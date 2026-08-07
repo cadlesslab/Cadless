@@ -1,0 +1,140 @@
+{
+  "id": "enclosure",
+  "name": "Mounting Boss Enclosure",
+  "slug": "mounting-boss-enclosure",
+  "verified": false,
+  "domain": "mechanical",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": null,
+  "tags": [],
+  "description": null,
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the outer enclosure box, 80 by 60 by 30 mm.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 144000.0,
+        "bbox": [
+          80.0,
+          60.0,
+          30.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create a hollow rectangular shell with outer dimensions 80 mm x 60 mm x 30 mm, wall thickness of 3 mm, and an open top face (the +Z face is removed).",
+        "assistant_message": "I've created an 80\u00d760\u00d730 hollow box with 3 mm thick walls and the top face removed, forming an open-top shell."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Hollow it to a 3 mm wall, open at the top.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 36108.0,
+        "bbox": [
+          80.0,
+          60.0,
+          30.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.06,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add four cylindrical mounting bosses with 8 mm diameter (4 mm radius) rising from the inner floor of the shell. Position them at x = \u00b130 mm, y = \u00b120 mm (inset from the corners). The inner floor is at z = -12 mm (bottom of box at z = -15 plus 3 mm wall). Each boss is 18 mm tall, extending from z = -12 mm to z = 6 mm.",
+        "assistant_message": "I added four 8 mm diameter cylindrical bosses at the corner insets, each rising 18 mm from the inner floor up to z = 6 mm."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add four cylindrical mounting bosses at the inner corners.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 39727.11473693544,
+        "bbox": [
+          80.0,
+          60.0,
+          30.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill a 3 mm diameter (1.5 mm radius) pilot hole down the center axis of each mounting boss. Each hole is 20 mm deep, starting at the inner floor (z = -12 mm) and extending upward to z = 8 mm, penetrating through the boss and 2 mm into the bottom wall but not all the way through the floor.",
+        "assistant_message": "I drilled 3 mm diameter pilot holes 20 mm deep through each boss center, penetrating slightly into the bottom wall without breaking through."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Drill a 3 mm pilot hole down each boss.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 39218.176727053906,
+        "bbox": [
+          80.0,
+          60.0,
+          30.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill a 3 mm pilot hole down each boss.",
+        "assistant_message": "Done \u2014 the 3 mm pilot holes are already drilled down each boss axis as described."
+      }
+    }
+  ]
+}

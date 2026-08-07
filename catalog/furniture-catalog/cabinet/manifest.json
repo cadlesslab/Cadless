@@ -1,0 +1,145 @@
+{
+  "id": "cabinet",
+  "name": "Open Storage Cabinet",
+  "slug": "open-storage-cabinet",
+  "verified": true,
+  "domain": "furniture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "storage",
+  "tags": [
+    "cabinet",
+    "open front",
+    "shelf",
+    "toe kick"
+  ],
+  "description": "Open-front storage cabinet, 800 x 400 x 720 mm: 18 mm shell, one mid-height shelf, and a 60 mm toe-kick recess at the front.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the cabinet blank: a box 800 mm wide (X), 400 mm deep (Y) and 720 mm tall, centered in X and Y with its base on Z=0. The front face is at Y=-200.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 230400000.0,
+        "bbox": [
+          800.0,
+          400.0,
+          720.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Start a storage cabinet: a solid box 800 mm wide (X), 400 mm deep (Y) and 720 mm tall (Z), centered in X and Y with its base on the floor at Z=0. The face at Y=-200 will be the open front.",
+        "assistant_message": "I've blocked out the 800 x 400 x 720 mm cabinet blank with its front face at Y=-200."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Shell the blank with 18 mm walls, leaving the front face (Y=-200) fully open.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 30775968.0,
+        "bbox": [
+          800.0,
+          400.0,
+          720.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Hollow it into a carcass: shell the box with 18 mm walls on the back, both sides, top and bottom, leaving the whole front face at Y=-200 open.",
+        "assistant_message": "The blank is now an open-front shell with 18 mm walls all round - a 764 mm wide, 684 mm tall cavity behind the opening."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add a fixed shelf 764 mm wide, 382 mm deep and 18 mm thick inside the cabinet, spanning Z=342 to Z=360, flush with the front opening and reaching the back wall.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 36029232.0,
+        "bbox": [
+          800.0,
+          400.0,
+          720.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Split the cavity with one fixed shelf at mid height: 764 mm wide and 18 mm thick, spanning the full 382 mm from the front opening back to the inside of the back wall, positioned from Z=342 to Z=360.",
+        "assistant_message": "The mid shelf is in at 342-360 mm, dividing the cabinet into two equal open compartments."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Cut a toe-kick recess across the full width at the front bottom: remove all material within 60 mm of the front face (Y=-200 to Y=-140) below Z=60.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 35074512.0,
+        "bbox": [
+          800.0,
+          400.0,
+          720.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Give it a plinth: cut a toe-kick recess along the whole front bottom edge, removing everything within 60 mm of the front face (from Y=-200 back to Y=-140) below Z=60.",
+        "assistant_message": "I cut the 60 x 60 mm toe-kick under the front - the cabinet now sets back at floor level so you can stand close to it."
+      }
+    }
+  ]
+}

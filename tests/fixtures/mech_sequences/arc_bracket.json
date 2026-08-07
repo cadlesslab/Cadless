@@ -1,0 +1,15 @@
+{
+  "part_id": "arc-bracket",
+  "name": "Arc Bracket",
+  "dataset": "deepcad",
+  "id": "00099999",
+  "representation": "sequence",
+  "commands": [
+    {"type": "Sketch", "plane": "XY", "z": 0},
+    {"type": "Line", "to": [0, 0]},
+    {"type": "Line", "to": [40, 0]},
+    {"type": "Arc", "to": [40, 20], "bulge": 0.5},
+    {"type": "Line", "to": [0, 20]},
+    {"type": "Ext", "distance": 8, "operation": "NewBody"}
+  ]
+}

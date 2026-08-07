@@ -1,0 +1,37 @@
+{
+	# No admin API; reload via `docker compose restart proxy`.
+	admin off
+}
+
+# Bundled proxy. The platform Caddy that owns TLS forwards
+# /apps/cadless/* to this host:${CADLESS_PROXY_PORT} (NO strip at the edge); this
+# block does the prefix-strip + fan-out. See infra/proxy/README.md.
+:8080 {
+	# API arm — strip /apps/cadless/api so FastAPI (which serves absolute
+	# /projects, /versions, /health ...) sees its real routes. No re-prepend:
+	# this API has no /api prefix. flush_interval -1 keeps SSE
+	# (the generate stream) flowing without buffering.
+	handle_path /apps/cadless/api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# Locally this bundled proxy is the only one, so the bare root the README
+	# advertises should land in the app. Exact match — other paths still 404.
+	redir / /apps/cadless/ 302
+
+	# Force the trailing slash so the SPA's relative asset URLs resolve.
+	redir /apps/cadless /apps/cadless/ 308
+
+	# Frontend arm — NO strip; nginx serves the SPA under /apps/cadless/ and its
+	# assets keep the prefix so browser follow-ups route back through the edge.
+	handle /apps/cadless/* {
+		reverse_proxy frontend:80
+	}
+
+	# This stack never pretends to own the rest.
+	handle {
+		respond "not found" 404
+	}
+}

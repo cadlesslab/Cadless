@@ -1,0 +1,176 @@
+{
+  "id": "drill-jig",
+  "name": "Drill Guide Jig",
+  "slug": "drill-guide-jig",
+  "verified": true,
+  "domain": "fixture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "fixture",
+  "tags": [
+    "drill jig",
+    "guide",
+    "bushing",
+    "fence"
+  ],
+  "description": "70 x 40 x 15 mm drill jig: three 6 mm guide bores with bushing counterbores, a registration fence, and two M5 clamp holes.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the jig body: a block 70 mm long (X), 40 mm wide (Y) and 15 mm thick (Z), centered in X and Y with its base on Z=0.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 42000.0,
+        "bbox": [
+          70.0,
+          40.0,
+          15.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create the jig body: a block 70 mm long (X), 40 mm wide (Y) and 15 mm thick (Z), centered in X and Y with its base on Z=0.",
+        "assistant_message": "I've created the 70 x 40 x 15 mm jig body \u2014 thick enough to guide a drill square to the work."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add a registration fence along the Y=-20 face: a bar 70 mm long (X), 8 mm wide (Y, from Y=-28 to Y=-20) and 12 mm tall, hanging from Z=4 down to Z=-8 so it hooks over the workpiece edge.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 48719.99999999999,
+        "bbox": [
+          70.0,
+          48.0,
+          23.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add a registration fence along the Y=-20 face: a bar 70 mm long (X), 8 mm wide (Y, from Y=-28 to Y=-20) and 12 mm tall, hanging from Z=4 down to Z=-8 so it hooks over the workpiece edge.",
+        "assistant_message": "I added the registration fence along the front face \u2014 it drops 8 mm below the base so the jig hooks square against the workpiece edge."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Drill three 6 mm drill guide bores of radius 3 mm vertically through the body at X = -20, 0 and 20 on the Y=0 centreline.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 47447.65497529614,
+        "bbox": [
+          70.0,
+          48.0,
+          23.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill three 6 mm drill guide bores of radius 3 mm vertically through the body at X = -20, 0 and 20 on the Y=0 centreline.",
+        "assistant_message": "I drilled the three 6 mm guide bores through the body at 20 mm spacing \u2014 these steer the drill bit."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Counterbore each guide bore from the top for a press-fit bushing: radius 5 mm, 5 mm deep (from Z=10 to the top face at Z=15).",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 46693.672738434594,
+        "bbox": [
+          70.0,
+          48.0,
+          23.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Counterbore each guide bore from the top for a press-fit bushing: radius 5 mm, 5 mm deep (from Z=10 to the top face at Z=15).",
+        "assistant_message": "I counterbored all three guides 10 mm across and 5 mm deep so hardened drill bushings can be pressed in from the top."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Drill two M5 clamp holes of radius 2.75 mm vertically through the body at X = +/-30 on the Y=0 centreline.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 45980.92390515143,
+        "bbox": [
+          70.0,
+          48.0,
+          23.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill two M5 clamp holes of radius 2.75 mm vertically through the body at X = +/-30 on the Y=0 centreline.",
+        "assistant_message": "I drilled the two 5.5 mm clamp holes at the ends of the jig \u2014 toggle clamps or screws hold it to the work through these."
+      }
+    }
+  ]
+}

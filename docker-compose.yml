@@ -1,0 +1,141 @@
+# Cadless stack — served at /apps/cadless behind a bundled Caddy.
+#
+# Topology:
+#   host (127.0.0.1) ──/apps/cadless/*──> proxy:8080 (this stack)
+#   proxy ──/apps/cadless/api/*──> api:8000      (LLM-provider egress)
+#         ──/apps/cadless/*──────> frontend:80   (SPA, base /apps/cadless/)
+#   api ──backnet (internal)──> worker:9000     (no egress; executes build123d)
+#   api + worker share the `data` volume for artifacts.
+#
+# Only `proxy` is published on the host. Run: ./start.sh start  (or: make up)
+
+# Pinned so named volumes keep a stable prefix regardless of the checkout
+# directory's name.
+name: cadless
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      CADLESS_DATA_DIR: /data
+      CADLESS_WORKER_URL: "" # force local execution inside the worker
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - data:/data
+    networks:
+      - backnet # internal only -> no network egress for untrusted code
+    mem_limit: 1024m
+    cpus: 2.0
+    pids_limit: 256
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      CADLESS_DATA_DIR: /data
+      # Catalog content is bind-mounted read-only at the fixed container path /catalog.
+      # The host source defaults to the bundled ./catalog sample set so `docker compose
+      # up` works with no setup; override CADLESS_CATALOG_ROOT with an absolute host path
+      # to serve an external catalog instead.
+      CADLESS_CATALOG_ROOT: /catalog
+      CADLESS_WORKER_URL: http://worker:9000
+      CADLESS_ROOT_PATH: /apps/cadless/api # for OpenAPI/docs link generation
+      # Default provider for a fresh docker run — an Anthropic (Claude) API
+      # key is the expected first credential; .env or the in-app Settings
+      # panel overrides it. anthropic | openai | bedrock.
+      CADLESS_LLM_PROVIDER: ${CADLESS_LLM_PROVIDER:-anthropic}
+      CADLESS_BEDROCK_MODEL_SLUG: ${CADLESS_BEDROCK_MODEL_SLUG:-sonnet-4-6}
+      CADLESS_BEDROCK_FAST_MODEL_SLUG: ${CADLESS_BEDROCK_FAST_MODEL_SLUG:-haiku-4-5}
+      # Chat agent-loop planning model.
+      CADLESS_ORCHESTRATOR_MODEL: ${CADLESS_ORCHESTRATOR_MODEL:-opus-4-6}
+      # Forge-mode global kill-switch. Default OFF: a turn must opt in AND
+      # this must be on for best-of-N racing to run (both-true gate).
+      CADLESS_FORGE_ENABLED: ${CADLESS_FORGE_ENABLED:-false}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    volumes:
+      - data:/data
+      # Bundled ./catalog samples by default (or an external catalog via an absolute
+      # CADLESS_CATALOG_ROOT), read-only at the container's /catalog.
+      - ${CADLESS_CATALOG_ROOT:-./catalog}:/catalog:ro
+      # Alternative to static keys: mount your AWS profile read-only.
+      # - ${HOME}/.aws:/home/appuser/.aws:ro
+    networks:
+      - frontnet # external egress (reaches the LLM provider) + reachable by proxy
+      - backnet # reaches the worker
+    # `/packages/import` takes no credentials, and the largest thing it does per
+    # request is unpack an archive: a package inside the reader's expansion ratio
+    # can reach 128 MiB unpacked, which was measured to peak at 255 MiB while it
+    # is being read. Two of those may be in flight at once
+    # (`packages.MAX_CONCURRENT_IMPORTS`), so that route's worst case is about
+    # 510 MiB — a quarter of this, leaving the rest for what this service does
+    # besides importing, which is most of what it does and has not been measured.
+    #
+    # The margin is the point. This is one uvicorn process serving chat as well,
+    # so being killed for memory takes everything with it, and the route that can
+    # provoke it is the one anyone can reach. Raising `MAX_CONCURRENT_IMPORTS`
+    # without raising this walks that margin back down.
+    mem_limit: 2048m
+    expose:
+      - "8000"
+    depends_on:
+      - worker
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # Only the prefix. The image derives the API base from it, and passing
+        # that separately would put the prefix back in two places — where
+        # forgetting one leaves an app that loads and then sends every request,
+        # the key-carrying POST /settings included, to the old path.
+        BASE_PATH: /apps/cadless/
+    networks:
+      - frontnet
+    expose:
+      - "80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2.11
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    volumes:
+      - ./infra/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - frontnet
+    ports:
+      # The platform Caddy forwards /apps/cadless/* here. This is the only
+      # published port. Override with CADLESS_PROXY_PORT if 8800 collides.
+      # Bound to 127.0.0.1 only: /settings stores API keys unauthenticated,
+      # so the tool must not be reachable from other hosts.
+      - "127.0.0.1:${CADLESS_PROXY_PORT:-8800}:8080"
+    restart: unless-stopped
+
+networks:
+  frontnet: {}
+  backnet:
+    internal: true # no route to the outside world
+
+volumes:
+  data: {}
+  caddy_data: {}
+  caddy_config: {}

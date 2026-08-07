@@ -1,0 +1,8 @@
+{
+  "dataset": "cadless-samples",
+  "representation": "hand-authored",
+  "license": "MIT",
+  "author": "InnoLingua Inc.",
+  "note": "Original parametric furniture model authored for the Cadless sample catalog.",
+  "id": "bench"
+}

@@ -1,0 +1,237 @@
+{
+  "id": "connecting-rod",
+  "name": "Engine Connecting Rod",
+  "slug": "engine-connecting-rod",
+  "verified": true,
+  "domain": "mechanical",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": null,
+  "tags": [
+    "engine",
+    "connecting rod",
+    "86 mm bore"
+  ],
+  "description": "I-beam connecting rod with 145 mm centres: 45 mm big-end bore, 22 mm small-end bore, and cap-bolt bosses with through holes.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the big-end boss, a 62 mm diameter cylinder 22 mm thick.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 66419.5518821954,
+        "bbox": [
+          62.0,
+          62.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create the connecting rod's big-end boss: a solid cylinder of radius 31 mm and height 22 mm, axis along Z, centered at the origin (spanning Z=-11 to Z=11).",
+        "assistant_message": "I've created the big-end boss \u2014 a 62 mm diameter disc, 22 mm thick, centered at the origin."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add the I-beam shank toward the small end.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 91083.2198930457,
+        "bbox": [
+          166.0,
+          62.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the I-beam shank running toward the small end along X: a central web 115 mm long (X), 6 mm wide (Y) and 18 mm tall (Z), plus top and bottom flanges each 115 mm long, 22 mm wide and 4 mm thick centered at Z=7 and Z=-7. Center all three at X=77.5 so the shank spans X=20 to X=135 and embeds into the big-end boss.",
+        "assistant_message": "I added the I-beam shank \u2014 web plus two flanges forming an I-section from X=20 to X=135, merged into the big end."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add the small-end boss at 145 mm centres.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 109635.17293420833,
+        "bbox": [
+          193.0,
+          62.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the small-end boss: a cylinder of radius 17 mm and height 22 mm centered at X=145, Y=0, overlapping the end of the shank so the centre-to-centre length is 145 mm.",
+        "assistant_message": "I added the small-end boss at X=145 \u2014 the rod now has its 145 mm centre distance."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Add two cap-bolt bosses flanking the big end.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 120999.91899955,
+        "bbox": [
+          193.0,
+          80.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add two cap-bolt bosses flanking the big end: boxes 26 mm (X) by 16 mm (Y) by 22 mm (Z) centered at Y=32 and Y=-32, merging into the big-end boss.",
+        "assistant_message": "I added the two bolt bosses on either side of the big end, ready to take the cap bolts."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Bore the big end for the 45 mm crank pin.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 86010.43082019367,
+        "bbox": [
+          193.0,
+          80.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Bore the big end for the 45 mm crank pin: cut a 22.5 mm radius hole straight through along Z at the origin.",
+        "assistant_message": "I bored the 45 mm big-end hole through the boss \u2014 8.5 mm of wall remains around the bore."
+      }
+    },
+    {
+      "index": 6,
+      "instruction": "Bore the small end for the 22 mm wrist pin.",
+      "code": "steps/06.py",
+      "geometry": {
+        "volume": 77647.51117633766,
+        "bbox": [
+          193.0,
+          80.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/06/model.step",
+        "glb": "artifacts/06/model.glb",
+        "stl": "artifacts/06/model.stl",
+        "obj": "artifacts/06/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Bore the small end for the 22 mm wrist pin: cut an 11 mm radius hole straight through along Z at X=145.",
+        "assistant_message": "I bored the 22 mm small-end hole \u2014 it matches the piston's wrist pin."
+      }
+    },
+    {
+      "index": 7,
+      "instruction": "Drill the two cap bolt holes along the rod axis.",
+      "code": "steps/07.py",
+      "geometry": {
+        "volume": 74335.0864972457,
+        "bbox": [
+          193.0000001,
+          80.0,
+          22.0000002
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/07/model.step",
+        "glb": "artifacts/07/model.glb",
+        "stl": "artifacts/07/model.stl",
+        "obj": "artifacts/07/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill the two cap bolt holes: 4.5 mm radius holes with axes along X (the rod axis), straight through each bolt boss at Y=32 and Y=-32, Z=0.",
+        "assistant_message": "I drilled both 9 mm cap bolt holes through the bolt bosses, parallel to the rod axis."
+      }
+    }
+  ]
+}

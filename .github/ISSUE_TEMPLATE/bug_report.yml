@@ -1,0 +1,56 @@
+name: Bug report
+description: Something broke or behaved unexpectedly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what went wrong?
+      placeholder: 'Asked for "a hex standoff, 20 mm tall" and the worker timed out.'
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Steps, the prompt you used, or the catalog item involved.
+      placeholder: |
+        1. docker compose up --build
+        2. Open the app, enter the prompt …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: false
+  - type: dropdown
+    id: provider
+    attributes:
+      label: LLM provider
+      options:
+        - none (keyless / catalog only)
+        - anthropic
+        - openai
+        - bedrock
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, and whether you run via `docker compose` or `make install`.
+      placeholder: macOS 15 · docker compose
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output from `make logs` or the browser console. Redact API keys.
+      render: text
+    validations:
+      required: false

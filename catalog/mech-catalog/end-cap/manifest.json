@@ -1,0 +1,52 @@
+{
+  "id": "end-cap",
+  "name": "End Cap",
+  "slug": null,
+  "verified": null,
+  "domain": "mechanical",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "enclosure",
+  "tags": [
+    "cap",
+    "cover",
+    "tube",
+    "pocket"
+  ],
+  "description": "Round end cap with a blind pocket that slips over a tube.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "A round end cap 40 mm outer diameter, 22 mm tall, with a 32 mm blind pocket leaving a 3 mm wall.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 12365.308684529427,
+        "bbox": [
+          40.0,
+          40.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 1.0,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "A round end cap 40 mm outer diameter, 22 mm tall, with a 32 mm blind pocket leaving a 3 mm wall.",
+        "assistant_message": "Here is the end cap. Adjust any value in its parameter block and rebuild to resize it."
+      }
+    }
+  ]
+}

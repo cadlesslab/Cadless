@@ -1,0 +1,177 @@
+{
+  "id": "raspberry-pi-mounting-plate",
+  "name": "Raspberry Pi Mounting Plate",
+  "slug": "raspberry-pi-mounting-plate",
+  "verified": true,
+  "domain": "fixture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "fixture",
+  "tags": [
+    "raspberry pi",
+    "mounting plate",
+    "standoff",
+    "M2.5",
+    "58x49"
+  ],
+  "description": "92 x 61 mm mounting plate for a Raspberry Pi: four standoff bosses on the 58 x 49 mm hole pattern with M2.5 clearance bores and a central cable slot.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the base plate: 92 mm long (X), 61 mm wide (Y) and 4 mm thick (Z), centered in X and Y with its base on Z=0.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 22447.999999999996,
+        "bbox": [
+          92.0,
+          61.0,
+          4.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create the base plate: 92 mm long (X), 61 mm wide (Y) and 4 mm thick (Z), centered in X and Y with its base on Z=0.",
+        "assistant_message": "I've created the 92 x 61 mm base plate, 4 mm thick, centered on the origin \u2014 sized with a margin around a Raspberry Pi footprint."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Round the four vertical corner edges of the plate with 6 mm fillets.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 22324.389342116927,
+        "bbox": [
+          92.0,
+          61.0,
+          4.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.06,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Round the four vertical corner edges of the plate with 6 mm fillets.",
+        "assistant_message": "I rounded all four corners of the plate with 6 mm fillets so it has no sharp corners."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add four standoff bosses on top of the plate: cylinders of radius 3.5 mm and height 5 mm on the Raspberry Pi hole pattern, centered at (X, Y) = (+/-29, +/-24.5) \u2014 58 mm by 49 mm between centres.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 23094.07954224642,
+        "bbox": [
+          92.0,
+          61.0,
+          9.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add four standoff bosses on top of the plate: cylinders of radius 3.5 mm and height 5 mm on the Raspberry Pi hole pattern, centered at (X, Y) = (+/-29, +/-24.5) \u2014 58 mm by 49 mm between centres.",
+        "assistant_message": "I added the four 7 mm standoff bosses, 5 mm tall, on the Pi's 58 x 49 mm mounting-hole pattern."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Drill M2.5 clearance holes of radius 1.35 mm straight through each boss and the plate at the same four centres.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 22887.9596482444,
+        "bbox": [
+          92.0,
+          61.0,
+          9.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill M2.5 clearance holes of radius 1.35 mm straight through each boss and the plate at the same four centres.",
+        "assistant_message": "I drilled the 2.7 mm M2.5 clearance bores through all four bosses and the plate, so the Pi can be screwed on from below."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Cut a central cable pass-through slot, 30 mm long (X) by 14 mm wide (Y), straight through the plate at the origin.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 21207.95964824439,
+        "bbox": [
+          92.0,
+          61.0,
+          9.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Cut a central cable pass-through slot, 30 mm long (X) by 14 mm wide (Y), straight through the plate at the origin.",
+        "assistant_message": "I cut the 30 x 14 mm cable pass-through in the middle of the plate \u2014 ribbon cables and wiring can now route under the board."
+      }
+    }
+  ]
+}

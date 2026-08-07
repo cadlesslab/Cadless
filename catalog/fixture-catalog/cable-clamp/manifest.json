@@ -1,0 +1,176 @@
+{
+  "id": "cable-clamp",
+  "name": "Cable Saddle Clamp",
+  "slug": "cable-saddle-clamp",
+  "verified": true,
+  "domain": "fixture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "fixture",
+  "tags": [
+    "cable clamp",
+    "saddle",
+    "10 mm cable",
+    "M4"
+  ],
+  "description": "40 x 16 mm saddle clamp for a 10 mm cable: raised bridge with a through bore, two M4 screw holes, and chamfered top edges.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the clamp base: a bar 40 mm long (X), 16 mm wide (Y) and 5 mm thick (Z), centered in X and Y with its base on Z=0.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 3199.999999999999,
+        "bbox": [
+          40.0,
+          16.0,
+          5.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create the clamp base: a bar 40 mm long (X), 16 mm wide (Y) and 5 mm thick (Z), centered in X and Y with its base on Z=0.",
+        "assistant_message": "I've created the 40 x 16 x 5 mm clamp base bar, centered on the origin."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add the saddle bridge: a block 20 mm long (X), the full 16 mm wide (Y) and 16 mm tall (Z), centered on the base and fused with it.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 6720.0,
+        "bbox": [
+          40.0,
+          16.0,
+          16.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the saddle bridge: a block 20 mm long (X), the full 16 mm wide (Y) and 16 mm tall (Z), centered on the base and fused with it.",
+        "assistant_message": "I raised the central saddle bridge to 16 mm \u2014 the block the cable bore will pass through."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Bore the cable channel through the bridge: a horizontal cylinder of radius 5 mm (10 mm cable) along the Y axis, centered at X=0, Z=9.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 5463.362938564082,
+        "bbox": [
+          40.0,
+          16.0,
+          16.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Bore the cable channel through the bridge: a horizontal cylinder of radius 5 mm (10 mm cable) along the Y axis, centered at X=0, Z=9.",
+        "assistant_message": "I bored the 10 mm cable channel straight through the bridge along Y, 9 mm above the base plane."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Drill two M4 clearance holes of radius 2.2 mm vertically through the base at X = +/-15, Y=0.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 5311.309854130335,
+        "bbox": [
+          40.0,
+          16.0,
+          16.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill two M4 clearance holes of radius 2.2 mm vertically through the base at X = +/-15, Y=0.",
+        "assistant_message": "I drilled the two 4.4 mm screw holes through the base tabs, one each side of the bridge, for the hold-down screws."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Chamfer the four straight top edges of the bridge with a 1.5 mm chamfer.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 5234.809854130336,
+        "bbox": [
+          40.0,
+          16.0,
+          16.000000000000004
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.06,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Chamfer the four straight top edges of the bridge with a 1.5 mm chamfer.",
+        "assistant_message": "I chamfered the bridge's top edges 1.5 mm so the clamp has no sharp corners where the cable enters."
+      }
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+# Local tooling / secrets (kept out of the repo)
+.claude
+.vscode
+.mcp.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+# Panels a composed build is given from outside this tree. `src/panels/plugins.ts`
+# reads this directory at build time; nothing here belongs to this repository,
+# and a plugin committed by accident would make the tree ship a panel it does
+# not own.
+#
+# `/*` rather than `/`: gitignore cannot re-include a path whose parent
+# directory is already excluded, and one file below does have to be re-included.
+# `__contract__/canary.ts` is this repository's own — it gives the `src/plugins/**`
+# lint rule a subject on a fresh checkout, and is named so the build-time glob
+# (`*/register.{ts,tsx}`) never matches it, so it ships nothing.
+frontend/src/plugins/*
+!frontend/src/plugins/__contract__/
+!frontend/src/plugins/__contract__/canary.ts
+
+# Local artifacts & data
+runtime-db/
+artifacts/
+.playwright-mcp/
+*.step
+*.stp
+*.glb
+*.gltf
+
+# Bulk catalog content and the large server-side prompt set live OUTSIDE the repo
+# under CADLESS_CATALOG_ROOT (default ./catalog), so they survive Docker image
+# rebuilds via a bind mount and are what the authoring pipeline writes into. A
+# sample catalog is nonetheless bundled (see the re-include below), so "outside
+# the repo" describes the bulk, not everything.
+#
+# This pattern has no leading slash, so it matches benchmarks/ at ANY depth.
+# That is deliberate for the leftover symlink/dir, but it means a nested
+# benchmarks/ directory would be untracked without saying so — which is why the
+# version-controlled eval tiers live at cadless/evalkit/tiers/ instead. Do not
+# rename that directory to "benchmarks".
+benchmarks/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+
+# Bundled sample catalog ships in-repo for the keyless first experience: the
+# tool must show working parts before any API key is entered. Re-include it
+# despite the blanket artifacts/ + binary-mesh ignores above.
+!catalog/**/artifacts/
+!catalog/**/artifacts/**
+
+# Local tooling scratch DB (recreated per directory)
+ruvector.db

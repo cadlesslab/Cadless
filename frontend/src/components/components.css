@@ -1,0 +1,257 @@
+/* Primitive component styles. Tokens only. */
+
+/* buttons */
+.btn {
+  font: inherit;
+  font-size: var(--text-sm);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--fg);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.btn:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg-elevated); }
+.btn:active:not(:disabled) { transform: translateY(0.5px); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn-sm { padding: var(--space-1) var(--space-2); font-size: var(--text-xs); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.btn-primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+.btn-ghost { background: transparent; border-color: transparent; }
+.btn-ghost:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border); }
+.btn-danger { background: transparent; border-color: var(--border); color: var(--bad); }
+.btn-danger:hover:not(:disabled) { background: var(--bad); color: #fff; border-color: var(--bad); }
+
+.icon-btn {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--panel-2); color: var(--fg); border-color: var(--border); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* fields */
+.field {
+  font: inherit;
+  font-size: var(--text-sm);
+  width: 100%;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+.field:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+
+/* panel */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.panel-title { margin: 0; font-size: var(--text-sm); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.panel-actions { display: flex; gap: var(--space-1); align-items: center; }
+.panel-body { padding: var(--space-3); overflow: auto; min-height: 0; }
+.empty { color: var(--muted); padding: var(--space-3); font-size: var(--text-sm); }
+
+/* modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); animation: fade 0.12s ease; }
+.modal-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(420px, calc(100vw - 32px));
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-5);
+  z-index: 50;
+}
+.modal-title { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
+.modal-desc { margin: 0 0 var(--space-4); color: var(--muted); font-size: var(--text-sm); }
+.modal-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.modal-label { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-sm); color: var(--muted); }
+.modal-footer { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* toast */
+/* Anchored top-right, not bottom-right: the chat panel is the right-hand column
+   and its composer — with the send/stop button in its bottom-right corner — sits
+   exactly where a bottom-anchored viewport of this width lands. Offsetting by the
+   panel width instead is not available here, because --right-w is an inline style
+   on .body and this viewport is a sibling of .app, so it never inherits it. */
+/* Offset below the 45px chat header so a toast that stays put — every error
+   does now — does not sit on the collapse control for as long as it is open.
+   pointer-events is none on the box and auto on the toasts, so the padding and
+   the gaps between them stay click-through instead of swallowing the panel. */
+.toast-viewport { position: fixed; top: 48px; right: 0; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); width: 360px; max-width: 100vw; z-index: 60; list-style: none; margin: 0; pointer-events: none; }
+.toast { position: relative; pointer-events: auto; background: var(--bg-elevated); border: 1px solid var(--border); border-left: 3px solid var(--muted); border-radius: var(--radius-md); padding: var(--space-3); padding-right: var(--space-6); box-shadow: var(--shadow-2); }
+/* 28px button inset 4px from the edge == the 32px right padding above. */
+.toast-close { position: absolute; top: var(--space-1); right: var(--space-1); }
+.toast-success { border-left-color: var(--ok); }
+.toast-error { border-left-color: var(--bad); }
+.toast-title { font-size: var(--text-sm); font-weight: 600; }
+/* Raw error text can be one long unbroken token, and it now stays until it is
+   dismissed, so break it rather than let it run off the edge. */
+.toast-desc { font-size: var(--text-xs); color: var(--muted); margin-top: var(--space-1); overflow-wrap: anywhere; }
+
+/* tooltip */
+.tooltip { background: var(--fg); color: var(--bg); font-size: var(--text-xs); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); box-shadow: var(--shadow-1); z-index: 70; }
+.tooltip-arrow { fill: var(--fg); }
+
+/* slider */
+.slider { position: relative; display: flex; align-items: center; width: 100%; height: 20px; touch-action: none; }
+.slider-track { position: relative; flex: 1; height: 4px; background: var(--panel-2); border-radius: 999px; }
+.slider-range { position: absolute; height: 100%; background: var(--accent); border-radius: 999px; }
+.slider-thumb { display: block; width: 14px; height: 14px; background: var(--accent); border: 2px solid var(--bg-elevated); border-radius: 50%; box-shadow: var(--shadow-1); }
+.slider-thumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* segmented control */
+.segmented { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 2px; gap: 2px; }
+.segment { font: inherit; font-size: var(--text-xs); border: 0; background: transparent; color: var(--muted); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2); cursor: pointer; }
+.segment:hover { color: var(--fg); }
+.segment-active { background: var(--bg-elevated); color: var(--fg); box-shadow: var(--shadow-1); }
+.segment:focus-visible { outline: 2px solid var(--accent); }
+
+/* Browsing a collection of models: the toolbar above it, the chips that narrow
+   it, and the cards it is made of. Shared by the catalog on this machine and by
+   any panel that browses elsewhere — they ask different servers and render the
+   same thing. */
+.browse-toolbar { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-3); }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.chip {
+  font: inherit; font-size: var(--text-xs); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px var(--space-2); cursor: pointer; white-space: nowrap;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip.on { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); }
+.item-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: var(--space-2);
+}
+.item-card { position: relative; display: flex; }
+.item-card-open {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1);
+  text-align: left; font: inherit; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: var(--space-2); cursor: pointer; color: var(--fg);
+}
+.item-card-open:hover { border-color: var(--accent); }
+.item-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* A fixed square whether or not a picture ever fills it, so a slow or missing
+   thumbnail cannot reflow the grid around it. */
+.item-thumb {
+  display: flex; align-items: center; justify-content: center;
+  aspect-ratio: 1; border-radius: var(--radius-sm); background: var(--panel);
+  overflow: hidden;
+}
+.item-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.item-thumb-placeholder { display: inline-flex; color: var(--muted); opacity: 0.6; transform: scale(1.6); }
+.item-card-name {
+  font-size: var(--text-sm); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.item-card-meta { font-size: var(--text-xs); color: var(--muted); }
+.item-card-desc {
+  font-size: var(--text-xs); color: var(--muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.item-card-actions {
+  position: absolute; top: var(--space-1); right: var(--space-1);
+  display: flex; gap: var(--space-1); opacity: 0;
+}
+.item-card:hover .item-card-actions,
+.item-card:focus-within .item-card-actions { opacity: 1; }
+.browse-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-2); margin-top: var(--space-3);
+}
+.browse-more {
+  font: inherit; font-size: var(--text-sm); background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2); cursor: pointer;
+}
+.browse-more:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.browse-more:disabled { opacity: 0.6; cursor: default; }
+
+/* Reaching a tag by typing towards it. The suggestions sit under the field and
+   only while something is typed — a hundred tags shown unprompted is the
+   clutter this replaces. */
+.tag-picker { display: flex; flex-direction: column; gap: var(--space-1); position: relative; }
+.tag-suggestions {
+  list-style: none; margin: 0; padding: var(--space-1); display: flex; flex-direction: column;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  max-height: 180px; overflow-y: auto;
+}
+.tag-suggestions button {
+  width: 100%; text-align: left; font: inherit; font-size: var(--text-xs);
+  background: transparent; border: 0; border-radius: var(--radius-sm);
+  padding: 2px var(--space-2); cursor: pointer; color: var(--fg);
+}
+.tag-suggestions button:hover, .tag-suggestions button:focus-visible {
+  background: var(--accent-weak); color: var(--accent);
+}
+
+/* Two filters that narrow the same search the box above them does, so they sit
+   on its line rather than under the chips. */
+/* Top-aligned, not bottom-aligned: the tag side grows downward as chips are
+   added, and anything else drags the licence control down with it — its label
+   ends up level with the other column's input. */
+.browse-narrow { display: flex; align-items: flex-start; gap: var(--space-2); }
+.browse-narrow > * { flex: 1; min-width: 0; }
+.browse-licence { display: flex; flex-direction: column; gap: var(--space-1); }
+/* The mark a section's explanation hides behind. */
+.help-dot {
+  font: inherit; font-size: var(--text-xs); line-height: 1; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
+  width: 18px; height: 18px; cursor: pointer; flex: none;
+}
+.help-dot:hover, .help-dot[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+
+/* The card the mark opens. It sits over the panel rather than inside the flow,
+   so reading one never moves the control it is about. Narrow on purpose: the
+   panel it floats above can be dragged down to a column, and a card wider than
+   its own explanation reads as a dialog someone has to deal with. */
+.help-card {
+  max-width: 260px; z-index: 70;
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2); padding: var(--space-3);
+}
+.help-card-head {
+  display: flex; align-items: center; gap: var(--space-2);
+  font-weight: 600; margin-bottom: var(--space-2);
+}
+.help-card-body { font-size: var(--text-xs); color: var(--muted); }
+.help-card-body p + p { margin-top: var(--space-2); }
+/* Matched to the card's own fill so the tail reads as part of it. The border
+   cannot follow around the point, and a stroked arrow on an unstroked one is
+   worse than none. */
+.help-arrow { fill: var(--panel); }

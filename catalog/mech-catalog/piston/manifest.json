@@ -1,0 +1,206 @@
+{
+  "id": "piston",
+  "name": "Engine Piston",
+  "slug": "engine-piston",
+  "verified": true,
+  "domain": "mechanical",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": null,
+  "tags": [
+    "engine",
+    "piston",
+    "86 mm bore"
+  ],
+  "description": "Flat-top piston for an 86 mm bore engine: three ring grooves, hollowed skirt, wrist-pin bosses and a 22 mm pin bore.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the piston blank, an 85.5 mm diameter cylinder 62 mm tall.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 355970.3292865242,
+        "bbox": [
+          85.5,
+          85.5,
+          62.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create a piston blank for an 86 mm bore engine: a solid cylinder with radius 42.75 mm (85.5 mm diameter) and height 62 mm, centered in X and Y, with its base on Z=0 so the crown face is at Z=62.",
+        "assistant_message": "I've created the piston blank \u2014 an 85.5 mm diameter cylinder standing 62 mm tall on the XY plane, with the crown face at Z=62."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Cut three piston-ring grooves near the crown.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 345664.3345864229,
+        "bbox": [
+          85.5,
+          85.5,
+          62.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Cut three ring grooves into the outer surface: each groove is an annular cut 3 mm tall and 4.5 mm deep (from radius 42.75 mm down to a root radius of 38.25 mm), with groove bottoms at Z=52, Z=46, and Z=40.",
+        "assistant_message": "I cut the three 3 mm ring grooves at Z=52, 46 and 40, each 4.5 mm deep to a 38.25 mm root radius \u2014 two compression rings and an oil ring."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Hollow the skirt from below, leaving a 12 mm thick crown.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 133518.4731757296,
+        "bbox": [
+          85.5,
+          85.5,
+          62.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Hollow the piston from below: cut a cylinder of radius 36.75 mm from Z=-1 up to Z=50, leaving a 6 mm thick skirt wall and a solid 12 mm thick crown.",
+        "assistant_message": "I hollowed the skirt from the open bottom up to Z=50 \u2014 the wall is now 6 mm thick and the crown stays solid, 12 mm deep."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Add two wrist-pin bosses inside the skirt.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 168671.58290674776,
+        "bbox": [
+          85.5,
+          85.5,
+          62.0000001
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add two wrist-pin bosses inside the skirt: horizontal cylinders of radius 16 mm with their axes along Y at X=0, Z=24, one spanning Y=14 to Y=38 and the other Y=-14 to Y=-38, merging into the skirt walls.",
+        "assistant_message": "I added the two pin bosses \u2014 16 mm radius cylinders on the Y axis at Z=24, leaving a 28 mm gap between them for the connecting rod's small end."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Bore the 22 mm wrist-pin hole through both bosses.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 147083.45948557675,
+        "bbox": [
+          85.5000002,
+          85.50000020001677,
+          62.0000001
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Bore the wrist-pin hole: an 11 mm radius cylinder along the Y axis at X=0, Z=24, cut straight through both bosses and both skirt walls.",
+        "assistant_message": "I bored the 22 mm wrist-pin hole through the bosses and skirt walls at Z=24 \u2014 it now accepts the 22 mm wrist pin."
+      }
+    },
+    {
+      "index": 6,
+      "instruction": "Chamfer the crown's outer edge by 1 mm.",
+      "code": "steps/06.py",
+      "geometry": {
+        "volume": 146950.16490469108,
+        "bbox": [
+          85.5000002,
+          85.50000020001677,
+          62.0000001
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/06/model.step",
+        "glb": "artifacts/06/model.glb",
+        "stl": "artifacts/06/model.stl",
+        "obj": "artifacts/06/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add a 1 mm chamfer on the circular outer edge of the crown at Z=62.",
+        "assistant_message": "I chamfered the crown's top edge by 1 mm to break the sharp corner."
+      }
+    }
+  ]
+}

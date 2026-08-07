@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cadless"
+version = "1.0.0"
+description = "Cadless — natural-language-driven CAD PoC (text to build123d to B-Rep)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "build123d>=0.10.0",
+    "boto3>=1.40.0",
+    "anthropic>=0.49",
+    "openai>=1.40",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "aiosqlite>=0.20",
+    "sse-starlette>=2.1",
+    # cadless/worker.py calls out over HTTP from async request handlers.
+    # httpx already arrives transitively (both anthropic and openai require it),
+    # so this declares what we import rather than pulling in anything new.
+    "httpx>=0.27",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "aiosqlite>=0.20",
+    "sse-starlette>=2.1",
+    "httpx>=0.27",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["cadless"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI's Depends()/Query() in argument defaults is the idiomatic pattern.
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/test_branding.py reads its scan scope from tools/leak_guard.py, which is
+# a standalone script rather than part of the installed package.
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning:build123d",
+    "ignore:Using `httpx` with `starlette.testclient`:DeprecationWarning",
+]
+markers = [
+    "bedrock: tests that call the live AWS Bedrock API (require credentials)",
+    "anthropic: tests that call the live Anthropic API (require ANTHROPIC_API_KEY)",
+    "openai: tests that call the live OpenAI API (require OPENAI_API_KEY)",
+    "build123d: tests that execute build123d/OCCT geometry",
+]

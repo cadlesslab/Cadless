@@ -1,0 +1,8 @@
+{
+  "dataset": "cadless-samples",
+  "representation": "synthetic",
+  "license": "MIT",
+  "author": "InnoLingua Inc.",
+  "note": "Original reference house authored for the Cadless sample catalog; not derived from any survey, listing or floor-plan dataset.",
+  "id": "demo-house"
+}

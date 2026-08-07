@@ -1,0 +1,13 @@
+# Commits that changed formatting only. `git blame` should look through them
+# to the commit that last changed the code itself.
+#
+# GitHub applies this file automatically. Locally, enable it once with:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Each SHA must be a commit that actually lands on main. If a merge rewrites
+# the sweep's SHA (a rebased or non-fast-forward merge does), update it here to
+# the SHA on main -- git blame ignores a missing SHA silently.
+
+# style: format the tree with ruff
+992afe124851f64766301fc8a4648db13794cdd0

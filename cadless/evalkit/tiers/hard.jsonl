@@ -1,0 +1,18 @@
+{"id": "fixture-catalog/cable-clamp", "prompt": "40 x 16 mm saddle clamp for a 10 mm cable: raised bridge with a through bore, two M4 screw holes, and chamfered top edges."}
+{"id": "fixture-catalog/corner-bracket", "prompt": "60 x 60 mm right-angle corner bracket, 40 mm wide, with a triangular gusset rib and two M5 clearance holes per leg."}
+{"id": "fixture-catalog/din-rail-clip-mount", "prompt": "60 x 50 mm adapter plate that clips over a 35 mm TS35 DIN rail: recessed rail channel with retaining lips and two M4 device mounting holes."}
+{"id": "fixture-catalog/drill-jig", "prompt": "70 x 40 x 15 mm drill jig: three 6 mm guide bores with bushing counterbores, a registration fence, and two M5 clamp holes."}
+{"id": "fixture-catalog/panel-mount-plate", "prompt": "100 x 70 x 3 mm control panel plate: two 22 mm pushbutton holes, a 50 x 20 mm display window, rounded corners, and four M4 mounting holes."}
+{"id": "fixture-catalog/project-box", "prompt": "80 x 50 x 22 mm electronics project box: 3 mm walls, four M2.5 screw bosses, and a lipped lid shown exploded above the body (two bodies)."}
+{"id": "fixture-catalog/raspberry-pi-mounting-plate", "prompt": "92 x 61 mm mounting plate for a Raspberry Pi: four standoff bosses on the 58 x 49 mm hole pattern with M2.5 clearance bores and a central cable slot."}
+{"id": "fixture-catalog/sensor-bracket", "prompt": "Right-angle sensor bracket, 40 x 30 mm base with a 50 mm upright: two vertical adjustment slots in the face and two M4 base holes."}
+{"id": "fixture-catalog/terminal-block-cover", "prompt": "90 x 30 x 25 mm U-channel cover for a terminal strip: 2 mm walls, two screw flanges, and five ventilation slots in the roof."}
+{"id": "fixture-catalog/v-block", "prompt": "60 x 40 x 40 mm machinist V-block: 90-degree V-groove 16 mm deep, side clamp grooves, and a base relief channel."}
+{"id": "furniture-catalog/bedside-table", "prompt": "Bedside table, 450 x 400 x 550 mm: an open-front 16 mm shell with a separate open-top drawer box sitting in the opening (two bodies)."}
+{"id": "mech-catalog/connecting-rod", "prompt": "I-beam connecting rod with 145 mm centres: 45 mm big-end bore, 22 mm small-end bore, and cap-bolt bosses with through holes."}
+{"id": "mech-catalog/crankshaft", "prompt": "Parallel-twin crankshaft with an 86 mm stroke: three 50 mm main journals, two 180-degree throws with counterweighted webs, and a six-bolt flywheel flange."}
+{"id": "mech-catalog/engine-block", "prompt": "Simplified inline-twin engine block: two 86 mm cylinder bores, open-bottomed crankcase, three main-bearing saddles, head-stud and main-cap bolt holes."}
+{"id": "mech-catalog/flywheel", "prompt": "280 mm engine flywheel: rimmed disc with a thinned web, hub boss, 30 mm pilot bore and the six-bolt crankshaft flange pattern."}
+{"id": "mech-catalog/hinge", "prompt": "Positioned multi-body item: a 60 mm five-knuckle butt hinge - two notched leaves meshing on a 10 mm barrel, opened 120 degrees, with a 5 mm pin through every knuckle - composed as a three-body Compound (no joints)."}
+{"id": "mech-catalog/piston", "prompt": "Flat-top piston for an 86 mm bore engine: three ring grooves, hollowed skirt, wrist-pin bosses and a 22 mm pin bore."}
+{"id": "mech-catalog/piston-assembly", "prompt": "Positioned multi-body capstone: the 86 mm family Engine Piston, its 22 mm wrist pin, and the Engine Connecting Rod hanging 17 degrees off the cylinder axis, composed as a three-body Compound (no joints)."}

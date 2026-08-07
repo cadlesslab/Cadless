@@ -1,0 +1,113 @@
+{
+  "id": "wall-shelf",
+  "name": "Wall Shelf With Mounting Rail",
+  "slug": "wall-shelf-with-mounting-rail",
+  "verified": true,
+  "domain": "furniture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "shelving",
+  "tags": [
+    "wall shelf",
+    "900 mm",
+    "mounting holes"
+  ],
+  "description": "Wall-mounted shelf: a 900 x 250 x 30 mm board with a rear mounting upstand and two 6 mm screw holes on 700 mm centers.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the shelf board: 900 mm long (X), 250 mm deep (Y) and 30 mm thick, centered in X and Y with its underside on Z=0. The back (wall) edge is at Y=+125.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 6750000.0,
+        "bbox": [
+          900.0,
+          250.0,
+          30.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Make a wall shelf. Start with the board: 900 mm long (X), 250 mm deep (Y), 30 mm thick, centered in X and Y with its underside on Z=0 - the back edge at Y=+125 will sit against the wall.",
+        "assistant_message": "I've created the 900 x 250 mm shelf board, 30 mm thick, with its back edge ready to meet the wall."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add a mounting upstand along the back edge: 900 mm long, 20 mm thick and 60 mm tall, sitting on the board's top face (Z=30 to Z=90) with its back face flush at Y=125.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 7830000.0,
+        "bbox": [
+          900.0,
+          250.0,
+          90.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add a mounting rail: an upstand running the full 900 mm along the back edge, 20 mm thick and 60 mm tall, standing on the board's top face so it spans Z=30 to Z=90, its back face flush with the board's back edge at Y=125.",
+        "assistant_message": "The mounting upstand now runs along the back of the shelf, 60 mm tall - that's where it will screw to the wall."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Drill two 6 mm diameter screw holes horizontally (along Y) through the 20 mm upstand at X=+/-350, Z=60. The upstand is centered at Y=115, so each hole must pass through its full thickness from Y=105 to Y=125.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 7828869.026644706,
+        "bbox": [
+          900.0,
+          250.0,
+          90.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill the fixing holes: two 6 mm diameter holes straight through the upstand along Y, centered at X=+/-350 (700 mm apart) at mid-rail height Z=60. Remember the upstand sits at the back, centered at Y=115 - the holes must pierce its full 20 mm thickness (Y=105 to Y=125).",
+        "assistant_message": "Both 6 mm screw holes are through the rail at 700 mm centers - the shelf is ready to mount."
+      }
+    }
+  ]
+}

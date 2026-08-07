@@ -1,0 +1,16 @@
+{
+  "part_id": "stepped-block",
+  "name": "Stepped Block",
+  "dataset": "hand-authored",
+  "id": "stepped-block",
+  "representation": "sequence",
+  "commands": [
+    {"type": "Sketch", "plane": "XY", "z": 0},
+    {"type": "Rect", "w": 60, "h": 40},
+    {"type": "Ext", "distance": 10, "operation": "NewBody"},
+    {"type": "Sketch", "plane": "XY", "z": 10},
+    {"type": "Rect", "w": 30, "h": 40},
+    {"type": "Ext", "distance": 12, "operation": "Join"},
+    {"type": "Fillet", "radius": 3, "edges": "top"}
+  ]
+}

@@ -1,0 +1,140 @@
+{
+  "id": "flanged-shaft",
+  "name": "Flanged Shaft",
+  "slug": "flanged-shaft",
+  "verified": false,
+  "domain": "mechanical",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": null,
+  "tags": [],
+  "description": null,
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create a cylindrical shaft, 12 mm diameter, 80 mm long, along Z.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 9047.786842338604,
+        "bbox": [
+          12.0,
+          12.0,
+          80.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create a cylinder (shaft) with radius 6 mm and height 80 mm, aligned at the center in X and Y and starting from Z=0.",
+        "assistant_message": "I've created a vertical cylindrical shaft, 12 mm in diameter and 80 mm tall, standing upright from the base."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add a 40 mm diameter, 8 mm thick mounting flange at the base.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 18196.104649592085,
+        "bbox": [
+          40.0,
+          40.0,
+          80.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add a flange cylinder with radius 20 mm and height 8 mm at the base (aligned center in X/Y, starting at Z=0), combining it with the shaft.",
+        "assistant_message": "Added a wider 40 mm diameter flange at the base, 8 mm thick, merged with the shaft."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Drill four 5 mm bolt holes on a 30 mm bolt circle through the flange.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 17567.78611887412,
+        "bbox": [
+          40.0,
+          40.0,
+          80.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Cut 4 through-holes of radius 2.5 mm and height 8 mm, equally spaced on a polar pattern at a radius of 15 mm from the center, through the flange.",
+        "assistant_message": "Cut four evenly-spaced bolt holes around a 15 mm radius circle through the flange."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Add a 1 mm chamfer to the top edge of the shaft.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 17549.98376050378,
+        "bbox": [
+          40.0,
+          40.0,
+          80.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Apply a 1 mm chamfer to the top circular edge of the shaft (the topmost circular edge at Z=80).",
+        "assistant_message": "Applied a 1 mm chamfer to the top circular edge of the shaft."
+      }
+    }
+  ]
+}

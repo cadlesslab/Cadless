@@ -1,0 +1,113 @@
+{
+  "id": "coffee-table",
+  "name": "Coffee Table With Shelf",
+  "slug": "coffee-table-with-shelf",
+  "verified": true,
+  "domain": "furniture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "table",
+  "tags": [
+    "coffee table",
+    "lower shelf",
+    "1100 mm"
+  ],
+  "description": "Living-room coffee table: 1100 x 600 mm top at 450 mm height on four 50 mm square legs, with a full-width magazine shelf 130 mm off the floor.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the tabletop: an 1100 x 600 mm slab, 25 mm thick, centered in X and Y, top face at Z=450 (slab from Z=425 to Z=450).",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 16500000.0,
+        "bbox": [
+          1100.0,
+          600.0,
+          25.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Let's build a coffee table. Start with the tabletop: a slab 1100 mm long (X), 600 mm wide (Y) and 25 mm thick, centered in X and Y, with its top face at Z=450 so it spans Z=425 to Z=450.",
+        "assistant_message": "I've made the 1100 x 600 mm coffee-table top, 25 mm thick with its surface at 450 mm - a comfortable sofa height."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add four 50 x 50 mm square legs from Z=0 to Z=425, centered at X=+/-465 and Y=+/-215 (outer faces inset 60 mm from the top's edges), fused with the top.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 20750000.000000007,
+        "bbox": [
+          1100.0,
+          600.0,
+          450.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add four square legs, 50 x 50 mm in cross-section, from the floor at Z=0 to the top's underside at Z=425. Place their centers at X=+/-465 and Y=+/-215 so each outer face is 60 mm in from the tabletop edge, and fuse them with the top.",
+        "assistant_message": "Four 50 mm square legs are in place at X=+/-465, Y=+/-215, carrying the top with a 60 mm inset all round."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add a lower shelf: a 980 x 480 mm panel, 15 mm thick, from Z=130 to Z=145, centered so its edges are flush with the legs' outer faces, fused through all four legs.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 27656000.000000034,
+        "bbox": [
+          1100.0,
+          600.0,
+          450.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add a magazine shelf near the floor: a panel 980 mm by 480 mm and 15 mm thick, spanning Z=130 to Z=145, centered in X and Y so its edges finish flush with the legs' outer faces, fused through all four legs.",
+        "assistant_message": "The lower shelf is in - a 980 x 480 mm panel at 130 mm off the floor, meeting all four legs flush with their outer faces. The table is now one welded frame."
+      }
+    }
+  ]
+}

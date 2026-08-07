@@ -1,0 +1,114 @@
+{
+  "id": "bar-stool",
+  "name": "Square-Leg Bar Stool",
+  "slug": "square-leg-bar-stool",
+  "verified": true,
+  "domain": "furniture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "seating",
+  "tags": [
+    "bar stool",
+    "750 mm",
+    "round seat",
+    "footrest"
+  ],
+  "description": "Bar-height stool: a 350 mm round seat at 750 mm on four 35 mm square legs with two footrest rails at 250 mm.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the stool seat: a 350 mm diameter disc, 30 mm thick, centered on the Z axis with its top face at Z=750 (disc from Z=720 to Z=750).",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 2886338.250485623,
+        "bbox": [
+          350.0,
+          350.0,
+          30.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Make a bar stool. Start with the seat: a round disc 350 mm in diameter and 30 mm thick, centered on the Z axis with its top face at bar height Z=750 (so it spans Z=720 to Z=750).",
+        "assistant_message": "I've created the 350 mm round seat, 30 mm thick, floating at the 750 mm bar-stool height."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add four 35 x 35 mm square legs from Z=0 to Z=720, centered at X=+/-100, Y=+/-100, fused with the seat.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 6414338.2504856195,
+        "bbox": [
+          350.0,
+          350.0,
+          750.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add four vertical legs, each 35 x 35 mm square, running from the floor at Z=0 up to the seat's underside at Z=720, centered at X=+/-100 and Y=+/-100, fused with the seat.",
+        "assistant_message": "Four 35 mm square legs now carry the seat, set on a 200 mm square under the disc."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add two footrest rails along X at Y=+/-100: each 235 mm long (spanning the legs' outer faces), 35 mm wide and 30 mm tall, from Z=250 to Z=280, fused through the legs.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 6760838.250485621,
+        "bbox": [
+          350.0,
+          350.0,
+          750.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add a footrest: two rails running along X at Y=+/-100, each 235 mm long so they span flush to the legs' outer faces, 35 mm wide and 30 mm tall, from Z=250 to Z=280, fused through the legs.",
+        "assistant_message": "Both footrest rails are in at 250-280 mm - the stool frame is complete."
+      }
+    }
+  ]
+}

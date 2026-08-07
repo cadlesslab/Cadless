@@ -1,0 +1,114 @@
+{
+  "id": "bedside-table",
+  "name": "Bedside Table With Drawer",
+  "slug": "bedside-table-with-drawer",
+  "verified": true,
+  "domain": "furniture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "storage",
+  "tags": [
+    "bedside table",
+    "nightstand",
+    "drawer",
+    "two bodies"
+  ],
+  "description": "Bedside table, 450 x 400 x 550 mm: an open-front 16 mm shell with a separate open-top drawer box sitting in the opening (two bodies).",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the bedside-table blank: a box 450 mm wide (X), 400 mm deep (Y) and 550 mm tall, centered in X and Y with its base on Z=0. The front face is at Y=-200.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 99000000.0,
+        "bbox": [
+          450.0,
+          400.0,
+          550.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Let's make a bedside table: start with a solid blank 450 mm wide (X), 400 mm deep (Y) and 550 mm tall (Z), centered in X and Y, base on the floor at Z=0, with the front face at Y=-200.",
+        "assistant_message": "I've created the 450 x 400 x 550 mm bedside-table blank with its front at Y=-200."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Shell the blank with 16 mm walls, leaving the front face (Y=-200) fully open: keep 16 mm of material on the back, both sides, top and bottom, so the interior cavity is 418 mm wide (X), 384 mm deep (Y, from the open front to the inside of the back wall) and 518 mm tall (Z=16 to Z=534).",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 15854783.999999994,
+        "bbox": [
+          450.0,
+          400.0,
+          550.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Hollow the blank into a carcass: shell it with 16 mm walls on the back, sides, top and bottom, leaving the entire front face at Y=-200 open. The cavity behind the opening should end up 418 mm wide, 384 mm deep and 518 mm tall (Z=16 to Z=534).",
+        "assistant_message": "The carcass is hollowed: 16 mm walls with a 418 mm wide, 518 mm tall opening at the front."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add a drawer as a separate second body (do not fuse): an open-top box 410 mm wide, 360 mm deep and 150 mm tall with 12 mm walls and base, centered in X, front face flush with the cabinet front at Y=-200, spanning Z=40 to Z=190. Return a Compound of the cabinet and drawer solids.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 20096735.999999993,
+        "bbox": [
+          450.0,
+          400.0,
+          550.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": 2,
+      "transcript": {
+        "user_prompt": "Slide in a drawer as its own separate body - do not fuse it to the carcass. Model an open-top drawer box 410 mm wide, 360 mm deep and 150 mm tall with 12 mm walls and base, centered in X so there is 4 mm of side clearance, its front face flush with the cabinet front at Y=-200, floating from Z=40 to Z=190. The result should be a compound of the two solids: carcass and drawer.",
+        "assistant_message": "The drawer is in place as a second, free body: a 410 x 360 x 150 mm open-top box with 12 mm walls, sitting in the opening with 4 mm side clearance - the model is now a two-body compound."
+      }
+    }
+  ]
+}

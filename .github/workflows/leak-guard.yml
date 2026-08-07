@@ -1,0 +1,78 @@
+# Leak guard + DCO + attribution guard for the public repository.
+#
+# The tree must stay free of internal references and credential shapes
+# (tools/leak_guard.py, fail-closed -- this repo used to be produced by a
+# scrubbing extractor; direct commits mean the scrub must live here now),
+# every pull-request commit must carry a Signed-off-by trailer (DCO -- see
+# CONTRIBUTING.md), and no commit message or pull-request body may carry
+# AI-assistant attribution (tools/attribution_guard.py).
+name: leak-guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Scan the tree
+        run: python tools/leak_guard.py
+
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Every commit is signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r sha; do
+            if ! git log -1 --format='%(trailers:key=Signed-off-by,only,valueonly)' "$sha" | grep -q .; then
+              echo "::error::commit $sha has no Signed-off-by trailer"
+              missing=1
+            fi
+          done < <(git rev-list --no-merges "$BASE".."$HEAD")
+          if [ "$missing" -ne 0 ]; then
+            echo 'Sign your commits with: git commit -s (see CONTRIBUTING.md, "Developer Certificate of Origin")'
+            exit 1
+          fi
+          echo "all commits carry Signed-off-by"
+
+  attribution:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: No assistant attribution in commit messages or the PR body
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          git log --no-merges --format='%B' "$BASE".."$HEAD" > messages.txt
+          printf '%s' "$PR_BODY" > pr_body.txt
+          python tools/attribution_guard.py messages.txt pr_body.txt

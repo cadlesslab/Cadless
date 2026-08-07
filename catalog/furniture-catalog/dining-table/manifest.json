@@ -1,0 +1,145 @@
+{
+  "id": "dining-table",
+  "name": "Rectangular Dining Table",
+  "slug": "rectangular-dining-table",
+  "verified": true,
+  "domain": "furniture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "table",
+  "tags": [
+    "dining table",
+    "1600 mm",
+    "four legs",
+    "aprons"
+  ],
+  "description": "Six-seat rectangular dining table: 1600 x 900 mm top at 750 mm height, four 60 mm square legs, perimeter aprons and rounded top corners.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the tabletop: a 1600 x 900 mm slab, 30 mm thick, centered in X and Y, with its top face at Z=750 (slab from Z=720 to Z=750).",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 43200000.0,
+        "bbox": [
+          1600.0,
+          900.0,
+          30.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Start a dining table. Create the tabletop first: a rectangular slab 1600 mm long (X) by 900 mm wide (Y) by 30 mm thick, centered in X and Y, with its top face at Z=750 so the slab spans Z=720 to Z=750.",
+        "assistant_message": "I've created the 1600 x 900 mm tabletop, 30 mm thick, floating with its top surface at the standard 750 mm dining height."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add four 60 x 60 mm square legs from Z=0 to Z=720, centered at X=+/-690 and Y=+/-340 (outer faces inset 80 mm from the top's edges), fused with the top.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 53568000.0,
+        "bbox": [
+          1600.0,
+          900.0,
+          750.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add four square legs, each 60 x 60 mm in cross-section, running from the floor at Z=0 up to the tabletop's underside at Z=720. Center them at X=+/-690 and Y=+/-340 so their outer faces sit 80 mm in from the tabletop edges, and fuse them with the top.",
+        "assistant_message": "I added the four 60 mm square legs at X=+/-690, Y=+/-340, rising 720 mm from the floor to meet the tabletop's underside - each outer face is inset 80 mm from the top's edge."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add four aprons 20 mm thick and 100 mm tall, flush under the top (Z=620 to 720), spanning between the legs on their centerlines: two along X at Y=+/-340, 1320 mm long, and two along Y at X=+/-690, 620 mm long.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 61327999.99999993,
+        "bbox": [
+          1600.0,
+          900.0,
+          750.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Connect the legs with four aprons, each 20 mm thick and 100 mm tall, tucked flush under the tabletop so they span Z=620 to Z=720. Run two long aprons along X at Y=+/-340, 1320 mm long between the legs' inner faces, and two short aprons along Y at X=+/-690, 620 mm long, all centered on the leg centerlines.",
+        "assistant_message": "The apron frame is in: two 1320 mm rails along the length and two 620 mm rails across the width, 20 x 100 mm each, flush against the tabletop's underside between the legs."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Fillet the tabletop's four vertical corner edges with a 20 mm radius.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 61317699.11184309,
+        "bbox": [
+          1600.0,
+          900.0,
+          750.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.5,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Soften the tabletop: fillet its four vertical corner edges with a 20 mm radius.",
+        "assistant_message": "I rounded the tabletop's four corners with a 20 mm fillet - the top now has soft corners while the legs and aprons stay crisp."
+      }
+    }
+  ]
+}

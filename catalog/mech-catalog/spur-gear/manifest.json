@@ -1,0 +1,140 @@
+{
+  "id": "spur-gear",
+  "name": "Spur Gear With Keyway",
+  "slug": "spur-gear-with-keyway",
+  "verified": false,
+  "domain": "mechanical",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": null,
+  "tags": [],
+  "description": null,
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the gear hub, a 60 mm diameter disc 12 mm thick.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 33929.20065876977,
+        "bbox": [
+          60.0,
+          60.0,
+          12.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create a solid cylinder with radius 30 mm and height 12 mm, centered in X and Y, with the base at Z=0.",
+        "assistant_message": "I've created a 30 mm radius cylinder, 12 mm tall, sitting on the XY plane."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Bore a 16 mm diameter hole through the centre.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 31516.45750081281,
+        "bbox": [
+          60.0,
+          60.0,
+          12.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Cut a central through-hole of radius 8 mm and height 12 mm, centered in X and Y, starting at Z=0.",
+        "assistant_message": "Done \u2014 I bored an 8 mm radius hole straight through the center of the disc."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Cut a 5 mm wide, 3 mm deep keyway into the bore.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 31328.52636773298,
+        "bbox": [
+          60.0,
+          60.0,
+          12.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Cut a keyway slot from the central hole: a box 5 mm wide (X), 4 mm deep (Y), and 12 mm tall (Z), centered in X, with its Y-min edge aligned to Y=0, positioned at Y=7 mm (so it spans Y=7 to Y=11, overlapping the bore), starting at Z=0.",
+        "assistant_message": "I cut a keyway slot near the bore \u2014 a small rectangular pocket extending radially outward from Y=7 to Y=11."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Add 18 teeth evenly around the rim.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 40122.53859107374,
+        "bbox": [
+          70.0,
+          70.32572813219001,
+          12.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.07,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.7,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add 18 teeth evenly spaced around the rim using polar locations. Each tooth is a box 7 mm long radially (X) and 8 mm wide tangentially (Y) and 12 mm tall (Z), centered in X and Y at a radial distance of 31.5 mm from the center (so each tooth spans radius 28 to 35 mm), with the base at Z=0. The teeth are distributed at equal angular intervals (every 20 degrees) around the Z-axis.",
+        "assistant_message": "I added 18 gear teeth evenly spaced every 20\u00b0 around the rim, each protruding 5 mm beyond the cylinder's outer edge."
+      }
+    }
+  ]
+}

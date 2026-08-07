@@ -1,0 +1,268 @@
+{
+  "id": "crankshaft",
+  "name": "Parallel-Twin Crankshaft",
+  "slug": "parallel-twin-crankshaft",
+  "verified": true,
+  "domain": "mechanical",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": null,
+  "tags": [
+    "engine",
+    "crankshaft",
+    "86 mm stroke"
+  ],
+  "description": "Parallel-twin crankshaft with an 86 mm stroke: three 50 mm main journals, two 180-degree throws with counterweighted webs, and a six-bolt flywheel flange.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the front main journal on the X axis.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 66758.84388878311,
+        "bbox": [
+          34.0,
+          50.0,
+          50.00000000000001
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create the front main journal of a twin crankshaft: a cylinder of radius 25 mm along the X axis spanning X=0 to X=34, centered on the crank axis at Y=0, Z=0.",
+        "assistant_message": "I've created the front main journal \u2014 a 50 mm diameter cylinder lying on the X axis."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Add the first crank throw with its pin offset +43 mm.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 664721.7355914302,
+        "bbox": [
+          98.00000000000001,
+          140.0,
+          140.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the first crank throw in web-pin-web order so the part stays one solid: a web disc of radius 70 mm and thickness 18 mm centered at X=41 on the main axis, then the crank pin \u2014 radius 22.5 mm spanning X=48 to X=82, offset +43 mm in Z for the 86 mm stroke \u2014 then the closing web at X=89.",
+        "assistant_message": "I added the first throw: two 140 mm webs flanking a 45 mm crank pin offset 43 mm above the main axis."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add the centre main journal.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 731480.5794802135,
+        "bbox": [
+          132.0,
+          140.0,
+          140.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the centre main journal: a cylinder of radius 25 mm spanning X=96 to X=132 on the main axis.",
+        "assistant_message": "I added the centre main journal between the two throws."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Add the second crank throw, 180 degrees from the first.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 1329443.471182861,
+        "bbox": [
+          196.0,
+          140.0,
+          140.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the second crank throw 180 degrees from the first, again in web-pin-web order: a web at X=139 (radius 70 mm, 18 mm thick), the crank pin of radius 22.5 mm spanning X=146 to X=180 offset -43 mm in Z, and the closing web at X=187.",
+        "assistant_message": "I added the second throw with its pin 43 mm below the main axis \u2014 a 180-degree parallel-twin layout."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Add the rear main journal.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 1392275.3242546564,
+        "bbox": [
+          228.0,
+          140.0,
+          140.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the rear main journal: a cylinder of radius 25 mm spanning X=194 to X=228 on the main axis.",
+        "assistant_message": "I added the rear main journal \u2014 all three mains are in place."
+      }
+    },
+    {
+      "index": 6,
+      "instruction": "Add counterweight lobes opposite each crank pin.",
+      "code": "steps/06.py",
+      "geometry": {
+        "volume": 1655226.6293601226,
+        "bbox": [
+          228.0,
+          170.0,
+          170.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/06/model.step",
+        "glb": "artifacts/06/model.glb",
+        "stl": "artifacts/06/model.stl",
+        "obj": "artifacts/06/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add counterweight lobes: for each web, enlarge the half opposite its crank pin to radius 85 mm \u2014 intersect an 85 mm radius disc (18 mm thick, at the same X position as the web) with the half-space on the side away from the pin (Z<=0 for the first throw's webs at X=41 and X=89, Z>=0 for the second throw's webs at X=139 and X=187) and union it onto the part.",
+        "assistant_message": "I added the four counterweight lobes \u2014 each web now bulges to an 85 mm radius on the side opposite its pin."
+      }
+    },
+    {
+      "index": 7,
+      "instruction": "Add the flywheel mounting flange.",
+      "code": "steps/07.py",
+      "geometry": {
+        "volume": 1740363.790272406,
+        "bbox": [
+          240.0,
+          170.0,
+          170.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/07/model.step",
+        "glb": "artifacts/07/model.glb",
+        "stl": "artifacts/07/model.stl",
+        "obj": "artifacts/07/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add the flywheel mounting flange: a disc of radius 45 mm spanning X=226 to X=240 on the main axis, overlapping the rear journal.",
+        "assistant_message": "I added the 90 mm flywheel flange on the rear of the shaft."
+      }
+    },
+    {
+      "index": 8,
+      "instruction": "Drill six flywheel bolt holes through the flange.",
+      "code": "steps/08.py",
+      "geometry": {
+        "volume": 1735019.941168649,
+        "bbox": [
+          240.0,
+          170.0,
+          170.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/08/model.step",
+        "glb": "artifacts/08/model.glb",
+        "stl": "artifacts/08/model.stl",
+        "obj": "artifacts/08/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill six 4.5 mm radius flywheel bolt holes through the flange along X on a 64 mm bolt circle (radius 32 mm), at (Y, Z) = (32, 0), (16, 27.71), (-16, 27.71), (-32, 0), (-16, -27.71) and (16, -27.71).",
+        "assistant_message": "I drilled the six bolt holes on the 64 mm bolt circle \u2014 they match the flywheel's pattern."
+      }
+    }
+  ]
+}

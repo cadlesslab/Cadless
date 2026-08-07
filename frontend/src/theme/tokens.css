@@ -1,0 +1,71 @@
+/* Design tokens. Light + dark themes selected by data-theme on <html>.
+   Every surface/color in the app references these vars — no ad-hoc colors. */
+
+:root {
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* type scale */
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.25);
+
+  /* semantic status (shared across themes) */
+  --ok: #2ea76b;
+  --bad: #e5484d;
+  --warn: #d9a514;
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --bg-elevated: #14171e;
+  --panel: #181b22;
+  --panel-2: #1f242d;
+  --fg: #e6e8ec;
+  --muted: #9aa3b2;
+  --accent: #4f8cff;
+  --accent-fg: #ffffff;
+  --accent-weak: rgba(79, 140, 255, 0.16);
+  --border: #262b35;
+  --border-strong: #333a47;
+  --grid-major: #333a47;
+  --grid-minor: #222831;
+  --viewport-bg: #0f1115;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --bg-elevated: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #eef0f4;
+  --fg: #1a1d23;
+  --muted: #5b6472;
+  --accent: #2f6fed;
+  --accent-fg: #ffffff;
+  --accent-weak: rgba(47, 111, 237, 0.12);
+  --border: #d9dde4;
+  --border-strong: #c2c8d2;
+  --grid-major: #c2c8d2;
+  --grid-minor: #e3e6ec;
+  --viewport-bg: #e9ecf1;
+}

@@ -1,0 +1,176 @@
+{
+  "id": "din-rail-clip-mount",
+  "name": "DIN Rail Clip Mount",
+  "slug": "din-rail-clip-mount",
+  "verified": true,
+  "domain": "fixture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "fixture",
+  "tags": [
+    "din rail",
+    "TS35",
+    "mount",
+    "clip"
+  ],
+  "description": "60 x 50 mm adapter plate that clips over a 35 mm TS35 DIN rail: recessed rail channel with retaining lips and two M4 device mounting holes.",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the mount plate: 60 mm long (X), 50 mm deep (Y) and 8 mm thick (Z), centered in X and Y with its base on Z=0.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 24000.0,
+        "bbox": [
+          60.0,
+          50.0,
+          8.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create the mount plate: 60 mm long (X), 50 mm deep (Y) and 8 mm thick (Z), centered in X and Y with its base on Z=0.",
+        "assistant_message": "I've created the 60 x 50 x 8 mm mount plate \u2014 thick enough to carry the rail channel on its underside."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Cut the DIN rail channel into the underside: a recess 35.4 mm wide (X, clearance over a 35 mm TS35 rail) and 4 mm deep, running the full depth of the plate in Y, centered in X.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 16920.0,
+        "bbox": [
+          60.0,
+          50.0,
+          8.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Cut the DIN rail channel into the underside: a recess 35.4 mm wide (X, clearance over a 35 mm TS35 rail) and 4 mm deep, running the full depth of the plate in Y, centered in X.",
+        "assistant_message": "I recessed a 35.4 mm wide, 4 mm deep channel across the underside \u2014 a TS35 top-hat rail drops in with 0.4 mm of clearance, leaving a foot on each side."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add a retaining lip on each side of the channel: bars 2 mm wide (X), running the full 50 mm depth in Y, 1.5 mm tall from Z=0, attached to the inner face of each foot (bar centres at X = +/-16.7).",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 17220.0,
+        "bbox": [
+          60.0,
+          50.0,
+          8.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add a retaining lip on each side of the channel: bars 2 mm wide (X), running the full 50 mm depth in Y, 1.5 mm tall from Z=0, attached to the inner face of each foot (bar centres at X = +/-16.7).",
+        "assistant_message": "I added the two retaining lips at the channel mouth \u2014 they hook over the rail's return flanges to keep the mount clipped on."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Drill two M4 clearance holes of radius 2.1 mm through the plate on the X centreline at Y = +/-18.",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 17109.164611181357,
+        "bbox": [
+          60.0,
+          50.0,
+          8.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill two M4 clearance holes of radius 2.1 mm through the plate on the X centreline at Y = +/-18.",
+        "assistant_message": "I drilled the two 4.2 mm device mounting holes through the plate \u2014 whatever rides on this mount bolts down with M4 screws."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Chamfer the straight edges of the top face with a 1 mm chamfer.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 17000.497944514686,
+        "bbox": [
+          60.0,
+          50.0,
+          8.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.06,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Chamfer the straight edges of the top face with a 1 mm chamfer.",
+        "assistant_message": "I chamfered the top edges 1 mm all round to break the sharp corners."
+      }
+    }
+  ]
+}

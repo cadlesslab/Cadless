@@ -1,0 +1,8 @@
+{
+  "dataset": "cadless-samples",
+  "representation": "hand-authored",
+  "license": "MIT",
+  "author": "InnoLingua Inc.",
+  "note": "Original generic parametric part authored for the Cadless keyless sample catalog.",
+  "id": "hex-standoff"
+}

@@ -1,0 +1,8 @@
+{
+  "dataset": "cadless-samples",
+  "representation": "hand-authored",
+  "license": "MIT",
+  "author": "InnoLingua Inc.",
+  "note": "Original parametric mechanical part authored for the Cadless sample catalog.",
+  "id": "v-pulley"
+}

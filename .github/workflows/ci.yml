@@ -1,0 +1,88 @@
+# CI for the public repository.
+#
+# Runs lint and the unit suite. Tests that need live model credentials are
+# excluded — contributors should be able to open a pull request and get a
+# green build without an API key of their own.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # Runs the same target contributors run, so the directory list lives in
+      # the Makefile alone and local checks cannot disagree with CI. The format
+      # check is the half that keeps the tree from drifting out of shape again.
+      - name: Lint and format check
+        run: make lint RUFF=ruff
+
+      - name: Unit tests
+        run: pytest -q -m "not bedrock and not anthropic and not openai"
+
+  # The frontend's own checks. `build` below does compile it — `tsc && vite
+  # build` runs inside the image — but compiling is not linting and it is not
+  # testing, so until this job existed a green CI said nothing about either.
+  #
+  # `lint` is the one that matters most, and not for style: `.eslintrc.cjs`
+  # carries the rule that refuses an import out of `src/plugins/**` to anywhere
+  # but `src/plugin.ts`. That rule is what decides whether a panel can still
+  # ship from another repository, and a rule that only runs on the machine of
+  # whoever remembers to run it decides nothing.
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the version `frontend/Dockerfile` builds with. A CI that
+      # passed on a different major than the image is a CI that can be green
+      # about code the deploy cannot build.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # `ci`, not `install`: it installs exactly the lockfile and fails if
+      # `package.json` has drifted from it, which is the check a developer's
+      # own `node_modules` cannot make.
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # Separate from `build`, which also type checks — this one says so in
+      # seconds and names the file, where a failure inside the image build is
+      # buried in docker output.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the stack
+        run: |
+          mkdir -p catalog
+          docker compose build

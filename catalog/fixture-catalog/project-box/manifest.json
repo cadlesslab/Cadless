@@ -1,0 +1,208 @@
+{
+  "id": "project-box",
+  "name": "Electronics Project Enclosure",
+  "slug": "electronics-project-enclosure",
+  "verified": true,
+  "domain": "fixture",
+  "source": "cadless-samples",
+  "storey_height": null,
+  "category": "enclosure",
+  "tags": [
+    "enclosure",
+    "project box",
+    "lid",
+    "screw bosses",
+    "80 mm"
+  ],
+  "description": "80 x 50 x 22 mm electronics project box: 3 mm walls, four M2.5 screw bosses, and a lipped lid shown exploded above the body (two bodies).",
+  "thumbnail": "artifacts/thumbnail.png",
+  "content_version": "1.0.0",
+  "steps": [
+    {
+      "index": 1,
+      "instruction": "Create the enclosure body blank: a solid block 80 mm long (X), 50 mm wide (Y) and 22 mm tall (Z), centered in X and Y with its base on Z=0.",
+      "code": "steps/01.py",
+      "geometry": {
+        "volume": 88000.0,
+        "bbox": [
+          80.0,
+          50.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/01/model.step",
+        "glb": "artifacts/01/model.glb",
+        "stl": "artifacts/01/model.stl",
+        "obj": "artifacts/01/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Create the enclosure body blank: a solid block 80 mm long (X), 50 mm wide (Y) and 22 mm tall (Z), centered in X and Y with its base on Z=0.",
+        "assistant_message": "I've created the solid enclosure blank \u2014 an 80 x 50 x 22 mm block sitting on the XY plane, ready to be hollowed out."
+      }
+    },
+    {
+      "index": 2,
+      "instruction": "Hollow the interior: cut a 74 x 44 mm pocket from Z=2.5 up through the open top, leaving 3 mm walls and a 2.5 mm floor.",
+      "code": "steps/02.py",
+      "geometry": {
+        "volume": 24507.999999999993,
+        "bbox": [
+          80.0,
+          50.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/02/model.step",
+        "glb": "artifacts/02/model.glb",
+        "stl": "artifacts/02/model.stl",
+        "obj": "artifacts/02/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Hollow the interior: cut a 74 x 44 mm pocket from Z=2.5 up through the open top, leaving 3 mm walls and a 2.5 mm floor.",
+        "assistant_message": "I hollowed the block into an open-top shell \u2014 the walls are 3 mm thick all round and the floor is 2.5 mm."
+      }
+    },
+    {
+      "index": 3,
+      "instruction": "Add four corner screw bosses inside the cavity: cylinders of radius 4 mm centered at (X, Y) = (+/-34, +/-19), rising from the floor at Z=2.5 to the rim at Z=22, fused into the walls.",
+      "code": "steps/03.py",
+      "geometry": {
+        "volume": 27862.974562715706,
+        "bbox": [
+          80.0,
+          50.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/03/model.step",
+        "glb": "artifacts/03/model.glb",
+        "stl": "artifacts/03/model.stl",
+        "obj": "artifacts/03/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Add four corner screw bosses inside the cavity: cylinders of radius 4 mm centered at (X, Y) = (+/-34, +/-19), rising from the floor at Z=2.5 to the rim at Z=22, fused into the walls.",
+        "assistant_message": "I added the four screw bosses in the cavity corners \u2014 each one merges into the adjacent walls and runs from the floor up to the rim."
+      }
+    },
+    {
+      "index": 4,
+      "instruction": "Drill a blind self-tapping pilot hole down the centre of each boss: radius 1.25 mm, 16 mm deep from the rim at Z=22 (hole bottom at Z=6).",
+      "code": "steps/04.py",
+      "geometry": {
+        "volume": 27548.815297356738,
+        "bbox": [
+          80.0,
+          50.0,
+          22.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/04/model.step",
+        "glb": "artifacts/04/model.glb",
+        "stl": "artifacts/04/model.stl",
+        "obj": "artifacts/04/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": null,
+      "transcript": {
+        "user_prompt": "Drill a blind self-tapping pilot hole down the centre of each boss: radius 1.25 mm, 16 mm deep from the rim at Z=22 (hole bottom at Z=6).",
+        "assistant_message": "I drilled the four pilot holes for self-tapping M2.5 screws \u2014 each 2.5 mm bore stops 16 mm down, well short of the floor."
+      }
+    },
+    {
+      "index": 5,
+      "instruction": "Add the lid as a second body, shown exploded 8 mm above the box: an 80 x 50 x 3 mm plate with its underside at Z=30, plus a 73 x 43 x 2 mm locating lip protruding below it (0.5 mm clearance to the cavity). Keep body and lid as two separate solids in a Compound.",
+      "code": "steps/05.py",
+      "geometry": {
+        "volume": 45826.815297356734,
+        "bbox": [
+          80.0,
+          50.0,
+          33.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/05/model.step",
+        "glb": "artifacts/05/model.glb",
+        "stl": "artifacts/05/model.stl",
+        "obj": "artifacts/05/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": 2,
+      "transcript": {
+        "user_prompt": "Add the lid as a second body, shown exploded 8 mm above the box: an 80 x 50 x 3 mm plate with its underside at Z=30, plus a 73 x 43 x 2 mm locating lip protruding below it (0.5 mm clearance to the cavity). Keep body and lid as two separate solids in a Compound.",
+        "assistant_message": "I added the lid as its own body floating 8 mm above the box \u2014 a 3 mm plate with a 2 mm locating lip sized to drop just inside the cavity. The result is now a two-body compound."
+      }
+    },
+    {
+      "index": 6,
+      "instruction": "Drill M2.5 clearance holes of radius 1.35 mm through the lid and its lip, one above each boss at (X, Y) = (+/-34, +/-19).",
+      "code": "steps/06.py",
+      "geometry": {
+        "volume": 45712.30424513339,
+        "bbox": [
+          80.0,
+          50.0,
+          33.0
+        ]
+      },
+      "artifacts": {
+        "step": "artifacts/06/model.step",
+        "glb": "artifacts/06/model.glb",
+        "stl": "artifacts/06/model.stl",
+        "obj": "artifacts/06/model.obj"
+      },
+      "assertions": {
+        "volume_tol": 0.05,
+        "bbox_tol": 0.05,
+        "chamfer_tol": 0.03,
+        "iou_tol": 0.85,
+        "feature_count": true
+      },
+      "expected_bodies": 2,
+      "transcript": {
+        "user_prompt": "Drill M2.5 clearance holes of radius 1.35 mm through the lid and its lip, one above each boss at (X, Y) = (+/-34, +/-19).",
+        "assistant_message": "I drilled the four 2.7 mm clearance holes through the lid and lip, lined up with the boss pilot holes below, so the lid screws straight onto the box."
+      }
+    }
+  ]
+}

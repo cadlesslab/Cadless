@@ -1,0 +1,16 @@
+{
+  "part_id": "plate-with-hole",
+  "name": "Plate With Hole",
+  "dataset": "deepcad",
+  "id": "00031420",
+  "representation": "sequence",
+  "commands": [
+    {"type": "Sketch", "plane": "XY", "z": 0},
+    {"type": "Rect", "w": 40, "h": 20},
+    {"type": "Ext", "distance": 10, "operation": "NewBody"},
+    {"type": "Sketch", "plane": "XY", "z": 0},
+    {"type": "Circle", "r": 5, "cx": 8, "cy": 0},
+    {"type": "Ext", "distance": 10, "operation": "Cut"},
+    {"type": "Chamfer", "length": 1.5, "edges": "top"}
+  ]
+}

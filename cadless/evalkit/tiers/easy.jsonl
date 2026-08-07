@@ -1,0 +1,39 @@
+{"id": "fixture-catalog/cable-clamp#1", "prompt": "Create the clamp base: a bar 40 mm long (X), 16 mm wide (Y) and 5 mm thick (Z), centered in X and Y with its base on Z=0."}
+{"id": "fixture-catalog/corner-bracket#1", "prompt": "Create the horizontal leg: a plate 60 mm long (X, from X=0 to X=60), 40 mm wide (Y, centered) and 5 mm thick (Z), base on Z=0."}
+{"id": "fixture-catalog/din-rail-clip-mount#1", "prompt": "Create the mount plate: 60 mm long (X), 50 mm deep (Y) and 8 mm thick (Z), centered in X and Y with its base on Z=0."}
+{"id": "fixture-catalog/drill-jig#1", "prompt": "Create the jig body: a block 70 mm long (X), 40 mm wide (Y) and 15 mm thick (Z), centered in X and Y with its base on Z=0."}
+{"id": "fixture-catalog/panel-mount-plate#1", "prompt": "Create the panel plate: 100 mm long (X), 70 mm wide (Y) and 3 mm thick (Z), centered in X and Y with its base on Z=0."}
+{"id": "fixture-catalog/project-box#1", "prompt": "Create the enclosure body blank: a solid block 80 mm long (X), 50 mm wide (Y) and 22 mm tall (Z), centered in X and Y with its base on Z=0."}
+{"id": "fixture-catalog/raspberry-pi-mounting-plate#1", "prompt": "Create the base plate: 92 mm long (X), 61 mm wide (Y) and 4 mm thick (Z), centered in X and Y with its base on Z=0."}
+{"id": "fixture-catalog/sensor-bracket#1", "prompt": "Create the base plate: 40 mm long (X, from X=0 to X=40), 30 mm wide (Y, centered) and 4 mm thick (Z), base on Z=0."}
+{"id": "fixture-catalog/terminal-block-cover#1", "prompt": "Create the cover blank: a solid block 90 mm long (X), 30 mm wide (Y) and 25 mm tall (Z), centered in X and Y with its base on Z=0."}
+{"id": "fixture-catalog/v-block#1", "prompt": "Create the block: 60 mm wide (X), 40 mm deep (Y) and 40 mm tall (Z), centered in X and Y with its base on Z=0."}
+{"id": "furniture-catalog/bar-stool#1", "prompt": "Create the stool seat: a 350 mm diameter disc, 30 mm thick, centered on the Z axis with its top face at Z=750 (disc from Z=720 to Z=750)."}
+{"id": "furniture-catalog/bedside-table#1", "prompt": "Create the bedside-table blank: a box 450 mm wide (X), 400 mm deep (Y) and 550 mm tall, centered in X and Y with its base on Z=0. The front face is at Y=-200."}
+{"id": "furniture-catalog/bench#1", "prompt": "Create the bench seat: a 1200 x 350 mm slab, 40 mm thick, centered in X and Y, top face at Z=450 (slab from Z=410 to Z=450)."}
+{"id": "furniture-catalog/bookshelf#1", "prompt": "Create the bookshelf carcass: two side panels 18 mm thick, 300 mm deep and 1800 mm tall at X=+/-391 (outer faces at +/-400), joined by a bottom panel (Z=0 to 18) and a top panel (Z=1782 to 1800), each 764 x 300 x 18 mm, fused into one frame centered in X and Y."}
+{"id": "furniture-catalog/cabinet#1", "prompt": "Create the cabinet blank: a box 800 mm wide (X), 400 mm deep (Y) and 720 mm tall, centered in X and Y with its base on Z=0. The front face is at Y=-200."}
+{"id": "furniture-catalog/coffee-table#1", "prompt": "Create the tabletop: an 1100 x 600 mm slab, 25 mm thick, centered in X and Y, top face at Z=450 (slab from Z=425 to Z=450)."}
+{"id": "furniture-catalog/desk#1", "prompt": "Create the desktop: a 1200 x 600 mm slab, 25 mm thick, centered in X and Y, top face at Z=740 (slab from Z=715 to Z=740). The back edge is at Y=+300."}
+{"id": "furniture-catalog/dining-table#1", "prompt": "Create the tabletop: a 1600 x 900 mm slab, 30 mm thick, centered in X and Y, with its top face at Z=750 (slab from Z=720 to Z=750)."}
+{"id": "furniture-catalog/tv-stand#1", "prompt": "Create the TV-stand blank: a box 1400 mm wide (X), 400 mm deep (Y) and 450 mm tall, centered in X and Y with its base on Z=0. The front face is at Y=-200."}
+{"id": "furniture-catalog/wall-shelf#1", "prompt": "Create the shelf board: 900 mm long (X), 250 mm deep (Y) and 30 mm thick, centered in X and Y with its underside on Z=0. The back (wall) edge is at Y=+125."}
+{"id": "house-catalog/demo-house#1", "prompt": "Create a rectangular base slab (ground floor) with dimensions 12 mm long, 8 mm wide, and 0.3 mm thick, centered at the origin."}
+{"id": "mech-catalog/bearing-block#1", "prompt": "Create the base plate, 100 by 40 mm and 12 mm thick."}
+{"id": "mech-catalog/connecting-rod#1", "prompt": "Create the big-end boss, a 62 mm diameter cylinder 22 mm thick."}
+{"id": "mech-catalog/crankshaft#1", "prompt": "Create the front main journal on the X axis."}
+{"id": "mech-catalog/enclosure#1", "prompt": "Create the outer enclosure box, 80 by 60 by 30 mm."}
+{"id": "mech-catalog/end-cap#1", "prompt": "A round end cap 40 mm outer diameter, 22 mm tall, with a 32 mm blind pocket leaving a 3 mm wall."}
+{"id": "mech-catalog/engine-block#1", "prompt": "Create the block blank with the deck face at Z=220."}
+{"id": "mech-catalog/flanged-shaft#1", "prompt": "Create a cylindrical shaft, 12 mm diameter, 80 mm long, along Z."}
+{"id": "mech-catalog/flat-washer#1", "prompt": "A flat washer with 32 mm outer diameter, 13 mm inner diameter and 4 mm thickness."}
+{"id": "mech-catalog/flywheel#1", "prompt": "Create the flywheel disc, 280 mm diameter and 32 mm thick."}
+{"id": "mech-catalog/hex-standoff#1", "prompt": "A hex standoff 20 mm across the flats and 25 mm tall with an 8 mm central bore."}
+{"id": "mech-catalog/hinge#1", "prompt": "Build the fixed hinge leaf with its three barrel knuckles."}
+{"id": "mech-catalog/l-bracket#1", "prompt": "An L-bracket: a 60x40 mm base 6 mm thick with a 45 mm wall rising from one short edge, and a 6 mm hole in the base."}
+{"id": "mech-catalog/l-mounting-bracket#1", "prompt": "Create the base plate, 80 by 60 mm and 8 mm thick."}
+{"id": "mech-catalog/mounting-plate#1", "prompt": "An 80x60x6 mm mounting plate with a 6 mm through-hole set 10 mm in from each corner."}
+{"id": "mech-catalog/piston#1", "prompt": "Create the piston blank, an 85.5 mm diameter cylinder 62 mm tall."}
+{"id": "mech-catalog/piston-assembly#1", "prompt": "Build the Engine Piston in its working frame, crown up."}
+{"id": "mech-catalog/spur-gear#1", "prompt": "Create the gear hub, a 60 mm diameter disc 12 mm thick."}
+{"id": "mech-catalog/v-pulley#1", "prompt": "Create the pulley body, a 70 mm diameter disc 25 mm wide."}
