@@ -164,4 +164,4 @@ catalog content read-only.
 
 ## Known Unknowns
 
-- TODO: Decide whether VLM critique remains an explicit Bedrock exception or moves behind a provider-neutral vision protocol / Current basis: `cadless.vlm_critique.VlmCritic` lazy-imports `boto3` and `Pipeline` invokes the injected critic, while ADR-0001 says vendor SDKs live only in provider adapters / 해소 조건: Record the exception in an ADR or implement and test a neutral vision-provider seam, then align ADR-0001
+- TODO: Decide whether VLM critique remains an explicit Bedrock exception or moves behind a provider-neutral vision protocol / Current basis: `cadless.vlm_critique.VlmCritic` lazy-imports `boto3` and `Pipeline` invokes the injected critic, while ADR-0001 says vendor SDKs live only in provider adapters / Resolved when: the exception is recorded in an ADR, or a neutral vision-provider seam is implemented and tested and ADR-0001 is aligned with it
