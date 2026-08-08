@@ -5,6 +5,13 @@ each API key is set — never a key value). POST /settings validates, persists t
 ``runtime-db/settings.json``, and applies the change without a restart. The
 endpoint is unauthenticated, so the tool must bind 127.0.0.1 (see backend.main /
 the compose proxy). Delegates all logic to :mod:`cadless.user_settings`.
+
+**A build that hosts more than one person accepts no write here.** That file is
+one file for the installation, so a visitor changing a model, a budget or a key
+changes it for everybody — and loopback was the only thing standing between this
+endpoint and whoever is connected. The refusal lives with the rule it enforces,
+in ``user_settings``, so a Python caller inherits it too; the read is deliberately
+left alone, because the settings panel renders from it.
 """
 
 from __future__ import annotations

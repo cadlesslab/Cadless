@@ -71,9 +71,21 @@ here even though the plug is fitted elsewhere.
 - **Three things stay installation-wide** and are known gaps rather than
   oversights. A build that adds a credential of its own to that file, or a
   route of its own that curates the catalogue, adds to the list:
-  1. `user_settings.json` — one file, so one person's save changes the model and
+  1. `settings.json` — one file, so one person's save changes the model and
      budget for everyone, and the endpoint that writes it asks nobody who they
-     are.
+     are. **Closed for a hosted build, and only there**: while
+     `CADLESS_REQUIRE_IDENTITY` is set, that endpoint accepts no write at all and
+     the settings become a launch decision. The file is still installation-wide,
+     so this is a refusal rather than a fix — what a per-person store would
+     answer instead is still open. The read is untouched.
+
+     Two things that refusal deliberately does not do, so neither is later read
+     into it. It does not **clear** anything: a build started with the flag on
+     still replays whatever the file already held, so a value written while that
+     same installation ran locally survives the switch, and an operator turning
+     hosting on should look at the file rather than assume it was emptied. And it
+     does not reach the environment: a credential pinned at launch is how a
+     hosted build is *supposed* to be configured.
   2. The artifact blob directory (`artifacts_dir/<version_id>/`, flat, with
      paths already recorded in rows). Access is gated in SQL, so the layout
      leaks nothing on its own — but a build that serves those files by a route

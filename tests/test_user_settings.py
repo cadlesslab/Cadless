@@ -263,6 +263,124 @@ def test_cost_multiplying_knob_refused_without_the_launch_gate():
     assert settings.forge_enabled is False
 
 
+def test_a_hosted_build_refuses_a_credential(monkeypatch):
+    """On a build that hosts more than one person, every caller here is a stranger.
+
+    The endpoint has no authentication of its own, so what a request would be
+    writing is the *installation's* credential — and the next generation anybody
+    ran would spend it. The refusal names the launch variable for the same reason
+    the Tier B one does: an operator reading it should be able to tell a posture
+    from a bug.
+    """
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    with pytest.raises(ValueError, match="CADLESS_REQUIRE_IDENTITY"):
+        user_settings.save({"anthropic_api_key": "sk-xyz"})
+
+    assert user_settings.load() == {}
+    assert user_settings.secret("anthropic_api_key") is None
+
+
+def test_a_hosted_build_refuses_a_harmless_field_too(monkeypatch):
+    """The whole write, not only the credentials — and this is the case that says so.
+
+    ``settings.json`` is one file for the installation, so a visitor changing the
+    model changes it for everybody, and a gate that let this through would close
+    the headline hole while leaving a real one. Refusing the credential fields
+    alone was considered and rejected for exactly this.
+    """
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    with pytest.raises(ValueError, match="CADLESS_REQUIRE_IDENTITY"):
+        user_settings.save({"codegen_model": "sonnet-4-6"})
+
+    assert user_settings.load() == {}
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"provider": "bogus"},
+        {"provider": "openai"},
+        {"forge_enabled": True},
+        {"rag_top_k": 999},
+        {"vlm_model_slug": "not-a-slug"},
+    ],
+    ids=["unknown-provider", "model-repoint", "tier-b", "out-of-range", "unknown-slug"],
+)
+def test_the_hosted_refusal_wins_over_every_other_complaint(monkeypatch, patch):
+    """Ordering, which the code claimed and nothing held.
+
+    Moving the refusal after any of the other checks leaves the whole suite
+    green — measured, twice — while a hosted build starts answering an
+    unauthenticated caller with the installation's configured model, the entire
+    model catalogue, whether the advanced gate is on, and every accepted range.
+    Each of those is something the refusal exists to keep unlearnable, so the
+    property under test is not "it refuses" but "it refuses *first*".
+    """
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    with pytest.raises(ValueError) as caught:
+        user_settings.save(patch)
+
+    message = str(caught.value)
+    assert "CADLESS_REQUIRE_IDENTITY" in message
+    for disclosure in (
+        "choose one of",
+        "CADLESS_SETTINGS_ADVANCED",
+        "outside the accepted range",
+        "Bedrock/Claude",
+    ):
+        assert disclosure not in message
+
+
+def test_a_hosted_build_refuses_to_forget_a_credential_too(monkeypatch):
+    """`clear()` is a write, and the reason for putting the guard in this module
+    rather than at the route has to hold for it as well.
+
+    No route reaches it today, but the engine loads add-on routers through an
+    entry-point seam — an add-on offering "forget my key" would otherwise remove
+    the installation's credential for everybody who shares the build.
+    """
+    user_settings.save({"anthropic_api_key": "sk-xyz"})
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    with pytest.raises(ValueError, match="CADLESS_REQUIRE_IDENTITY"):
+        user_settings.clear("anthropic_api_key")
+
+    assert user_settings.secret("anthropic_api_key") == "sk-xyz"
+
+
+def test_an_empty_patch_is_not_the_thing_being_refused(monkeypatch):
+    """A patch that asks for nothing changes nothing, hosted or not.
+
+    Worth pinning rather than leaving to chance: a refusal keyed on "hosted"
+    alone would turn a no-op into an error, and the endpoint's own model builds
+    an empty dict whenever every field was omitted.
+    """
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    assert user_settings.save({}) == user_settings.status()
+
+
+def test_the_gate_is_not_reachable_through_the_thing_it_gates(monkeypatch):
+    """The flag cannot be turned off by the endpoint it protects.
+
+    Structural rather than incidental: ``require_identity`` is in none of the
+    field maps, so there is no patch that reaches it and no ordering of saves
+    that opens the gate. Asserted here because the whole refusal rests on it.
+    """
+    assert "require_identity" not in user_settings._ALL_FIELDS
+    assert "require_identity" not in user_settings._SETTINGS_ATTR
+
+    # And the structure is what holds it, not the refusal: `save` maps only the
+    # fields it knows, so even reached directly — no endpoint, no gate — the flag
+    # is untouched by a patch that names it.
+    monkeypatch.setattr(settings, "require_identity", False)
+    user_settings.save({"require_identity": True})
+    assert settings.require_identity is False
+
+
 def test_cost_multiplying_knob_accepted_when_the_gate_is_set(monkeypatch):
     monkeypatch.setattr(user_settings, "_ADVANCED_ENABLED", True)
 
