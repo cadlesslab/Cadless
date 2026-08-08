@@ -95,6 +95,67 @@ def test_post_saves_applies_and_never_echoes_key(client, tmp_path):
     assert "sk-xyz" not in g.text
 
 
+def test_a_hosted_build_refuses_the_write_and_persists_nothing(client, tmp_path, monkeypatch):
+    """The whole point of the change, asked of the route rather than the function.
+
+    The flag is set after the app is built on purpose: a real hosted build also
+    registers an identity resolver, and without one the app refuses to boot at
+    all. What is under test here is the refusal, not the boot, so the shorter
+    arrangement is the honest one — and the gate reads the flag per request, so
+    the two reach the same line.
+    """
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    r = client.post("/settings", json={"anthropic_api_key": "sk-xyz"})
+
+    assert r.status_code == 400
+    assert "CADLESS_REQUIRE_IDENTITY" in r.json()["detail"]
+    assert "sk-xyz" not in r.text
+    assert not (tmp_path / "settings.json").exists()
+    assert user_settings.secret("anthropic_api_key") is None
+
+
+def test_a_hosted_build_still_answers_the_read_and_still_masks_it(client, monkeypatch):
+    """The read is what the panel renders from, so refusing it would break the
+    engine's own frontend — which is why the route is gated rather than removed."""
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    r = client.get("/settings")
+
+    assert r.status_code == 200
+    assert r.json()["secrets"]["anthropic_api_key"]["set"] is False
+    assert r.json()["provider"] == "anthropic"
+
+
+def test_a_hosted_build_cannot_be_talked_into_it_by_an_empty_body(client, tmp_path, monkeypatch):
+    """A no-op stays a no-op. Every field on the endpoint's model is optional and
+    dropped when unset, so a body of `{}` is reachable — and answering 400 to it
+    would report a refusal where nothing was asked for."""
+    monkeypatch.setattr(settings, "require_identity", True)
+
+    assert client.post("/settings", json={}).status_code == 200
+    # The assertion the docstring above is actually about. Without it this test
+    # said "a no-op stays a no-op" while the request created the file: `save`
+    # used to reach `_write` even with nothing left to write, so on a hosted
+    # build an unauthenticated caller could create `settings.json` — or, since
+    # `load()` answers `{}` for a file it cannot parse, truncate a corrupt one.
+    assert not (tmp_path / "settings.json").exists()
+
+
+def test_an_empty_body_does_not_rewrite_a_file_that_already_exists(client, tmp_path):
+    """The other half, on the local build where writes are allowed.
+
+    Creating the file was the visible half of the same defect; overwriting one
+    that is already there is the half that loses something.
+    """
+    client.post("/settings", json={"provider": "anthropic"})
+    written = (tmp_path / "settings.json").read_bytes()
+
+    assert client.post("/settings", json={}).status_code == 200
+
+    assert (tmp_path / "settings.json").read_bytes() == written
+
+
 def test_post_tuning_knob_round_trips_with_its_type(client):
     """A JSON number stays a number, and a false stays a set value."""
     r = client.post(

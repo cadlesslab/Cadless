@@ -209,11 +209,18 @@ walks are shared, so an item belongs to the installation and is read by
 everyone. Customising one is a clone, and the clone is yours.
 
 Three things remain installation-wide and are not this seam's to fix:
-`user_settings.json` (one file, so one save changes the model and budget for
+`settings.json` (one file, so one save changes the model and budget for
 everyone), the artifact blob directory, and **who may curate the catalogue**.
 A build that stores a credential of its own in that file adds a fourth. Blob *access* is gated in SQL, so the flat
 layout leaks nothing by itself — but a build that serves those files by some
 other route of its own would bypass the gate.
+
+The first of those is **refused rather than shared once you set
+`CADLESS_REQUIRE_IDENTITY`**: `POST /settings` then accepts nothing, because one
+file for the installation means one visitor's save is everybody's, and the
+credential being written is yours rather than theirs. Configure a hosted build
+from its launch environment. `GET /settings` still answers — the panel renders
+from it — and still reports only whether each key is set.
 
 The last one needs a decision from you if you host untrusted callers.
 `POST /packages/import` and `DELETE /catalog/{id}` act for the installation,

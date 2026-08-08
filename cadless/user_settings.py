@@ -119,6 +119,30 @@ _SLUG_FIELDS: frozenset[str] = frozenset(
 _ADVANCED_GATE = "CADLESS_SETTINGS_ADVANCED"
 
 
+# A build that hosts more than one person takes its settings from its launch
+# environment, not from whoever happens to be connected. This is the Tier B
+# reasoning one step further: there, the endpoint having no authentication made
+# *raising spend* a vector; here it makes the whole write one. ``settings.json``
+# is a single file for the installation, so a visitor who changes a model, a
+# budget or a key changes it for everybody at once — and the credential they
+# would be writing is the installation's, which the next generation anybody runs
+# then spends.
+#
+# The gate is ``require_identity`` rather than a variable of its own. It already
+# means "this build hosts more than one person"; ``cadless/config.py`` already
+# calls it a launch decision and says it is deliberately not settable through
+# this endpoint; and the two have to move together, because identity without
+# this leaves every signed-in visitor able to write the installation's
+# credentials. Named here only so the refusal can say what to look for.
+#
+# Written out rather than derived, unlike `_TUNING_FIELDS` above. Deriving it
+# would still spell the field name as a literal — there is no cheap way to get
+# an attribute's name as a symbol — so it would be the same second copy in a
+# less readable shape. What actually keeps this honest is that a wrong name here
+# changes only the sentence an operator reads, never what is refused.
+_IDENTITY_GATE = "CADLESS_REQUIRE_IDENTITY"
+
+
 def _env_flag(name: str) -> bool:
     """Read an environment variable as a boolean.
 
@@ -232,6 +256,34 @@ def _effective_after(patch: dict[str, Any]) -> dict[str, Any]:
     return eff
 
 
+def _refuse_a_hosted_write(patch: dict[str, Any]) -> None:
+    """Raise while this build hosts more than one person and a write was asked for.
+
+    Read live rather than snapshotted at import, unlike the Tier B gate. That one
+    reads ``os.environ`` and had to be pinned so a request could not flip it;
+    this one reads a settings field that no request can reach — it is in none of
+    the field maps and the endpoint's model forbids what it does not name — so
+    there is nothing to pin, and reading it where it is used keeps the rule and
+    its condition in one place.
+
+    An empty patch is not a write. Every field on the endpoint's model is
+    optional and dropped when unset, so a body of ``{}`` is reachable, and
+    answering an error to a request that asked for nothing would report a
+    refusal where nothing was refused.
+
+    The message names no field and echoes no value: the engine writes the text
+    of what is raised here into a log line, and the caller already knows what it
+    sent.
+    """
+    if not patch or not settings.require_identity:
+        return
+    raise ValueError(
+        "this build hosts more than one person, so its settings are a launch "
+        f"decision rather than a request one ({_IDENTITY_GATE} is set); "
+        "change them in the launch environment and restart"
+    )
+
+
 def validate(patch: dict[str, Any]) -> None:
     """Raise ``ValueError`` on an unusable provider/model combination.
 
@@ -239,7 +291,12 @@ def validate(patch: dict[str, Any]) -> None:
     same ``PROFILES`` membership rule): when the effective provider is openai the
     orchestrator/codegen models must be OpenAI ids, not the Claude-slug defaults, or
     generation 404s. Surfaced here so the UI shows a readable error at save time.
+
+    A hosted build is refused first, before any of that is looked at, so a caller
+    it will not serve learns nothing from the shape of the answer about what
+    would have been valid.
     """
+    _refuse_a_hosted_write(patch)
     provider = patch.get("provider")
     if provider is not None and provider not in PROVIDERS:
         raise ValueError(f"unknown provider {provider!r}; choose one of {', '.join(PROVIDERS)}")
@@ -392,10 +449,21 @@ def save(patch: dict[str, Any]) -> dict[str, Any]:
     Blank/omitted values are ignored (this endpoint sets values; it does not clear
     them). Validation runs before anything is written, so a rejected patch leaves
     both the file and the running process untouched.
+
+    A patch with nothing left in it writes nothing, and that is a correctness
+    rule rather than an optimisation. Every field on the endpoint's model is
+    optional, so ``{}`` is reachable — and without this line it still reached
+    ``_write``, which creates the file where none existed and, because
+    :func:`load` answers ``{}`` for a file it cannot parse, **truncates a corrupt
+    or hand-edited one**. On a build that refuses writes because it hosts more
+    than one person, that was an unauthenticated caller destroying the
+    installation's saved settings through the door marked closed.
     """
     known = set(_ALL_FIELDS) | set(_SAVED_ONLY_FIELDS)
     patch = {k: v for k, v in patch.items() if k in known and v not in (None, "")}
     validate(patch)
+    if not patch:
+        return status()
     data = load()
     data.update(patch)
     _write(data)
@@ -413,7 +481,14 @@ def clear(*fields: str) -> dict[str, Any]:
     An environment variable that was set at process start is left in place: we
     did not put it there, and removing it would misreport what the next request
     actually sends. :func:`status` keeps calling such a value ``env``.
+
+    Gated the same way :func:`save` is, and for the consistency the placement
+    argument demands: forgetting the installation's credential is a write, and a
+    build that hosts more than one person must not take one from a request. This
+    has no route today, but the engine ships a seam for add-on routers — an
+    add-on offering "forget my key" would otherwise remove everybody's.
     """
+    _refuse_a_hosted_write({f: True for f in fields})
     clearable = {f for f in fields if f in _SECRET_FIELDS or f in _SAVED_ONLY_FIELDS}
     unclearable = set(fields) - clearable
     if unclearable:
