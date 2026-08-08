@@ -520,6 +520,14 @@ def secret(field: str) -> str | None:
     return os.environ.get(_SECRET_FIELDS[field]) or load().get(field) or None
 
 
+# The signing name of `bedrock-runtime`, which is what botocore appends to
+# AWS_BEARER_TOKEN_ when it looks for a service-specific credential. It is not
+# the client name: the service is `bedrock-runtime` and the signing name is
+# `bedrock`. Pinned by a test against botocore's own service model, so a rename
+# on their side surfaces here rather than as a lab that silently stops answering.
+_BEDROCK_SIGNING_NAME = "bedrock"
+
+
 def has_credentials(provider: str | None = None) -> bool:
     """Whether ``provider`` (or the current one) has usable credentials.
 
@@ -528,6 +536,14 @@ def has_credentials(provider: str | None = None) -> bool:
     role), so we ask botocore rather than only checking env vars — otherwise a
     working ``~/.aws`` or instance-role setup would be misreported as "no
     credentials" and wrongly blocked.
+
+    Bedrock accepts **two** credential forms and they resolve on different paths.
+    A service-specific credential is a bearer token, which botocore reads at
+    client construction from ``AWS_BEARER_TOKEN_<SIGNING_NAME>`` and never through
+    the session's SigV4 chain. Asking the chain alone therefore reports a
+    correctly configured deployment as having none, and the turn is refused with
+    an invitation to open Settings and type a key — on a hosted build, the one
+    thing the deployment exists to avoid.
     """
     provider = provider or settings.llm_provider
     if provider == "anthropic":
@@ -537,7 +553,14 @@ def has_credentials(provider: str | None = None) -> bool:
     if provider == "bedrock":
         try:
             import botocore.session
+            import botocore.utils
 
+            # Looked up rather than imported: on a botocore too old to know about
+            # bearer tokens, an ImportError here would be caught below and turn a
+            # working access key into "no credentials".
+            token_from_environment = getattr(botocore.utils, "get_token_from_environment", None)
+            if token_from_environment is not None and token_from_environment(_BEDROCK_SIGNING_NAME):
+                return True
             return botocore.session.Session().get_credentials() is not None
         except Exception:  # botocore missing or resolution failed -> treat as unset
             return False
@@ -555,8 +578,10 @@ _CREDENTIAL_HINTS: dict[str, str] = {
     ),
     "bedrock": (
         "No AWS credentials found for Bedrock. Open Settings to add an AWS access key "
-        "and secret, or switch to Anthropic/OpenAI and enter an API key. Browsing and "
-        "editing the sample catalog works without one."
+        "and secret, or switch to Anthropic/OpenAI and enter an API key. A deployment "
+        "can supply either an access key or a Bedrock bearer token in "
+        "AWS_BEARER_TOKEN_BEDROCK instead, so nobody has to enter one here. Browsing "
+        "and editing the sample catalog works without one."
     ),
 }
 
