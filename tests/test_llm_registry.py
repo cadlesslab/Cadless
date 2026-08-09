@@ -40,9 +40,13 @@ def _clean_registry():
     """
     registry_mod._load_bundled_providers()
     before = dict(registry_mod._PROVIDER_FACTORIES)
+    registry_mod._ADVERTISED_LOADED = False
+    registry_mod._PROVIDER_LOAD_ERRORS.clear()
     yield
     registry_mod._PROVIDER_FACTORIES.clear()
     registry_mod._PROVIDER_FACTORIES.update(before)
+    registry_mod._ADVERTISED_LOADED = False
+    registry_mod._PROVIDER_LOAD_ERRORS.clear()
 
 
 class _Stub:
@@ -116,3 +120,128 @@ def test_unregistering_returns_the_name_to_unknown():
 def test_unregistering_a_name_nobody_claimed_is_not_an_error():
     """Cleanup runs on paths where the registration may not have happened."""
     unregister_provider("never-registered")
+
+
+# ---- the seam: a provider that ships in another distribution ----------------
+
+
+class _Advertised:
+    """What ``entry_points`` hands back, reduced to the three things we use.
+
+    A real ``EntryPoint`` would resolve its ``value`` by importing it, which
+    would mean installing a distribution to test the seam. What the registry
+    asks of one is its ``name`` (which becomes the provider name), ``load()``,
+    and — when that fails — ``value`` to name it in the log.
+    """
+
+    def __init__(self, name: str, value: str, produce):
+        self.name = name
+        self.value = value
+        self._produce = produce
+
+    def load(self):
+        return self._produce()
+
+
+def _offering(*entries):
+    """A stand-in for ``entry_points`` that advertises exactly ``entries``."""
+
+    def entry_points(*, group: str):
+        assert group == registry_mod.PROVIDER_ENTRY_POINT_GROUP
+        return list(entries)
+
+    return entry_points
+
+
+def _advertising(monkeypatch, *entries) -> None:
+    monkeypatch.setattr(registry_mod, "entry_points", _offering(*entries))
+
+
+def test_a_provider_from_an_installed_distribution_is_selectable(monkeypatch):
+    """The seam itself: a build adds a model backend without editing this tree."""
+    _advertising(monkeypatch, _Advertised("outside", "somewhere:factory", lambda: _factory))
+
+    assert isinstance(build_provider("outside", settings=Settings()), _Stub)
+    assert "outside" in available_providers()
+
+
+def test_an_advertised_provider_is_selectable_through_the_environment(monkeypatch):
+    """Selection is by environment only — the settings panel keeps a closed list."""
+    _advertising(monkeypatch, _Advertised("outside", "somewhere:factory", lambda: _factory))
+    monkeypatch.setenv("CADLESS_LLM_PROVIDER", "outside")
+
+    assert isinstance(build_provider(settings=Settings()), _Stub)
+
+
+@pytest.mark.parametrize("advertised", [(), None])
+def test_the_ordinary_build_advertises_nothing_and_is_unaffected(monkeypatch, advertised):
+    """The negative control.
+
+    Without it a loader that never ran is indistinguishable from one that ran
+    and found nothing. Parametrized over an empty group *and* the real
+    unpatched ``entry_points``: the first proves the loop is a no-op, and only
+    the second proves an ordinary install is untouched by any of this.
+    """
+    if advertised is not None:
+        _advertising(monkeypatch, *advertised)
+
+    assert available_providers() == ["anthropic", "bedrock", "fake", "openai"]
+
+
+def test_an_advertised_provider_cannot_displace_a_bundled_one(monkeypatch):
+    """A name this tree ships stays this tree's, and the app carries on."""
+    _advertising(monkeypatch, _Advertised("bedrock", "somewhere:factory", lambda: _factory))
+
+    assert build_provider("bedrock", settings=Settings()).__class__.__name__ == (
+        "BedrockChatProvider"
+    )
+    # The contested name must not be recorded as a failure, or selecting it
+    # would report the collision instead of returning the bundled adapter.
+    assert "bedrock" not in registry_mod._PROVIDER_LOAD_ERRORS
+
+
+def test_a_provider_that_cannot_be_produced_does_not_stop_the_others(monkeypatch):
+    """One broken add-on must not cost a build its own providers."""
+
+    def unloadable():
+        raise ModuleNotFoundError("no module named 'half_installed'")
+
+    _advertising(
+        monkeypatch,
+        _Advertised("broken", "half_installed:factory", unloadable),
+        _Advertised("outside", "somewhere:factory", lambda: _factory),
+    )
+
+    assert isinstance(build_provider("bedrock", settings=Settings()), object)
+    # The entry after the broken one is still reached.
+    assert isinstance(build_provider("outside", settings=Settings()), _Stub)
+
+
+def test_selecting_a_provider_that_would_not_load_reports_why(monkeypatch):
+    """ "unknown provider" would be a lie, and would send the reader hunting.
+
+    The distribution is installed and the name is real; what failed is
+    producing the factory, and that cause travels with the refusal.
+    """
+
+    def unloadable():
+        raise ModuleNotFoundError("no module named 'half_installed'")
+
+    _advertising(monkeypatch, _Advertised("broken", "half_installed:factory", unloadable))
+
+    with pytest.raises(ValueError, match="could not be loaded") as caught:
+        build_provider("broken", settings=Settings())
+
+    assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+    assert "half_installed" in str(caught.value.__cause__)
+
+
+def test_a_provider_that_would_not_load_is_not_offered_as_available(monkeypatch):
+    """``available_providers`` means "can be built", so a broken name is absent."""
+
+    def unloadable():
+        raise ModuleNotFoundError("no module named 'half_installed'")
+
+    _advertising(monkeypatch, _Advertised("broken", "half_installed:factory", unloadable))
+
+    assert "broken" not in available_providers()
