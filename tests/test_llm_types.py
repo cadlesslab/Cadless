@@ -193,7 +193,7 @@ def test_build_provider_resolves_registered_name():
         provider = build_provider("stub", settings=Settings())
         assert isinstance(provider, _StubProvider)
     finally:
-        registry_mod._PROVIDER_FACTORIES.pop("stub", None)
+        registry_mod.unregister_provider("stub")
 
 
 def test_build_provider_uses_config_default_when_name_omitted(monkeypatch):
@@ -203,7 +203,7 @@ def test_build_provider_uses_config_default_when_name_omitted(monkeypatch):
         provider = build_provider(settings=Settings())
         assert isinstance(provider, _StubProvider)
     finally:
-        registry_mod._PROVIDER_FACTORIES.pop("stub", None)
+        registry_mod.unregister_provider("stub")
 
 
 def test_build_provider_unknown_raises_clear_error():
