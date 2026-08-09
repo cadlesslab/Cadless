@@ -97,7 +97,11 @@ Providers get the same treatment rather than a new one.
   module-level import that hangs blocks discovery, and discovery runs inside
   the first request rather than at startup, so one such add-on wedges request
   handling. Containing that means running discovery at startup, which is a
-  change on the serving side rather than in this seam.
+  change on the serving side rather than in this seam. Two constraints on an
+  advertised module follow, and neither can be enforced from here: its import
+  must terminate, and it must not block on **another thread** that calls back
+  into the registry. Re-entering on the same thread is handled; a second thread
+  would wait for the discovery lock while the importing thread waits for it.
 - **This repository advertises nothing in the group it reads.** Its
   `pyproject.toml` has no entry-points table and the bundled adapters keep
   registering by import, which is the same shape as `cadless.routers`: the

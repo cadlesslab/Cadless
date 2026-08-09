@@ -54,7 +54,10 @@ _PROVIDER_LOAD_ERRORS: dict[str, BaseException] = {}
 # The lock is re-entrant, and _DISCOVERY_RUNNING is what stops that re-entrancy
 # from restarting the loop: an advertised module is third-party code, and one
 # that calls build_provider() while it is still being imported would otherwise
-# come back round through here on the same thread.
+# come back round through here on the same thread. What that does not cover is
+# an advertised module whose import blocks on *another* thread that calls back
+# in here: the other thread is not the one holding the lock, so it waits, and
+# the importing thread waits on it. An advertised module must not do that.
 _DISCOVERY_LOCK = threading.RLock()
 _DISCOVERY_RUNNING = False
 _ADVERTISED_LOADED = False
@@ -88,8 +91,13 @@ def unregister_provider(name: str) -> None:
     The pair to ``register_provider``: without it the only way to undo a
     registration is to reach into the table itself, and a registry a test can
     only add to is one whose additions outlive the test that made them.
+
+    Any recorded load failure for the name goes with it. Leaving one behind
+    would let a name be registrable and reported-as-broken at the same time.
     """
-    _PROVIDER_FACTORIES.pop(name.lower(), None)
+    key = name.lower()
+    _PROVIDER_FACTORIES.pop(key, None)
+    _PROVIDER_LOAD_ERRORS.pop(key, None)
 
 
 def _load_bundled_providers() -> None:
@@ -136,35 +144,64 @@ def _load_advertised_providers() -> None:
         _DISCOVERY_RUNNING = True
         try:
             _discover()
+            # Last statement of the try on purpose: reached only when discovery
+            # actually finished. Setting it in the finally would publish the
+            # cache over a half-filled table, and every later call would take
+            # the fast path above and report a perfectly installed provider as
+            # unknown — for the life of the process.
+            _ADVERTISED_LOADED = True
         finally:
             _DISCOVERY_RUNNING = False
-            _ADVERTISED_LOADED = True
 
 
 def _discover() -> None:
-    """The discovery loop itself. Called once, under ``_DISCOVERY_LOCK``."""
+    """The discovery loop itself. Called once, under ``_DISCOVERY_LOCK``.
+
+    Reading the group parses the metadata of every installed distribution, so a
+    single malformed file anywhere on ``sys.path`` can fail the scan — which has
+    nothing to do with any provider. Failing the scan degrades this build to its
+    bundled adapters rather than costing it the request it happened inside.
+    """
     _load_bundled_providers()
-    for entry in entry_points(group=PROVIDER_ENTRY_POINT_GROUP):
+    try:
+        advertised = list(entry_points(group=PROVIDER_ENTRY_POINT_GROUP))
+    except Exception:
+        logger.exception("could not read the %s entry-point group", PROVIDER_ENTRY_POINT_GROUP)
+        return
+    for entry in advertised:
         try:
-            factory = entry.load()
-        except (Exception, SystemExit) as exc:
-            # SystemExit is not an Exception, and a module that calls sys.exit()
-            # while being imported would otherwise walk straight out of here and
-            # take the process with it — which is the opposite of the
-            # containment this function exists to provide. KeyboardInterrupt is
-            # deliberately still allowed through, so Ctrl-C keeps working.
-            _PROVIDER_LOAD_ERRORS[entry.name.lower()] = exc
-            logger.exception("could not load the LLM provider advertised as %s", entry.value)
-            continue
-        try:
-            register_provider(entry.name, factory)
-        except ValueError:
-            logger.exception(
-                "the LLM provider advertised as %s claims the name %r, which is already "
-                "registered; keeping the one already in place",
-                entry.value,
-                entry.name,
-            )
+            _register_advertised(entry)
+        except (Exception, SystemExit):
+            # The backstop for whatever the two named failures below did not
+            # anticipate — an entry with no usable name, say. Containment here
+            # is per entry, so one unusable advertisement costs only itself.
+            logger.exception("could not register the LLM provider advertised as %r", entry)
+
+
+def _register_advertised(entry) -> None:
+    """Load and register one advertised entry, containing its two failures."""
+    try:
+        factory = entry.load()
+    except (Exception, SystemExit) as exc:
+        # SystemExit is not an Exception, and a module that calls sys.exit()
+        # while being imported would otherwise walk straight out of here and
+        # take the request with it — which is the opposite of the containment
+        # this seam exists to provide. KeyboardInterrupt is deliberately still
+        # allowed through, so Ctrl-C keeps working.
+        _PROVIDER_LOAD_ERRORS[entry.name.lower()] = exc
+        logger.exception("could not load the LLM provider advertised as %s", entry.value)
+        return
+    try:
+        register_provider(entry.name, factory)
+    except ValueError:
+        # A tolerated outcome rather than a broken install, so it is logged
+        # without a traceback: this build shipped that name and keeps it.
+        logger.warning(
+            "the LLM provider advertised as %s claims the name %r, which is already "
+            "registered; keeping the one already in place",
+            entry.value,
+            entry.name,
+        )
 
 
 def available_providers() -> list[str]:

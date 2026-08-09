@@ -207,6 +207,11 @@ Three things worth knowing:
   other provider goes on working, and asking for that name reports the
   underlying import failure rather than "unknown LLM provider" — which would
   send you looking for an install that is in fact right there.
+- **Your module is imported during a request, so its import must terminate**
+  and must not block on another thread that calls back into the engine's
+  registry — that second thread would wait for the discovery lock while yours
+  waits for it. Keep module-level work to definitions and do the real setup in
+  the factory or lazily in the client, as the bundled adapters do.
 - **Your provider is env-selectable only.** `user_settings.PROVIDERS` stays a
   closed tuple of the names this tree ships, so yours is picked with
   `CADLESS_LLM_PROVIDER` and does not appear in the Settings panel. The

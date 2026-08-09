@@ -49,6 +49,7 @@ def _clean_registry():
     registry_mod._PROVIDER_FACTORIES.clear()
     registry_mod._PROVIDER_FACTORIES.update(before)
     registry_mod._ADVERTISED_LOADED = False
+    registry_mod._DISCOVERY_RUNNING = False
     registry_mod._PROVIDER_LOAD_ERRORS.clear()
 
 
@@ -122,7 +123,7 @@ def test_unregistering_returns_the_name_to_unknown():
 
 def test_unregistering_a_name_nobody_claimed_is_not_an_error():
     """Cleanup runs on paths where the registration may not have happened."""
-    unregister_provider("never-registered")
+    assert unregister_provider("never-registered") is None
 
 
 # ---- the seam: a provider that ships in another distribution ----------------
@@ -185,10 +186,16 @@ def test_the_ordinary_build_advertises_nothing_and_is_unaffected(monkeypatch, ad
     unpatched ``entry_points``: the first proves the loop is a no-op, and only
     the second proves an ordinary install is untouched by any of this.
     """
+    bundled = {"anthropic", "bedrock", "fake", "openai"}
     if advertised is not None:
         _advertising(monkeypatch, *advertised)
-
-    assert available_providers() == ["anthropic", "bedrock", "fake", "openai"]
+        # An empty group is a controlled input, so this half can be exact.
+        assert set(available_providers()) == bundled
+    else:
+        # The real scan. Asserted as a superset on purpose: this environment may
+        # legitimately have a distribution advertising a provider installed, and
+        # demanding equality would fail on a correct configuration.
+        assert bundled <= set(available_providers())
 
 
 def test_an_advertised_provider_cannot_displace_a_bundled_one(monkeypatch):
@@ -215,7 +222,9 @@ def test_a_provider_that_cannot_be_produced_does_not_stop_the_others(monkeypatch
         _Advertised("outside", "somewhere:factory", lambda: _factory),
     )
 
-    assert isinstance(build_provider("bedrock", settings=Settings()), object)
+    assert build_provider("bedrock", settings=Settings()).__class__.__name__ == (
+        "BedrockChatProvider"
+    )
     # The entry after the broken one is still reached.
     assert isinstance(build_provider("outside", settings=Settings()), _Stub)
 
@@ -275,6 +284,10 @@ def test_a_second_caller_waits_for_discovery_instead_of_being_told_it_is_done(mo
     second.start()
     first.join(timeout=5)
     second.join(timeout=5)
+    # join() returns None whether or not the thread finished. Without this, a
+    # timeout fails later with a confusing KeyError while two live threads are
+    # still mutating the registry through the fixture's teardown.
+    assert not first.is_alive() and not second.is_alive()
 
     assert isinstance(out["first"], _Stub)
     assert isinstance(out["second"], _Stub), f"the second caller raced discovery: {out['second']!r}"
@@ -303,6 +316,87 @@ def test_a_provider_that_exits_while_loading_does_not_take_the_process_with_it(m
     with pytest.raises(ValueError, match="could not be loaded") as caught:
         build_provider("suicidal", settings=Settings())
     assert isinstance(caught.value.__cause__, SystemExit)
+
+
+def test_discovery_that_did_not_finish_is_not_remembered_as_finished(monkeypatch):
+    """A failed discovery must not publish itself as done.
+
+    The cache is checked before anything else, so marking an unfinished
+    discovery as complete does not fail loudly — it silently reports every
+    advertised provider as unknown, for the life of the process.
+    """
+
+    def exploding() -> None:
+        raise RuntimeError("the scan blew up")
+
+    monkeypatch.setattr(registry_mod, "_discover", exploding)
+    with pytest.raises(RuntimeError):
+        build_provider("outside", settings=Settings())
+
+    assert registry_mod._ADVERTISED_LOADED is False
+    assert registry_mod._DISCOVERY_RUNNING is False
+
+    # A later, working discovery still runs rather than being skipped.
+    monkeypatch.undo()
+    _advertising(monkeypatch, _Advertised("outside", "somewhere:factory", lambda: _factory))
+    assert isinstance(build_provider("outside", settings=Settings()), _Stub)
+
+
+def test_a_group_that_cannot_be_read_leaves_the_bundled_providers_working(monkeypatch):
+    """Reading the group parses every installed distribution's metadata.
+
+    One malformed file belonging to a package that has nothing to do with this
+    engine would otherwise cost the build every provider and the request it
+    happened inside.
+    """
+
+    def unreadable(*, group: str):
+        raise ValueError("a malformed entry_points.txt somewhere on sys.path")
+
+    monkeypatch.setattr(registry_mod, "entry_points", unreadable)
+
+    assert build_provider("bedrock", settings=Settings()).__class__.__name__ == (
+        "BedrockChatProvider"
+    )
+    assert set(available_providers()) == {"anthropic", "bedrock", "fake", "openai"}
+
+
+def test_a_provider_that_builds_a_provider_while_loading_does_not_recurse(monkeypatch):
+    """An advertised module is third-party code and may do this at import time.
+
+    Re-entering on the same thread must return rather than restart discovery —
+    which would recurse until the stack ran out.
+    """
+    seen: list[object] = []
+
+    def reentrant():
+        try:
+            seen.append(build_provider("bedrock", settings=Settings()))
+        except Exception as exc:  # noqa: BLE001 — recorded, then asserted on
+            seen.append(exc)
+        return _factory
+
+    _advertising(monkeypatch, _Advertised("outside", "somewhere:factory", reentrant))
+
+    assert isinstance(build_provider("outside", settings=Settings()), _Stub)
+    # The bundled table is already populated when discovery runs, so the
+    # re-entrant call is answered rather than failing.
+    assert seen and seen[0].__class__.__name__ == "BedrockChatProvider"
+
+
+def test_unregistering_also_forgets_a_recorded_load_failure(monkeypatch):
+    """Otherwise a name is registrable and reported-as-broken at the same time."""
+
+    def unloadable():
+        raise ModuleNotFoundError("no module named 'half_installed'")
+
+    _advertising(monkeypatch, _Advertised("broken", "half_installed:factory", unloadable))
+    with pytest.raises(ValueError, match="could not be loaded"):
+        build_provider("broken", settings=Settings())
+
+    unregister_provider("broken")
+    register_provider("broken", _factory)
+    assert isinstance(build_provider("broken", settings=Settings()), _Stub)
 
 
 def test_a_provider_that_would_not_load_is_not_offered_as_available(monkeypatch):
