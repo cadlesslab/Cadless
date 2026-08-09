@@ -19,11 +19,13 @@ build123d also differs by model, so users need the freedom to pick.
   (`cadless/llm/provider.py`) with four methods — `stream_turn`,
   `capabilities`, `complete`, `embed` — over the neutral message/tool/stream
   types in `cadless/llm/types.py`.
-- Adapters live in `cadless/llm/providers/` (`bedrock`, `anthropic`,
-  `openai`, plus a deterministic `fake` for offline tests) and register
-  themselves with `register_provider(name, factory)`;
+- The bundled adapters live in `cadless/llm/providers/` (`bedrock`,
+  `anthropic`, `openai`, plus a deterministic `fake` for offline tests) and
+  register themselves with `register_provider(name, factory)`;
   `build_provider(name=None, *, settings)` resolves the configured one
-  (`CADLESS_LLM_PROVIDER`).
+  (`CADLESS_LLM_PROVIDER`). An adapter does not have to be in this tree — one
+  installed beside the engine advertises itself through an entry-point group
+  ([ADR-0008](./0008-provider-entry-point.md)).
 - Vendor SDKs are imported **only** inside the adapter modules. The agent,
   pipeline and prompts never see them.
 - Models are configured by role, not hard-coded: an orchestrator model for
@@ -32,9 +34,10 @@ build123d also differs by model, so users need the freedom to pick.
 
 ## Consequences
 
-- Adding a provider is a bounded exercise: implement the protocol, call
-  `register_provider`, done — the four bundled adapters are the reference
-  implementations.
+- Adding a provider is a bounded exercise: implement the protocol, register it,
+  done — the four bundled adapters are the reference implementations. A build
+  that cannot put its adapter in this tree registers the same factory from its
+  own distribution instead ([ADR-0008](./0008-provider-entry-point.md)).
 - The `fake` provider makes the whole loop testable in CI with no
   credentials and no network.
 - Capability differences between vendors must be expressed through the

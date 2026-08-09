@@ -156,6 +156,11 @@ readable. The rationale is in
 
 ## Registering it
 
+Two ways in, and which one you need depends on whether this tree is yours to
+change.
+
+### Inside this tree
+
 Two steps. At the bottom of your module, expose a factory and register it:
 
 ```python
@@ -175,6 +180,42 @@ from cadless.llm.providers import acme as _acme  # noqa: E402,F401
 
 That import *is* the registration — `register_provider` runs as an import side
 effect, and the registry triggers the package import lazily on first use.
+
+### Shipping it in your own distribution
+
+If your adapter lives in a package installed *beside* the engine, you cannot add
+that import line — and you do not need to. Advertise the factory under the
+`cadless.llm_providers` entry-point group in your own `pyproject.toml`:
+
+```toml
+[project.entry-points."cadless.llm_providers"]
+acme = "my_package.provider:_factory"
+```
+
+The entry-point **name** is the provider name, and the value resolves to the
+same `ProviderFactory` — `Callable[[Settings], ChatProvider]` — that
+`register_provider` takes. Do not call `register_provider` yourself as well: the
+engine does it for you, after the bundled adapters, and that ordering is what
+the first rule below depends on.
+
+Three things worth knowing:
+
+- **A name this tree already ships is refused**, and the bundled adapter stays.
+  Advertising something as `bedrock` does not replace `bedrock`; the attempt is
+  logged and otherwise ignored.
+- **A factory that will not load does not stop the app.** It is logged, every
+  other provider goes on working, and asking for that name reports the
+  underlying import failure rather than "unknown LLM provider" — which would
+  send you looking for an install that is in fact right there.
+- **Your module is imported during a request, so its import must terminate**
+  and must not block on another thread that calls back into the engine's
+  registry — that second thread would wait for the discovery lock while yours
+  waits for it. Keep module-level work to definitions and do the real setup in
+  the factory or lazily in the client, as the bundled adapters do.
+- **Your provider is env-selectable only.** `user_settings.PROVIDERS` stays a
+  closed tuple of the names this tree ships, so yours is picked with
+  `CADLESS_LLM_PROVIDER` and does not appear in the Settings panel. The
+  reasoning is in [ADR-0008](../adr/0008-provider-entry-point.md).
 
 ### Where to import StreamChunk from
 
@@ -207,7 +248,9 @@ function. That one is redundant; there is no need to copy it.
 nothing claims the name. `available_providers()` returns that list.
 
 At this point your provider works from the environment. To make it appear in the
-in-app Settings panel as well, extend `cadless/user_settings.py`:
+in-app Settings panel as well — which only an in-tree adapter can do, since
+every step below is an edit to this repository — extend
+`cadless/user_settings.py`:
 
 - add the name to the `PROVIDERS` tuple — `validate()` rejects anything not in it;
 - if it needs a key, map a field to its environment variable in `_SECRET_FIELDS`
@@ -216,7 +259,9 @@ in-app Settings panel as well, extend `cadless/user_settings.py`:
   message instead of the generic fallback.
 
 Skipping this is a legitimate choice — `fake` is deliberately registered but not
-offered in the UI.
+offered in the UI. A provider that arrived through the entry-point group has no
+choice in the matter: the tuple is closed, so it is env-selectable and nothing
+more.
 
 ## Testing it without an API key
 
@@ -262,8 +307,11 @@ tests are excluded. Expect it to take a few minutes.
 - [ ] Stream translated to `StreamChunk`s with the documented payload keys
 - [ ] Config slugs mapped to vendor ids, failing loudly on an unknown slug
 - [ ] `embed` implemented, or raising `EmbeddingsUnsupported` before any SDK work
-- [ ] `_factory` + `register_provider` at the bottom of the module
-- [ ] Import line added to `cadless/llm/providers/__init__.py`
+- [ ] `_factory` at the bottom of the module — plus, **in this tree**, a
+      `register_provider` call and an import line in
+      `cadless/llm/providers/__init__.py`; **in your own distribution**, a
+      `[project.entry-points."cadless.llm_providers"]` entry naming that
+      factory, and no `register_provider` call of your own
 - [ ] `StreamChunk` / `parse_partial_json` imported at the file bottom, with the `noqa`
 - [ ] Offline tests pass under `make test`; live tests marked, registered in
       `pyproject.toml`, and excluded in both `Makefile` and the CI workflow

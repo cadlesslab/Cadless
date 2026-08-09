@@ -25,8 +25,9 @@ is what runs, and a change to the engine is an ordinary pull request against
 catalog and a marketplace to publish parts through are a separate product,
 developed in a private repository, and this one neither contains it nor depends
 on it. That half plugs in through the same published extension points anyone
-else can use — the `cadless.routers` entry-point group, the frontend
-`registerPanel` registry, the provider protocol and the identity resolver. The
+else can use — the `cadless.routers` and `cadless.llm_providers` entry-point
+groups, the frontend `registerPanel` registry, the provider protocol and the
+identity resolver. The
 dependency runs one way only: it imports this engine, and this engine knows
 nothing about it. The reasoning is recorded in
 [ADR-0007](./docs/adr/0007-engine-and-implementations.md).

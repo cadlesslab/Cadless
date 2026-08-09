@@ -13,3 +13,4 @@ older ones only when they say so explicitly.
 | [0005](./0005-best-of-n-judge.md) | Best-of-N candidates judged by a cheap-first ladder |
 | [0006](./0006-identity-seam.md) | The engine is told who is asking, and never how (amends 0004) |
 | [0007](./0007-engine-and-implementations.md) | This repository is the engine and its seams; what plugs into them is not published (supersedes one bullet of 0004) |
+| [0008](./0008-provider-entry-point.md) | A model backend can be installed beside the engine, and the seam stays identity-free (extends 0001) |
