@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint, entry_points
 
 from cadless.config import Settings
 from cadless.config import settings as default_settings
@@ -145,10 +145,17 @@ def _load_advertised_providers() -> None:
         try:
             _discover()
             # Last statement of the try on purpose: reached only when discovery
-            # actually finished. Setting it in the finally would publish the
+            # ran to completion. Setting it in the finally would publish the
             # cache over a half-filled table, and every later call would take
             # the fast path above and report a perfectly installed provider as
             # unknown — for the life of the process.
+            #
+            # "Completed" includes completing by degrading to the bundled
+            # adapters when the group could not be read at all. That is cached
+            # deliberately: a malformed distribution on sys.path is a standing
+            # condition, not a transient one, and build_provider runs once per
+            # generation request, so rescanning would repay nothing. Recovering
+            # from it means fixing the install and restarting.
             _ADVERTISED_LOADED = True
         finally:
             _DISCOVERY_RUNNING = False
@@ -166,6 +173,9 @@ def _discover() -> None:
     try:
         advertised = list(entry_points(group=PROVIDER_ENTRY_POINT_GROUP))
     except Exception:
+        # Narrower than the per-entry arms below on purpose: this call reads
+        # metadata and never executes a distribution's code, so there is no
+        # SystemExit to contain here.
         logger.exception("could not read the %s entry-point group", PROVIDER_ENTRY_POINT_GROUP)
         return
     for entry in advertised:
@@ -178,7 +188,7 @@ def _discover() -> None:
             logger.exception("could not register the LLM provider advertised as %r", entry)
 
 
-def _register_advertised(entry) -> None:
+def _register_advertised(entry: EntryPoint) -> None:
     """Load and register one advertised entry, containing its two failures."""
     try:
         factory = entry.load()

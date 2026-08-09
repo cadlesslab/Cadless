@@ -395,8 +395,38 @@ def test_unregistering_also_forgets_a_recorded_load_failure(monkeypatch):
         build_provider("broken", settings=Settings())
 
     unregister_provider("broken")
+
+    # Assert on the half the fix actually changes. Going straight to the
+    # re-register below would pass either way: build_provider reads the factory
+    # table first and only consults the failure table when that misses, so a
+    # stale record is never reached once the name is registered again.
+    assert "broken" not in registry_mod._PROVIDER_LOAD_ERRORS
+    with pytest.raises(ValueError, match="unknown LLM provider"):
+        build_provider("broken", settings=Settings())
+
     register_provider("broken", _factory)
     assert isinstance(build_provider("broken", settings=Settings()), _Stub)
+
+
+def test_an_advertisement_with_no_usable_name_costs_only_itself(monkeypatch):
+    """The backstop, for whatever the two named failures did not anticipate.
+
+    Here the entry loads fine and then fails to register, because its name is
+    not a string — a shape neither the load branch nor the collision branch
+    expects.
+    """
+    _advertising(
+        monkeypatch,
+        _Advertised(None, "somewhere:factory", lambda: _factory),
+        _Advertised("outside", "somewhere:factory", lambda: _factory),
+    )
+
+    # The entry after the unusable one is still reached, and the bundled
+    # adapters are untouched.
+    assert isinstance(build_provider("outside", settings=Settings()), _Stub)
+    assert build_provider("bedrock", settings=Settings()).__class__.__name__ == (
+        "BedrockChatProvider"
+    )
 
 
 def test_a_provider_that_would_not_load_is_not_offered_as_available(monkeypatch):
