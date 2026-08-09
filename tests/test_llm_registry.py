@@ -13,6 +13,9 @@ the two should not drift apart in what a collision costs.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from cadless.config import Settings
@@ -234,6 +237,72 @@ def test_selecting_a_provider_that_would_not_load_reports_why(monkeypatch):
 
     assert isinstance(caught.value.__cause__, ModuleNotFoundError)
     assert "half_installed" in str(caught.value.__cause__)
+
+
+def test_a_second_caller_waits_for_discovery_instead_of_being_told_it_is_done(monkeypatch):
+    """Discovery is cached, and the cache must not be visible before it is true.
+
+    Measured regression: with the "already loaded" flag set before the loop ran,
+    a second thread arriving mid-discovery was told the work was finished and
+    then reported the provider as unknown. Requests are concurrent, so this is
+    reachable in the ordinary running of the app rather than only in theory.
+    """
+    started = threading.Event()
+
+    class _Slow:
+        name = "slowone"
+        value = "somewhere:factory"
+
+        def load(self):
+            started.set()
+            time.sleep(0.3)
+            return _factory
+
+    _advertising(monkeypatch, _Slow())
+
+    out: dict[str, object] = {}
+
+    def call(tag: str) -> None:
+        try:
+            out[tag] = build_provider("slowone", settings=Settings())
+        except Exception as exc:  # noqa: BLE001 — the failure is the assertion
+            out[tag] = exc
+
+    first = threading.Thread(target=call, args=("first",))
+    second = threading.Thread(target=call, args=("second",))
+    first.start()
+    assert started.wait(timeout=5), "the first caller never entered discovery"
+    second.start()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert isinstance(out["first"], _Stub)
+    assert isinstance(out["second"], _Stub), f"the second caller raced discovery: {out['second']!r}"
+
+
+def test_a_provider_that_exits_while_loading_does_not_take_the_process_with_it(monkeypatch):
+    """``SystemExit`` is not an ``Exception``, and this seam promises containment.
+
+    A module that calls ``sys.exit()`` while being imported would otherwise walk
+    straight out of discovery — which, since discovery runs inside a request,
+    means out of the request too.
+    """
+
+    def exits():
+        raise SystemExit(2)
+
+    _advertising(
+        monkeypatch,
+        _Advertised("suicidal", "half_installed:factory", exits),
+        _Advertised("outside", "somewhere:factory", lambda: _factory),
+    )
+
+    # Neither the entry after it nor the bundled adapters are affected.
+    assert isinstance(build_provider("outside", settings=Settings()), _Stub)
+    assert "suicidal" not in available_providers()
+    with pytest.raises(ValueError, match="could not be loaded") as caught:
+        build_provider("suicidal", settings=Settings())
+    assert isinstance(caught.value.__cause__, SystemExit)
 
 
 def test_a_provider_that_would_not_load_is_not_offered_as_available(monkeypatch):

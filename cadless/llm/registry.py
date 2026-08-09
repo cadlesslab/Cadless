@@ -22,6 +22,7 @@ perfectly well. Taking a name over is still allowed, but only by asking for it
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from importlib.metadata import entry_points
 
@@ -34,9 +35,6 @@ ProviderFactory = Callable[[Settings], ChatProvider]
 
 _PROVIDER_FACTORIES: dict[str, ProviderFactory] = {}
 
-# Whether the bundled adapters have been imported. See _load_bundled_providers.
-_BUNDLED_LOADED = False
-
 # Where a distribution installed beside this one says it has a provider to add.
 # The bundled adapters can only be modules inside this tree, so they are no way
 # in for a provider that ships separately — and a build that adds one should not
@@ -47,8 +45,18 @@ PROVIDER_ENTRY_POINT_GROUP = "cadless.llm_providers"
 # that selecting one reports what actually went wrong. Deliberately separate
 # from the factory table: a broken name must not look available, and must not
 # be confused with a name that was refused for colliding with a bundled one.
-_PROVIDER_LOAD_ERRORS: dict[str, Exception] = {}
+_PROVIDER_LOAD_ERRORS: dict[str, BaseException] = {}
 
+# Discovery is cached because build_provider runs once per generation request and
+# an uncached scan would walk sys.path every time. The flag is set *after* the
+# work, under the lock, so a second thread blocks until the table is populated
+# rather than being told the work is done and reading a table that is not.
+# The lock is re-entrant, and _DISCOVERY_RUNNING is what stops that re-entrancy
+# from restarting the loop: an advertised module is third-party code, and one
+# that calls build_provider() while it is still being imported would otherwise
+# come back round through here on the same thread.
+_DISCOVERY_LOCK = threading.RLock()
+_DISCOVERY_RUNNING = False
 _ADVERTISED_LOADED = False
 
 logger = logging.getLogger(__name__)
@@ -90,16 +98,17 @@ def _load_bundled_providers() -> None:
     Done lazily (and tolerant of optional deps) to keep this module vendor-free
     and avoid a circular import — ``providers`` imports this registry.
 
-    ``_BUNDLED_LOADED`` is set *before* the import rather than after, and that
-    order is load-bearing. ``register_provider`` calls this function, and the
-    bundled adapters call ``register_provider`` while this very import is
-    running; setting the flag first makes that re-entry a no-op instead of a
-    second pass over a half-initialised module.
+    Deliberately *not* guarded by a "already loaded" flag. The import statement
+    is the better guard on both counts this function needs. Re-entrancy: the
+    bundled adapters call ``register_provider`` — which calls this — while this
+    very import is still running, and a re-entrant import returns the
+    half-initialised module from ``sys.modules`` instead of recursing.
+    Concurrency: a second thread arriving mid-import blocks on the per-module
+    import lock until the first has finished, so it cannot see an empty table.
+    A flag set before the import would break exactly that second property,
+    which is measurable: the second thread is told the work is done and then
+    reports every provider as unknown.
     """
-    global _BUNDLED_LOADED
-    if _BUNDLED_LOADED:
-        return
-    _BUNDLED_LOADED = True
     import cadless.llm.providers  # noqa: F401  (registers bedrock/anthropic/openai/fake)
 
 
@@ -118,15 +127,32 @@ def _load_advertised_providers() -> None:
     The bundled adapters load first. That is what makes the refusal above land
     on the newcomer rather than on this tree's own.
     """
-    global _ADVERTISED_LOADED
+    global _ADVERTISED_LOADED, _DISCOVERY_RUNNING
     if _ADVERTISED_LOADED:
         return
-    _ADVERTISED_LOADED = True
+    with _DISCOVERY_LOCK:
+        if _ADVERTISED_LOADED or _DISCOVERY_RUNNING:
+            return
+        _DISCOVERY_RUNNING = True
+        try:
+            _discover()
+        finally:
+            _DISCOVERY_RUNNING = False
+            _ADVERTISED_LOADED = True
+
+
+def _discover() -> None:
+    """The discovery loop itself. Called once, under ``_DISCOVERY_LOCK``."""
     _load_bundled_providers()
     for entry in entry_points(group=PROVIDER_ENTRY_POINT_GROUP):
         try:
             factory = entry.load()
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
+            # SystemExit is not an Exception, and a module that calls sys.exit()
+            # while being imported would otherwise walk straight out of here and
+            # take the process with it — which is the opposite of the
+            # containment this function exists to provide. KeyboardInterrupt is
+            # deliberately still allowed through, so Ctrl-C keeps working.
             _PROVIDER_LOAD_ERRORS[entry.name.lower()] = exc
             logger.exception("could not load the LLM provider advertised as %s", entry.value)
             continue

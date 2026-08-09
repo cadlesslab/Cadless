@@ -84,6 +84,20 @@ Providers get the same treatment rather than a new one.
   none of them. Whatever wants those numbers has to *be* the provider. That is
   why the surface above stays frozen rather than growing a hook that could not
   have worked from outside anyway.
+- **Containment covers a module that exits, and discovery is safe under
+  concurrent requests.** `SystemExit` is not an `Exception`, so a provider
+  module calling `sys.exit()` while being imported would otherwise leave
+  discovery and take the request with it; it is caught and recorded like any
+  other load failure, while `KeyboardInterrupt` is deliberately still allowed
+  through. Discovery is cached, and the cache is published only once the table
+  is actually populated — `build_provider` runs per generation request, so a
+  second caller arriving mid-discovery must wait rather than be told the work
+  is done and find nothing.
+- **What this seam does not contain is a provider that never returns.** A
+  module-level import that hangs blocks discovery, and discovery runs inside
+  the first request rather than at startup, so one such add-on wedges request
+  handling. Containing that means running discovery at startup, which is a
+  change on the serving side rather than in this seam.
 - **This repository advertises nothing in the group it reads.** Its
   `pyproject.toml` has no entry-points table and the bundled adapters keep
   registering by import, which is the same shape as `cadless.routers`: the
