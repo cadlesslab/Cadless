@@ -6,7 +6,7 @@ procedures for each.
 
 | You want to | The seam | Guide |
 | --- | --- | --- |
-| Support a new model backend | `ChatProvider` protocol + `register_provider` | [llm-provider.md](./llm-provider.md) |
+| Support a new model backend | `ChatProvider` protocol + `register_provider`, or the `cadless.llm_providers` entry-point group from a package of your own | [llm-provider.md](./llm-provider.md) |
 | Add an artifact format (STEP, GLB, STL, OBJ, …) | the `EXPORTERS` registry | [core-modules.md](./core-modules.md#adding-an-export-format) |
 | Add a catalog item | a directory with a `manifest.json` | [catalog.md](./catalog.md) |
 | Add a catalog domain | `register_domain` | [catalog.md](./catalog.md#adding-a-domain) |
@@ -25,9 +25,11 @@ pipeline.
 
 ## Adding routes and panels from outside this tree
 
-The last two seams are for a build that installs *beside* this one rather than
+These two seams are for a build that installs *beside* this one rather than
 editing it — the case where you cannot add a line to a list in here because the
-tree is not yours to change.
+tree is not yours to change. A model backend arrives the same way, through the
+`cadless.llm_providers` group; that one has its own guide in
+[llm-provider.md](./llm-provider.md#shipping-it-in-your-own-distribution).
 
 **Backend.** `backend/app.py` includes every router advertised under the
 `cadless.routers` entry-point group, after the ones this tree ships. In your

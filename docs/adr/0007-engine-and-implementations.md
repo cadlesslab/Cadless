@@ -30,10 +30,12 @@ nobody reads, which is a worse promise to a contributor than a plain repository.
 
 - **This repository holds the engine and the seams, and no implementation that
   fills them.** A seam is an extension point with a published contract: the
-  `cadless.routers` entry-point group, the frontend `registerPanel` registry, the
-  provider protocol ([ADR-0001](./0001-provider-seam.md)) and the identity
-  resolver ([ADR-0006](./0006-identity-seam.md)). What can be added from outside
-  the tree is added from outside the tree.
+  `cadless.routers` and `cadless.llm_providers` entry-point groups, the frontend
+  `registerPanel` registry, the provider protocol
+  ([ADR-0001](./0001-provider-seam.md), reachable from outside the tree since
+  [ADR-0008](./0008-provider-entry-point.md)) and the identity resolver
+  ([ADR-0006](./0006-identity-seam.md)). What can be added from outside the tree
+  is added from outside the tree.
 - **The implementations live in a separate, private repository** that carries the
   hosted service and the shared catalogue, and is where a sign-in filling the
   identity seam belongs once there is one. What it installs today registers a

@@ -136,10 +136,17 @@ catalog content read-only.
   SDK wording: it lazy-loads the Bedrock SDK directly instead of using the
   `ChatProvider` seam. It is off by default and is not the reference pattern for
   adding chat or embedding providers.
-- Routes and panels can arrive from outside this tree. `backend/app.py` includes
-  any router advertised under the `cadless.routers` entry-point group, so an
-  installed distribution adds API routes — and its own startup work — to the
-  running app. Built-in routers register first, so an add-on cannot shadow a path
+- Routes, panels and model backends can arrive from outside this tree.
+  `backend/app.py` includes any router advertised under the `cadless.routers`
+  entry-point group, so an installed distribution adds API routes — and its own
+  startup work — to the running app. `cadless/llm/registry.py` reads
+  `cadless.llm_providers` the same way, so a build can generate through an
+  adapter this tree has never heard of; the seam carries no identity and no
+  accounting, and a provider needing a per-caller credential reads it at
+  construction from a context it owns ([ADR-0008](./adr/0008-provider-entry-point.md)).
+  A name this tree already ships is refused rather than displaced, and a
+  provider selected this way is env-only — `user_settings.PROVIDERS` stays
+  closed, so a private name never reaches an API response. Built-in routers register first, so an add-on cannot shadow a path
   this tree already serves, and a failure while loading or starting one is
   contained to that router rather than taken as a reason to stop booting. The
   frontend reaches the same end by different means, and the difference is not
