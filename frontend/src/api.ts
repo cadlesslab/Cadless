@@ -143,39 +143,33 @@ export interface ClarificationQuestion {
  * could take it away would have that import refused with a 415. A contributor
  * adds to a request; it does not get to re-describe one.
  *
- * A plain object rather than `Headers`, because that is what every caller here
- * passes and what `fetch` accepts. Names are compared case-insensitively when
- * the call overrides one: two spellings of the same header in one object leave
- * which of them reaches the wire up to the runtime.
+ * `Headers` rather than an object, and that is the whole of how the override is
+ * enforced. Header names are case-insensitive, so an object merged by key keeps
+ * both `Content-Type` and `content-type` and sends the two values comma-joined
+ * under one name — measured as a 422 on this build's own JSON routes, because
+ * the body then parses as nothing. `Headers.set` answers to the name rather
+ * than to the spelling, so the last writer wins whatever case it used, and a
+ * caller's `HeadersInit` is normalised whichever of its three shapes it is
+ * (object, `Headers`, array of pairs) including the array's repeated names,
+ * which it combines exactly as `fetch` would.
  */
-function outgoingHeaders(init?: RequestInit): Record<string, string> {
-  const outgoing: Record<string, string> = { "Content-Type": "application/json" };
-  Object.assign(outgoing, contributedHeaders());
-  for (const [name, value] of headerEntries(init?.headers)) {
-    for (const held of Object.keys(outgoing)) {
-      if (held.toLowerCase() === name.toLowerCase()) delete outgoing[held];
-    }
-    outgoing[name] = value;
-  }
+function outgoingHeaders(init?: RequestInit): Headers {
+  const outgoing = new Headers({ "Content-Type": "application/json" });
+  for (const [name, value] of Object.entries(contributedHeaders())) outgoing.set(name, value);
+  for (const [name, value] of new Headers(init?.headers ?? {}).entries()) outgoing.set(name, value);
   return outgoing;
 }
 
-/** A caller's headers as pairs, whichever of the three shapes it used.
- *
- * Read rather than handed to `Headers`, which would answer correctly and
- * lowercase every name on the way — and a call here spells its content type
- * `Content-Type`, which is the spelling its own test pins. Only the `Headers`
- * branch loses the spelling, because that object lowercased it on construction
- * and there is nothing left to preserve.
- */
-function headerEntries(source: HeadersInit | undefined): [string, string][] {
-  if (!source) return [];
-  if (source instanceof Headers) return [...source.entries()];
-  if (Array.isArray(source)) return source.map(([name, value]) => [name, value]);
-  return Object.entries(source);
-}
-
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  // `API_BASE` is a prefix and may be empty, so a `path` that is not rooted here
+  // is a request to somewhere else — and since a composed build may be adding a
+  // credential to every call, somewhere else is where that credential would go.
+  // `//host/x` is the one that reads as a path and is not: the browser takes it
+  // as protocol-relative and leaves the origin behind. Nothing in this file can
+  // reach it; the check is here because `request` is published to plugins.
+  if (!path.startsWith("/") || path.startsWith("//")) {
+    throw new Error(`refusing to send a request to ${path}: a path must be rooted at the API base`);
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: outgoingHeaders(init),
@@ -601,8 +595,11 @@ export async function streamChat(
       // Through the same helper as `req`, not a second literal: this call does
       // not go through `req` at all, and a build's contributed headers reaching
       // every route except the one that spends is the failure that looks like
-      // it works.
-      headers: outgoingHeaders(),
+      // it works. Its content type goes in as this call's own rather than left
+      // to the helper's default, so a contributor cannot take it away — the
+      // default is overridable by design and there is no `init` here to reassert
+      // it from, which is the difference between this call and `importCatalog`.
+      headers: outgoingHeaders({ headers: { "Content-Type": "application/json" } }),
       // `forge` opts this turn into best-of-N racing. It only takes
       // effect if the server's global forge kill-switch is also on (both-true gate).
       body: JSON.stringify({ message, forge }),

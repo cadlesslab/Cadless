@@ -21,7 +21,7 @@ describe("request header contributors", () => {
 
   it("contributes what a registered source returns", () => {
     register(() => ({ "X-Example": "one" }));
-    expect(contributedHeaders()).toEqual({ "X-Example": "one" });
+    expect(contributedHeaders()).toEqual({ "x-example": "one" });
   });
 
   it("asks every time rather than once", () => {
@@ -33,9 +33,9 @@ describe("request header contributors", () => {
     let answer = "before";
     register(() => ({ "X-Example": answer }));
 
-    expect(contributedHeaders()["X-Example"]).toBe("before");
+    expect(contributedHeaders()["x-example"]).toBe("before");
     answer = "after";
-    expect(contributedHeaders()["X-Example"]).toBe("after");
+    expect(contributedHeaders()["x-example"]).toBe("after");
   });
 
   it("lets the last registered source win a name it shares", () => {
@@ -45,7 +45,7 @@ describe("request header contributors", () => {
     register(() => ({ "X-Example": "first" }));
     register(() => ({ "X-Example": "second" }));
 
-    expect(contributedHeaders()["X-Example"]).toBe("second");
+    expect(contributedHeaders()["x-example"]).toBe("second");
   });
 
   it("withdraws a source through the function it handed back", () => {
@@ -64,7 +64,34 @@ describe("request header contributors", () => {
 
     withdrawFirst();
 
-    expect(contributedHeaders()).toEqual({ "X-Second": "2" });
+    expect(contributedHeaders()).toEqual({ "x-second": "2" });
+  });
+
+  it("lets the last registered source win a name spelled another way", () => {
+    // Merged into an object these are two keys, and both would reach the server
+    // under one name with the values comma-joined — two credentials on one
+    // request rather than the later one winning.
+    register(() => ({ "X-Example": "first" }));
+    register(() => ({ "x-example": "second" }));
+
+    expect(Object.values(contributedHeaders())).toEqual(["second"]);
+  });
+
+  it("withdraws the registration it belongs to when one source is registered twice", () => {
+    // The same function twice is two registrations. Removing whichever matches
+    // by value takes the wrong one: the count still comes out right, so nothing
+    // leaks — but the survivor moves to the end and takes the shared name from
+    // whoever was legitimately after it. Registered first, third, with another
+    // source between them, because withdrawing the *first* registration is the
+    // one case a by-value lookup gets right by accident.
+    const shared = () => ({ "X-Example": "from-shared" });
+    register(shared);
+    register(() => ({ "X-Example": "from-other" }));
+    const withdrawThird = register(shared);
+
+    withdrawThird();
+
+    expect(contributedHeaders()["x-example"]).toBe("from-other");
   });
 
   it("survives being withdrawn twice", () => {
@@ -74,7 +101,7 @@ describe("request header contributors", () => {
 
     withdraw();
 
-    expect(contributedHeaders()).toEqual({ "X-Other": "two" });
+    expect(contributedHeaders()).toEqual({ "x-other": "two" });
   });
 
   it("lets a source that throws reach the caller", () => {

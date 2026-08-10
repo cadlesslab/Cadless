@@ -14,12 +14,16 @@
  * Two limits are worth knowing before building on it, because neither is
  * visible from here:
  *
- * - **It reaches `fetch` and nothing else.** `api.ts` opens its progress streams
+ * - **It reaches the `fetch` calls in `api.ts` and nothing else.** Not every
+ *   request this app makes is one of those. `api.ts` opens its progress streams
  *   with `EventSource`, which carries no custom header in any browser — no
- *   option, no argument, no workaround. A contributed header therefore never
- *   reaches the streaming generate and refine routes. That is a property of the
- *   browser API rather than of this registry, and a build that needs a header on
- *   those routes needs a different transport, not a different registry.
+ *   option, no argument, no workaround — so a contributed header never reaches
+ *   the streaming generate and refine routes. Nor does it reach the browser's
+ *   own retrievals: the artifact download in `panels/ExportShare.tsx`, the model
+ *   fetched by the viewport in `viewport/preview.ts`, or a thumbnail an `<img>`
+ *   asks for. A deployment that gated every route on a contributed header would
+ *   break downloads and previews as well as the streams. Covering those needs a
+ *   different transport, not a different registry.
  * - **A source runs on the request's own path**, so it must be cheap and must
  *   not await. It is asked once per request rather than once at registration:
  *   a value a build contributes is allowed to change between requests, and
@@ -35,40 +39,65 @@
  */
 export type HeaderContributor = () => Record<string, string>;
 
-const SOURCES: HeaderContributor[] = [];
+/** One registration, boxed so a withdrawal can find its own.
+ *
+ * The box is the identity, not the function: the same function may be
+ * registered twice, and those are two registrations. Searching for the function
+ * would find whichever was registered first and remove that one — the count
+ * comes out right, so nothing leaks, but the survivor moves to the end of the
+ * list and takes a shared name from whoever was legitimately after it.
+ */
+interface Registration {
+  contribute: HeaderContributor;
+}
+
+const SOURCES: Registration[] = [];
 
 /** Add `contribute` to what every request carries, and hand back its withdrawal.
  *
  * The withdrawal is returned rather than offered as a matching `unregister`
- * taking the same function: two calls with the same source are two sources, and
- * a name-based withdrawal could not tell them apart. Calling it twice is
- * harmless — the second call finds nothing to remove and takes nothing else
- * with it.
+ * taking the same function: two calls with the same source are two
+ * registrations, and a lookup by value could not tell them apart. Calling it
+ * twice is harmless — the second call returns without touching the list, so it
+ * cannot take a later registration of the same function with it.
  */
 export function registerRequestHeaders(contribute: HeaderContributor): () => void {
-  SOURCES.push(contribute);
+  const registration: Registration = { contribute };
+  SOURCES.push(registration);
   let withdrawn = false;
   return () => {
     if (withdrawn) return;
     withdrawn = true;
-    const at = SOURCES.indexOf(contribute);
+    const at = SOURCES.indexOf(registration);
     if (at !== -1) SOURCES.splice(at, 1);
   };
 }
 
-/** Every contributed header for the request being made now.
+/** Every contributed header for the request being made now, by lowercased name.
  *
  * Not exported to plugins: a build contributes headers and does not read what
  * the others contributed. `api.ts` is the only caller.
+ *
+ * Merged through `Headers` rather than into an object, because an object merges
+ * by key and header names are case-insensitive. Two sources spelling one name
+ * differently would both survive a key merge, and the two values would reach
+ * the server comma-joined as a single header — which is not "the later source
+ * wins" but "both do", and on `content-type` it is measurably a 422 rather than
+ * a subtle preference. Names come back lowercased, which is what `fetch` sends
+ * regardless of how they were spelled.
  *
  * A source that throws is left to throw. It is code this build was composed
  * with rather than input from outside it, so a throw is a defect in the build —
  * and a request that quietly went out without the header a source exists to add
  * is the worse of the two outcomes, because the server refuses it for a reason
- * nothing on this side names.
+ * nothing on this side names. **A source holding a credential must keep it out
+ * of the message it throws**: the throw travels out through `req` and
+ * `errMessage` renders `Error.message` straight onto the screen.
  */
 export function contributedHeaders(): Record<string, string> {
-  const contributed: Record<string, string> = {};
-  for (const contribute of SOURCES) Object.assign(contributed, contribute());
-  return contributed;
+  const contributed = new Headers();
+  for (const { contribute } of SOURCES) {
+    for (const [name, value] of Object.entries(contribute())) contributed.set(name, value);
+  }
+  return Object.fromEntries(contributed.entries());
 }
