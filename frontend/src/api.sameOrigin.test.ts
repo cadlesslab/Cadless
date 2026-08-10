@@ -114,6 +114,20 @@ describe("a request on a same-origin build", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it("keeps a decoded path out of the refusal it throws", async () => {
+    // Reading the path as a proxy would means parsing it a second time, and on
+    // this build a decode yielding a leading `//` puts that parse into the
+    // authority state — where a character no host may carry throws. Uncaught,
+    // the runtime's own message quotes the decoded path onto the screen, which
+    // is what the refusal exists to avoid saying.
+    mockFetch();
+
+    await expect(api.request("/%2fa%5bb/x?token=a-secret-value")).rejects.toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining("a-secret-value") }),
+    );
+    await expect(api.request("/%2f%2fa%20b/x")).rejects.toThrow("rooted at the API base");
+  });
+
   it("keeps the caller's path out of the refusal it throws", async () => {
     // `errMessage` renders `Error.message` straight into a toast, so a message
     // that interpolated the path would put whatever the caller passed on the

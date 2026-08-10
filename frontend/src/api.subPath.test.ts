@@ -63,10 +63,17 @@ describe("a request on a build mounted under a path", () => {
   it("refuses a path that climbs out once a proxy decodes it", async () => {
     // The URL parser does not decode an escaped separator, so `..%2f..%2fadmin`
     // stays a single segment here and the containment check says it is inside.
-    // A proxy that normalises before it matches — nginx does; the Caddy this
-    // tree bundles does not — sees `/apps/cadless/admin` instead: outside the
-    // base, with the credential attached, and on a shared host that is somebody
-    // else's app.
+    // A proxy that decodes before it matches sees a different path — outside
+    // the base, with the credential attached, and on a shared host that is
+    // somebody else's app.
+    //
+    // The proxy this tree bundles is one of those. Measured on caddy 2.11.4
+    // against this repo's own two arms: `/apps/cadless/api/..%2fassets/app.js`
+    // is matched by the *frontend* arm, having left the API base before any
+    // routing decision, and `/apps/cadless/%61pi/x` reaches the API arm because
+    // `%61` decoded to `a` first. The backslash form is in the list below
+    // because Caddy does *not* fold that one — other parsers do, and the guard
+    // answers to the class rather than to whichever proxy is in front today.
     withdrawals.push(registerRequestHeaders(() => ({ "X-Model-Key": "a-secret-value" })));
     const fetchFn = mockFetch();
 
@@ -112,11 +119,29 @@ describe("a request on a build mounted under a path", () => {
     );
   });
 
+  it("refuses a climb that only a non-decoding proxy would see", async () => {
+    // The mirror of the case above, and why both rulings are made rather than
+    // just the decoded one. `/../%61pi/x` resolves to `/apps/cadless/%61pi/x` —
+    // read decoded that is the base and inside it, but a proxy that routes on
+    // the raw path sees a segment that is not `api` and sends it elsewhere,
+    // credential attached.
+    withdrawals.push(registerRequestHeaders(() => ({ "X-Model-Key": "a-secret-value" })));
+    const fetchFn = mockFetch();
+
+    await expect(api.request("/../%61pi/x")).rejects.toThrow("rooted at the API base");
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("sends a path that resolves onto the base itself", async () => {
     // The base is inside the base. `/../api` climbs one level and comes back to
     // exactly `/apps/cadless/api` — no trailing slash, so a containment test
     // written only as "starts with the base plus a slash" refuses it, and a
     // build is entitled to a route at its own root.
+    //
+    // It is also what holds the base to the trimmed value: built from the raw
+    // `API_BASE` this path is compared against a base one directory up, and a
+    // route the build owns is refused.
     const fetchFn = mockFetch();
 
     await api.request("/../api");

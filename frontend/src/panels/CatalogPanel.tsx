@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  BASE,
   type CatalogItem,
   type CatalogQuery,
   type CatalogResponse,
@@ -25,7 +26,6 @@ import {
   TextInput,
   Tooltip,
 } from "../components";
-import { API_BASE } from "../config";
 import { useApp } from "../useApp";
 
 const PAGE_SIZE = 24;
@@ -69,7 +69,7 @@ function CatalogCard({
         </>
       }
       description={item.description}
-      thumbnailUrl={item.thumbnail_url && `${API_BASE}${item.thumbnail_url}`}
+      thumbnailUrl={item.thumbnail_url && `${BASE}${item.thumbnail_url}`}
       fallbackIcon={domainIcon(item.domain)}
       onOpen={() => void app.selectProject(item.project_id)}
       actions={

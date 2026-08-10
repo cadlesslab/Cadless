@@ -192,7 +192,9 @@ const UNROOTED = "refusing to send a request: a path must be rooted at the API b
  * also end in one. `API_BASE` of `/` is the natural spelling of "the API is at
  * the root", and left alone it turns `/projects` into `//projects` —
  * protocol-relative, origin `projects`, off this site entirely. `/base/` does
- * the milder version of the same thing and asks for `/base//projects`.
+ * the milder version of the same thing and asks for `/base//projects`. Every
+ * trailing slash comes off rather than one, because `//` trimmed once is still
+ * `/` and lands back on the first case.
  *
  * At module scope rather than inside the one function that first needed it,
  * because the streams and the artifact URLs join to the base too and are not
@@ -200,7 +202,7 @@ const UNROOTED = "refusing to send a request: a path must be rooted at the API b
  * guarded calls and left every download and every progress stream pointing at
  * a host named after the first path segment.
  */
-const BASE = API_BASE.replace(/\/$/, "");
+export const BASE = API_BASE.replace(/\/+$/, "");
 
 /** Where `path` will actually send the request, refusing it if that is not here.
  *
@@ -286,16 +288,19 @@ function under(target: string, base: string): boolean {
  * would otherwise end the path and take the rest of it with it.
  */
 function asRead(pathname: string): string {
-  let decoded: string;
   try {
-    decoded = decodeURIComponent(pathname);
+    const decoded = decodeURIComponent(pathname);
+    return new URL(decoded.replace(/[?#]/g, (c) => encodeURIComponent(c)), "http://read.invalid")
+      .pathname;
   } catch {
-    // A percent escape the browser accepted but a decoder will not is not a
-    // path anyone can rule on, so it is not one this sends.
+    // Both steps are inside, and the parse is not the formality it looks like:
+    // a decode that yields a leading `//` puts the parser into the authority
+    // state, where a character no host may carry throws. Outside the `try` that
+    // throw is the runtime's own, and its message quotes the decoded path —
+    // which is the caller's input, on a screen, in a refusal whose whole point
+    // is naming none of it.
     throw new Error(UNROOTED);
   }
-  return new URL(decoded.replace(/[?#]/g, (c) => encodeURIComponent(c)), "http://read.invalid")
-    .pathname;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

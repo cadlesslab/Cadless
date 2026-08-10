@@ -7,7 +7,11 @@ import { registerRequestHeaders } from "./requestHeaders";
 // because that spelling reaches different lines — the prefix is trimmed before
 // anything is joined to it, and the base pathname then ends in a slash where
 // the other file's does not.
-vi.mock("./config", () => ({ API_BASE: "/apps/cadless/api/" }));
+// The doubled slash is here rather than a single one because a trim taking one
+// slash leaves `//` as `/` — which is the case the trim exists for, arriving by
+// a different road. Everything else this file asserts holds identically for the
+// single-slash spelling.
+vi.mock("./config", () => ({ API_BASE: "/apps/cadless/api//" }));
 
 const api = await import("./api");
 
