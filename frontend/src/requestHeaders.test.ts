@@ -120,31 +120,22 @@ describe("request header contributors", () => {
     expect(visits).toBe(1);
   });
 
-  it("keeps a rejected value out of the error it raises", () => {
-    // The runtime refuses a value with an interior newline, and on at least one
-    // engine the TypeError quotes what it refused. `errMessage` renders that
-    // straight into a toast, so a source holding a credential would have it on
-    // screen without ever throwing on purpose.
+  it("refuses a value the runtime will not take, through the shared guard", () => {
+    // Asserted on the message this build writes rather than on the absence of
+    // the key from whatever was thrown. jsdom's own refusal quotes nothing, so
+    // "does not contain the key" passes here with the guard removed — measured,
+    // and shipped once. What the redaction is worth is measured against a
+    // quoting runtime in `headers.test.ts`; what this holds is that the
+    // contributor merge goes through the guard at all.
     register(() => ({ "X-Model-Key": "sk-live-SECRETVALUE\r\nX-Injected: 1" }));
 
-    expect(() => contributedHeaders()).toThrow("X-Model-Key");
-    expect(() => contributedHeaders()).toThrow(
-      expect.objectContaining({
-        message: expect.not.stringContaining("SECRETVALUE"),
-      }),
-    );
+    expect(() => contributedHeaders()).toThrow("a request header is not valid: X-Model-Key");
   });
 
   it("does not repeat a name that is not a header name", () => {
-    // A name refused for its own spelling is not a name worth echoing either —
-    // a build that put something in the name would have it on screen.
     register(() => ({ "X-Model Key: sk-live-SECRETVALUE": "one" }));
 
-    expect(() => contributedHeaders()).toThrow(
-      expect.objectContaining({
-        message: expect.not.stringContaining("SECRETVALUE"),
-      }),
-    );
+    expect(() => contributedHeaders()).toThrow("its name is not a header name");
   });
 
   it("lets a source that throws reach the caller", () => {

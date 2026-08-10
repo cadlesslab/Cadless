@@ -410,6 +410,29 @@ describe("contributed request headers", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it("keeps a caller's own header value out of the refusal it throws", async () => {
+    // `request` is published, so the value that trips the runtime need not be a
+    // contributed one — a plugin passing its own key with a stray newline is
+    // the same credential on the same screen. Handing the caller's headers to
+    // `new Headers(...)` validated them all at once and raised the runtime's
+    // message, which nothing on this side was holding.
+    //
+    // Asserted on the message this build writes rather than on the absence of
+    // the secret from whatever was thrown: jsdom's own refusal quotes nothing,
+    // so "does not contain the key" passes here with the guard removed. That is
+    // measured, not supposed — a review round shipped exactly that assertion.
+    // The redaction itself is measured against a quoting runtime in
+    // `headers.test.ts`; what this one holds is that the caller's headers go
+    // through the guard at all.
+    const fetchFn = mockFetch(200, []);
+
+    await expect(
+      api.request("/projects", { headers: { Authorization: "Bearer sk-live-SECRETVALUE\r\nX: 1" } }),
+    ).rejects.toThrow("a request header is not valid: Authorization");
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("keeps the caller's path out of the refusal it throws", async () => {
     // `errMessage` renders `Error.message` straight into a toast, so a message
     // that interpolated the path would put whatever the caller passed on the

@@ -1,5 +1,6 @@
 /** Typed client for the Cadless backend (REST + SSE). */
 import { API_BASE } from "./config";
+import { appendHeader, headerPairs, setHeader } from "./headers";
 import { contributedHeaders } from "./requestHeaders";
 
 export interface Project {
@@ -152,11 +153,27 @@ export interface ClarificationQuestion {
  * caller's `HeadersInit` is normalised whichever of its three shapes it is
  * (object, `Headers`, array of pairs) including the array's repeated names,
  * which it combines exactly as `fetch` would.
+ *
+ * The caller's shapes are read here and written one at a time rather than
+ * handed to `new Headers(...)`, so that they go in through the same guard the
+ * contributed ones do. That constructor validates every value at once and
+ * raises the runtime's own `TypeError`, which on at least one engine quotes the
+ * value it refused — and `request` is published, so the value in question can
+ * be a key a plugin spelled with a stray newline in it.
  */
 function outgoingHeaders(init?: RequestInit): Headers {
   const outgoing = new Headers({ "Content-Type": "application/json" });
-  for (const [name, value] of Object.entries(contributedHeaders())) outgoing.set(name, value);
-  for (const [name, value] of new Headers(init?.headers ?? {}).entries()) outgoing.set(name, value);
+  for (const [name, value] of Object.entries(contributedHeaders())) {
+    setHeader(outgoing, name, value);
+  }
+  // Repeated names in the array form combine, which is what `new Headers` did
+  // here before and what `fetch` does with them — so the caller's headers are
+  // gathered first and only then override, rather than the last pair winning.
+  const callers = new Headers();
+  for (const [name, value] of headerPairs(init?.headers ?? {})) {
+    appendHeader(callers, name, value);
+  }
+  callers.forEach((value, name) => outgoing.set(name, value));
   return outgoing;
 }
 
@@ -193,17 +210,24 @@ const UNROOTED = "refusing to send a request: a path must be rooted at the API b
  *
  * **It rules on where the request is sent, not on where it ends up.** A `3xx`
  * from the API base is followed by `fetch` with the contributed header still
- * attached, and nothing here sees the second hop. This tree serves no redirect,
- * so closing that would only trade a hazard nobody can reach for a refusal a
- * composed build's own routes could hit; a deployment that adds one is choosing
- * to, and owns it.
+ * attached, and nothing here sees the second hop. The redirects this tree
+ * serves are Starlette's trailing-slash ones, which stay on the API base, so
+ * closing the hop would trade a hazard nothing here can reach for a refusal a
+ * composed build's own routes could hit. A deployment that adds a redirect off
+ * the base is choosing that, and owns it.
  */
 function apiTarget(path: string): URL {
+  // A trailing slash comes off the prefix before anything is joined to it,
+  // because `path` brings its own. `API_BASE` of `/` is the natural spelling of
+  // "the API is at the root", and left alone it made `/projects` into
+  // `//projects` — protocol-relative, origin `projects`, and refused. Every
+  // call, on a value nobody would read as wrong.
+  const prefix = API_BASE.replace(/\/$/, "");
   let base: URL;
   let target: URL;
   try {
-    base = new URL(API_BASE || "/", window.location.href);
-    target = new URL(`${API_BASE}${path}`, window.location.href);
+    base = new URL(prefix || "/", window.location.href);
+    target = new URL(`${prefix}${path}`, window.location.href);
   } catch {
     throw new Error(UNROOTED);
   }
@@ -214,21 +238,54 @@ function apiTarget(path: string): URL {
   if (base.origin === "null") {
     throw new Error(UNROOTED);
   }
-  // A base path is a directory, so compare against it as one. `startsWith` on
-  // the bare value answers to a sibling that merely begins the same way: under
-  // a base of `/apps/cadless/api`, a path resolving to `/apps/cadless/api-admin`
-  // is not under it, and on a shared host that is somebody else's app.
-  const within = `${base.pathname.replace(/\/$/, "")}/`;
-  // Rooted, on this origin, and still under the base — the last of the three is
-  // what stops a path climbing out with `..` when `API_BASE` names a subpath.
+  // Rooted, on this origin, and still under the base — the last one both as the
+  // parser left it and as a proxy in front of this app would read it.
   if (
     !path.startsWith("/") ||
     target.origin !== base.origin ||
-    !(target.pathname === base.pathname || target.pathname.startsWith(within))
+    !under(target.pathname, base.pathname) ||
+    !under(asRead(target.pathname), asRead(base.pathname))
   ) {
     throw new Error(UNROOTED);
   }
   return target;
+}
+
+/** Whether `target` is the base path itself or something inside it.
+ *
+ * A base path is a directory, so it is compared as one. `startsWith` on the
+ * bare value answers to a sibling that merely begins the same way: under a base
+ * of `/apps/cadless/api`, a path resolving to `/apps/cadless/api-admin` is not
+ * under it, and on a shared host that is somebody else's app.
+ */
+function under(target: string, base: string): boolean {
+  return target === base || target.startsWith(`${base.replace(/\/$/, "")}/`);
+}
+
+/** A path as an intermediary in front of this app would read it.
+ *
+ * A proxy decodes the percent escapes and resolves the dot segments before it
+ * decides which app a request belongs to, and the URL parser does neither for
+ * an escaped separator — `..%2f..%2fadmin` stays one segment here and arrives
+ * there as `../../admin`. Ruling only on what the parser produced would rule on
+ * a path nobody downstream is going to see.
+ *
+ * Decoding is not enough on its own, because the dot segments it uncovers are
+ * still text: the value goes back through the parser to have them resolved, and
+ * a `?` or `#` the decode produced is put back escaped first, since either
+ * would otherwise end the path and take the rest of it with it.
+ */
+function asRead(pathname: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // A percent escape the browser accepted but a decoder will not is not a
+    // path anyone can rule on, so it is not one this sends.
+    throw new Error(UNROOTED);
+  }
+  return new URL(decoded.replace(/[?#]/g, (c) => encodeURIComponent(c)), "http://read.invalid")
+    .pathname;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

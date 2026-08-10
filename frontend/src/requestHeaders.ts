@@ -31,6 +31,8 @@
  *   reading it once would send the first answer forever.
  */
 
+import { setHeader } from "./headers";
+
 /** Headers to add to this request, by name.
  *
  * Called per request. What it returns is merged in registration order, so a
@@ -53,13 +55,6 @@ interface Registration {
 }
 
 const SOURCES: Registration[] = [];
-
-/** What a header name may be made of — RFC 9110's `token`, which is what
- * `Headers` itself accepts. Used only to decide whether a rejected name is safe
- * to name in an error, never to vet one on the way in: `Headers` is the
- * authority on that and answering it twice would be two answers.
- */
-const TOKEN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
 
 /** Add `contribute` to what every request carries, and hand back its withdrawal.
  *
@@ -105,14 +100,9 @@ export function registerRequestHeaders(contribute: HeaderContributor): () => voi
  * The throw travels through `req`, and `errMessage` renders `Error.message`
  * straight onto the screen.
  *
- * A value the *runtime* rejects is caught here rather than left to do the same
- * thing. `Headers.set` refuses a name that is not a token and a value with an
- * interior CR, LF or NUL, and on at least one engine the `TypeError` it raises
- * quotes what it rejected — which would put a credential on screen without any
- * source ever throwing on purpose. This is the party calling `set`, so it is
- * the party that can discharge that, and it re-throws naming the header and
- * never its value. Whether a given engine would have quoted it does not need
- * settling if nobody is asking it to.
+ * A value the *runtime* rejects is not left to say so itself — `setHeader`
+ * refuses naming the header and never its value, for the reason recorded in
+ * `headers.ts`.
  *
  * The list is copied before it is walked. A source that registers another
  * during the pass would otherwise be visited in the same pass — and one that
@@ -124,18 +114,7 @@ export function contributedHeaders(): Record<string, string> {
   const contributed = new Headers();
   for (const { contribute } of [...SOURCES]) {
     for (const [name, value] of Object.entries(contribute())) {
-      try {
-        contributed.set(name, value);
-      } catch {
-        // The name is quoted only once it is known to be a bare token, because
-        // a name this build spelled badly enough to be refused is not a name
-        // worth repeating onto the screen either.
-        throw new Error(
-          TOKEN.test(name)
-            ? `a contributed header is not valid: ${name}`
-            : "a contributed header is not valid: its name is not a header name",
-        );
-      }
+      setHeader(contributed, name, value);
     }
   }
   return Object.fromEntries(contributed.entries());
