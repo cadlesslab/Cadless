@@ -20,10 +20,11 @@
  *   option, no argument, no workaround — so a contributed header never reaches
  *   the streaming generate and refine routes. Nor does it reach the browser's
  *   own retrievals: the artifact download in `panels/ExportShare.tsx`, the model
- *   fetched by the viewport in `viewport/preview.ts`, or a thumbnail an `<img>`
- *   asks for. A deployment that gated every route on a contributed header would
- *   break downloads and previews as well as the streams. Covering those needs a
- *   different transport, not a different registry.
+ *   the viewport loads through `useGLTF` in `viewport/Viewport.tsx`, or a
+ *   thumbnail an `<img>` asks for. A deployment that gated every route on a
+ *   contributed header would break downloads and previews as well as the
+ *   streams. Covering those needs a different transport, not a different
+ *   registry.
  * - **A source runs on the request's own path**, so it must be cheap and must
  *   not await. It is asked once per request rather than once at registration:
  *   a value a build contributes is allowed to change between requests, and
@@ -90,13 +91,24 @@ export function registerRequestHeaders(contribute: HeaderContributor): () => voi
  * with rather than input from outside it, so a throw is a defect in the build —
  * and a request that quietly went out without the header a source exists to add
  * is the worse of the two outcomes, because the server refuses it for a reason
- * nothing on this side names. **A source holding a credential must keep it out
- * of the message it throws**: the throw travels out through `req` and
- * `errMessage` renders `Error.message` straight onto the screen.
+ * nothing on this side names. Nothing is half-applied either way: a throw
+ * leaves here before any merge and before `fetch`, so the request does not go.
+ *
+ * **A source holding a credential must keep it off the way out.** The throw
+ * travels through `req`, and `errMessage` renders `Error.message` straight onto
+ * the screen. Keeping it out of a message you write yourself is only half of
+ * that: `Headers.set` rejects a name that is not a token and a value carrying
+ * CR, LF or NUL, and **the message it raises quotes the value it rejected** —
+ * so a source that returns a credential the runtime refuses puts it on screen
+ * without ever throwing on purpose. Validate before returning.
+ *
+ * The list is copied before it is walked. A source that registers another
+ * during the pass would otherwise be visited in the same pass — and one that
+ * registers on every call would never finish, on the request's own path.
  */
 export function contributedHeaders(): Record<string, string> {
   const contributed = new Headers();
-  for (const { contribute } of SOURCES) {
+  for (const { contribute } of [...SOURCES]) {
     for (const [name, value] of Object.entries(contribute())) contributed.set(name, value);
   }
   return Object.fromEntries(contributed.entries());

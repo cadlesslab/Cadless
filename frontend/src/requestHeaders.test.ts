@@ -104,6 +104,22 @@ describe("request header contributors", () => {
     expect(contributedHeaders()).toEqual({ "x-other": "two" });
   });
 
+  it("does not visit a source that registered during the pass", () => {
+    // A live array iterator rereads the length each step, so a source that
+    // registers another while being asked would have it visited in the same
+    // pass — and one that registers on every call would never finish, on the
+    // request's own path rather than at load.
+    let visits = 0;
+    register(() => {
+      visits += 1;
+      if (visits < 5) register(() => ({ "X-Late": "late" }));
+      return { "X-Example": "one" };
+    });
+
+    expect(contributedHeaders()).toEqual({ "x-example": "one" });
+    expect(visits).toBe(1);
+  });
+
   it("lets a source that throws reach the caller", () => {
     // Not caught, and deliberately. A source is code this build was composed
     // with rather than input from outside it, so a throw is a defect in the
