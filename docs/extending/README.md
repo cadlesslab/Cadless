@@ -151,17 +151,22 @@ Five things decide whether this seam fits what you want:
   browser and the server.
 - **A source that throws is not caught**, and the throw reaches the screen
   through `errMessage`. If yours holds a credential, keep it out of the message
-  — and note that not throwing on purpose is not enough. The runtime rejects a
-  name that is not a token and a value carrying CR, LF or NUL, and **the error
-  it raises quotes the value it rejected**, which is the same screen. Validate
-  what you are about to return. Nothing goes half-applied either way: a throw
-  happens before the merge and before the request, so no request is sent.
+  you throw. A value the *runtime* rejects — a name that is not a token, a value
+  with an interior CR, LF or NUL — is caught here instead and re-raised naming
+  the header and never its value, so a stray newline in a key does not put the
+  key on screen. Nothing goes half-applied either way: both happen before the
+  merge and before the request, so no request is sent.
 - **`request` refuses a path that does not stay under `API_BASE`.** Your own
   calls through it are checked by resolving the URL rather than reading the
   string, so a spelling that only looks rooted (`/\host/x`, or one carrying a
   raw tab or newline) is refused too — those resolve to another origin, and a
-  contributed credential rides every call. That refusal is a plain `Error`
-  rather than an `ApiError`: nothing was sent, so there is no status.
+  contributed credential rides every call. Under a base that names a path, a
+  sibling that merely begins the same way (`/apps/cadless/api-admin` beside
+  `/apps/cadless/api`) is outside it and refused. That refusal is a plain
+  `Error` rather than an `ApiError`: nothing was sent, so there is no status.
+  What it rules on is where the request is *sent* — a redirect the API base
+  answers with is followed, header attached, and nothing here sees the second
+  hop. This engine serves no redirect; a deployment that adds one owns that.
 
 ## Recording what your build knows
 

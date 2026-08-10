@@ -54,6 +54,13 @@ interface Registration {
 
 const SOURCES: Registration[] = [];
 
+/** What a header name may be made of — RFC 9110's `token`, which is what
+ * `Headers` itself accepts. Used only to decide whether a rejected name is safe
+ * to name in an error, never to vet one on the way in: `Headers` is the
+ * authority on that and answering it twice would be two answers.
+ */
+const TOKEN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+
 /** Add `contribute` to what every request carries, and hand back its withdrawal.
  *
  * The withdrawal is returned rather than offered as a matching `unregister`
@@ -94,22 +101,42 @@ export function registerRequestHeaders(contribute: HeaderContributor): () => voi
  * nothing on this side names. Nothing is half-applied either way: a throw
  * leaves here before any merge and before `fetch`, so the request does not go.
  *
- * **A source holding a credential must keep it off the way out.** The throw
- * travels through `req`, and `errMessage` renders `Error.message` straight onto
- * the screen. Keeping it out of a message you write yourself is only half of
- * that: `Headers.set` rejects a name that is not a token and a value carrying
- * CR, LF or NUL, and **the message it raises quotes the value it rejected** —
- * so a source that returns a credential the runtime refuses puts it on screen
- * without ever throwing on purpose. Validate before returning.
+ * **A source holding a credential must keep it out of the message it throws.**
+ * The throw travels through `req`, and `errMessage` renders `Error.message`
+ * straight onto the screen.
+ *
+ * A value the *runtime* rejects is caught here rather than left to do the same
+ * thing. `Headers.set` refuses a name that is not a token and a value with an
+ * interior CR, LF or NUL, and on at least one engine the `TypeError` it raises
+ * quotes what it rejected — which would put a credential on screen without any
+ * source ever throwing on purpose. This is the party calling `set`, so it is
+ * the party that can discharge that, and it re-throws naming the header and
+ * never its value. Whether a given engine would have quoted it does not need
+ * settling if nobody is asking it to.
  *
  * The list is copied before it is walked. A source that registers another
  * during the pass would otherwise be visited in the same pass — and one that
- * registers on every call would never finish, on the request's own path.
+ * registers on every call would never finish, on the request's own path. The
+ * copy cuts the other way too: a source withdrawn mid-pass is still asked, so a
+ * revoked value goes out on the request already in flight.
  */
 export function contributedHeaders(): Record<string, string> {
   const contributed = new Headers();
   for (const { contribute } of [...SOURCES]) {
-    for (const [name, value] of Object.entries(contribute())) contributed.set(name, value);
+    for (const [name, value] of Object.entries(contribute())) {
+      try {
+        contributed.set(name, value);
+      } catch {
+        // The name is quoted only once it is known to be a bare token, because
+        // a name this build spelled badly enough to be refused is not a name
+        // worth repeating onto the screen either.
+        throw new Error(
+          TOKEN.test(name)
+            ? `a contributed header is not valid: ${name}`
+            : "a contributed header is not valid: its name is not a header name",
+        );
+      }
+    }
   }
   return Object.fromEntries(contributed.entries());
 }

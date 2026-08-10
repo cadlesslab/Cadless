@@ -120,6 +120,33 @@ describe("request header contributors", () => {
     expect(visits).toBe(1);
   });
 
+  it("keeps a rejected value out of the error it raises", () => {
+    // The runtime refuses a value with an interior newline, and on at least one
+    // engine the TypeError quotes what it refused. `errMessage` renders that
+    // straight into a toast, so a source holding a credential would have it on
+    // screen without ever throwing on purpose.
+    register(() => ({ "X-Model-Key": "sk-live-SECRETVALUE\r\nX-Injected: 1" }));
+
+    expect(() => contributedHeaders()).toThrow("X-Model-Key");
+    expect(() => contributedHeaders()).toThrow(
+      expect.objectContaining({
+        message: expect.not.stringContaining("SECRETVALUE"),
+      }),
+    );
+  });
+
+  it("does not repeat a name that is not a header name", () => {
+    // A name refused for its own spelling is not a name worth echoing either —
+    // a build that put something in the name would have it on screen.
+    register(() => ({ "X-Model Key: sk-live-SECRETVALUE": "one" }));
+
+    expect(() => contributedHeaders()).toThrow(
+      expect.objectContaining({
+        message: expect.not.stringContaining("SECRETVALUE"),
+      }),
+    );
+  });
+
   it("lets a source that throws reach the caller", () => {
     // Not caught, and deliberately. A source is code this build was composed
     // with rather than input from outside it, so a throw is a defect in the
