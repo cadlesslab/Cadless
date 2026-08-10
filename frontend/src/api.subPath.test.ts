@@ -63,13 +63,34 @@ describe("a request on a build mounted under a path", () => {
   it("refuses a path that climbs out once a proxy decodes it", async () => {
     // The URL parser does not decode an escaped separator, so `..%2f..%2fadmin`
     // stays a single segment here and the containment check says it is inside.
-    // nginx normalises the URI before it matches a location and uvicorn unquotes
-    // the path into ASGI, so what arrives is `/apps/cadless/admin` — outside,
-    // with the credential attached, and on a shared host that is another app.
+    // A proxy that normalises before it matches — nginx does; the Caddy this
+    // tree bundles does not — sees `/apps/cadless/admin` instead: outside the
+    // base, with the credential attached, and on a shared host that is somebody
+    // else's app.
     withdrawals.push(registerRequestHeaders(() => ({ "X-Model-Key": "a-secret-value" })));
     const fetchFn = mockFetch();
 
     for (const path of ["/..%2f..%2fadmin", "/catalog/..%2F..%2Fadmin", "/..%5c..%5cadmin"]) {
+      await expect(api.request(path)).rejects.toThrow("rooted at the API base");
+    }
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a climb hidden behind a decoded query or fragment mark", async () => {
+    // Decoding is what exposes the traversal, and it exposes a `?` or a `#` the
+    // same way. Read back by a parser those end the path and take the rest of
+    // it — the traversal included — out of the ruling, so what is left looks
+    // like an ordinary segment. Escaped again first, the whole path stays a
+    // path and the climb is seen.
+    withdrawals.push(registerRequestHeaders(() => ({ "X-Model-Key": "a-secret-value" })));
+    const fetchFn = mockFetch();
+
+    for (const path of [
+      "/%23/..%2f..%2fadmin",
+      "/%3f/..%2f..%2fadmin",
+      "/x%23%2f..%2f..%2fadmin",
+    ]) {
       await expect(api.request(path)).rejects.toThrow("rooted at the API base");
     }
 

@@ -186,6 +186,22 @@ function outgoingHeaders(init?: RequestInit): Headers {
  */
 const UNROOTED = "refusing to send a request: a path must be rooted at the API base";
 
+/** `API_BASE` with a trailing slash off it, which is what everything joins to.
+ *
+ * Every path in this file brings its own leading slash, so the base must not
+ * also end in one. `API_BASE` of `/` is the natural spelling of "the API is at
+ * the root", and left alone it turns `/projects` into `//projects` —
+ * protocol-relative, origin `projects`, off this site entirely. `/base/` does
+ * the milder version of the same thing and asks for `/base//projects`.
+ *
+ * At module scope rather than inside the one function that first needed it,
+ * because the streams and the artifact URLs join to the base too and are not
+ * routed through that function — a trim in one place would have fixed the
+ * guarded calls and left every download and every progress stream pointing at
+ * a host named after the first path segment.
+ */
+const BASE = API_BASE.replace(/\/$/, "");
+
 /** Where `path` will actually send the request, refusing it if that is not here.
  *
  * `API_BASE` is a prefix and may be empty, so a `path` that leaves it is a
@@ -210,24 +226,18 @@ const UNROOTED = "refusing to send a request: a path must be rooted at the API b
  *
  * **It rules on where the request is sent, not on where it ends up.** A `3xx`
  * from the API base is followed by `fetch` with the contributed header still
- * attached, and nothing here sees the second hop. The redirects this tree
- * serves are Starlette's trailing-slash ones, which stay on the API base, so
+ * attached, and nothing here sees the second hop. The redirects reachable from
+ * the API base are Starlette's trailing-slash ones, which stay on it, so
  * closing the hop would trade a hazard nothing here can reach for a refusal a
  * composed build's own routes could hit. A deployment that adds a redirect off
  * the base is choosing that, and owns it.
  */
 function apiTarget(path: string): URL {
-  // A trailing slash comes off the prefix before anything is joined to it,
-  // because `path` brings its own. `API_BASE` of `/` is the natural spelling of
-  // "the API is at the root", and left alone it made `/projects` into
-  // `//projects` — protocol-relative, origin `projects`, and refused. Every
-  // call, on a value nobody would read as wrong.
-  const prefix = API_BASE.replace(/\/$/, "");
   let base: URL;
   let target: URL;
   try {
-    base = new URL(prefix || "/", window.location.href);
-    target = new URL(`${prefix}${path}`, window.location.href);
+    base = new URL(BASE || "/", window.location.href);
+    target = new URL(`${BASE}${path}`, window.location.href);
   } catch {
     throw new Error(UNROOTED);
   }
@@ -642,7 +652,7 @@ export const setCurrent = (projectId: number, versionId: number) =>
 
 // ---- artifact URLs ----
 export const artifactUrl = (versionId: number, kind: ArtifactKind) =>
-  `${API_BASE}/versions/${versionId}/artifacts/${kind}`;
+  `${BASE}/versions/${versionId}/artifacts/${kind}`;
 export const stepUrl = (versionId: number) => artifactUrl(versionId, "step");
 export const glbUrl = (versionId: number) => artifactUrl(versionId, "glb");
 
@@ -668,7 +678,7 @@ function openStream(
   onEvent: (e: ProgressEvent) => void,
   onError?: (err: Event) => void,
 ): StreamHandle {
-  const es = new EventSource(`${API_BASE}/projects/${query}`);
+  const es = new EventSource(`${BASE}/projects/${query}`);
   es.onmessage = (msg) => {
     const data = JSON.parse(msg.data) as ProgressEvent;
     onEvent(data);

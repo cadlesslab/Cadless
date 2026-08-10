@@ -171,9 +171,9 @@ Five things decide whether this seam fits what you want:
   refused. That refusal is a plain `Error` rather than an `ApiError`: nothing
   was sent, so there is no status. What it rules on is where the request is
   *sent* — a redirect the API base answers with is followed, header attached,
-  and nothing here sees the second hop. The redirects this engine serves are
-  Starlette's trailing-slash ones and stay on the base; a deployment that adds
-  one going elsewhere owns that.
+  and nothing here sees the second hop. The redirects reachable from the API
+  base are Starlette's trailing-slash ones and stay on it; a deployment that
+  adds one going elsewhere owns that.
 
 ## Recording what your build knows
 

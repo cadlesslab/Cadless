@@ -82,6 +82,25 @@ describe("reading a caller's headers", () => {
     expect(headerPairs(new Headers({ "X-A": "1" }))).toEqual([["x-a", "1"]]);
   });
 
+  it("reads every iterable the constructor took, not only an array", () => {
+    // `HeadersInit` names three shapes and `new Headers(...)` takes any iterable
+    // of pairs. Read as the three, a `Map` or a generator falls through to
+    // `Object.entries` and comes back empty — the caller's headers vanish with
+    // nothing raised, and a caller overriding a contributed credential would
+    // have the contributed one sent in its place.
+    const pairs: [string, string][] = [["X-A", "1"]];
+    function* generated() {
+      yield* pairs;
+    }
+
+    expect(headerPairs(new Map(pairs) as unknown as HeadersInit)).toEqual(pairs);
+    expect(headerPairs(generated() as unknown as HeadersInit)).toEqual(pairs);
+    expect(headerPairs(new Set(pairs) as unknown as HeadersInit)).toEqual(pairs);
+    expect(headerPairs(new URLSearchParams({ "X-A": "1" }) as unknown as HeadersInit)).toEqual([
+      ["X-A", "1"],
+    ]);
+  });
+
   it("keeps the array's repeats rather than collapsing them", () => {
     // `new Headers` would have combined them, and combining is what the merge
     // downstream still does — but it has to happen behind the guard, so the

@@ -54,11 +54,21 @@ export function appendHeader(headers: Headers, name: string, value: string): voi
 
 /** A caller's `HeadersInit` as name/value pairs, in the order it wrote them.
  *
- * Reading the three shapes here rather than handing them to `new Headers(...)`
- * is what puts them behind the guard above: that constructor validates every
- * value at once, so a bad one throws from inside the runtime with nothing on
- * this side holding it. A `Headers` is already past that check by construction,
- * so it is the one shape that can be read straight through.
+ * Read here rather than handed to `new Headers(...)`, which is what puts the
+ * values behind the guard above: that constructor validates them all at once,
+ * so a bad one throws from inside the runtime with nothing on this side holding
+ * it. A `Headers` is already past that check by construction, so it is the one
+ * shape that can be read straight through.
+ *
+ * **Every shape the constructor took, this takes.** Reading it as the three
+ * shapes `HeadersInit` names — a `Headers`, an array of pairs, a plain object —
+ * is what the type says and not what the runtime does: the constructor takes
+ * *any* iterable of pairs, so a `Map`, a `Set` of pairs, a generator or a
+ * `URLSearchParams` all worked before. Narrowed to the three, each of those
+ * falls to `Object.entries` and comes back empty — the caller's headers vanish
+ * with nothing raised, and a caller overriding a contributed credential gets
+ * the contributed one sent instead. A plugin is published JavaScript and the
+ * type it declares is not a promise about what it passes.
  */
 export function headerPairs(init: HeadersInit): [string, string][] {
   if (init instanceof Headers) {
@@ -66,5 +76,9 @@ export function headerPairs(init: HeadersInit): [string, string][] {
     init.forEach((value, name) => pairs.push([name, value]));
     return pairs;
   }
-  return Array.isArray(init) ? init.map(([name, value]) => [name, value]) : Object.entries(init);
+  const iterable = (init as Partial<Iterable<[string, string]>>)?.[Symbol.iterator];
+  if (typeof iterable === "function") {
+    return [...(init as Iterable<[string, string]>)].map(([name, value]) => [name, value]);
+  }
+  return Object.entries(init);
 }

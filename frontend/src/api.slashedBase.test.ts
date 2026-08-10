@@ -40,6 +40,32 @@ describe("a request on a build whose base ends in a slash", () => {
     expect(new URL(fetchFn.mock.calls[0][0]).pathname).toBe("/apps/cadless/api/projects");
   });
 
+  it("joins the streams and the artifact URLs to the same base", async () => {
+    // These two do not go through the guarded call, so a trim applied only
+    // there would have fixed the requests and left every progress stream and
+    // every download asking for `/base//...` — or, on a base of `/`, for a host
+    // named after the first path segment, taking the prompt with it.
+    const captured: { url: string }[] = [];
+    class FakeES {
+      onmessage: ((e: { data: string }) => void) | null = null;
+      onerror: ((e: Event) => void) | null = null;
+      close = vi.fn();
+      constructor(public url: string) {
+        captured.push(this);
+      }
+    }
+    vi.stubGlobal("EventSource", FakeES as unknown as typeof EventSource);
+
+    api.streamGenerate(2, "a rod", () => {});
+
+    expect(new URL(captured[0].url, window.location.href).pathname).toBe(
+      "/apps/cadless/api/projects/2/generate/stream",
+    );
+    expect(new URL(api.stepUrl(5), window.location.href).pathname).toBe(
+      "/apps/cadless/api/versions/5/artifacts/step",
+    );
+  });
+
   it("sends a path that lands on the base itself", async () => {
     // The base is inside the base. Comparing only "starts with the base plus a
     // slash" would refuse this, and a build is entitled to a route at its root.
