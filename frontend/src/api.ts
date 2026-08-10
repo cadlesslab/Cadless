@@ -190,6 +190,13 @@ const UNROOTED = "refusing to send a request: a path must be rooted at the API b
  * base applies: this compares against the page's own URL, while a bare string
  * handed to `fetch` is resolved against `document.baseURI`, which a `<base>` tag
  * can move. Checking one and sending the other would be checking nothing.
+ *
+ * **It rules on where the request is sent, not on where it ends up.** A `3xx`
+ * from the API base is followed by `fetch` with the contributed header still
+ * attached, and nothing here sees the second hop. This tree serves no redirect,
+ * so closing that would only trade a hazard nobody can reach for a refusal a
+ * composed build's own routes could hit; a deployment that adds one is choosing
+ * to, and owns it.
  */
 function apiTarget(path: string): URL {
   let base: URL;
@@ -200,12 +207,24 @@ function apiTarget(path: string): URL {
   } catch {
     throw new Error(UNROOTED);
   }
+  // A page with an opaque origin — one served from `file:`, say — reports its
+  // origin as the string "null", and so does everywhere else it can reach. The
+  // comparison below would hold between two of them and pass the whole class,
+  // so refuse before making it rather than compare two nothings.
+  if (base.origin === "null") {
+    throw new Error(UNROOTED);
+  }
+  // A base path is a directory, so compare against it as one. `startsWith` on
+  // the bare value answers to a sibling that merely begins the same way: under
+  // a base of `/apps/cadless/api`, a path resolving to `/apps/cadless/api-admin`
+  // is not under it, and on a shared host that is somebody else's app.
+  const within = `${base.pathname.replace(/\/$/, "")}/`;
   // Rooted, on this origin, and still under the base — the last of the three is
   // what stops a path climbing out with `..` when `API_BASE` names a subpath.
   if (
     !path.startsWith("/") ||
     target.origin !== base.origin ||
-    !target.pathname.startsWith(base.pathname)
+    !(target.pathname === base.pathname || target.pathname.startsWith(within))
   ) {
     throw new Error(UNROOTED);
   }
@@ -633,7 +652,13 @@ export async function streamChat(
 ): Promise<void> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/projects/${projectId}/chat`, {
+    // Through the same resolver as `req`, for the same reason the headers go
+    // through the same helper. This is the route that spends, so it is the one
+    // carrying a contributed credential that matters most — and handing `fetch`
+    // a bare string would have resolved it against `document.baseURI`, which a
+    // `<base>` tag can move, while the guard next door reads the page's own
+    // URL. Checking one and sending the other would be checking nothing.
+    res = await fetch(apiTarget(`/projects/${projectId}/chat`).toString(), {
       method: "POST",
       // Through the same helper as `req`, not a second literal: this call does
       // not go through `req` at all, and a build's contributed headers reaching

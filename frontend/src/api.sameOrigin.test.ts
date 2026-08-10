@@ -73,6 +73,47 @@ describe("a request on a same-origin build", () => {
     expect(sent.pathname).toBe("/projects");
   });
 
+  it("resolves the chat turn's URL rather than handing over a relative one", async () => {
+    // `streamChat` does not go through `req`, and it is the route that spends —
+    // so it is the one call a contributed credential matters most on. Handed a
+    // bare string, `fetch` would resolve it against `document.baseURI`, which a
+    // `<base>` tag can move, while the guard reads the page's own URL. The two
+    // have to be the same thing or the guard is guarding a different request.
+    const fetchFn = mockFetch();
+    fetchFn.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "x",
+      body: {
+        getReader: () => ({
+          read: async () => ({ done: true, value: undefined }),
+          releaseLock() {},
+          cancel() {},
+        }),
+      },
+    });
+
+    await api.streamChat(7, "hello", () => {});
+
+    const sent = new URL(fetchFn.mock.calls[0][0]);
+    expect(sent.origin).toBe(window.location.origin);
+    expect(sent.pathname).toBe("/projects/7/chat");
+  });
+
+  it("refuses everything from a page whose origin is opaque", async () => {
+    // A page served from `file:` reports its origin as the string "null", and
+    // so does every URL it can resolve — so an origin comparison holds between
+    // two of them and lets the whole class through, `//host/x` included. There
+    // is nothing to compare, so there is nothing to allow.
+    vi.stubGlobal("location", { href: "file:///app/index.html" });
+    const fetchFn = mockFetch();
+
+    await expect(api.request("//elsewhere.example/x")).rejects.toThrow("rooted at the API base");
+    await expect(api.request("/projects")).rejects.toThrow("rooted at the API base");
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("keeps the caller's path out of the refusal it throws", async () => {
     // `errMessage` renders `Error.message` straight into a toast, so a message
     // that interpolated the path would put whatever the caller passed on the

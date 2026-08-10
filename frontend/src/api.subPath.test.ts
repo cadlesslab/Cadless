@@ -40,10 +40,20 @@ describe("a request on a build mounted under a path", () => {
     withdrawals.push(registerRequestHeaders(() => ({ "X-Model-Key": "a-secret-value" })));
     const fetchFn = mockFetch();
 
-    // The last one climbs with backslashes, which the parser folds to `/`
-    // before resolving — the same disagreement between spelling and parsing
-    // that the origin case turns on, arriving here as a path traversal.
-    for (const path of ["/../../admin", "/../other/x", "/..\\..\\admin"]) {
+    // The backslash one climbs with separators the parser folds to `/` before
+    // resolving — the same disagreement between spelling and parsing that the
+    // origin case turns on, arriving here as a path traversal.
+    //
+    // The last two are the ones a prefix comparison lets through: they do not
+    // climb above the base's parent, they land on a *sibling* whose name merely
+    // begins with the base's. On a shared host that is somebody else's app.
+    for (const path of [
+      "/../../admin",
+      "/../other/x",
+      "/..\\..\\admin",
+      "/../api-admin/x",
+      "/../apifoo/x",
+    ]) {
       await expect(api.request(path)).rejects.toThrow("rooted at the API base");
     }
 
