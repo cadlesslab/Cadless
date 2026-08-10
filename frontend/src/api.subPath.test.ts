@@ -60,6 +60,59 @@ describe("a request on a build mounted under a path", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it("refuses a path that climbs out once a proxy decodes it", async () => {
+    // The URL parser does not decode an escaped separator, so `..%2f..%2fadmin`
+    // stays a single segment here and the containment check says it is inside.
+    // nginx normalises the URI before it matches a location and uvicorn unquotes
+    // the path into ASGI, so what arrives is `/apps/cadless/admin` — outside,
+    // with the credential attached, and on a shared host that is another app.
+    withdrawals.push(registerRequestHeaders(() => ({ "X-Model-Key": "a-secret-value" })));
+    const fetchFn = mockFetch();
+
+    for (const path of ["/..%2f..%2fadmin", "/catalog/..%2F..%2Fadmin", "/..%5c..%5cadmin"]) {
+      await expect(api.request(path)).rejects.toThrow("rooted at the API base");
+    }
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("still sends an escaped separator that stays inside the base", async () => {
+    // The other half of the same rule, and the reason it cannot simply refuse
+    // `%2F`: a catalog origin key is `encodeURIComponent`d into one segment, so
+    // an escaped slash inside a legitimate route is ordinary rather than a
+    // signal. Decoded it is still under the base, so it goes — and it goes
+    // exactly as spelled, because what was decoded was only ever the ruling.
+    const fetchFn = mockFetch();
+
+    await api.request("/catalog/origins/a%2Fb");
+
+    expect(new URL(fetchFn.mock.calls[0][0]).pathname).toBe(
+      "/apps/cadless/api/catalog/origins/a%2Fb",
+    );
+  });
+
+  it("sends a path that resolves onto the base itself", async () => {
+    // The base is inside the base. `/../api` climbs one level and comes back to
+    // exactly `/apps/cadless/api` — no trailing slash, so a containment test
+    // written only as "starts with the base plus a slash" refuses it, and a
+    // build is entitled to a route at its own root.
+    const fetchFn = mockFetch();
+
+    await api.request("/../api");
+
+    expect(new URL(fetchFn.mock.calls[0][0]).pathname).toBe("/apps/cadless/api");
+  });
+
+  it("refuses a percent escape no decoder will accept", async () => {
+    const fetchFn = mockFetch();
+
+    for (const path of ["/%zz/x", "/%/x"]) {
+      await expect(api.request(path)).rejects.toThrow("rooted at the API base");
+    }
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("sends a rooted path under the API base", async () => {
     const fetchFn = mockFetch();
 
