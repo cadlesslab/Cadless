@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "./api";
+import { registerRequestHeaders } from "./requestHeaders";
 
 function mockFetch(status: number, body: unknown) {
   const fn = vi.fn().mockResolvedValue({
@@ -271,5 +272,106 @@ describe("chat SSE client", () => {
     controller.abort();
     await expect(promise).resolves.toBeUndefined();
     expect(fetchFn.mock.calls[0][1].signal).toBe(controller.signal);
+  });
+});
+
+describe("contributed request headers", () => {
+  const withdrawals: (() => void)[] = [];
+
+  function contribute(headers: Record<string, string>) {
+    withdrawals.push(registerRequestHeaders(() => headers));
+  }
+
+  afterEach(() => {
+    while (withdrawals.length) withdrawals.pop()?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("puts a contributed header on the app's own calls", async () => {
+    // `req` is what every named endpoint below it goes through, so covering it
+    // here covers all of them.
+    contribute({ "X-Example": "one" });
+    const fetchFn = mockFetch(200, []);
+
+    await api.listProjects();
+
+    expect(fetchFn.mock.calls[0][1].headers["X-Example"]).toBe("one");
+  });
+
+  it("keeps the JSON default beside a contributed header", async () => {
+    contribute({ "X-Example": "one" });
+    const fetchFn = mockFetch(200, []);
+
+    await api.listProjects();
+
+    expect(fetchFn.mock.calls[0][1].headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("lets the call's own header win the name it shares", async () => {
+    // The order that keeps `importCatalog` working: a call that spelled a
+    // header out meant that one, and a contributor must not be able to take a
+    // route's content type away from it.
+    // Contributed in the other case on purpose: an object carrying both
+    // `content-type` and `Content-Type` is legal JavaScript and leaves which of
+    // them `fetch` sends up to the runtime, so the override has to match names
+    // case-insensitively rather than by key.
+    contribute({ "content-type": "application/json" });
+    const fetchFn = mockFetch(200, { id: "l-bracket" });
+    const file = new File([new Uint8Array([80, 75, 3, 4])], "l-bracket.cls");
+
+    await api.importCatalog(file, "a".repeat(64));
+
+    const headers = fetchFn.mock.calls[0][1].headers;
+    expect(headers["Content-Type"]).toBe("application/octet-stream");
+    // And only once: a second spelling of the same name would leave which one
+    // reaches the wire up to the runtime.
+    expect(Object.keys(headers).filter((n) => n.toLowerCase() === "content-type")).toHaveLength(1);
+  });
+
+  it("puts a contributed header on the chat turn, which does not go through req", async () => {
+    contribute({ "X-Example": "one" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(sseResponse(['data: {"event":"turn_end","stop_reason":"end_turn"}\n\n']));
+    vi.stubGlobal("fetch", fetchFn);
+
+    await api.streamChat(7, "a cube", () => {});
+
+    const headers = fetchFn.mock.calls[0][1].headers;
+    expect(headers["X-Example"]).toBe("one");
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("never smuggles a contributed header into a stream URL", async () => {
+    // `EventSource` carries no custom header, and the reachable-looking way to
+    // work around that is to put the value in the query string — where it lands
+    // in every access log between here and the server. It does not reach these
+    // routes, and it must not arrive by another door.
+    contribute({ "X-Example": "a-secret-value" });
+    const captured: { url: string }[] = [];
+    class FakeES {
+      onmessage: ((e: { data: string }) => void) | null = null;
+      onerror: ((e: Event) => void) | null = null;
+      close = vi.fn();
+      constructor(public url: string) {
+        captured.push(this);
+      }
+    }
+    vi.stubGlobal("EventSource", FakeES as unknown as typeof EventSource);
+
+    api.streamGenerate(2, "a rod", () => {});
+
+    expect(captured[0].url).not.toContain("a-secret-value");
+    expect(captured[0].url).not.toContain("X-Example");
+  });
+
+  it("stops sending a header once its source is withdrawn", async () => {
+    const withdraw = registerRequestHeaders(() => ({ "X-Example": "one" }));
+    withdraw();
+    const fetchFn = mockFetch(200, []);
+
+    await api.listProjects();
+
+    expect(fetchFn.mock.calls[0][1].headers["X-Example"]).toBeUndefined();
   });
 });

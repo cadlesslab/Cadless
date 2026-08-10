@@ -1,5 +1,6 @@
 /** Typed client for the Cadless backend (REST + SSE). */
 import { API_BASE } from "./config";
+import { contributedHeaders } from "./requestHeaders";
 
 export interface Project {
   id: number;
@@ -134,10 +135,50 @@ export interface ClarificationQuestion {
   options?: string[];
 }
 
+/** The headers one request goes out with: this file's default, then whatever a
+ * composed build contributes, then the call's own.
+ *
+ * The call last, and that order is load-bearing rather than tidy: `importCatalog`
+ * below relies on its own content type reaching the server, and a build that
+ * could take it away would have that import refused with a 415. A contributor
+ * adds to a request; it does not get to re-describe one.
+ *
+ * A plain object rather than `Headers`, because that is what every caller here
+ * passes and what `fetch` accepts. Names are compared case-insensitively when
+ * the call overrides one: two spellings of the same header in one object leave
+ * which of them reaches the wire up to the runtime.
+ */
+function outgoingHeaders(init?: RequestInit): Record<string, string> {
+  const outgoing: Record<string, string> = { "Content-Type": "application/json" };
+  Object.assign(outgoing, contributedHeaders());
+  for (const [name, value] of headerEntries(init?.headers)) {
+    for (const held of Object.keys(outgoing)) {
+      if (held.toLowerCase() === name.toLowerCase()) delete outgoing[held];
+    }
+    outgoing[name] = value;
+  }
+  return outgoing;
+}
+
+/** A caller's headers as pairs, whichever of the three shapes it used.
+ *
+ * Read rather than handed to `Headers`, which would answer correctly and
+ * lowercase every name on the way — and a call here spells its content type
+ * `Content-Type`, which is the spelling its own test pins. Only the `Headers`
+ * branch loses the spelling, because that object lowercased it on construction
+ * and there is nothing left to preserve.
+ */
+function headerEntries(source: HeadersInit | undefined): [string, string][] {
+  if (!source) return [];
+  if (source instanceof Headers) return [...source.entries()];
+  if (Array.isArray(source)) return source.map(([name, value]) => [name, value]);
+  return Object.entries(source);
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: outgoingHeaders(init),
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -497,7 +538,18 @@ export interface StreamHandle {
   close: () => void;
 }
 
-/** Open an SSE generation stream; calls onEvent for each progress event. */
+/** Open an SSE generation stream; calls onEvent for each progress event.
+ *
+ * **No contributed header reaches these two routes.** `EventSource` takes a URL
+ * and nothing else — there is no header argument in any browser — so a build
+ * composed with `registerRequestHeaders` sees its headers on every `fetch` here
+ * and on neither of the streams. Two things follow. A deployment that gates the
+ * spending routes on a header gates `POST /chat` and not these; and the
+ * reachable-looking workaround, putting the value in the query string, is not
+ * one — it would write whatever the header carries into every access log
+ * between here and the server. Covering these needs a different transport, not
+ * a different registry.
+ */
 function openStream(
   query: string,
   onEvent: (e: ProgressEvent) => void,
@@ -546,7 +598,11 @@ export async function streamChat(
   try {
     res = await fetch(`${API_BASE}/projects/${projectId}/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // Through the same helper as `req`, not a second literal: this call does
+      // not go through `req` at all, and a build's contributed headers reaching
+      // every route except the one that spends is the failure that looks like
+      // it works.
+      headers: outgoingHeaders(),
       // `forge` opts this turn into best-of-N racing. It only takes
       // effect if the server's global forge kill-switch is also on (both-true gate).
       body: JSON.stringify({ message, forge }),
