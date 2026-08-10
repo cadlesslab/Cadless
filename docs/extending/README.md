@@ -131,7 +131,7 @@ value change while the page is open.
 The engine never learns what a header means. It merges what you return and
 sends it; nothing here inspects a name or a value.
 
-Four things decide whether this seam fits what you want:
+Five things decide whether this seam fits what you want:
 
 - **Your header does not beat the call's own.** The order is this tree's
   default, then contributed, then whatever the call itself spelled out. A route
@@ -150,7 +150,18 @@ Four things decide whether this seam fits what you want:
   like: it writes whatever the header carries into every access log between the
   browser and the server.
 - **A source that throws is not caught**, and the throw reaches the screen
-  through `errMessage`. If yours holds a credential, keep it out of the message.
+  through `errMessage`. If yours holds a credential, keep it out of the message
+  — and note that not throwing on purpose is not enough. The runtime rejects a
+  name that is not a token and a value carrying CR, LF or NUL, and **the error
+  it raises quotes the value it rejected**, which is the same screen. Validate
+  what you are about to return. Nothing goes half-applied either way: a throw
+  happens before the merge and before the request, so no request is sent.
+- **`request` refuses a path that does not stay under `API_BASE`.** Your own
+  calls through it are checked by resolving the URL rather than reading the
+  string, so a spelling that only looks rooted (`/\host/x`, or one carrying a
+  raw tab or newline) is refused too — those resolve to another origin, and a
+  contributed credential rides every call. That refusal is a plain `Error`
+  rather than an `ApiError`: nothing was sent, so there is no status.
 
 ## Recording what your build knows
 

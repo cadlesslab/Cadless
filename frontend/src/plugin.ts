@@ -117,6 +117,13 @@ export { API_BASE } from "./config";
 // 409 that should ask before overwriting is not a failure to report) and
 // turning whatever was thrown into a sentence. Both halves are the same
 // contract, so they ship together.
+//
+// One refusal comes from `request` itself rather than from a server: the path
+// must stay rooted at `API_BASE`, because a build contributing a header below
+// puts a credential on every call and a path that resolves elsewhere is where
+// that credential would go. It is checked by resolving the URL, so a spelling
+// that only looks rooted is refused too. That refusal is a plain `Error` and
+// not an `ApiError` — nothing was sent, so there is no status to carry.
 export { ApiError, request } from "./api";
 export { errMessage } from "./errors";
 
