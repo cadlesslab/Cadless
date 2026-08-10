@@ -155,8 +155,18 @@ catalog content read-only.
   reaches the build by being placed under `frontend/src/plugins/`, which
   `frontend/src/panels/plugins.ts` globs while the bundle is built. What such a
   panel may import is `frontend/src/plugin.ts` and nothing else — that file is
-  the frontend's public contract, and everything outside it is internal. The
-  procedures are in `docs/extending/README.md`.
+  the frontend's public contract, and everything outside it is internal. That
+  contract also carries `registerRequestHeaders`, which lets such a build put a
+  header on the API calls *this tree* makes rather than only on its own. It
+  merges its own default, then contributed headers, then whatever a call spelled
+  out, so a contributor adds to a request and never re-describes one — and it
+  reaches the `fetch` calls in `frontend/src/api.ts` and nothing else, because
+  the progress streams are opened with `EventSource`, which carries no custom
+  header in any browser. **A deployment that gates a route on such a header is
+  choosing a trust boundary the engine does not police**: nothing here inspects
+  a contributed name or value, and the streams, the artifact download and the
+  viewport's model fetch are outside it. The procedures are in
+  `docs/extending/README.md`.
 - What such a build may *record* is a seam too, and for the same reason: it
   cannot add a column or a branch from outside. How an item arrived is a
   registry (`cadless/catalog/origins.py`), where an entry brings the reader that

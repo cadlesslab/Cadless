@@ -117,8 +117,35 @@ export { API_BASE } from "./config";
 // 409 that should ask before overwriting is not a failure to report) and
 // turning whatever was thrown into a sentence. Both halves are the same
 // contract, so they ship together.
+//
+// One refusal comes from `request` itself rather than from a server: the path
+// must stay rooted at `API_BASE`, because a build contributing a header below
+// puts a credential on every call and a path that resolves elsewhere is where
+// that credential would go. It is checked by resolving the URL, so a spelling
+// that only looks rooted is refused too. That refusal is a plain `Error` and
+// not an `ApiError` — nothing was sent, so there is no status to carry.
 export { ApiError, request } from "./api";
 export { errMessage } from "./errors";
+
+// Adding a header to every request this app makes, rather than only to the ones
+// a plugin issues itself. `request` above covers a plugin's own calls; this
+// covers the app's, which a build outside this repository cannot reach — they
+// are named per endpoint inside `api.ts` and deliberately not exported.
+//
+// It is exported because the alternative is worse and was measured: with no
+// seam here, a composed build's only route to the same effect is patching
+// `window.fetch` from a module that happens to evaluate early, which is not a
+// contract, breaks the first time `api.ts` is refactored, and leaves this file —
+// the one place the commitment is supposed to be visible — silent about it.
+// This file's own rule is that what a plugin needs and does not have is added
+// here on purpose, so here it is.
+//
+// A mechanism and no policy: the engine never learns what a contributed header
+// means, and this seam names none. **It reaches `fetch` and nothing else** —
+// the progress streams are opened with `EventSource`, which carries no custom
+// header in any browser, so a contributed header does not reach them.
+// `requestHeaders.ts` records both limits in full.
+export { registerRequestHeaders, type HeaderContributor } from "./requestHeaders";
 
 // Showing a model this build does not hold yet. A panel hands over what to draw
 // and the engine decides how, which is the difference between a capability and

@@ -1,5 +1,7 @@
 /** Typed client for the Cadless backend (REST + SSE). */
 import { API_BASE } from "./config";
+import { appendHeader, headerPairs, setHeader } from "./headers";
+import { contributedHeaders } from "./requestHeaders";
 
 export interface Project {
   id: number;
@@ -134,10 +136,177 @@ export interface ClarificationQuestion {
   options?: string[];
 }
 
+/** The headers one request goes out with: this file's default, then whatever a
+ * composed build contributes, then the call's own.
+ *
+ * The call last, and that order is load-bearing rather than tidy: `importCatalog`
+ * below relies on its own content type reaching the server, and a build that
+ * could take it away would have that import refused with a 415. A contributor
+ * adds to a request; it does not get to re-describe one.
+ *
+ * `Headers` rather than an object, and that is the whole of how the override is
+ * enforced. Header names are case-insensitive, so an object merged by key keeps
+ * both `Content-Type` and `content-type` and sends the two values comma-joined
+ * under one name — measured as a 422 on this build's own JSON routes, because
+ * the body then parses as nothing. `Headers.set` answers to the name rather
+ * than to the spelling, so the last writer wins whatever case it used, and a
+ * caller's `HeadersInit` is normalised whichever of its three shapes it is
+ * (object, `Headers`, array of pairs) including the array's repeated names,
+ * which it combines exactly as `fetch` would.
+ *
+ * The caller's shapes are read here and written one at a time rather than
+ * handed to `new Headers(...)`, so that they go in through the same guard the
+ * contributed ones do. That constructor validates every value at once and
+ * raises the runtime's own `TypeError`, which on at least one engine quotes the
+ * value it refused — and `request` is published, so the value in question can
+ * be a key a plugin spelled with a stray newline in it.
+ */
+function outgoingHeaders(init?: RequestInit): Headers {
+  const outgoing = new Headers({ "Content-Type": "application/json" });
+  for (const [name, value] of Object.entries(contributedHeaders())) {
+    setHeader(outgoing, name, value);
+  }
+  // Repeated names in the array form combine, which is what `new Headers` did
+  // here before and what `fetch` does with them — so the caller's headers are
+  // gathered first and only then override, rather than the last pair winning.
+  const callers = new Headers();
+  for (const [name, value] of headerPairs(init?.headers ?? {})) {
+    appendHeader(callers, name, value);
+  }
+  callers.forEach((value, name) => outgoing.set(name, value));
+  return outgoing;
+}
+
+/** What `req` says when a path would take the request off the API base.
+ *
+ * One sentence, and it names no part of the caller's input on purpose. It
+ * travels out through `errMessage`, which renders `Error.message` straight into
+ * a toast — and a caller that got a path wrong is the one most likely to have
+ * built it out of something that should not be read aloud.
+ */
+const UNROOTED = "refusing to send a request: a path must be rooted at the API base";
+
+/** `API_BASE` with a trailing slash off it, which is what everything joins to.
+ *
+ * Every path in this file brings its own leading slash, so the base must not
+ * also end in one. `API_BASE` of `/` is the natural spelling of "the API is at
+ * the root", and left alone it turns `/projects` into `//projects` —
+ * protocol-relative, origin `projects`, off this site entirely. `/base/` does
+ * the milder version of the same thing and asks for `/base//projects`. Every
+ * trailing slash comes off rather than one, because `//` trimmed once is still
+ * `/` and lands back on the first case.
+ *
+ * At module scope rather than inside the one function that first needed it,
+ * because the streams and the artifact URLs join to the base too and are not
+ * routed through that function — a trim in one place would have fixed the
+ * guarded calls and left every download and every progress stream pointing at
+ * a host named after the first path segment.
+ */
+export const BASE = API_BASE.replace(/\/+$/, "");
+
+/** Where `path` will actually send the request, refusing it if that is not here.
+ *
+ * `API_BASE` is a prefix and may be empty, so a `path` that leaves it is a
+ * request to somewhere else — and since a composed build may be adding a
+ * credential to every call, somewhere else is where that credential would go.
+ * Nothing in this file can reach that; the check exists because `request` is
+ * published to plugins.
+ *
+ * **Resolved and compared, never matched as a string**, and that distinction is
+ * the whole of it. The caller spells a path and the URL parser reads one, and
+ * the two do not agree about what a path is: for a special scheme the parser
+ * reads `\` as `/`, and it strips a raw tab, CR or LF before parsing at all. So
+ * `/\host/x` and `/<TAB>/host/x` are both protocol-relative once resolved while
+ * neither begins with `//` — a prefix test passes them and `fetch` then sends
+ * the credential to `host`. Comparing the origin the request is actually going
+ * to closes that class however it is spelled, which no test on the input can.
+ *
+ * Resolving here rather than leaving the string to `fetch` also settles which
+ * base applies: this compares against the page's own URL, while a bare string
+ * handed to `fetch` is resolved against `document.baseURI`, which a `<base>` tag
+ * can move. Checking one and sending the other would be checking nothing.
+ *
+ * **It rules on where the request is sent, not on where it ends up.** A `3xx`
+ * from the API base is followed by `fetch` with the contributed header still
+ * attached, and nothing here sees the second hop. The redirects reachable from
+ * the API base are Starlette's trailing-slash ones, which stay on it, so
+ * closing the hop would trade a hazard nothing here can reach for a refusal a
+ * composed build's own routes could hit. A deployment that adds a redirect off
+ * the base is choosing that, and owns it.
+ */
+function apiTarget(path: string): URL {
+  let base: URL;
+  let target: URL;
+  try {
+    base = new URL(BASE || "/", window.location.href);
+    target = new URL(`${BASE}${path}`, window.location.href);
+  } catch {
+    throw new Error(UNROOTED);
+  }
+  // A page with an opaque origin — one served from `file:`, say — reports its
+  // origin as the string "null", and so does everywhere else it can reach. The
+  // comparison below would hold between two of them and pass the whole class,
+  // so refuse before making it rather than compare two nothings.
+  if (base.origin === "null") {
+    throw new Error(UNROOTED);
+  }
+  // Rooted, on this origin, and still under the base — the last one both as the
+  // parser left it and as a proxy in front of this app would read it.
+  if (
+    !path.startsWith("/") ||
+    target.origin !== base.origin ||
+    !under(target.pathname, base.pathname) ||
+    !under(asRead(target.pathname), asRead(base.pathname))
+  ) {
+    throw new Error(UNROOTED);
+  }
+  return target;
+}
+
+/** Whether `target` is the base path itself or something inside it.
+ *
+ * A base path is a directory, so it is compared as one. `startsWith` on the
+ * bare value answers to a sibling that merely begins the same way: under a base
+ * of `/apps/cadless/api`, a path resolving to `/apps/cadless/api-admin` is not
+ * under it, and on a shared host that is somebody else's app.
+ */
+function under(target: string, base: string): boolean {
+  return target === base || target.startsWith(`${base.replace(/\/$/, "")}/`);
+}
+
+/** A path as an intermediary in front of this app would read it.
+ *
+ * A proxy decodes the percent escapes and resolves the dot segments before it
+ * decides which app a request belongs to, and the URL parser does neither for
+ * an escaped separator — `..%2f..%2fadmin` stays one segment here and arrives
+ * there as `../../admin`. Ruling only on what the parser produced would rule on
+ * a path nobody downstream is going to see.
+ *
+ * Decoding is not enough on its own, because the dot segments it uncovers are
+ * still text: the value goes back through the parser to have them resolved, and
+ * a `?` or `#` the decode produced is put back escaped first, since either
+ * would otherwise end the path and take the rest of it with it.
+ */
+function asRead(pathname: string): string {
+  try {
+    const decoded = decodeURIComponent(pathname);
+    return new URL(decoded.replace(/[?#]/g, (c) => encodeURIComponent(c)), "http://read.invalid")
+      .pathname;
+  } catch {
+    // Both steps are inside, and the parse is not the formality it looks like:
+    // a decode that yields a leading `//` puts the parser into the authority
+    // state, where a character no host may carry throws. Outside the `try` that
+    // throw is the runtime's own, and its message quotes the decoded path —
+    // which is the caller's input, on a screen, in a refusal whose whole point
+    // is naming none of it.
+    throw new Error(UNROOTED);
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+  const res = await fetch(apiTarget(path).toString(), {
     ...init,
+    headers: outgoingHeaders(init),
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -488,7 +657,7 @@ export const setCurrent = (projectId: number, versionId: number) =>
 
 // ---- artifact URLs ----
 export const artifactUrl = (versionId: number, kind: ArtifactKind) =>
-  `${API_BASE}/versions/${versionId}/artifacts/${kind}`;
+  `${BASE}/versions/${versionId}/artifacts/${kind}`;
 export const stepUrl = (versionId: number) => artifactUrl(versionId, "step");
 export const glbUrl = (versionId: number) => artifactUrl(versionId, "glb");
 
@@ -497,13 +666,24 @@ export interface StreamHandle {
   close: () => void;
 }
 
-/** Open an SSE generation stream; calls onEvent for each progress event. */
+/** Open an SSE generation stream; calls onEvent for each progress event.
+ *
+ * **No contributed header reaches these two routes.** `EventSource` takes a URL
+ * and nothing else — there is no header argument in any browser — so a build
+ * composed with `registerRequestHeaders` sees its headers on every `fetch` here
+ * and on neither of the streams. Two things follow. A deployment that gates the
+ * spending routes on a header gates `POST /chat` and not these; and the
+ * reachable-looking workaround, putting the value in the query string, is not
+ * one — it would write whatever the header carries into every access log
+ * between here and the server. Covering these needs a different transport, not
+ * a different registry.
+ */
 function openStream(
   query: string,
   onEvent: (e: ProgressEvent) => void,
   onError?: (err: Event) => void,
 ): StreamHandle {
-  const es = new EventSource(`${API_BASE}/projects/${query}`);
+  const es = new EventSource(`${BASE}/projects/${query}`);
   es.onmessage = (msg) => {
     const data = JSON.parse(msg.data) as ProgressEvent;
     onEvent(data);
@@ -544,9 +724,22 @@ export async function streamChat(
 ): Promise<void> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/projects/${projectId}/chat`, {
+    // Through the same resolver as `req`, for the same reason the headers go
+    // through the same helper. This is the route that spends, so it is the one
+    // carrying a contributed credential that matters most — and handing `fetch`
+    // a bare string would have resolved it against `document.baseURI`, which a
+    // `<base>` tag can move, while the guard next door reads the page's own
+    // URL. Checking one and sending the other would be checking nothing.
+    res = await fetch(apiTarget(`/projects/${projectId}/chat`).toString(), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // Through the same helper as `req`, not a second literal: this call does
+      // not go through `req` at all, and a build's contributed headers reaching
+      // every route except the one that spends is the failure that looks like
+      // it works. Its content type goes in as this call's own rather than left
+      // to the helper's default, so a contributor cannot take it away — the
+      // default is overridable by design and there is no `init` here to reassert
+      // it from, which is the difference between this call and `importCatalog`.
+      headers: outgoingHeaders({ headers: { "Content-Type": "application/json" } }),
       // `forge` opts this turn into best-of-N racing. It only takes
       // effect if the server's global forge kill-switch is also on (both-true gate).
       body: JSON.stringify({ message, forge }),

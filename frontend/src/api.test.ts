@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "./api";
+import { registerRequestHeaders } from "./requestHeaders";
 
 function mockFetch(status: number, body: unknown) {
   const fn = vi.fn().mockResolvedValue({
@@ -38,7 +39,10 @@ describe("REST client", () => {
     expect(url).toContain("filename=l-bracket.cls");
     expect(url).toContain(`expected_digest=${"a".repeat(64)}`);
     expect(init.method).toBe("POST");
-    expect(init.headers["Content-Type"]).toBe("application/octet-stream");
+    // Read off `Headers` rather than off a key: names are case-insensitive, and
+    // asking for one spelling of an object would pass while the other spelling
+    // was also on the wire.
+    expect(init.headers.get("content-type")).toBe("application/octet-stream");
     expect(init.body).toBe(file);
   });
 
@@ -271,5 +275,210 @@ describe("chat SSE client", () => {
     controller.abort();
     await expect(promise).resolves.toBeUndefined();
     expect(fetchFn.mock.calls[0][1].signal).toBe(controller.signal);
+  });
+});
+
+describe("contributed request headers", () => {
+  const withdrawals: (() => void)[] = [];
+
+  function contribute(headers: Record<string, string>) {
+    withdrawals.push(registerRequestHeaders(() => headers));
+  }
+
+  afterEach(() => {
+    while (withdrawals.length) withdrawals.pop()?.();
+    vi.unstubAllGlobals();
+  });
+
+  it("puts a contributed header on the app's own calls", async () => {
+    // `req` is what every named endpoint below it goes through, so covering it
+    // here covers all of them.
+    contribute({ "X-Example": "one" });
+    const fetchFn = mockFetch(200, []);
+
+    await api.listProjects();
+
+    expect(fetchFn.mock.calls[0][1].headers.get("x-example")).toBe("one");
+  });
+
+  it("keeps the JSON default beside a contributed header", async () => {
+    contribute({ "X-Example": "one" });
+    const fetchFn = mockFetch(200, []);
+
+    await api.listProjects();
+
+    expect(fetchFn.mock.calls[0][1].headers.get("content-type")).toBe("application/json");
+  });
+
+  it("lets the call's own header win the name it shares", async () => {
+    // The order that keeps `importCatalog` working: a call that spelled a
+    // header out meant that one, and a contributor must not be able to take a
+    // route's content type away from it.
+    // Contributed in the other case on purpose: an object merged by key keeps
+    // both `content-type` and `Content-Type`, and the two values then reach the
+    // server comma-joined under one name — which is a 422 rather than a
+    // preference. The override has to answer to the name, not to the spelling.
+    contribute({ "content-type": "application/json" });
+    const fetchFn = mockFetch(200, { id: "l-bracket" });
+    const file = new File([new Uint8Array([80, 75, 3, 4])], "l-bracket.cls");
+
+    await api.importCatalog(file, "a".repeat(64));
+
+    const headers = fetchFn.mock.calls[0][1].headers;
+    expect(headers.get("content-type")).toBe("application/octet-stream");
+    // And once. `Headers` joins repeats with a comma, so a surviving second
+    // value shows up here rather than being invisible behind the first.
+    expect(headers.get("content-type")).not.toContain(",");
+  });
+
+  it("puts a contributed header on the chat turn, which does not go through req", async () => {
+    contribute({ "X-Example": "one" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(sseResponse(['data: {"event":"turn_end","stop_reason":"end_turn"}\n\n']));
+    vi.stubGlobal("fetch", fetchFn);
+
+    await api.streamChat(7, "a cube", () => {});
+
+    const headers = fetchFn.mock.calls[0][1].headers;
+    expect(headers.get("x-example")).toBe("one");
+    expect(headers.get("content-type")).toBe("application/json");
+  });
+
+  it("keeps the chat turn's content type when a contributor spells it differently", async () => {
+    // The turn passes no `init` of its own to reassert from, so it supplies its
+    // content type as the call's own. Without that it would take a
+    // contributor's and post a JSON body the server refuses to parse.
+    contribute({ "content-type": "text/plain" });
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(sseResponse(['data: {"event":"turn_end","stop_reason":"end_turn"}\n\n']));
+    vi.stubGlobal("fetch", fetchFn);
+
+    await api.streamChat(7, "a cube", () => {});
+
+    expect(fetchFn.mock.calls[0][1].headers.get("content-type")).toBe("application/json");
+  });
+
+  it("lets one contributor override another that spelled the name differently", async () => {
+    // Both would otherwise survive a key merge and go out comma-joined, which
+    // on a credential header means two keys on one request.
+    contribute({ "X-Model-Key": "first" });
+    contribute({ "x-model-key": "second" });
+    const fetchFn = mockFetch(200, []);
+
+    await api.listProjects();
+
+    expect(fetchFn.mock.calls[0][1].headers.get("x-model-key")).toBe("second");
+  });
+
+  it("normalises a caller's Headers and a caller's array of pairs", async () => {
+    // Both are legal `HeadersInit` and both arrive through the published
+    // `request` export. Read with `Object.entries` they come back empty and a
+    // caller's headers vanish with no error.
+    contribute({ "X-Example": "contributed" });
+    const fetchFn = mockFetch(200, []);
+
+    await api.request("/projects", { headers: new Headers({ "X-Example": "from-headers" }) });
+    expect(fetchFn.mock.calls[0][1].headers.get("x-example")).toBe("from-headers");
+
+    await api.request("/projects", {
+      headers: [
+        ["X-Example", "a"],
+        ["X-Example", "b"],
+      ],
+    });
+    expect(fetchFn.mock.calls[1][1].headers.get("x-example")).toBe("a, b");
+  });
+
+  it("refuses a path that would send the request somewhere else", async () => {
+    // A contributed credential rides every call, so an unrooted path is not a
+    // typo — it is that credential leaving this origin.
+    //
+    // This build's `API_BASE` is absolute (`vite.config.ts` defaults it to
+    // `http://localhost:8000`), so a path is refused here by failing to resolve
+    // under that origin at all. The build where the guard has real work to do
+    // is the same-origin one, and it is measured in `api.sameOrigin.test.ts`
+    // rather than here, because `API_BASE` is settled per file.
+    contribute({ "X-Model-Key": "a-secret-value" });
+    const fetchFn = mockFetch(200, []);
+
+    for (const path of ["https://elsewhere.example/x", "projects", ""]) {
+      await expect(api.request(path)).rejects.toThrow("rooted at the API base");
+    }
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a caller's own header value out of the refusal it throws", async () => {
+    // `request` is published, so the value that trips the runtime need not be a
+    // contributed one — a plugin passing its own key with a stray newline is
+    // the same credential on the same screen. Handing the caller's headers to
+    // `new Headers(...)` validated them all at once and raised the runtime's
+    // message, which nothing on this side was holding.
+    //
+    // Asserted on the message this build writes rather than on the absence of
+    // the secret from whatever was thrown: jsdom's own refusal quotes nothing,
+    // so "does not contain the key" passes here with the guard removed. That is
+    // measured, not supposed — a review round shipped exactly that assertion.
+    // The redaction itself is measured against a quoting runtime in
+    // `headers.test.ts`; what this one holds is that the caller's headers go
+    // through the guard at all.
+    const fetchFn = mockFetch(200, []);
+
+    await expect(
+      api.request("/projects", { headers: { Authorization: "Bearer sk-live-SECRETVALUE\r\nX: 1" } }),
+    ).rejects.toThrow("a request header is not valid: Authorization");
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the caller's path out of the refusal it throws", async () => {
+    // `errMessage` renders `Error.message` straight into a toast, so a message
+    // that interpolated the path would put whatever the caller passed on the
+    // screen — and a caller that got the path wrong is the one most likely to
+    // have built it out of something that should not be read aloud.
+    contribute({ "X-Model-Key": "a-secret-value" });
+    mockFetch(200, []);
+
+    await expect(api.request("https://elsewhere.example/x?token=a-secret-value")).rejects.toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining("a-secret-value") }),
+    );
+  });
+
+  it("never smuggles a contributed header into a stream URL", async () => {
+    // `EventSource` carries no custom header, and the reachable-looking way to
+    // work around that is to put the value in the query string — where it lands
+    // in every access log between here and the server.
+    //
+    // This one cannot fail against the code as it stands: `openStream` reads no
+    // header state at all. It is here as a guard against the edit that adds it,
+    // not as a check on the merge below.
+    contribute({ "X-Example": "a-secret-value" });
+    const captured: { url: string }[] = [];
+    class FakeES {
+      onmessage: ((e: { data: string }) => void) | null = null;
+      onerror: ((e: Event) => void) | null = null;
+      close = vi.fn();
+      constructor(public url: string) {
+        captured.push(this);
+      }
+    }
+    vi.stubGlobal("EventSource", FakeES as unknown as typeof EventSource);
+
+    api.streamGenerate(2, "a rod", () => {});
+
+    expect(captured[0].url).not.toContain("a-secret-value");
+    expect(captured[0].url).not.toContain("X-Example");
+  });
+
+  it("stops sending a header once its source is withdrawn", async () => {
+    const withdraw = registerRequestHeaders(() => ({ "X-Example": "one" }));
+    withdraw();
+    const fetchFn = mockFetch(200, []);
+
+    await api.listProjects();
+
+    expect(fetchFn.mock.calls[0][1].headers.get("x-example")).toBeNull();
   });
 });

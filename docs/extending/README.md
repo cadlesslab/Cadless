@@ -14,11 +14,12 @@ procedures for each.
 | Change how generated code is executed | `run_code` and the worker | [core-modules.md](./core-modules.md#changing-the-worker) |
 | Add API routes from a package of your own | the `cadless.routers` entry-point group | [below](#adding-routes-and-panels-from-outside-this-tree) |
 | Add a panel to the left rail | `registerPanel`, plus `src/plugin.ts` and `src/plugins/` from outside this tree | [below](#adding-routes-and-panels-from-outside-this-tree) |
+| Put a header on every API call the front end makes | `registerRequestHeaders` | [below](#adding-a-header-to-every-request) |
 | Say an item can arrive a new way | `register_origin` | [below](#recording-what-your-build-knows) |
 | Remember something about a project | `Store.record_plugin_data` | [below](#recording-what-your-build-knows) |
 | Host this for more than one person | `register_principal_resolver` | [below](#saying-who-is-asking) |
 
-Six of these are registries you extend with a single entry, one is a protocol
+Seven of these are registries you extend with a single entry, one is a protocol
 you satisfy by writing a class, one is a place to keep your own record, and the
 rest are data or a directory on disk. None of them requires touching the
 pipeline.
@@ -106,6 +107,73 @@ at build time. Things worth knowing:
   original held rather than moving to the end, because the registry is a `Map`
   and setting an existing key does not reorder it. So a new id lands at the
   bottom of the rail while an override stays where the panel it replaced was.
+
+## Adding a header to every request
+
+`registerPanel` above lets your bundle draw. `registerRequestHeaders` lets it
+put a header on the API calls **this tree's own code** makes — the ones you
+cannot reach, because they are named per endpoint inside `src/api.ts` and are
+deliberately not exported.
+
+```ts
+import { registerRequestHeaders } from "../../plugin";
+
+registerRequestHeaders(() => {
+  const key = sessionStorage.getItem("my-build.key");
+  return key ? { "X-My-Build-Key": key } : {};
+});
+```
+
+It returns a withdrawal, so a build can take a source back. Your function is
+asked **once per request**, not once at registration, which is what lets the
+value change while the page is open.
+
+The engine never learns what a header means. It merges what you return and
+sends it; nothing here inspects a name or a value.
+
+Five things decide whether this seam fits what you want:
+
+- **Your header does not beat the call's own.** The order is this tree's
+  default, then contributed, then whatever the call itself spelled out. A route
+  that sets its own content type keeps it — `importCatalog` sends
+  `application/octet-stream` and a contributor cannot take that away, because a
+  build that could would have that import refused with a 415.
+- **Names are case-insensitive**, and the last source to write one wins whatever
+  case it used. Two sources spelling one name differently do not both go.
+- **It reaches the `fetch` calls in `src/api.ts` and nothing else.** Not the
+  progress streams: those are opened with `EventSource`, which carries no custom
+  header in any browser. Not the artifact download, the model the viewport
+  fetches, or a thumbnail an `<img>` asks for. **A deployment that gated every
+  route on a contributed header would break downloads and previews as well as
+  the streams** — gate the routes you can reach, or use a different transport.
+  Putting the value in a query string instead is not the workaround it looks
+  like: it writes whatever the header carries into every access log between the
+  browser and the server.
+- **A source that throws is not caught**, and the throw reaches the screen
+  through `errMessage`. If yours holds a credential, keep it out of the message
+  you throw. A value the *runtime* rejects — a name that is not a token, a value
+  with an interior CR, LF or NUL — is caught for you instead and re-raised
+  naming the header and never its value, so a stray newline in a key does not
+  put the key on screen. That holds for the headers you pass to `request`
+  yourself as well as the ones you contribute. Nothing goes half-applied either
+  way: both happen before the merge and before the request, so no request is
+  sent.
+- **`request` refuses a path that does not stay under `API_BASE`.** Your own
+  calls through it are checked by resolving the URL rather than reading the
+  string, so a spelling that only looks rooted is refused on the resolved
+  answer rather than the spelling: `/\host/x`, and paths carrying a raw tab or
+  newline, resolve protocol-relative and leave the origin whenever `API_BASE`
+  is a path rather than a whole URL. It is also checked as an intermediary
+  would read it, so an escaped separator cannot climb out (`/..%2f..%2fadmin`)
+  while an escaped separator that stays inside a segment still goes. Under a
+  base that names a path, a sibling that merely begins the same way
+  (`/apps/cadless/api-admin` beside `/apps/cadless/api`) is outside it and
+  refused. That refusal is a plain `Error` rather than an `ApiError`: nothing
+  was sent, so there is no status. What it rules on is where the request is
+  *sent* — a redirect the API base answers with is followed, header attached,
+  and nothing here sees the second hop. The redirects reachable from the API
+  base are Starlette's trailing-slash ones and stay on it; a deployment that
+  adds one going elsewhere owns that.
 
 ## Recording what your build knows
 
