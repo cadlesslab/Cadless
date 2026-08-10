@@ -14,11 +14,12 @@ procedures for each.
 | Change how generated code is executed | `run_code` and the worker | [core-modules.md](./core-modules.md#changing-the-worker) |
 | Add API routes from a package of your own | the `cadless.routers` entry-point group | [below](#adding-routes-and-panels-from-outside-this-tree) |
 | Add a panel to the left rail | `registerPanel`, plus `src/plugin.ts` and `src/plugins/` from outside this tree | [below](#adding-routes-and-panels-from-outside-this-tree) |
+| Put a header on every API call the front end makes | `registerRequestHeaders` | [below](#adding-a-header-to-every-request) |
 | Say an item can arrive a new way | `register_origin` | [below](#recording-what-your-build-knows) |
 | Remember something about a project | `Store.record_plugin_data` | [below](#recording-what-your-build-knows) |
 | Host this for more than one person | `register_principal_resolver` | [below](#saying-who-is-asking) |
 
-Six of these are registries you extend with a single entry, one is a protocol
+Seven of these are registries you extend with a single entry, one is a protocol
 you satisfy by writing a class, one is a place to keep your own record, and the
 rest are data or a directory on disk. None of them requires touching the
 pipeline.
@@ -106,6 +107,50 @@ at build time. Things worth knowing:
   original held rather than moving to the end, because the registry is a `Map`
   and setting an existing key does not reorder it. So a new id lands at the
   bottom of the rail while an override stays where the panel it replaced was.
+
+## Adding a header to every request
+
+`registerPanel` above lets your bundle draw. `registerRequestHeaders` lets it
+put a header on the API calls **this tree's own code** makes — the ones you
+cannot reach, because they are named per endpoint inside `src/api.ts` and are
+deliberately not exported.
+
+```ts
+import { registerRequestHeaders } from "../../plugin";
+
+registerRequestHeaders(() => {
+  const key = sessionStorage.getItem("my-build.key");
+  return key ? { "X-My-Build-Key": key } : {};
+});
+```
+
+It returns a withdrawal, so a build can take a source back. Your function is
+asked **once per request**, not once at registration, which is what lets the
+value change while the page is open.
+
+The engine never learns what a header means. It merges what you return and
+sends it; nothing here inspects a name or a value.
+
+Four things decide whether this seam fits what you want:
+
+- **Your header does not beat the call's own.** The order is this tree's
+  default, then contributed, then whatever the call itself spelled out. A route
+  that sets its own content type keeps it — `importCatalog` sends
+  `application/octet-stream` and a contributor cannot take that away, because a
+  build that could would have that import refused with a 415.
+- **Names are case-insensitive**, and the last source to write one wins whatever
+  case it used. Two sources spelling one name differently do not both go.
+- **It reaches the `fetch` calls in `src/api.ts` and nothing else.** Not the
+  progress streams: those are opened with `EventSource`, which carries no custom
+  header in any browser. Not the artifact download, the model the viewport
+  fetches, or a thumbnail an `<img>` asks for. **A deployment that gated every
+  route on a contributed header would break downloads and previews as well as
+  the streams** — gate the routes you can reach, or use a different transport.
+  Putting the value in a query string instead is not the workaround it looks
+  like: it writes whatever the header carries into every access log between the
+  browser and the server.
+- **A source that throws is not caught**, and the throw reaches the screen
+  through `errMessage`. If yours holds a credential, keep it out of the message.
 
 ## Recording what your build knows
 
