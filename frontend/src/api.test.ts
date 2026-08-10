@@ -394,13 +394,33 @@ describe("contributed request headers", () => {
   it("refuses a path that would send the request somewhere else", async () => {
     // A contributed credential rides every call, so an unrooted path is not a
     // typo — it is that credential leaving this origin.
+    //
+    // This build's `API_BASE` is absolute (`vite.config.ts` defaults it to
+    // `http://localhost:8000`), so a path is refused here by failing to resolve
+    // under that origin at all. The build where the guard has real work to do
+    // is the same-origin one, and it is measured in `api.sameOrigin.test.ts`
+    // rather than here, because `API_BASE` is settled per file.
     contribute({ "X-Model-Key": "a-secret-value" });
     const fetchFn = mockFetch(200, []);
 
-    await expect(api.request("//elsewhere.example/x")).rejects.toThrow("must be rooted");
-    await expect(api.request("https://elsewhere.example/x")).rejects.toThrow("must be rooted");
+    for (const path of ["https://elsewhere.example/x", "projects", ""]) {
+      await expect(api.request(path)).rejects.toThrow("rooted at the API base");
+    }
 
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("keeps the caller's path out of the refusal it throws", async () => {
+    // `errMessage` renders `Error.message` straight into a toast, so a message
+    // that interpolated the path would put whatever the caller passed on the
+    // screen — and a caller that got the path wrong is the one most likely to
+    // have built it out of something that should not be read aloud.
+    contribute({ "X-Model-Key": "a-secret-value" });
+    mockFetch(200, []);
+
+    await expect(api.request("https://elsewhere.example/x?token=a-secret-value")).rejects.toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining("a-secret-value") }),
+    );
   });
 
   it("never smuggles a contributed header into a stream URL", async () => {

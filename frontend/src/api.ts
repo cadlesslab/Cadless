@@ -160,17 +160,60 @@ function outgoingHeaders(init?: RequestInit): Headers {
   return outgoing;
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  // `API_BASE` is a prefix and may be empty, so a `path` that is not rooted here
-  // is a request to somewhere else — and since a composed build may be adding a
-  // credential to every call, somewhere else is where that credential would go.
-  // `//host/x` is the one that reads as a path and is not: the browser takes it
-  // as protocol-relative and leaves the origin behind. Nothing in this file can
-  // reach it; the check is here because `request` is published to plugins.
-  if (!path.startsWith("/") || path.startsWith("//")) {
-    throw new Error(`refusing to send a request to ${path}: a path must be rooted at the API base`);
+/** What `req` says when a path would take the request off the API base.
+ *
+ * One sentence, and it names no part of the caller's input on purpose. It
+ * travels out through `errMessage`, which renders `Error.message` straight into
+ * a toast — and a caller that got a path wrong is the one most likely to have
+ * built it out of something that should not be read aloud.
+ */
+const UNROOTED = "refusing to send a request: a path must be rooted at the API base";
+
+/** Where `path` will actually send the request, refusing it if that is not here.
+ *
+ * `API_BASE` is a prefix and may be empty, so a `path` that leaves it is a
+ * request to somewhere else — and since a composed build may be adding a
+ * credential to every call, somewhere else is where that credential would go.
+ * Nothing in this file can reach that; the check exists because `request` is
+ * published to plugins.
+ *
+ * **Resolved and compared, never matched as a string**, and that distinction is
+ * the whole of it. The caller spells a path and the URL parser reads one, and
+ * the two do not agree about what a path is: for a special scheme the parser
+ * reads `\` as `/`, and it strips a raw tab, CR or LF before parsing at all. So
+ * `/\host/x` and `/<TAB>/host/x` are both protocol-relative once resolved while
+ * neither begins with `//` — a prefix test passes them and `fetch` then sends
+ * the credential to `host`. Comparing the origin the request is actually going
+ * to closes that class however it is spelled, which no test on the input can.
+ *
+ * Resolving here rather than leaving the string to `fetch` also settles which
+ * base applies: this compares against the page's own URL, while a bare string
+ * handed to `fetch` is resolved against `document.baseURI`, which a `<base>` tag
+ * can move. Checking one and sending the other would be checking nothing.
+ */
+function apiTarget(path: string): URL {
+  let base: URL;
+  let target: URL;
+  try {
+    base = new URL(API_BASE || "/", window.location.href);
+    target = new URL(`${API_BASE}${path}`, window.location.href);
+  } catch {
+    throw new Error(UNROOTED);
   }
-  const res = await fetch(`${API_BASE}${path}`, {
+  // Rooted, on this origin, and still under the base — the last of the three is
+  // what stops a path climbing out with `..` when `API_BASE` names a subpath.
+  if (
+    !path.startsWith("/") ||
+    target.origin !== base.origin ||
+    !target.pathname.startsWith(base.pathname)
+  ) {
+    throw new Error(UNROOTED);
+  }
+  return target;
+}
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(apiTarget(path).toString(), {
     ...init,
     headers: outgoingHeaders(init),
   });
