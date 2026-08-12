@@ -17,6 +17,7 @@ import { ResizeHandle } from "../components/ResizeHandle";
 import { useStore, useStoreSelector } from "../state";
 import { applyTheme } from "../theme/theme";
 import { HelpButton } from "./HelpButton";
+import { registeredRailControls } from "./railControls";
 import { panelFor, type PanelId, registeredPanels } from "./registry";
 // Side effect: the panels this tree ships hand themselves in. Imported here
 // rather than at the app root so anything that renders the rail — a test
@@ -66,6 +67,15 @@ export function LeftRail({
       </div>
 
       <div className="rail-bottom">
+        {/* Above help and the theme, not below them. Those two are the app's own
+            and sit at the very foot of the rail in every build, so a control a
+            composed build adds would otherwise land in a different place
+            depending on how many of them there were. */}
+        {registeredRailControls().map(({ id, entry }) => (
+          <div key={id} className="rail-control">
+            {entry.render()}
+          </div>
+        ))}
         <HelpButton />
         <Tooltip label={theme === "dark" ? "Light theme" : "Dark theme"} side="right">
           <IconButton label="Toggle theme" onClick={toggleTheme}>

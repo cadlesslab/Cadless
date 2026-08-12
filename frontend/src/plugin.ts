@@ -44,6 +44,16 @@
 // draws whatever the registry holds, in registration order.
 export { registerPanel, unregisterPanel, type PanelEntry, type PanelId } from "./panels/registry";
 
+// The rail's bottom section, for a control rather than a panel — something that
+// is not an icon opening a flyout. A registered control sits above help and the
+// theme toggle, which this app keeps to itself.
+export {
+  registerRailControl,
+  unregisterRailControl,
+  type RailControlEntry,
+  type RailControlId,
+} from "./panels/railControls";
+
 // The UI kit the built-in panels are made of, so a plugin's panel looks like
 // part of the app rather than a visitor.
 //
