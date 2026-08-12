@@ -165,8 +165,11 @@ catalog content read-only.
   header in any browser. **A deployment that gates a route on such a header is
   choosing a trust boundary the engine does not police**: nothing here inspects
   a contributed name or value, and the streams, the artifact download and the
-  viewport's model fetch are outside it. The procedures are in
-  `docs/extending/README.md`.
+  viewport's model fetch are outside it. The same contract carries
+  `registerRailControl`, which puts a whole control at the rail's foot rather
+  than an icon that opens a flyout — the rail mounts it as a component, so it
+  holds its own state and one build's control cannot disturb another's. The
+  procedures are in `docs/extending/README.md`.
 - What such a build may *record* is a seam too, and for the same reason: it
   cannot add a column or a branch from outside. How an item arrived is a
   registry (`cadless/catalog/origins.py`), where an entry brings the reader that

@@ -29,6 +29,13 @@ body {
 .rail-brand { color: var(--accent); font-size: var(--text-lg); height: 28px; display: flex; align-items: center; }
 .rail-items { display: flex; flex-direction: column; gap: var(--space-1); margin-top: var(--space-2); }
 .rail-bottom { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-1); align-items: center; }
+/* The wrapper a registered control sits in. It has to say `flex`: without it the
+   wrapper is the flex item and the control inside becomes ordinary in-flow
+   content, so `align-items` no longer reaches it and an inline-level root picks
+   up a line box whose strut adds space underneath. Two builds shipping the same
+   button would then sit differently depending on a `display` value neither of
+   them thinks is part of the contract. */
+.rail-control { display: flex; align-items: center; justify-content: center; }
 .rail-btn {
   position: relative;
   width: 36px; height: 36px;

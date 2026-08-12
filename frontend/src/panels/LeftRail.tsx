@@ -4,7 +4,7 @@
  * panel over the left edge of the viewport. Clicking the active icon again,
  * pressing Esc, or clicking outside closes it, so the viewport stays full-width
  * by default. Brand sits at the top; theme + help are pinned at the bottom. */
-import { useEffect, useRef } from "react";
+import { createElement, useEffect, useRef } from "react";
 
 import {
   CadlessIcon,
@@ -73,7 +73,11 @@ export function LeftRail({
             depending on how many of them there were. */}
         {registeredRailControls().map(({ id, entry }) => (
           <div key={id} className="rail-control">
-            {entry.render()}
+            {/* Mounted, not called. Calling it here would run a control's hooks
+                in this component's scope, so registering a second one mid-life
+                would change how many hooks the rail ran and React would throw.
+                As an element it gets a scope of its own. */}
+            {createElement(entry.render)}
           </div>
         ))}
         <HelpButton />
