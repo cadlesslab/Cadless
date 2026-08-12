@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- The same solid the app draws as its brand mark (src/components/icons.tsx).
+       A favicon is fetched on its own, so it inherits no `currentColor` and has
+       to name its colour here; the two values are the app's own accent tokens,
+       light then dark.
+
+       The media query is an improvement rather than the guarantee: browsers that
+       ignore CSS inside a favicon keep the default fill, which is chosen to read
+       on either chrome. That is why the default is the light-theme accent rather
+       than something only correct under the query. -->
+  <style>
+    :root { fill: #2f6fed; }
+    @media (prefers-color-scheme: dark) { :root { fill: #4f8cff; } }
+  </style>
+  <path fill-rule="evenodd" d="M12 2.5 21 7.75 12 13 3 7.75Z M8.9 7.75a3.1 1.8 0 1 0 6.2 0 3.1 1.8 0 1 0-6.2 0Z"/>
+  <path d="M3 7.75 12 13v8.5L3 16.25Z" opacity="0.48"/>
+  <path d="M21 7.75 12 13v8.5l9-5.25Z" opacity="0.72"/>
+</svg>

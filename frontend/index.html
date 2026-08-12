@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Root-relative on purpose. The deploy serves this app under a base path,
+         and Vite rewrites a root-relative href to include it; a relative one
+         would resolve against the document, which is served at both
+         /apps/cadless and /apps/cadless/ and so would break on the first. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Cadless — Natural-Language CAD</title>
   </head>
   <body>

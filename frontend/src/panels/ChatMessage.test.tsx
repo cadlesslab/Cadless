@@ -32,7 +32,7 @@ function liveTurn(over: Partial<LiveTurn> = {}): LiveTurn {
 }
 
 describe("ChatMessage", () => {
-  it("renders the CadlessIcon spark as the assistant avatar", () => {
+  it("renders the CadlessIcon solid as the assistant avatar", () => {
     const { container } = renderMsg({ kind: "assistant", id: "a7", version: okVersion() });
     const avatar = container.querySelector(".msg-avatar");
     expect(avatar).not.toBeNull();

@@ -33,7 +33,25 @@ function EmptyState({ onPick, disabled }: { onPick: (p: string) => void; disable
   );
 }
 
-export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
+/** @param visible — whether this panel is actually on screen. It is not always:
+ *  in the narrow layout the shell keeps the panel mounted and hides it, so that
+ *  a half-typed prompt survives the drawer closing. Anything that measures or
+ *  focuses has to wait for the panel to come back, because both are no-ops
+ *  inside a `display: none` subtree and neither reports that it did nothing.
+ *  @param collapseLabel — what the close control is called. The wide layout
+ *  collapses to a strip and the narrow one closes a drawer, and a control that
+ *  named the wrong one would be the only wrong word on the screen. */
+export function ChatPanel({
+  onCollapse,
+  onReveal,
+  visible = true,
+  collapseLabel = "Collapse chat",
+}: {
+  onCollapse?: () => void;
+  onReveal?: () => void;
+  visible?: boolean;
+  collapseLabel?: string;
+}) {
   const app = useApp();
   const messagesData = useStoreSelector((s) => s.messages);
   const chatEvents = useStoreSelector((s) => s.chatEvents);
@@ -55,21 +73,31 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   // Transcript = persisted block-based messages + the live POST /chat turn.
   const messages = chatTranscript(messagesData, chatEvents, generating, chatPending);
 
-  // A version's prompt was recalled into the composer.
+  // A version's prompt was recalled into the composer. Hidden, the focus call
+  // below does nothing, so the shell is told to bring the panel back first and
+  // the recall waits here for it — otherwise recalling from the rail while the
+  // drawer is closed looks like nothing happened at all.
   useEffect(() => {
-    if (recalled != null) {
-      setValue(recalled);
-      inputRef.current?.focus();
-      app.clearRecalled();
+    if (recalled == null) return;
+    if (!visible) {
+      onReveal?.();
+      return;
     }
+    setValue(recalled);
+    inputRef.current?.focus();
+    app.clearRecalled();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recalled]);
+  }, [recalled, visible]);
 
-  // Stick to the newest message as the thread grows / streams.
+  // Stick to the newest message as the thread grows / streams. `visible` is a
+  // dependency because a hidden thread has no layout: messages that arrive
+  // while the drawer is closed would otherwise leave it scrolled to the oldest
+  // one, which is where it opens.
   useEffect(() => {
+    if (!visible) return;
     const el = threadRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, chatEvents.length, generating]);
+  }, [messages.length, chatEvents.length, generating, visible]);
 
   // Catalog items are read-only, and the backend refuses a chat turn on one with
   // a 403. Follow the convention the other panels use (VersionsPanel rerun,
@@ -143,7 +171,7 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
           )}
         </div>
         {onCollapse && (
-          <IconButton label="Collapse chat" onClick={onCollapse}>
+          <IconButton label={collapseLabel} onClick={onCollapse}>
             ⟩
           </IconButton>
         )}
