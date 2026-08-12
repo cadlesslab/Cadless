@@ -32,26 +32,35 @@ export const SettingsIcon = ({ size }: IconProps) => (
   </Svg>
 );
 
-/** Cadless brand mark — a four-point spark. Unlike the stroked toolbar glyphs
- * this one is filled so it reads as a solid mark at 16/24/32px; it still
- * inherits `currentColor` and shares the 0 0 16 16 viewBox convention. The
- * concave edges curve toward the centre so the star stays crisp when small,
- * and a small inner facet adds a hint of dimension. */
+/** Cadless brand mark — the isometric solid the marketing site draws in its
+ * header. Unlike the stroked toolbar glyphs this one is filled so it reads as a
+ * solid mark at 16/24/32px, and it still inherits `currentColor`.
+ *
+ * It keeps the site's 0 0 24 24 viewBox rather than the 16×16 the glyphs above
+ * share. The two surfaces have to show the same drawing, and re-fitting the
+ * path data to another grid by hand is exactly how they would stop doing so —
+ * the viewBox is a coordinate space, and nothing renders differently for it. */
 export const CadlessIcon = ({ size = 16 }: IconProps) => (
   <svg
     className="icon"
     width={size}
     height={size}
-    viewBox="0 0 16 16"
+    viewBox="0 0 24 24"
     fill="currentColor"
     stroke="none"
-    fillRule="evenodd"
-    clipRule="evenodd"
     aria-hidden
   >
-    {/* Outer four-point spark; the inner diamond is cut out (evenodd) so the
-        facet shows the background and stays crisp on any theme at 16px. */}
-    <path d="M8 0.5C8.45 3.7 8.8 5.2 9.8 6.2C10.8 7.2 12.3 7.55 15.5 8C12.3 8.45 10.8 8.8 9.8 9.8C8.8 10.8 8.45 12.3 8 15.5C7.55 12.3 7.2 10.8 6.2 9.8C5.2 8.8 3.7 8.45 0.5 8C3.7 7.55 5.2 7.2 6.2 6.2C7.2 5.2 7.55 3.7 8 0.5ZM8 6.4L6.9 8L8 9.6L9.1 8L8 6.4Z" />
+    {/* The lit top face, with the centre cut out (evenodd) so the solid reads as
+        hollow rather than as a flat tile. */}
+    <path
+      fillRule="evenodd"
+      d="M12 2.5 21 7.75 12 13 3 7.75Z M8.9 7.75a3.1 1.8 0 1 0 6.2 0 3.1 1.8 0 1 0-6.2 0Z"
+    />
+    {/* The two side faces. They are held apart by opacity alone, which is what
+        keeps the whole mark on one `currentColor` and so correct in either
+        theme without a second declaration. */}
+    <path d="M3 7.75 12 13v8.5L3 16.25Z" opacity={0.48} />
+    <path d="M21 7.75 12 13v8.5l9-5.25Z" opacity={0.72} />
   </svg>
 );
 

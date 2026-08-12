@@ -44,7 +44,7 @@ describe("LeftRail", () => {
     expect(await screen.findByLabelText(/package file/i)).toBeInTheDocument();
   });
 
-  it("renders the CadlessIcon spark as the brand mark", () => {
+  it("renders the CadlessIcon solid as the brand mark", () => {
     const { container } = renderWithProviders(<LeftRail active={null} onSelect={() => {}} />);
     const brand = container.querySelector(".rail-brand");
     expect(brand).not.toBeNull();
