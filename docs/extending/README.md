@@ -14,12 +14,13 @@ procedures for each.
 | Change how generated code is executed | `run_code` and the worker | [core-modules.md](./core-modules.md#changing-the-worker) |
 | Add API routes from a package of your own | the `cadless.routers` entry-point group | [below](#adding-routes-and-panels-from-outside-this-tree) |
 | Add a panel to the left rail | `registerPanel`, plus `src/plugin.ts` and `src/plugins/` from outside this tree | [below](#adding-routes-and-panels-from-outside-this-tree) |
+| Put a control at the foot of the rail | `registerRailControl` | [below](#adding-a-control-to-the-foot-of-the-rail) |
 | Put a header on every API call the front end makes | `registerRequestHeaders` | [below](#adding-a-header-to-every-request) |
 | Say an item can arrive a new way | `register_origin` | [below](#recording-what-your-build-knows) |
 | Remember something about a project | `Store.record_plugin_data` | [below](#recording-what-your-build-knows) |
 | Host this for more than one person | `register_principal_resolver` | [below](#saying-who-is-asking) |
 
-Seven of these are registries you extend with a single entry, one is a protocol
+Eight of these are registries you extend with a single entry, one is a protocol
 you satisfy by writing a class, one is a place to keep your own record, and the
 rest are data or a directory on disk. None of them requires touching the
 pipeline.
@@ -174,6 +175,49 @@ Five things decide whether this seam fits what you want:
   and nothing here sees the second hop. The redirects reachable from the API
   base are Starlette's trailing-slash ones and stay on it; a deployment that
   adds one going elsewhere owns that.
+
+## Adding a control to the foot of the rail
+
+`registerPanel` puts an icon in the rail that opens a flyout. `registerRailControl`
+puts a **whole control** at the rail's foot — something that is not an icon
+opening a panel. It is where a hosted build puts what it has to say about who
+you are.
+
+```ts
+import { registerRailControl } from "../../plugin";
+
+import { Account } from "./Account";
+
+registerRailControl("account", { render: () => <Account /> });
+```
+
+It returns a withdrawal, so a build can take a control back. Registered controls
+sit above the help button and the theme toggle, which this app keeps to itself —
+those two stay at the foot in every build, so your control does not move when a
+second one is installed.
+
+Four things decide whether this seam fits what you want:
+
+- **Return an element; do not call hooks in `render` itself.** The rail mounts
+  what you return as a component, so it has a hook scope of its own and its state
+  survives the rail re-rendering. Hooks called directly inside `render` would
+  belong to the rail instead, and installing a second control would then be
+  "rendered more hooks than during the previous render". `eslint` catches this
+  where you write it.
+- **Register at module load**, the same rule panels follow. The rail reads the
+  registry while it renders and subscribes to nothing, so a control registered
+  after first paint stays invisible until something else re-renders the rail.
+  Whether somebody is signed in belongs *inside* your control, not in whether you
+  registered it.
+- **Size for the rail, not for a panel.** It is 48 wide, and 56 with 44-wide
+  buttons where the pointer is coarse. The seam supplies no sizing; the wrapper
+  it puts you in centres you and nothing else.
+- **A control that throws takes the app's chrome with it.** There is no error
+  boundary around it — the same as for a panel's `render`.
+
+Order is registration order, and for a composed build that is the alphabetical
+path order `import.meta.glob` walks. Registering under an id that is already
+taken replaces it, so a build can ship its own version of another's control.
 
 ## Recording what your build knows
 

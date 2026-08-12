@@ -4,7 +4,7 @@
  * panel over the left edge of the viewport. Clicking the active icon again,
  * pressing Esc, or clicking outside closes it, so the viewport stays full-width
  * by default. Brand sits at the top; theme + help are pinned at the bottom. */
-import { useEffect, useRef } from "react";
+import { createElement, useEffect, useRef } from "react";
 
 import {
   CadlessIcon,
@@ -17,6 +17,7 @@ import { ResizeHandle } from "../components/ResizeHandle";
 import { useStore, useStoreSelector } from "../state";
 import { applyTheme } from "../theme/theme";
 import { HelpButton } from "./HelpButton";
+import { registeredRailControls } from "./railControls";
 import { panelFor, type PanelId, registeredPanels } from "./registry";
 // Side effect: the panels this tree ships hand themselves in. Imported here
 // rather than at the app root so anything that renders the rail — a test
@@ -66,6 +67,19 @@ export function LeftRail({
       </div>
 
       <div className="rail-bottom">
+        {/* Above help and the theme, not below them. Those two are the app's own
+            and sit at the very foot of the rail in every build, so a control a
+            composed build adds would otherwise land in a different place
+            depending on how many of them there were. */}
+        {registeredRailControls().map(({ id, entry }) => (
+          <div key={id} className="rail-control">
+            {/* Mounted, not called. Calling it here would run a control's hooks
+                in this component's scope, so registering a second one mid-life
+                would change how many hooks the rail ran and React would throw.
+                As an element it gets a scope of its own. */}
+            {createElement(entry.render)}
+          </div>
+        ))}
         <HelpButton />
         <Tooltip label={theme === "dark" ? "Light theme" : "Dark theme"} side="right">
           <IconButton label="Toggle theme" onClick={toggleTheme}>
