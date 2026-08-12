@@ -577,6 +577,38 @@ body.resizing { cursor: col-resize; user-select: none; }
   .flyout { max-width: 85vw; }
 }
 
+/* Narrow: there is no room for two columns, so the chat stops being one.
+   `useNarrow` breaks at the same width and decides what renders; this decides
+   how it sits. Keep the two in step. */
+@media (max-width: 720px) {
+  /* Over the canvas, not beside it — the same move `.flyout` makes from the
+     other edge, one z-index below it so opening a rail panel covers the chat
+     rather than fighting it. */
+  .side-col.right.drawer {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 15;
+    width: min(var(--right-w), 92vw);
+    box-shadow: -8px 0 24px rgb(0 0 0 / 0.28);
+  }
+  .chat-fab {
+    position: absolute;
+    right: var(--space-3);
+    bottom: var(--space-3);
+    z-index: 14;
+    background: var(--panel);
+    border-color: var(--border);
+    color: var(--fg);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.24);
+  }
+}
+/* `.side-col` sets `display: flex`, which outranks the user-agent rule that
+   makes `hidden` mean `display: none`. Without this the closed drawer stays on
+   screen while the accessibility tree reports it gone — the worst of both. */
+.side-col[hidden] { display: none; }
+
 /* Touch. `pointer` describes the primary input, so a laptop with a trackpad
    stays `fine` and none of this reaches the desktop look. */
 @media (pointer: coarse) {
