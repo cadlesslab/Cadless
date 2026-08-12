@@ -51,6 +51,37 @@ export function App() {
     syncProjectUrl(activeProjectId);
   }, [activeProjectId]);
 
+  // Carry focus across the drawer's edges. Opening unmounts the button that was
+  // just pressed and closing hides the one inside, so without this the browser
+  // drops focus to `<body>` both ways and the next Tab restarts at the top of
+  // the document. Skipped on the first render, which nobody asked for.
+  const drawerRef = useRef<HTMLElement>(null);
+  const fabRef = useRef<HTMLButtonElement>(null);
+  const drawerWas = useRef(drawerOpen);
+  useEffect(() => {
+    if (!narrow || drawerWas.current === drawerOpen) {
+      drawerWas.current = drawerOpen;
+      return;
+    }
+    drawerWas.current = drawerOpen;
+    const target = drawerOpen
+      ? drawerRef.current?.querySelector<HTMLElement>("button, [href], textarea, input")
+      : fabRef.current;
+    target?.focus();
+  }, [drawerOpen, narrow]);
+
+  // Escape is what everyone tries on a panel that floats over something. The
+  // rail's flyout listens for it too, so this only claims the key while the
+  // drawer is the thing on top.
+  useEffect(() => {
+    if (!narrow || !drawerOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setDrawerOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [narrow, drawerOpen]);
+
   const style = { "--right-w": `${layout.rightWidth}px` } as CSSProperties;
   // The collapsed strip is a way to give the viewport more width, which is
   // exactly what the drawer already does. Offering both at once would leave two
@@ -78,7 +109,11 @@ export function App() {
         {/* Hidden rather than unmounted: the composer's draft is the chat
             panel's own state, so unmounting would throw away a half-typed
             prompt every time the drawer closed. */}
-        <aside className={classes.filter(Boolean).join(" ")} hidden={narrow && !drawerOpen}>
+        <aside
+          ref={drawerRef}
+          className={classes.filter(Boolean).join(" ")}
+          hidden={narrow && !drawerOpen}
+        >
           {collapsed ? (
             <div className="rail-collapsed">
               <IconButton label="Expand chat" onClick={layout.toggleRight}>
@@ -87,12 +122,22 @@ export function App() {
               <span className="rail-collapsed-label">Cadless</span>
             </div>
           ) : (
-            <ChatPanel onCollapse={narrow ? () => setDrawerOpen(false) : layout.toggleRight} />
+            <ChatPanel
+              onCollapse={narrow ? () => setDrawerOpen(false) : layout.toggleRight}
+              onReveal={() => setDrawerOpen(true)}
+              visible={!narrow || drawerOpen}
+              collapseLabel={narrow ? "Close chat" : "Collapse chat"}
+            />
           )}
         </aside>
 
         {narrow && !drawerOpen && (
-          <IconButton className="chat-fab" label="Open chat" onClick={() => setDrawerOpen(true)}>
+          <IconButton
+            ref={fabRef}
+            className="chat-fab"
+            label="Open chat"
+            onClick={() => setDrawerOpen(true)}
+          >
             ⟨
           </IconButton>
         )}

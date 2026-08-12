@@ -32,14 +32,15 @@ export const SettingsIcon = ({ size }: IconProps) => (
   </Svg>
 );
 
-/** Cadless brand mark — the isometric solid the marketing site draws in its
- * header. Unlike the stroked toolbar glyphs this one is filled so it reads as a
- * solid mark at 16/24/32px, and it still inherits `currentColor`.
+/** Cadless brand mark — an isometric solid. Unlike the stroked toolbar glyphs
+ * this one is filled so it reads as a solid mark at 16/24/32px, and it still
+ * inherits `currentColor`.
  *
- * It keeps the site's 0 0 24 24 viewBox rather than the 16×16 the glyphs above
- * share. The two surfaces have to show the same drawing, and re-fitting the
- * path data to another grid by hand is exactly how they would stop doing so —
- * the viewBox is a coordinate space, and nothing renders differently for it. */
+ * It keeps its own 0 0 24 24 viewBox rather than the 16×16 the glyphs above
+ * share, because the mark is drawn in more than one place and re-fitting path
+ * data to another grid by hand is how those copies stop matching. A viewBox is
+ * a coordinate space; nothing renders differently for it. `brandMark.test.ts`
+ * is what holds the copies together. */
 export const CadlessIcon = ({ size = 16 }: IconProps) => (
   <svg
     className="icon"

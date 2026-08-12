@@ -1,6 +1,10 @@
 /* App layout. Tokens only. */
 * { box-sizing: border-box; }
-html, body, #app { height: 100%; }
+/* Paired with `.app` below. Leaving this chain on `100%` while `.app` asks for
+   `100dvh` mixes two viewports: where `100%` resolves against the large one the
+   app is `100vh` tall inside a `100dvh` box and the page scrolls anyway. Both
+   declarations, so a browser without `dvh` keeps the first. */
+html, body, #app { height: 100%; height: 100dvh; }
 body {
   margin: 0;
   font-family: var(--font-sans);
@@ -590,7 +594,12 @@ body.resizing { cursor: col-resize; user-select: none; }
     top: 0;
     bottom: 0;
     z-index: 15;
-    width: min(var(--right-w), 92vw);
+    /* A percentage, not `vw`. The containing block is `.body`, which is the
+       viewport minus the rail, so `92vw` is wider than the space available and
+       the drawer spills left over the rail — measured at 390px: the drawer
+       started at x=31 and buried 17px of a 48px rail, taking half of every rail
+       button with it. */
+    width: min(var(--right-w), 92%);
     box-shadow: -8px 0 24px rgb(0 0 0 / 0.28);
   }
   .chat-fab {
@@ -603,6 +612,13 @@ body.resizing { cursor: col-resize; user-select: none; }
     color: var(--fg);
     box-shadow: 0 2px 10px rgb(0 0 0 / 0.24);
   }
+  /* The bottom-right corner already belongs to the preview banner's exit
+     control, and this button is positioned against `.body` while that row is
+     positioned against `.viewport`, so neither can see the other. Give the row
+     the button's width back — the alternative, two things anchoring themselves
+     to one corner, is the failure the rule above `.vp-overlays` was written
+     about. */
+  .vp-overlays { padding-right: 44px; }
 }
 /* `.side-col` sets `display: flex`, which outranks the user-agent rule that
    makes `hidden` mean `display: none`. Without this the closed drawer stays on
@@ -610,16 +626,21 @@ body.resizing { cursor: col-resize; user-select: none; }
 .side-col[hidden] { display: none; }
 
 /* Touch. `pointer` describes the primary input, so a laptop with a trackpad
-   stays `fine` and none of this reaches the desktop look. */
+   stays `fine` and none of this reaches the desktop look. Note it carries no
+   width bound: a tablet gets this at any window size, which is the intent.
+   Only the rail is treated here, because it has a column to itself and its
+   buttons can grow without moving anything.
+
+   `.icon-btn` is deliberately left alone. Growing it to 44px reflows the dense
+   action rows it sits in, and growing only its hit area with an `::after`
+   overlay is worse than doing nothing: `.proj-actions` has no gap at all and
+   `.ver-card-actions` sets `gap: 0`, so an 8px expansion on each side puts
+   Delete's hit area over Rename's own face — a tap on the visible Rename glyph
+   would open the delete dialog. Those rows need real spacing before their
+   targets can grow, which reaches three panels and is its own change. */
 @media (pointer: coarse) {
-  /* The rail has a column to itself, so its buttons can simply grow. */
   .rail { flex: 0 0 56px; width: 56px; }
   .rail-btn { width: 44px; height: 44px; }
-  /* Everything else cannot. `.icon-btn` sits inside dense toolbars, and growing
-     it to 44px would reflow them; growing only the hit area leaves every layout
-     where it is and still gives the finger 28 + 2×8 = 44px. */
-  .icon-btn { position: relative; }
-  .icon-btn::after { content: ""; position: absolute; inset: -8px; }
 }
 
 /* Settings panel */
