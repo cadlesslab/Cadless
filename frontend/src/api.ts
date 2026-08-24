@@ -677,7 +677,19 @@ export interface PrinterTest {
   status_detail: string;
 }
 
-export const fetchPrintCapability = () => req<PrintCapability>("/printing/capability");
+/** What every printing call sends, and why it is not decoration.
+ *
+ * These routes take no body, and a body-less request is a CORS "simple
+ * request": the browser sends it cross-site without asking, so the server's
+ * origin allowlist never gets consulted. A custom header is exactly what makes
+ * it non-simple — the browser must preflight, the allowlist answers, and a page
+ * that is not this app is refused before it can start a print on someone's
+ * machine. The server refuses a request that arrives without it.
+ */
+const PRINT_HEADERS = { "X-Cadless-Action": "1" };
+
+export const fetchPrintCapability = () =>
+  req<PrintCapability>("/printing/capability", { headers: PRINT_HEADERS });
 
 /** Open and close the printer's job port. Prints nothing.
  *
@@ -687,14 +699,26 @@ export const fetchPrintCapability = () => req<PrintCapability>("/printing/capabi
 export const testPrinter = (address?: string) =>
   req<PrinterTest>("/printing/test", {
     method: "POST",
+    headers: PRINT_HEADERS,
     body: JSON.stringify({ address: address ?? null }),
   });
 
+/** Forget the saved address. Its own call because saving only ever sets, so an
+ * emptied box cannot mean "remove this". */
+export const forgetPrinterAddress = () =>
+  req<{ ok: boolean }>("/printing/address", { method: "DELETE", headers: PRINT_HEADERS });
+
 export const sliceVersion = (versionId: number) =>
-  req<SliceResult>(`/printing/versions/${versionId}/slice`, { method: "POST" });
+  req<SliceResult>(`/printing/versions/${versionId}/slice`, {
+    method: "POST",
+    headers: PRINT_HEADERS,
+  });
 
 export const sendVersionToPrinter = (versionId: number) =>
-  req<PrintResult>(`/printing/versions/${versionId}/send`, { method: "POST" });
+  req<PrintResult>(`/printing/versions/${versionId}/send`, {
+    method: "POST",
+    headers: PRINT_HEADERS,
+  });
 /** Take a `.cls` already on this machine into the catalog.
  *
  * The file is the request body rather than a form field: there is exactly one,

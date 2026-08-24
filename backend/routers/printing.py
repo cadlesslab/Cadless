@@ -20,14 +20,44 @@ from __future__ import annotations
 import asyncio
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from backend.deps import get_store
 from cadless import printing, slicing, user_settings
 from cadless.scoped_store import ScopedStore
 
-router = APIRouter(prefix="/printing", tags=["printing"])
+#: The header a caller must send to reach anything here.
+#:
+#: Not a secret and not authentication -- its whole job is to stop a request
+#: being a CORS "simple request". The rest of this API is reached with a JSON
+#: body, which forces a ``Content-Type`` the browser will not send cross-site
+#: without asking first, so the origin allow-list is consulted and a foreign
+#: page is turned away. The routes below take no body, and a body-less POST is
+#: simple: no preflight, no allow-list, no refusal. Without this, any page the
+#: operator happened to visit could ``fetch(..., {mode: "no-cors"})`` this port
+#: and start a print on their machine -- blind, but the filament is real.
+#:
+#: A browser cannot attach a custom header cross-site without a preflight, and
+#: ``<img>`` and form posts cannot attach one at all, so requiring it puts these
+#: routes back behind the allow-list that already guards the rest.
+ACTION_HEADER = "x-cadless-action"
+
+
+async def require_action_header(x_cadless_action: str | None = Header(default=None)) -> None:
+    """Refuse a request that did not have to ask the browser's permission first."""
+    if not x_cadless_action:
+        raise HTTPException(
+            status_code=403,
+            detail=f"This endpoint requires the {ACTION_HEADER} header.",
+        )
+
+
+router = APIRouter(
+    prefix="/printing",
+    tags=["printing"],
+    dependencies=[Depends(require_action_header)],
+)
 
 #: The sliced file's name inside the version's artifact directory.
 GCODE_NAME = "print.gcode"
@@ -75,16 +105,24 @@ async def capability() -> dict:
 
 @router.post("/test")
 async def test_connection(body: AddressBody | None = None) -> dict:
-    """Open and close the printer's job port. Prints nothing.
+    """Open and close the printer's job port, then ask what it is doing.
 
     Takes an address so the Settings panel can check a value before saving it;
     falls back to the saved one so the same route serves a plain "is it there?".
+
+    The status read is what makes the answer worth having: a port that accepts a
+    connection says the path is open, and the device naming its own state says
+    the thing at the other end is the printer.
     """
     address = (body.address if body else None) or _saved_address()
     if not address:
         raise HTTPException(status_code=400, detail="No printer address is configured.")
     outcome = await asyncio.to_thread(printing.probe, address)
-    status = await asyncio.to_thread(printing.fetch_status, address)
+    status = (
+        await asyncio.to_thread(printing.fetch_status, address)
+        if outcome.ok
+        else printing.StatusOutcome(False, "not asked: the job port did not answer")
+    )
     return {
         "ok": outcome.ok,
         "detail": outcome.detail,
@@ -94,27 +132,25 @@ async def test_connection(body: AddressBody | None = None) -> dict:
     }
 
 
-@router.get("/status")
-async def printer_status() -> dict:
-    """What the printer says it is doing."""
-    address = _saved_address()
-    if not address:
-        raise HTTPException(status_code=400, detail="No printer address is configured.")
-    outcome = await asyncio.to_thread(printing.fetch_status, address)
-    return {"ok": outcome.ok, "detail": outcome.detail, "fields": outcome.fields}
-
-
 @router.post("/versions/{version_id}/slice")
-async def slice_version(version_id: int, store: ScopedStore = Depends(get_store)) -> dict:
+async def slice_version(
+    version_id: int,
+    request: Request,
+    store: ScopedStore = Depends(get_store),
+) -> dict:
     """Slice the version's mesh and report what the print would cost.
 
     A missing slicer is reported as its own outcome rather than an error status:
     the UI turns it into installation guidance, and a 500 would read as a bug in
     the tool instead of something the reader can fix.
+
+    Serialised on the app's slice gate -- the slicer is a heavy parser reading
+    untrusted geometry inside this container, so one at a time.
     """
     mesh = await _mesh_path(store, version_id)
     out_path = os.path.join(os.path.dirname(mesh), GCODE_NAME)
-    outcome = await asyncio.to_thread(slicing.slice_mesh, mesh, out_path)
+    async with request.app.state.slice_gate:
+        outcome = await asyncio.to_thread(slicing.slice_mesh, mesh, out_path)
     return {
         "ok": outcome.ok,
         "detail": outcome.detail,
@@ -129,7 +165,9 @@ async def send_version(version_id: int, store: ScopedStore = Depends(get_store))
 
     Refuses to slice implicitly. Reaching here without a sliced file means the
     confirmation step was skipped, and quietly slicing would send a print nobody
-    had seen the numbers for.
+    had seen the numbers for. The file's presence is evidence of a *finished*
+    slice rather than merely an attempted one, because a failed slice never
+    leaves one under this name.
     """
     address = _saved_address()
     if not address:
@@ -143,15 +181,8 @@ async def send_version(version_id: int, store: ScopedStore = Depends(get_store))
             detail="This version has not been sliced yet.",
         )
 
-    try:
-        gcode = await asyncio.to_thread(_read_bytes, gcode_path)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500, detail=f"The sliced file could not be read: {exc}"
-        ) from exc
-
     outcome = await asyncio.to_thread(
-        printing.send_gcode, address, gcode, name=f"cadless-{version_id}"
+        printing.send_gcode, address, gcode_path, name=f"cadless-{version_id}"
     )
     return {
         "ok": outcome.ok,
@@ -161,6 +192,14 @@ async def send_version(version_id: int, store: ScopedStore = Depends(get_store))
     }
 
 
-def _read_bytes(path: str) -> bytes:
-    with open(path, "rb") as handle:
-        return handle.read()
+@router.delete("/address")
+async def forget_address() -> dict:
+    """Forget the saved printer address.
+
+    Its own route because the settings endpoint only ever sets: a blank field
+    there means "leave this alone", which is right for a key someone did not
+    retype but leaves a mistyped address unfixable short of editing the file by
+    hand.
+    """
+    user_settings.clear("printer_address")
+    return {"ok": True}

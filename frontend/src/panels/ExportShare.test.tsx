@@ -166,6 +166,42 @@ describe("ExportShare printing", () => {
     await waitFor(() => expect(screen.getByText("Object too tall")).toBeInTheDocument());
   });
 
+  it("sends the version it sliced, not whichever became active meanwhile", async () => {
+    // The active version moves without a click: a chat or generation turn
+    // finishing re-reads the project from an SSE event and sets it. This
+    // component is not remounted when that happens, so reading the prop again
+    // at send time would print a different model than the dialog described.
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
+    vi.mocked(api.sliceVersion).mockResolvedValue({
+      ok: true, detail: "", slicer_missing: false, stats: { estimated_time: "3h 12m" },
+    });
+    vi.mocked(api.sendVersionToPrinter).mockResolvedValue({
+      ok: true, detail: "sent", reason: "", bytes_sent: 10,
+    });
+
+    const sliceMe = version(["stl"]);
+    const { rerender } = render(
+      <ToastProvider>
+        <ExportShare version={sliceMe} />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Print/ }));
+    await waitFor(() => expect(screen.getByText(/3h 12m/)).toBeInTheDocument());
+    expect(api.sliceVersion).toHaveBeenCalledWith(5);
+
+    const moved = { ...version(["stl"]), id: 9 };
+    rerender(
+      <ToastProvider>
+        <ExportShare version={moved} />
+      </ToastProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Send to printer" }));
+    await waitFor(() => expect(api.sendVersionToPrinter).toHaveBeenCalled());
+    expect(api.sendVersionToPrinter).toHaveBeenCalledWith(5);
+    expect(api.sendVersionToPrinter).not.toHaveBeenCalledWith(9);
+  });
+
   it("reports an unreachable printer after confirmation", async () => {
     vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
     vi.mocked(api.sliceVersion).mockResolvedValue({

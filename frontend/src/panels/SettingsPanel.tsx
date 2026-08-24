@@ -188,12 +188,36 @@ export function SettingsPanel() {
     setTestingPrinter(true);
     try {
       const result = await api.testPrinter(printerAddress.trim() || undefined);
-      if (result.ok) toast.success("Printer answered", result.detail);
-      else toast.error("No answer from the printer", result.detail);
+      if (!result.ok) {
+        toast.error("No answer from the printer", result.detail);
+        return;
+      }
+      // An open port says the path is there; the device naming its own state
+      // says the thing at the other end is a printer. Worth showing, since the
+      // second is the half that distinguishes it from anything else listening.
+      const state = result.status?.printing
+        ? "It is printing something now."
+        : result.status?.idle
+          ? "It is idle and ready."
+          : "";
+      toast.success("Printer answered", [result.detail, state].filter(Boolean).join(" "));
     } catch (err) {
       toast.error("Could not test the printer", errMessage(err));
     } finally {
       setTestingPrinter(false);
+    }
+  }
+
+  /** Remove the saved address. Saving cannot do this: a blank box there means
+   * "leave it alone", which would make a typo permanent. */
+  async function onForgetPrinter() {
+    try {
+      await api.forgetPrinterAddress();
+      setPrinterAddress("");
+      setStatus((s) => (s ? { ...s, printer_address: null } : s));
+      toast.success("Printer address forgotten");
+    } catch (err) {
+      toast.error("Could not forget the printer address", errMessage(err));
     }
   }
 
@@ -301,9 +325,12 @@ export function SettingsPanel() {
           <TextInput value={codegenModel} onChange={(e) => setCodegenModel(e.target.value)} />
         </label>
 
+        {/* The button sits outside the label: inside one, a click on it also
+            counts as a click on the field it labels. */}
         <label className="settings-field">
           <span>3D printer address</span>
           <TextInput
+            aria-label="3D printer address"
             placeholder="192.168.0.42"
             value={printerAddress}
             onChange={(e) => setPrinterAddress(e.target.value)}
@@ -312,6 +339,8 @@ export function SettingsPanel() {
             The printer's address on your own network — Print sends jobs here. A public
             address is refused.
           </small>
+        </label>
+        <div className="export-actions">
           <Button
             type="button"
             size="sm"
@@ -321,7 +350,12 @@ export function SettingsPanel() {
           >
             {testingPrinter ? "Testing…" : "Test connection"}
           </Button>
-        </label>
+          {status?.printer_address && (
+            <Button type="button" size="sm" variant="ghost" onClick={onForgetPrinter}>
+              Forget
+            </Button>
+          )}
+        </div>
 
         {provider === "openai" && (
           <small className="settings-note">

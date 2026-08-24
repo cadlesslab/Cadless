@@ -46,6 +46,19 @@ port, bound to loopback.
    validation is a separate caller responsibility: `run_code` does not enforce
    it. Upstream orchestration treats programs as text rather than importing and
    running them in the API process.
+
+   The slicer is the one place that reads a *product* of that execution outside
+   the boundary. `cadless/slicing.py` hands the exported mesh to a large
+   third-party parser running in the `api` container — which, unlike the worker,
+   has egress and holds provider credentials — so the mesh is untrusted input in
+   a place the sandbox does not cover. This is a deliberate trade and not an
+   oversight: the slicer has to reach the printer's network, which the worker
+   container is specifically denied. What bounds it instead is narrower than the
+   sandbox and is named here so it is not mistaken for it — the same CPU rlimit
+   the code-execution child runs under, a wall-clock timeout, and one slice at a
+   time through `app.state.slice_gate`. Moving it behind the worker, with the
+   G-code returned rather than the socket opened there, is the stronger shape and
+   is not what this does.
 6. What the unauthenticated settings endpoint can change MUST stay tiered.
    Runtime tuning is settable; anything that multiplies per-turn spend is
    settable only when the launch environment opts in; and configuration that

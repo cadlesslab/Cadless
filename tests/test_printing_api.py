@@ -5,6 +5,10 @@ routes owe a caller is that each way of not being able to print is
 distinguishable -- no address, no mesh, no slicer, not sliced yet -- because the
 UI turns each into a different sentence, and a single generic failure would make
 all four read as the tool being broken.
+
+The other thing pinned here is who may reach them at all: the action header,
+which is what puts these routes behind the CORS origin allow-list, and the
+scoped store, which is what stops one person printing another's model.
 """
 
 from __future__ import annotations
@@ -19,7 +23,12 @@ from backend.app import create_app
 from backend.routers import printing as printing_routes
 from cadless import printing, slicing, user_settings
 from cadless.config import settings
+from cadless.identity import Principal, register_principal_resolver
+from cadless.identity import unregister_principal_resolver as _unregister
 from cadless.store import Store
+
+ACT = {printing_routes.ACTION_HEADER: "1"}
+WHO = "X-Test-Principal"
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +46,14 @@ def store(tmp_path):
 
 @pytest.fixture
 def client(store):
+    """A caller that sends the action header, as the app's own frontend does."""
+    with TestClient(create_app(store=store), headers=ACT) as c:
+        yield c
+
+
+@pytest.fixture
+def bare_client(store):
+    """A caller that does not — which is what a foreign page would be."""
     with TestClient(create_app(store=store)) as c:
         yield c
 
@@ -66,6 +83,41 @@ def version_without_stl(store):
 
 def _configure(address="192.168.4.4"):
     user_settings.save({"printer_address": address})
+
+
+def _slices(text: bytes = b"G28\n"):
+    """A stand-in slicer that leaves a finished file where it was asked to."""
+
+    def run(_mesh_path, out_path, **_kwargs):
+        Path(out_path).write_bytes(text)
+        return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+    return run
+
+
+class TestTheActionHeader:
+    """Without it these routes are reachable from any page the operator visits.
+
+    A body-less POST is a CORS "simple request": no preflight, so the origin
+    allow-list is never consulted. Requiring a header the browser cannot attach
+    cross-site without asking first is what puts them back behind it.
+    """
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("get", "/printing/capability"),
+            ("post", "/printing/test"),
+            ("post", "/printing/versions/1/slice"),
+            ("post", "/printing/versions/1/send"),
+            ("delete", "/printing/address"),
+        ],
+    )
+    def test_every_route_refuses_a_request_without_it(self, bare_client, method, path):
+        assert getattr(bare_client, method)(path).status_code == 403
+
+    def test_the_same_request_is_served_with_it(self, bare_client):
+        assert bare_client.get("/printing/capability", headers=ACT).status_code == 200
 
 
 class TestCapability:
@@ -113,12 +165,33 @@ class TestConnectionTest:
             "probe",
             lambda *a, **k: printing.PrintOutcome(False, "refused: nobody home"),
         )
-        monkeypatch.setattr(
-            printing, "fetch_status", lambda *a, **k: printing.StatusOutcome(False, "no")
-        )
         body = client.post("/printing/test", json={"address": "192.168.9.9"}).json()
         assert body["ok"] is False
         assert body["reason"] == "refused"
+
+    def test_a_closed_port_is_not_followed_by_a_status_read(self, client, monkeypatch):
+        """Waiting out a second timeout to ask a device that did not answer."""
+        asked = []
+        monkeypatch.setattr(
+            printing, "probe", lambda *a, **k: printing.PrintOutcome(False, "refused: no")
+        )
+        monkeypatch.setattr(
+            printing,
+            "fetch_status",
+            lambda *a, **k: asked.append(1) or printing.StatusOutcome(True, "", {}),
+        )
+        client.post("/printing/test", json={"address": "192.168.9.9"})
+        assert asked == []
+
+    def test_the_printers_own_state_is_passed_through(self, client, monkeypatch):
+        monkeypatch.setattr(printing, "probe", lambda *a, **k: printing.PrintOutcome(True, "open"))
+        monkeypatch.setattr(
+            printing,
+            "fetch_status",
+            lambda *a, **k: printing.StatusOutcome(True, "", {"idle": True, "percent": 0}),
+        )
+        body = client.post("/printing/test", json={"address": "192.168.9.9"}).json()
+        assert body["status"]["idle"] is True
 
 
 class TestSlicing:
@@ -137,7 +210,7 @@ class TestSlicing:
         assert body["detail"] == slicing.INSTALL_HINT
 
     def test_a_sliced_job_returns_its_stats(self, client, version_with_stl, monkeypatch):
-        def fake(mesh_path, out_path, **_kwargs):
+        def fake(_mesh, out_path, **_kwargs):
             Path(out_path).write_text("G28\n")
             return slicing.SliceOutcome(
                 True, "", gcode_path=out_path, stats={"estimated_time": "1h 2m"}
@@ -152,8 +225,7 @@ class TestSlicing:
         seen = {}
 
         def fake(mesh_path, out_path, **_kwargs):
-            seen["mesh"] = mesh_path
-            seen["out"] = out_path
+            seen["mesh"], seen["out"] = mesh_path, out_path
             Path(out_path).write_text("G28\n")
             return slicing.SliceOutcome(True, "", gcode_path=out_path)
 
@@ -169,42 +241,32 @@ class TestSending:
 
     def test_sending_before_slicing_is_a_409(self, client, version_with_stl):
         _configure()
-        response = client.post(f"/printing/versions/{version_with_stl}/send")
-        assert response.status_code == 409
+        assert client.post(f"/printing/versions/{version_with_stl}/send").status_code == 409
 
-    def test_the_sliced_bytes_are_what_is_sent(self, client, version_with_stl, monkeypatch):
+    def test_the_sliced_file_is_what_is_sent(self, client, version_with_stl, monkeypatch):
         _configure()
         sent = {}
 
-        def fake_slice(mesh_path, out_path, **_kwargs):
-            Path(out_path).write_bytes(b"G28\nG1 X1\n")
-            return slicing.SliceOutcome(True, "", gcode_path=out_path)
-
-        def fake_send(address, gcode, **kwargs):
+        def fake_send(address, gcode_path, **kwargs):
             sent["address"] = address
-            sent["gcode"] = gcode
+            sent["body"] = Path(gcode_path).read_bytes()
             sent["name"] = kwargs.get("name")
-            return printing.PrintOutcome(True, "sent", bytes_sent=len(gcode))
+            return printing.PrintOutcome(True, "sent", bytes_sent=len(sent["body"]))
 
-        monkeypatch.setattr(slicing, "slice_mesh", fake_slice)
+        monkeypatch.setattr(slicing, "slice_mesh", _slices(b"G28\nG1 X1\n"))
         monkeypatch.setattr(printing, "send_gcode", fake_send)
 
         client.post(f"/printing/versions/{version_with_stl}/slice")
         body = client.post(f"/printing/versions/{version_with_stl}/send").json()
 
         assert body["ok"] is True
-        assert sent["gcode"] == b"G28\nG1 X1\n"
+        assert sent["body"] == b"G28\nG1 X1\n"
         assert sent["address"] == "192.168.4.4"
         assert str(version_with_stl) in sent["name"]
 
     def test_an_unreachable_printer_keeps_its_reason(self, client, version_with_stl, monkeypatch):
         _configure()
-
-        def fake_slice(mesh_path, out_path, **_kwargs):
-            Path(out_path).write_bytes(b"G28\n")
-            return slicing.SliceOutcome(True, "", gcode_path=out_path)
-
-        monkeypatch.setattr(slicing, "slice_mesh", fake_slice)
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
         monkeypatch.setattr(
             printing,
             "send_gcode",
@@ -216,17 +278,64 @@ class TestSending:
         assert body["reason"] == "unreachable"
 
 
-class TestStatusRoute:
-    def test_no_address_is_a_400(self, client):
-        assert client.get("/printing/status").status_code == 400
-
-    def test_it_passes_the_printers_own_fields_through(self, client, monkeypatch):
+class TestForgettingTheAddress:
+    def test_it_removes_the_saved_value(self, client):
         _configure()
+        assert client.delete("/printing/address").status_code == 200
+        assert not user_settings.load().get("printer_address")
+
+    def test_forgetting_when_there_is_nothing_saved_is_not_an_error(self, client):
+        assert client.delete("/printing/address").status_code == 200
+
+
+class TestOwnership:
+    """The scoped store is this router's only gate on whose model gets printed."""
+
+    @pytest.fixture
+    def hosted(self, tmp_path):
+        store = Store(db_path=tmp_path / "db.sqlite", artifacts_dir=tmp_path / "artifacts")
+
+        async def seed():
+            await store.init()
+            project = await store.create_project("A's part", owner="user-a")
+            version = await store.add_version(project.id, "make it", "code", True, owner="user-a")
+            directory = Path(store.version_artifact_dir(version.id))
+            (directory / "model.stl").write_bytes(b"\x00" * 84)
+            await store.add_artifact(
+                version.id, "stl", str(directory / "model.stl"), owner="user-a"
+            )
+            return version.id
+
+        version_id = asyncio.run(seed())
+        register_principal_resolver(lambda request: Principal(request.headers.get(WHO, "nobody")))
+        try:
+            with TestClient(create_app(store=store), headers=ACT) as client:
+                yield client, version_id
+        finally:
+            _unregister()
+
+    def test_the_owner_can_slice_their_own_version(self, hosted, monkeypatch):
+        client, version_id = hosted
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        response = client.post(f"/printing/versions/{version_id}/slice", headers={WHO: "user-a"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+
+    def test_someone_else_cannot_slice_it(self, hosted, monkeypatch):
+        client, version_id = hosted
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        response = client.post(f"/printing/versions/{version_id}/slice", headers={WHO: "user-b"})
+        assert response.status_code == 404
+
+    def test_someone_else_cannot_send_it(self, hosted, monkeypatch):
+        client, version_id = hosted
+        _configure()
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
         monkeypatch.setattr(
-            printing,
-            "fetch_status",
-            lambda *a, **k: printing.StatusOutcome(True, "", {"percent": 42}),
+            printing, "send_gcode", lambda *a, **k: printing.PrintOutcome(True, "sent")
         )
-        body = client.get("/printing/status").json()
-        assert body["ok"] is True
-        assert body["fields"]["percent"] == 42
+        client.post(f"/printing/versions/{version_id}/slice", headers={WHO: "user-a"})
+        # Sliced and on disk -- the only thing standing between user-b and it is
+        # the scoped lookup, which is the point of the test.
+        response = client.post(f"/printing/versions/{version_id}/send", headers={WHO: "user-b"})
+        assert response.status_code == 404

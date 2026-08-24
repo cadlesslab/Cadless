@@ -4,24 +4,28 @@ The device speaks the raw print protocol on TCP 9100 (JetDirect/AppSocket): a
 PJL job envelope wrapping a G-code body. Status is a separate, unauthenticated
 HTTP endpoint that the printer's own web UI polls.
 
-Two rules shape this module, both inherited from how ``cadless/worker.py``
-reaches its remote worker:
+Three rules shape this module:
 
 - **No exception escapes.** Every entry point answers with a result object whose
   ``ok`` says what happened, so a request handler never turns a cable being
-  unplugged into a 500.
-- **The address is resolved once and then dialled by literal.** ``resolve_target``
-  refuses anything that is not on a local network, and the caller connects to the
-  address it returned rather than to the name. Resolving again at connect time
-  would let a name answer differently the second time.
+  unplugged into a 500. Name resolution is the sharp edge here: it raises
+  ``UnicodeError`` as readily as ``OSError``, and only one of those looks like a
+  network failure.
+- **The address is checked against a list of what is allowed, not of what is
+  not.** ``resolve_target`` resolves once, permits only the ranges a device on a
+  local network can occupy, and hands back the literal for the caller to dial --
+  resolving again at connect time would let a name answer differently.
+- **The body never touches memory whole.** A sliced part runs to hundreds of
+  megabytes, and this is called from a request handler.
 
-The engine must not import ``backend`` or ``worker`` (architecture invariant 3),
-so nothing here knows about requests, stores or settings files.
+The engine may not import the web or worker layers, so nothing here knows about
+requests, stores or settings files.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,21 +38,55 @@ STATUS_PORT = 80
 
 #: What the web UI polls for job state. Answers a JavaScript call rather than
 #: JSON -- ``set_status(a, b, c, ...);`` -- which is why the reply is parsed
-#: positionally by :func:`parse_status`.
+#: positionally by :func:`parse_status`, and why :data:`STATUS_CALL` has to
+#: appear before any of it is believed.
 STATUS_PATH = "/cgi-bin/config_periodic_data.cgi"
+STATUS_CALL = "set_status("
 
 #: Universal Exit Language: the escape that returns a printer to PJL from
 #: whatever it was doing. It opens and closes every job.
 UEL = b"\x1b%-12345X"
 
+#: The byte UEL starts with. A body that can spell it can end the job early.
+ESC = 0x1B
+
 DEFAULT_CONNECT_TIMEOUT = 5.0
 DEFAULT_SEND_TIMEOUT = 120.0
 DEFAULT_STATUS_TIMEOUT = 5.0
 
-#: Job states the device reports, from the field the web UI reads. Only the
-#: values this code acts on are named; anything else is reported as its number.
+#: Read and write size for the job body, which is far too big to hold.
+CHUNK_BYTES = 1 << 16
+
+#: The status reply is one short line; anything larger is not it.
+STATUS_READ_CAP = 65536
+
+#: PJL truncates a long job name anyway, and the panel shows less than this.
+NAME_MAX = 64
+
+#: Job states the device reports. Only the values this code acts on are named.
 _IDLE_STATE = 10001
 _PRINTING_STATES = range(10002, 10024)
+
+#: Where a printer can be. An allow-list rather than a list of the ways out,
+#: because the ways out cannot be enumerated: ``is_private`` answers IANA's
+#: "not globally reachable", which is a different question and says yes to 6to4,
+#: Teredo and the local-use NAT64 prefix -- each of which carries an IPv4
+#: address straight to the open internet. Measured on CPython 3.13:
+#: ``ip_address("2002:0808:0808::1").is_private`` is True while its ``sixtofour``
+#: is 8.8.8.8. Listing what is allowed fails closed on the next such prefix
+#: instead of waiting for someone to notice it.
+_ALLOWED_V4 = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+)
+_ALLOWED_V6 = (
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
 
 
 class AddressRefused(ValueError):
@@ -82,9 +120,29 @@ class StatusOutcome:
     fields: dict[str, Any] = field(default_factory=dict)
 
 
+def _unwrap(
+    parsed: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """The IPv4 address an IPv6 one carries, when it carries one.
+
+    ``::ffff:a.b.c.d`` and ``2002::/16`` are how an IPv4 destination gets
+    written as IPv6, and the address inside is where the traffic ends up, so it
+    is what the allow-list should see. Teredo is deliberately not unwrapped: its
+    endpoints are public by construction, so leaving it wrapped lets the
+    allow-list refuse it without a special case.
+    """
+    for attr in ("ipv4_mapped", "sixtofour"):
+        found = getattr(parsed, attr, None)
+        if found is not None:
+            return found
+    return parsed
+
+
 def _is_local(parsed: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Whether an address is one this may dial. The single rule both checks use."""
-    return parsed.is_private or parsed.is_loopback or parsed.is_link_local
+    """Whether an address is one this may dial."""
+    addr = _unwrap(parsed)
+    allowed = _ALLOWED_V4 if addr.version == 4 else _ALLOWED_V6
+    return any(addr in net for net in allowed)
 
 
 def _unbracket(address: str) -> str:
@@ -96,14 +154,14 @@ def _unbracket(address: str) -> str:
 
 
 def refuse_public_literal(address: str) -> None:
-    """Refuse an address that is plainly not on a local network.
+    """Refuse an address that is plainly not one this may dial.
 
     Cheap on purpose. This runs when settings are saved, so it must not perform
     a name lookup: a save that hangs on DNS is a worse failure than a refusal
     that arrives one step later. A name is therefore allowed through here and
-    checked by :func:`resolve_target` at the moment it is dialled, which refuses
-    on the same rule. What this catches is the mistake worth catching early --
-    someone typing a public IP into the box.
+    checked by :func:`resolve_target` at the moment it is dialled, against the
+    same list. What this catches is what someone can be told about immediately
+    -- a public address typed into the box, or a port appended to it.
     """
     host = _unbracket(address)
     if not host:
@@ -111,21 +169,28 @@ def refuse_public_literal(address: str) -> None:
     try:
         parsed = ipaddress.ip_address(host)
     except ValueError:
+        if ":" in host:
+            # Neither a name nor an IPv6 literal. Almost always `host:9100`,
+            # which would otherwise be saved happily and fail at dial time with
+            # a message about the name not resolving.
+            raise AddressRefused(
+                f"{host} looks like it has a port on the end; give the address only"
+            ) from None
         return  # a name; settled at dial time
     if not _is_local(parsed):
         raise AddressRefused(
-            f"{host} is a public address; a printer address must be on your local network"
+            f"{host} is not on a local network; a printer address must be one of "
+            "10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x, or an IPv6 unique-local "
+            "or link-local address"
         )
 
 
 def resolve_target(address: str) -> str:
     """Return the IP literal to dial for ``address``, or raise `AddressRefused`.
 
-    A printer lives on the network the machine is already on, so a public
-    address is never the right answer and is refused rather than dialled. The
-    check runs over *every* address the name resolves to and fails closed: one
-    public answer among several refuses the lot, because a name that sometimes
-    resolves outward is exactly the case this is here to stop.
+    The check runs over *every* address the name resolves to and fails closed:
+    one answer outside the allowed ranges refuses the lot, because a name that
+    sometimes resolves outward is exactly the case this is here to stop.
 
     The returned literal is what the caller connects to. Handing back the name
     would leave a second resolution between the check and the connection.
@@ -136,6 +201,11 @@ def resolve_target(address: str) -> str:
 
     try:
         infos = socket.getaddrinfo(host, PRINT_PORT, proto=socket.IPPROTO_TCP)
+    except UnicodeError as exc:
+        # Not an OSError. `getaddrinfo` encodes the name as IDNA first, and a
+        # label over 63 characters fails there -- so catching only OSError lets
+        # a saved address turn every later call into a 500.
+        raise AddressRefused(f"{host} is not a usable host name: {exc}") from exc
     except OSError as exc:
         raise AddressRefused(f"{host} does not resolve: {exc}") from exc
 
@@ -147,10 +217,7 @@ def resolve_target(address: str) -> str:
         except ValueError as exc:  # a resolver answering something unparseable
             raise AddressRefused(f"{host} resolves to an unusable address") from exc
         if not _is_local(parsed):
-            raise AddressRefused(
-                f"{host} resolves to the public address {literal}; a printer address "
-                "must be on your local network"
-            )
+            raise AddressRefused(f"{host} resolves to {literal}, which is not on a local network")
         literals.append(literal)
 
     if not literals:
@@ -158,50 +225,110 @@ def resolve_target(address: str) -> str:
     return literals[0]
 
 
+def pjl_header(name: str) -> bytes:
+    """The bytes that open one job.
+
+    ``name`` is sanitised rather than escaped. PJL has no escape for a quote
+    inside a quoted value, so a name containing one would end the value early
+    and leave the rest to be read as commands.
+    """
+    safe = "".join(c for c in name if c.isalnum() or c in "._- ")[:NAME_MAX] or "cadless"
+    return UEL + f'@PJL JOB NAME="{safe}"\r\n'.encode("ascii", "ignore")
+
+
+#: The bytes that close one job and leave the device back in PJL.
+PJL_FOOTER = UEL + b"@PJL EOJ\r\n" + UEL
+
+
 def pjl_job(gcode: bytes, *, name: str) -> bytes:
     """Wrap ``gcode`` in the PJL job envelope the raw-print port expects.
 
-    The envelope is what separates one job from the next on a port that is
-    otherwise a byte stream: UEL opens it, ``@PJL JOB`` names it so the job shows
-    up on the panel, ``@PJL EOJ`` ends it, and the trailing UEL leaves the device
-    back in PJL rather than mid-body.
+    The whole payload in memory, which is why :func:`send_gcode` does not use
+    it: this is for callers holding a small body already, and for tests that
+    want to assert on the exact bytes.
 
-    ``name`` is sanitised rather than escaped. PJL has no escape for a quote
-    inside a quoted value, so a name containing one would end the value early and
-    leave the rest to be read as commands.
+    :raises ValueError: if ``gcode`` contains an escape byte -- see
+        :func:`contains_escape` for why that is refused rather than stripped.
     """
-    safe = "".join(c for c in name if c.isalnum() or c in "._- ")[:64] or "cadless"
-    header = UEL + f'@PJL JOB NAME="{safe}"\r\n'.encode("ascii", "ignore")
-    footer = UEL + b"@PJL EOJ\r\n" + UEL
-    return header + gcode + footer
+    if ESC in gcode:
+        raise ValueError("the job contains an escape byte and will not be sent")
+    return pjl_header(name) + gcode + PJL_FOOTER
+
+
+def contains_escape(path: str) -> bool:
+    """Whether the file holds an escape byte, read a chunk at a time.
+
+    An envelope only separates one job from the next while the body cannot
+    spell the thing that ends it, and ``ESC`` is the first byte of the UEL
+    sequence that does. G-code is text and a slicer has no reason to emit one,
+    so a body containing one is not a job to be repaired: quietly editing bytes
+    on their way to a machine that moves is the worse answer, and so is sending
+    the head of a file before discovering the rest is not printable.
+    """
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(CHUNK_BYTES)
+            if not chunk:
+                return False
+            if ESC in chunk:
+                return True
 
 
 def send_gcode(
     address: str,
-    gcode: bytes,
+    gcode_path: str,
     *,
     name: str = "cadless",
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT,
     send_timeout: float = DEFAULT_SEND_TIMEOUT,
 ) -> PrintOutcome:
-    """Put one job on the printer's raw-print port.
+    """Stream one job from ``gcode_path`` to the printer's raw-print port.
 
     The port acknowledges nothing, so a clean write is the whole of the good
     news: it says the bytes left this machine, not that the print succeeded.
     Callers wanting more read :func:`fetch_status` afterwards.
+
+    The body is checked for an escape before anything is dialled, so a job that
+    will be refused is refused without the printer seeing half of it.
     """
-    if not gcode:
+    try:
+        size = os.path.getsize(gcode_path)
+    except OSError as exc:
+        return PrintOutcome(False, f"missing: the sliced file could not be read ({exc})")
+    if size == 0:
         return PrintOutcome(False, "empty: there is nothing to print")
+
     try:
         target = resolve_target(address)
     except AddressRefused as exc:
         return PrintOutcome(False, f"address: {exc}")
 
-    payload = pjl_job(gcode, name=name)
     try:
-        with socket.create_connection((target, PRINT_PORT), timeout=connect_timeout) as sock:
+        if contains_escape(gcode_path):
+            return PrintOutcome(
+                False, "payload: the sliced job contains an escape byte and will not be sent"
+            )
+    except OSError as exc:
+        return PrintOutcome(False, f"missing: the sliced file could not be read ({exc})")
+
+    header, footer = pjl_header(name), PJL_FOOTER
+    sent = 0
+    try:
+        with (
+            open(gcode_path, "rb") as body,
+            socket.create_connection((target, PRINT_PORT), timeout=connect_timeout) as sock,
+        ):
             sock.settimeout(send_timeout)
-            sock.sendall(payload)
+            sock.sendall(header)
+            sent += len(header)
+            while True:
+                chunk = body.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                sock.sendall(chunk)
+                sent += len(chunk)
+            sock.sendall(footer)
+            sent += len(footer)
     except TimeoutError as exc:
         return PrintOutcome(False, f"timeout: {target}:{PRINT_PORT} did not answer in time ({exc})")
     except ConnectionRefusedError:
@@ -215,20 +342,25 @@ def send_gcode(
             False, f"unreachable: {target}:{PRINT_PORT} could not be reached ({exc})"
         )
 
-    return PrintOutcome(True, f"sent {len(payload)} bytes to {target}", bytes_sent=len(payload))
+    return PrintOutcome(True, f"sent {sent} bytes to {target}", bytes_sent=sent)
 
 
 def parse_status(body: str) -> dict[str, Any]:
     """Pull the fields out of the ``set_status(...)`` reply.
 
     The endpoint answers a JavaScript call rather than data, so the values are
-    positional and unnamed. Only the leading positions this code has a use for
-    are named; the rest are kept under ``extra`` so nothing is silently dropped.
+    positional and unnamed. Anchored on the call's own name: without that, any
+    page with a bracket in it parses -- an HTML error page reading "Not Found
+    (404)" came back as an estimate of 404 seconds and a healthy printer.
     """
-    start, end = body.find("("), body.rfind(")")
-    if start == -1 or end <= start:
+    start = body.find(STATUS_CALL)
+    if start == -1:
         return {}
-    parts = [p.strip().strip("'\"") for p in body[start + 1 : end].split(",")]
+    open_paren = start + len(STATUS_CALL) - 1
+    end = body.find(")", open_paren)
+    if end == -1:
+        return {}
+    parts = [p.strip().strip("'\"") for p in body[open_paren + 1 : end].split(",")]
 
     def _int(index: int) -> int | None:
         try:
@@ -237,7 +369,11 @@ def parse_status(body: str) -> dict[str, Any]:
             return None
 
     state = _int(1)
-    out: dict[str, Any] = {
+    if state is None:
+        # The job state is the one field everything else is read against. A
+        # reply that has not got one is not this endpoint's reply.
+        return {}
+    return {
         "estimate_seconds": _int(0),
         "state_code": state,
         "percent": _int(2),
@@ -245,11 +381,9 @@ def parse_status(body: str) -> dict[str, Any]:
         "nozzle_temp": _int(10),
         "filename": parts[11] if len(parts) > 11 else None,
         "extra": parts[12:],
+        "idle": state == _IDLE_STATE,
+        "printing": state in _PRINTING_STATES,
     }
-    if state is not None:
-        out["idle"] = state == _IDLE_STATE
-        out["printing"] = state in _PRINTING_STATES
-    return out
 
 
 def fetch_status(
@@ -259,9 +393,9 @@ def fetch_status(
 ) -> StatusOutcome:
     """Ask the printer what it is doing.
 
-    Read-only, and the same refusal rules as :func:`send_gcode` apply to the
-    address -- this reaches out over the network from the API process, so it is
-    the same egress decision even though nothing is printed.
+    Read-only, and the same rules as :func:`send_gcode` apply to the address --
+    this reaches out over the network from the API process, so it is the same
+    egress decision even though nothing is printed.
     """
     try:
         target = resolve_target(address)
@@ -278,14 +412,14 @@ def fetch_status(
         with socket.create_connection((target, STATUS_PORT), timeout=timeout) as sock:
             sock.settimeout(timeout)
             sock.sendall(request)
-            chunks = []
-            while True:
-                chunk = sock.recv(4096)
+            chunks: list[bytes] = []
+            read = 0
+            while read < STATUS_READ_CAP:
+                chunk = sock.recv(CHUNK_BYTES)
                 if not chunk:
                     break
                 chunks.append(chunk)
-                if sum(len(c) for c in chunks) > 65536:
-                    break  # the reply is one short line; anything larger is not it
+                read += len(chunk)
     except TimeoutError as exc:
         return StatusOutcome(False, f"timeout: {target} did not answer in time ({exc})")
     except ConnectionRefusedError:

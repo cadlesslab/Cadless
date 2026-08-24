@@ -36,11 +36,22 @@ async function fetchAndSave(url: string, filename: string): Promise<void> {
  * place to go, and a message that dismisses itself is the wrong shape for one. */
 type Notice = { title: string; body: string } | null;
 
+/** A slice, carrying the version it is a slice *of*.
+ *
+ * The id travels with the numbers because the two must not come apart. This
+ * component is not remounted when the active version changes, and that change
+ * does not need a click: a chat or generation turn finishing re-reads the
+ * project and moves the active version from an SSE event. Reading `version.id`
+ * again at send time would then print whatever became current while the dialog
+ * was open, under a summary describing something else.
+ */
+type Sliced = { versionId: number; result: SliceResult } | null;
+
 export function ExportShare({ version }: { version: Version }) {
   const toast = useToast();
   const [busy, setBusy] = useState<ArtifactKind | null>(null);
   const [printStep, setPrintStep] = useState<"" | "slicing" | "sending">("");
-  const [sliced, setSliced] = useState<SliceResult | null>(null);
+  const [sliced, setSliced] = useState<Sliced>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const formats = availableFormats(version);
   if (formats.length === 0) return null;
@@ -64,6 +75,9 @@ export function ExportShare({ version }: { version: Version }) {
    * only to report that no address was ever set wastes the reader's time on a
    * question that could have been asked immediately. */
   async function print() {
+    // Read once, at the moment the user asked. Everything below belongs to
+    // this version even if the active one moves while slicing runs.
+    const target = version.id;
     setPrintStep("slicing");
     try {
       const capability = await fetchPrintCapability();
@@ -79,7 +93,7 @@ export function ExportShare({ version }: { version: Version }) {
         return;
       }
 
-      const result = await sliceVersion(version.id);
+      const result = await sliceVersion(target);
       if (result.slicer_missing) {
         setNotice({ title: "No slicer yet", body: result.detail });
         return;
@@ -88,7 +102,7 @@ export function ExportShare({ version }: { version: Version }) {
         toast.error("Couldn't prepare this model", result.detail);
         return;
       }
-      setSliced(result);
+      setSliced({ versionId: target, result });
     } catch (err) {
       toast.error("Couldn't prepare this model", errMessage(err));
     } finally {
@@ -96,12 +110,16 @@ export function ExportShare({ version }: { version: Version }) {
     }
   }
 
-  /** The half that commits material. Only reachable through the dialog. */
+  /** The half that commits material. Only reachable through the dialog.
+   *
+   * Sends the version the dialog described, not whichever is active now. */
   async function confirmSend() {
+    if (!sliced) return;
+    const target = sliced.versionId;
     setSliced(null);
     setPrintStep("sending");
     try {
-      const result = await sendVersionToPrinter(version.id);
+      const result = await sendVersionToPrinter(target);
       if (result.ok) toast.success("Sent to the printer", "Check the printer to start the job.");
       else toast.error("Couldn't reach the printer", result.detail);
     } catch (err) {
@@ -153,7 +171,7 @@ export function ExportShare({ version }: { version: Version }) {
       <ConfirmDialog
         open={sliced != null}
         title="Send this to the printer?"
-        message={sliceSummary(sliced?.stats)}
+        message={sliceSummary(sliced?.result.stats)}
         confirmLabel="Send to printer"
         destructive={false}
         onConfirm={confirmSend}
