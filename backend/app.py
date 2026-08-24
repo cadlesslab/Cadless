@@ -9,7 +9,9 @@ and registered here.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from importlib.metadata import entry_points
@@ -23,6 +25,73 @@ from cadless.identity import has_principal_resolver
 from cadless.store import Store, get_store
 
 logger = logging.getLogger(__name__)
+
+
+def _files_a_version_keeps_without_a_row() -> tuple[str, ...]:
+    """Names the sweep must not mistake for litter.
+
+    Read from the modules that own them rather than repeated here: a second copy
+    of a filename is a thing to keep in step, and the cost when it drifts is a
+    sliced job counted as reclaimable.
+
+    Imported inside the function because a build need not have the printing
+    router at all — ``ROUTER_MODULES`` tolerates a missing module, and so does
+    this.
+    """
+    try:
+        from backend.routers.printing import GCODE_NAME
+        from cadless.slicing import PART_SUFFIX
+    except ImportError:
+        return ()
+    return (GCODE_NAME, GCODE_NAME + PART_SUFFIX)
+
+
+async def _report_orphans(store: Store) -> None:
+    """Say what the artifact directory is holding that nothing refers to.
+
+    A dry run. It counts and measures and removes nothing, because the rule
+    that decides what an orphan is has never run anywhere but a test, and its
+    mistakes are not recoverable. Whether a later start should delete is a
+    decision to take on what these reports say, not ahead of them.
+
+    Startup is a convenient moment rather than a safe one, and the difference
+    matters to whoever reads this next. It is **not** true that nothing is in
+    flight: the worker is its own container on the same volume, restarts
+    independently, and can be finishing an export while this api boots. What
+    makes staging safe is the grace window, not the timing — so lowering the
+    grace on the strength of "it runs at startup" would break it.
+
+    Runs before the catalog autoload, which means an item about to be reloaded
+    is still counted; the number is a ceiling on what could be reclaimed rather
+    than a promise about what would be.
+    """
+    if settings.sweep_on_start == "off":
+        return
+    try:
+        orphans = await store.sweep_orphans(
+            dry_run=True, keep_names=_files_a_version_keeps_without_a_row()
+        )
+    except Exception:
+        # Logged rather than swallowed, and never raised: this is a report, and
+        # a report that cannot be produced is not a reason to refuse to serve.
+        logger.exception("artifact sweep: could not measure the artifact directory")
+        return
+
+    if not orphans:
+        logger.info("artifact sweep: nothing unreferenced")
+        return
+    held = 0
+    for path in orphans:
+        # One file going while we add up is ordinary on a shared volume, and
+        # must cost the byte total rather than the whole report: a count with a
+        # partial size still tells the reader what they came for.
+        with contextlib.suppress(OSError):
+            held += os.path.getsize(path)
+    logger.info(
+        "artifact sweep: %d unreferenced file(s) holding %.1f MB. Nothing was deleted.",
+        len(orphans),
+        held / 1_048_576,
+    )
 
 
 async def _autoload_catalog(store: Store) -> None:
@@ -103,6 +172,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await store.init()
+        await _report_orphans(store)
         await _autoload_catalog(store)
         yield
 

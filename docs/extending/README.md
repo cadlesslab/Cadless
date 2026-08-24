@@ -48,12 +48,20 @@ The value resolves to a FastAPI `APIRouter`. Two things worth knowing:
   included first, so an advertised router can add paths but cannot shadow one
   this tree already serves.
 - **A router's own `lifespan=` runs.** `include_router` merges it into the
-  app's, so an advertised router can do startup housekeeping — sweeping what a
-  killed run left staged, warming a pool — without this tree knowing about it.
-  No router in this tree passes one today, so the mechanism is stated by
+  app's, so an advertised router can do startup housekeeping — warming a pool,
+  reconciling with a service it owns — without this tree knowing about it. No
+  router in this tree passes one today, so the mechanism is stated by
   `backend/app.py` rather than shown by an example: it merges the lifespan and
   wraps it (`_contained`). A failure while starting is logged and contained —
   it costs that router its routes, and the app still boots.
+
+  This example used to be "sweeping what a killed run left staged". That one is
+  now the app's own: it walks the artifact tree at startup and logs how many
+  files nothing refers to and how much they hold. It **deletes nothing** —
+  `CADLESS_SWEEP_ON_START` takes `report` (the default) or `off`, and there is
+  no value that removes anything. An add-on wanting its own housekeeping still
+  does it here; it should not expect to be the only thing looking at that
+  directory.
 
 **Frontend.** Same idea, different mechanics — and the difference is the whole
 reason it looks the way it does. Python finds an installed distribution at
