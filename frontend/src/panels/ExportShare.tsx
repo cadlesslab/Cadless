@@ -17,11 +17,13 @@ import { Button, Modal, Tooltip, useToast } from "../components";
 import { errMessage } from "../errors";
 import { BASE_URL } from "../routing";
 import { availableFormats, downloadFilename, FORMAT_META, shareUrl } from "./exportFormats";
-import { sliceSummary } from "./printSummary";
+import { DEFAULT_CLOSING, sliceSummary } from "./printSummary";
 
 async function fetchAndSave(url: string, filename: string, init?: RequestInit): Promise<void> {
   const res = await fetch(url, init);
-  if (!res.ok) throw new Error(`${res.status}`);
+  // The status text as well as the number: this message is shown to someone,
+  // and a toast body reading only "409" tells them nothing they can act on.
+  if (!res.ok) throw new Error(res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`);
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -52,6 +54,21 @@ type Notice = { title: string; body: string } | null;
  * what was true when the slice was made, not what a later poll says.
  */
 type Sliced = { versionId: number; result: SliceResult; can: PrintCapability } | null;
+
+/** What the dialog says happens after the numbers.
+ *
+ * Three cases, and telling them apart matters because two of them are the
+ * reader's to fix and one is not. Somebody running this on their own machine
+ * who has not set an address yet was being told the installation cannot reach a
+ * printer, which is false and offers them nothing to do about it.
+ */
+export function closingFor(can: PrintCapability): string {
+  if (can.can_send) return DEFAULT_CLOSING;
+  if (can.mode === "auto" && !can.printer_configured && can.can_configure) {
+    return "Add your printer's address in Settings to send jobs straight to it.";
+  }
+  return "This installation cannot reach a printer, so take the file to yours.";
+}
 
 export function ExportShare({ version }: { version: Version }) {
   const toast = useToast();
@@ -89,8 +106,10 @@ export function ExportShare({ version }: { version: Version }) {
     try {
       const capability = await fetchPrintCapability();
       if (!capability.can_send && !capability.can_download) {
+        // The mode first: a build with printing switched off *and* no slicer
+        // would otherwise be told to install one, which would not help.
         setNotice(
-          capability.slicer_available
+          capability.mode === "off"
             ? { title: "Printing is off", body: "This installation has printing switched off." }
             : { title: "No slicer yet", body: capability.slicer_hint },
         );
@@ -199,10 +218,7 @@ export function ExportShare({ version }: { version: Version }) {
         onOpenChange={(open) => !open && setSliced(null)}
         title={sliced?.can.can_send ? "Send this to the printer?" : "Ready to print"}
         description={
-          sliceSummary(sliced?.result.stats) +
-          (sliced && !sliced.can.can_send
-            ? " This installation cannot reach a printer, so take the file over yourself."
-            : "")
+          sliced ? sliceSummary(sliced.result.stats, closingFor(sliced.can)) : ""
         }
       >
         <div className="modal-footer">

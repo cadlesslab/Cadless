@@ -20,17 +20,26 @@ const LOCAL: PrintCapability = {
   slicer_path: "/s",
   slicer_hint: "",
   printer_configured: true,
+  can_configure: true,
   mode: "auto",
   can_send: true,
   can_download: true,
 };
 
-/** A deployment in a datacentre. It can slice; it has no route to the network
- * the printer is on, and no way for anyone to record one. */
-const HOSTED: PrintCapability = {
+/** The same machine before anyone has said where the printer is. There is
+ * something for this reader to go and do. */
+const FIRST_RUN: PrintCapability = {
   ...LOCAL,
   printer_configured: false,
   can_send: false,
+};
+
+/** A deployment in a datacentre. It can slice; it has no route to the network
+ * the printer is on, and nowhere to record one either — which is what tells it
+ * apart from FIRST_RUN, since the other fields are identical. */
+const HOSTED: PrintCapability = {
+  ...FIRST_RUN,
+  can_configure: false,
 };
 
 function version(kinds: string[]): Version {
@@ -258,6 +267,41 @@ describe("ExportShare printing", () => {
       renderShare(version(["stl"]));
       print();
       await waitFor(() => expect(screen.getByText(/cannot reach a printer/)).toBeInTheDocument());
+    });
+
+    it("does not also promise the printer is about to start", async () => {
+      // The two sentences were written for different deployments and were
+      // being shown together, contradicting each other in one breath.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(HOSTED);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced({ estimated_time: "45m" }));
+      renderShare(version(["stl"]));
+      print();
+      await waitFor(() => expect(screen.getByText(/45m/)).toBeInTheDocument());
+      expect(screen.queryByText(/will start as soon as it arrives/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("on a machine that has not been told where the printer is", () => {
+    it("points at Settings rather than claiming it cannot reach one", async () => {
+      // Identical on the wire to the hosted case but for `can_configure`, and
+      // the two readers need opposite things said to them: this one has
+      // something to go and fix.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(FIRST_RUN);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
+      renderShare(version(["stl"]));
+      print();
+      await waitFor(() => expect(screen.getByText(/address in Settings/)).toBeInTheDocument());
+      expect(screen.queryByText(/cannot reach a printer/)).not.toBeInTheDocument();
+    });
+
+    it("still slices and offers the download", async () => {
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(FIRST_RUN);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
+      renderShare(version(["stl"]));
+      print();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Download G-code" })).toBeInTheDocument(),
+      );
     });
 
     it("fetches the G-code with the action header and saves it", async () => {

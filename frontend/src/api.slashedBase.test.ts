@@ -68,6 +68,12 @@ describe("a request on a build whose base ends in a slash", () => {
     expect(new URL(api.stepUrl(5), window.location.href).pathname).toBe(
       "/apps/cadless/api/versions/5/artifacts/step",
     );
+    // The sliced job is fetched the same way and joins to the same base. Left
+    // on the untrimmed one it produced a triple slash here, and on a base of
+    // "/" a URL pointing at a host named `printing`.
+    expect(new URL(api.gcodeUrl(5), window.location.href).pathname).toBe(
+      "/apps/cadless/api/printing/versions/5/gcode",
+    );
   });
 
   it("sends a path that lands on the base itself", async () => {

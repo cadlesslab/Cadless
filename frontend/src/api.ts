@@ -648,6 +648,10 @@ export interface PrintCapability {
   /** What to install, when there is nothing to slice with. Empty otherwise. */
   slicer_hint: string;
   printer_configured: boolean;
+  /** Whether an address can be recorded here at all. Without it, "none yet" on
+   * a laptop and "none is possible" on a hosted build look identical, and one
+   * of those readers has something to go and do. */
+  can_configure: boolean;
   /** `auto` | `download` | `off` — the operator's switch, for display only.
    * What to draw is `can_send` / `can_download`, which already account for it. */
   mode: string;
@@ -719,7 +723,7 @@ export const testPrinter = (address?: string) =>
  * saves the blob, the way it already does for the export formats.
  */
 export const gcodeUrl = (versionId: number) =>
-  `${API_BASE}/printing/versions/${versionId}/gcode`;
+  `${BASE}/printing/versions/${versionId}/gcode`;
 
 /** The headers a fetch of that URL needs. Exported so the caller does not have
  * to know the header's name to download a file. */

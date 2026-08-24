@@ -9,9 +9,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from cadless.model_profiles import resolve_model_id
+
+#: What kinds of printing a deployment may offer. Defined here rather than in
+#: `cadless.printing`, which re-exports them: the validator below needs them and
+#: the import runs the other way.
+PRINTING_MODES = ("auto", "download", "off")
 
 
 class Settings(BaseSettings):
@@ -163,6 +169,36 @@ class Settings(BaseSettings):
     # that question asked directly. A build that cannot save one -- anything
     # refusing settings writes -- lands on download without being told to.
     printing: str = "auto"
+
+    @field_validator("printing")
+    @classmethod
+    def _known_printing_mode(cls, value: str) -> str:
+        """Refuse a value this does not understand, at startup.
+
+        Falling back to a default would be the wrong kindness here. This is the
+        switch an operator reaches for to stop a deployment opening connections,
+        and `false`, `0`, `no` and `disabled` are what they are most likely to
+        write to mean exactly that. Every one of them is "not a mode I know", so
+        a tolerant reading turns the switch on. `user_settings._env_flag` states
+        the rule this follows: a boundary that opens when someone writes
+        `=false` is worse than no boundary, because it is believed to be closed.
+
+        Raising is safe because this runs while `Settings` is being built, which
+        is at import -- a bad value stops the process starting rather than
+        surfacing on a request, and `backend/app.py` already refuses to start
+        on a security gate it cannot honour.
+        """
+        cleaned = (value or "").strip().lower()
+        if not cleaned:
+            # Genuinely unset, which a compose file spells `${CADLESS_PRINTING:-}`.
+            # Different from `false`: nobody writes an empty string to mean off.
+            return PRINTING_MODES[0]
+        if cleaned not in PRINTING_MODES:
+            raise ValueError(
+                f"CADLESS_PRINTING={value!r} is not one of {', '.join(PRINTING_MODES)}. "
+                "To switch printing off, write `off`."
+            )
+        return cleaned
 
     # Repair loop
     repair_max_attempts: int = 3
