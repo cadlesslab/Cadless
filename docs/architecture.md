@@ -79,6 +79,17 @@ port, bound to loopback.
    nothing reads it from the environment, so exporting it would hand a device
    address on the operator's network to generated code for nothing in return.
 
+   Whether sending is on offer at all is `CADLESS_PRINTING`, and it is operator
+   configuration rather than a setting: it is in none of the field maps, so the
+   request model refuses it like the rest of that tier. It exists because the
+   default answers the question by asking whether an address is configured, and
+   an operator may want to say no even when one is. A build that admits more
+   than one person and cannot switch identity on — the engine hosted somewhere
+   the platform does not share an origin with — is the case it is for, because
+   there a settings write is reachable by more than the person at the keyboard.
+   The send route reads it itself rather than trusting the capability answer the
+   UI drew its buttons from.
+
 7. A request MUST reach persistence through the per-request scoped view, never
    through `Store` itself. The view carries the caller's principal into every
    query and cannot be widened back; `Store` stays unscoped for startup, the

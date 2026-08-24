@@ -19,7 +19,9 @@ Three rules shape this module:
   megabytes, and this is called from a request handler.
 
 The engine may not import the web or worker layers, so nothing here knows about
-requests, stores or settings files.
+requests or stores. It does read the engine's own configuration, for the one
+question an operator answers rather than a caller: what kind of printing this
+deployment offers at all.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ import os
 import socket
 from dataclasses import dataclass, field
 from typing import Any
+
+from cadless.config import settings
 
 #: The raw-print port. The printer's firmware reads PJL and G-code from it.
 PRINT_PORT = 9100
@@ -87,6 +91,53 @@ _ALLOWED_V6 = (
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
 )
+
+
+#: What a deployment offers. `Settings.printing` documents what each means.
+MODE_AUTO = "auto"
+MODE_DOWNLOAD = "download"
+MODE_OFF = "off"
+MODES = (MODE_AUTO, MODE_DOWNLOAD, MODE_OFF)
+
+
+@dataclass(frozen=True)
+class Actions:
+    """Which printing actions a deployment can actually complete."""
+
+    send: bool
+    download: bool
+
+
+def mode() -> str:
+    """The configured mode, or ``auto`` for anything unrecognised.
+
+    Falls back rather than raising, because this is read on a request path and a
+    typo in an operator's environment should not take the app down. It falls
+    back to the most capable value on purpose: ``off`` would remove a feature
+    over a spelling mistake, and a silently absent button is harder to notice
+    than a printer that will not answer.
+    """
+    configured = (settings.printing or "").strip().lower()
+    return configured if configured in MODES else MODE_AUTO
+
+
+def actions(*, slicer_available: bool, address_configured: bool) -> Actions:
+    """What this deployment can do, given what it has.
+
+    Sending needs somewhere to send to, and asking whether an address exists is
+    the whole of the deployment question asked directly. A cloud build has no
+    route to a printer on the user's own network *and* no way for them to record
+    one, so it lands on download without anything here having to work out where
+    it is running -- which it could not do reliably anyway: the same image, the
+    same compose file and the same ports serve a laptop and a server.
+
+    Downloading is offered wherever there is a slicer, because a file the user
+    carries to the printer themselves works from everywhere.
+    """
+    current = mode()
+    if not slicer_available or current == MODE_OFF:
+        return Actions(send=False, download=False)
+    return Actions(send=address_configured and current == MODE_AUTO, download=True)
 
 
 class AddressRefused(ValueError):

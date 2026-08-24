@@ -47,6 +47,58 @@ def _job(tmp_path, body: bytes = b"G28\n"):
     return str(path)
 
 
+class TestModes:
+    """Which actions a deployment offers, and why it is asked this way.
+
+    The question a deployment is really answering is whether it can reach the
+    device. It cannot be derived from where the process is running -- the same
+    image, compose file and ports serve a laptop and a server -- so it is asked
+    directly: is there an address to send to.
+    """
+
+    @pytest.fixture(autouse=True)
+    def default_mode(self, monkeypatch):
+        monkeypatch.setattr(printing.settings, "printing", "auto")
+
+    def test_a_machine_with_a_printer_can_do_both(self):
+        allowed = printing.actions(slicer_available=True, address_configured=True)
+        assert (allowed.send, allowed.download) == (True, True)
+
+    def test_a_deployment_with_no_address_can_still_hand_the_file_over(self):
+        """This is every visitor to a build in a datacentre."""
+        allowed = printing.actions(slicer_available=True, address_configured=False)
+        assert (allowed.send, allowed.download) == (False, True)
+
+    def test_no_slicer_means_neither(self):
+        allowed = printing.actions(slicer_available=False, address_configured=True)
+        assert (allowed.send, allowed.download) == (False, False)
+
+    def test_download_mode_refuses_to_send_even_with_an_address(self, monkeypatch):
+        monkeypatch.setattr(printing.settings, "printing", "download")
+        allowed = printing.actions(slicer_available=True, address_configured=True)
+        assert (allowed.send, allowed.download) == (False, True)
+
+    def test_off_removes_both(self, monkeypatch):
+        monkeypatch.setattr(printing.settings, "printing", "off")
+        allowed = printing.actions(slicer_available=True, address_configured=True)
+        assert (allowed.send, allowed.download) == (False, False)
+
+    @pytest.mark.parametrize("configured", ["", "  ", "nonsense", "AUTO", "Download"])
+    def test_the_value_is_read_forgivingly(self, monkeypatch, configured):
+        """Case-folded, trimmed, and anything unrecognised falls back to auto.
+
+        Falling back to the most capable value on purpose: `off` over a typo
+        would remove a feature silently, which is harder to notice than a
+        printer that will not answer.
+        """
+        monkeypatch.setattr(printing.settings, "printing", configured)
+        assert printing.mode() in printing.MODES
+        if configured.strip().lower() not in printing.MODES:
+            assert printing.mode() == printing.MODE_AUTO
+        else:
+            assert printing.mode() == configured.strip().lower()
+
+
 class TestAddressRules:
     @pytest.mark.parametrize(
         "address",

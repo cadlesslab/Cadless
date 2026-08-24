@@ -153,6 +153,17 @@ class Settings(BaseSettings):
     # network instead of spawning a local subprocess. Empty = run locally.
     worker_url: str = ""
 
+    # What kind of printing this deployment offers. Operator-only: it is in none
+    # of the settings endpoint's field maps, so a request cannot reach it.
+    #   auto     - send when a printer address is configured, download otherwise
+    #   download - never send, whatever is configured
+    #   off      - neither
+    # `auto` is the honest default because the question a deployment is really
+    # answering is whether it can reach the device, and a configured address is
+    # that question asked directly. A build that cannot save one -- anything
+    # refusing settings writes -- lands on download without being told to.
+    printing: str = "auto"
+
     # Repair loop
     repair_max_attempts: int = 3
 

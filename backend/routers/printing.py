@@ -21,6 +21,7 @@ import asyncio
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
 from backend.deps import get_store
@@ -76,6 +77,19 @@ def _saved_address() -> str:
     return str(user_settings.load().get("printer_address") or "")
 
 
+def _allowed() -> printing.Actions:
+    """What this deployment can complete right now.
+
+    Read fresh on each request rather than at import: a slicer can be installed
+    and an address saved while the app is running, and a capability answered
+    from a snapshot would keep saying no.
+    """
+    return printing.actions(
+        slicer_available=slicing.find_slicer() is not None,
+        address_configured=bool(_saved_address()),
+    )
+
+
 async def _mesh_path(store: ScopedStore, version_id: int) -> str:
     """The version's STL path, or a 404. Also the ownership gate for this router."""
     artifact = await store.get_artifact(version_id, "stl")
@@ -95,11 +109,18 @@ async def capability() -> dict:
     an address beats one that fails after slicing for two minutes.
     """
     binary = slicing.find_slicer()
+    allowed = _allowed()
     return {
         "slicer_available": binary is not None,
         "slicer_path": binary or "",
         "slicer_hint": "" if binary else slicing.INSTALL_HINT,
         "printer_configured": bool(_saved_address()),
+        "mode": printing.mode(),
+        # What the UI should offer. Two booleans rather than one mode string,
+        # because the caller's question is "which buttons" and answering it here
+        # keeps the rule in one place instead of restating it in TypeScript.
+        "can_send": allowed.send,
+        "can_download": allowed.download,
     }
 
 
@@ -147,6 +168,8 @@ async def slice_version(
     Serialised on the app's slice gate -- the slicer is a heavy parser reading
     untrusted geometry inside this container, so one at a time.
     """
+    if printing.mode() == printing.MODE_OFF:
+        raise HTTPException(status_code=409, detail="Printing is switched off on this deployment.")
     mesh = await _mesh_path(store, version_id)
     out_path = os.path.join(os.path.dirname(mesh), GCODE_NAME)
     async with request.app.state.slice_gate:
@@ -169,6 +192,20 @@ async def send_version(version_id: int, store: ScopedStore = Depends(get_store))
     slice rather than merely an attempted one, because a failed slice never
     leaves one under this name.
     """
+    current = printing.mode()
+    if current != printing.MODE_AUTO:
+        # Enforced here rather than trusted to the UI. The capability endpoint
+        # tells the frontend which button to draw; this is what makes the answer
+        # true for anything else that can reach the port.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This deployment prepares files to download and does not send to a printer."
+                if current == printing.MODE_DOWNLOAD
+                else "Printing is switched off on this deployment."
+            ),
+        )
+
     address = _saved_address()
     if not address:
         raise HTTPException(status_code=400, detail="No printer address is configured.")
@@ -190,6 +227,33 @@ async def send_version(version_id: int, store: ScopedStore = Depends(get_store))
         "reason": outcome.reason,
         "bytes_sent": outcome.bytes_sent,
     }
+
+
+@router.get("/versions/{version_id}/gcode")
+async def download_gcode(version_id: int, store: ScopedStore = Depends(get_store)) -> FileResponse:
+    """Hand back the sliced job as a file.
+
+    The half of printing that works from anywhere. A deployment in a datacentre
+    has no route to a printer on somebody's own network and no honest way to
+    get one, but it can still do the part the user cannot: turn the model into a
+    job their machine will accept, so what they carry over is ready to print
+    rather than a mesh they have to slice themselves.
+
+    Served rather than regenerated: this is the same file `/slice` produced and
+    `/send` would have sent, so what is downloaded and what would be printed
+    cannot drift apart.
+    """
+    if printing.mode() == printing.MODE_OFF:
+        raise HTTPException(status_code=409, detail="Printing is switched off on this deployment.")
+    mesh = await _mesh_path(store, version_id)
+    gcode_path = os.path.join(os.path.dirname(mesh), GCODE_NAME)
+    if not os.path.exists(gcode_path):
+        raise HTTPException(status_code=409, detail="This version has not been sliced yet.")
+    return FileResponse(
+        gcode_path,
+        media_type="text/x.gcode",
+        filename=f"model_{version_id}.gcode",
+    )
 
 
 @router.delete("/address")

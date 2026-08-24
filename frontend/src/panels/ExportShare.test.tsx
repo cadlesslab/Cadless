@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as api from "../api";
-import type { Version } from "../api";
+import type { PrintCapability, Version } from "../api";
 import { ToastProvider } from "../components";
 import { ExportShare } from "./ExportShare";
 
@@ -13,7 +13,25 @@ vi.mock("../api", async (orig) => ({
   sendVersionToPrinter: vi.fn(),
 }));
 
-const READY = { slicer_available: true, slicer_path: "/s", slicer_hint: "", printer_configured: true };
+/** A deployment that can reach a printer: someone's own machine, with an
+ * address saved. */
+const LOCAL: PrintCapability = {
+  slicer_available: true,
+  slicer_path: "/s",
+  slicer_hint: "",
+  printer_configured: true,
+  mode: "auto",
+  can_send: true,
+  can_download: true,
+};
+
+/** A deployment in a datacentre. It can slice; it has no route to the network
+ * the printer is on, and no way for anyone to record one. */
+const HOSTED: PrintCapability = {
+  ...LOCAL,
+  printer_configured: false,
+  can_send: false,
+};
 
 function version(kinds: string[]): Version {
   return {
@@ -50,7 +68,8 @@ describe("ExportShare", () => {
     vi.stubGlobal("fetch", fetchFn);
     renderShare(version(["step", "stl", "obj", "glb"]));
     fireEvent.click(screen.getByRole("button", { name: "STL" }));
-    await waitFor(() => expect(fetchFn).toHaveBeenCalledWith(expect.stringContaining("/versions/5/artifacts/stl")));
+    await waitFor(() => expect(fetchFn).toHaveBeenCalled());
+    expect(fetchFn.mock.calls[0][0]).toContain("/versions/5/artifacts/stl");
     await waitFor(() => expect(screen.getByText("STL downloaded")).toBeInTheDocument());
   });
 
@@ -75,6 +94,9 @@ describe("ExportShare printing", () => {
   afterEach(() => vi.clearAllMocks());
 
   const print = () => fireEvent.click(screen.getByRole("button", { name: /Print/ }));
+  const sliced = (stats: Record<string, string> = {}) => ({
+    ok: true, detail: "", slicer_missing: false, stats,
+  });
 
   it("offers Print only when there is a mesh to slice", () => {
     renderShare(version(["step", "glb"]));
@@ -83,18 +105,11 @@ describe("ExportShare printing", () => {
     expect(screen.getByRole("button", { name: /Print/ })).toBeInTheDocument();
   });
 
-  it("asks for an address before spending time slicing", async () => {
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue({ ...READY, printer_configured: false });
-    renderShare(version(["stl"]));
-    print();
-    await waitFor(() => expect(screen.getByText("No printer yet")).toBeInTheDocument());
-    expect(api.sliceVersion).not.toHaveBeenCalled();
-  });
-
   it("says what to install when there is no slicer", async () => {
     vi.mocked(api.fetchPrintCapability).mockResolvedValue({
-      ...READY,
+      ...HOSTED,
       slicer_available: false,
+      can_download: false,
       slicer_hint: "Install PrusaSlicer",
     });
     renderShare(version(["stl"]));
@@ -103,14 +118,21 @@ describe("ExportShare printing", () => {
     expect(api.sliceVersion).not.toHaveBeenCalled();
   });
 
-  it("shows the cost and sends nothing until it is confirmed", async () => {
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
-    vi.mocked(api.sliceVersion).mockResolvedValue({
-      ok: true,
-      detail: "",
-      slicer_missing: false,
-      stats: { estimated_time: "1h 2m", filament_grams: "12.3" },
+  it("says so when an operator has switched printing off", async () => {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue({
+      ...HOSTED, mode: "off", can_send: false, can_download: false,
     });
+    renderShare(version(["stl"]));
+    print();
+    await waitFor(() => expect(screen.getByText("Printing is off")).toBeInTheDocument());
+    expect(api.sliceVersion).not.toHaveBeenCalled();
+  });
+
+  it("shows the cost and sends nothing until it is confirmed", async () => {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+    vi.mocked(api.sliceVersion).mockResolvedValue(
+      sliced({ estimated_time: "1h 2m", filament_grams: "12.3" }),
+    );
     renderShare(version(["stl"]));
     print();
     await waitFor(() => expect(screen.getByText(/1h 2m/)).toBeInTheDocument());
@@ -119,10 +141,8 @@ describe("ExportShare printing", () => {
   });
 
   it("sends only after the confirmation is accepted", async () => {
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
-    vi.mocked(api.sliceVersion).mockResolvedValue({
-      ok: true, detail: "", slicer_missing: false, stats: { estimated_time: "10m" },
-    });
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+    vi.mocked(api.sliceVersion).mockResolvedValue(sliced({ estimated_time: "10m" }));
     vi.mocked(api.sendVersionToPrinter).mockResolvedValue({
       ok: true, detail: "sent", reason: "", bytes_sent: 10,
     });
@@ -135,10 +155,8 @@ describe("ExportShare printing", () => {
   });
 
   it("sends nothing when the confirmation is dismissed", async () => {
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
-    vi.mocked(api.sliceVersion).mockResolvedValue({
-      ok: true, detail: "", slicer_missing: false, stats: {},
-    });
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+    vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
     renderShare(version(["stl"]));
     print();
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument());
@@ -146,53 +164,29 @@ describe("ExportShare printing", () => {
     expect(api.sendVersionToPrinter).not.toHaveBeenCalled();
   });
 
-  it("turns a slicer that vanished into guidance rather than an error toast", async () => {
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
-    vi.mocked(api.sliceVersion).mockResolvedValue({
-      ok: false, detail: "Install PrusaSlicer", slicer_missing: true, stats: {},
-    });
-    renderShare(version(["stl"]));
-    print();
-    await waitFor(() => expect(screen.getByText("No slicer yet")).toBeInTheDocument());
-  });
-
-  it("reports a model the slicer refused, with the slicer's own words", async () => {
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
-    vi.mocked(api.sliceVersion).mockResolvedValue({
-      ok: false, detail: "Object too tall", slicer_missing: false, stats: {},
-    });
-    renderShare(version(["stl"]));
-    print();
-    await waitFor(() => expect(screen.getByText("Object too tall")).toBeInTheDocument());
-  });
-
   it("sends the version it sliced, not whichever became active meanwhile", async () => {
     // The active version moves without a click: a chat or generation turn
-    // finishing re-reads the project from an SSE event and sets it. This
-    // component is not remounted when that happens, so reading the prop again
-    // at send time would print a different model than the dialog described.
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
-    vi.mocked(api.sliceVersion).mockResolvedValue({
-      ok: true, detail: "", slicer_missing: false, stats: { estimated_time: "3h 12m" },
-    });
+    // finishing re-reads the project from an SSE event. This component is not
+    // remounted when that happens, so reading the prop again at send time would
+    // print a different model than the dialog described.
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+    vi.mocked(api.sliceVersion).mockResolvedValue(sliced({ estimated_time: "3h 12m" }));
     vi.mocked(api.sendVersionToPrinter).mockResolvedValue({
       ok: true, detail: "sent", reason: "", bytes_sent: 10,
     });
 
-    const sliceMe = version(["stl"]);
     const { rerender } = render(
       <ToastProvider>
-        <ExportShare version={sliceMe} />
+        <ExportShare version={version(["stl"])} />
       </ToastProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: /Print/ }));
+    print();
     await waitFor(() => expect(screen.getByText(/3h 12m/)).toBeInTheDocument());
     expect(api.sliceVersion).toHaveBeenCalledWith(5);
 
-    const moved = { ...version(["stl"]), id: 9 };
     rerender(
       <ToastProvider>
-        <ExportShare version={moved} />
+        <ExportShare version={{ ...version(["stl"]), id: 9 }} />
       </ToastProvider>,
     );
 
@@ -202,11 +196,29 @@ describe("ExportShare printing", () => {
     expect(api.sendVersionToPrinter).not.toHaveBeenCalledWith(9);
   });
 
-  it("reports an unreachable printer after confirmation", async () => {
-    vi.mocked(api.fetchPrintCapability).mockResolvedValue(READY);
+  it("turns a slicer that vanished into guidance rather than an error toast", async () => {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
     vi.mocked(api.sliceVersion).mockResolvedValue({
-      ok: true, detail: "", slicer_missing: false, stats: {},
+      ok: false, detail: "Install PrusaSlicer", slicer_missing: true, stats: {},
     });
+    renderShare(version(["stl"]));
+    print();
+    await waitFor(() => expect(screen.getByText("No slicer yet")).toBeInTheDocument());
+  });
+
+  it("reports a model the slicer refused, with the slicer's own words", async () => {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+    vi.mocked(api.sliceVersion).mockResolvedValue({
+      ok: false, detail: "Object too tall", slicer_missing: false, stats: {},
+    });
+    renderShare(version(["stl"]));
+    print();
+    await waitFor(() => expect(screen.getByText("Object too tall")).toBeInTheDocument());
+  });
+
+  it("reports an unreachable printer after confirmation", async () => {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+    vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
     vi.mocked(api.sendVersionToPrinter).mockResolvedValue({
       ok: false, detail: "unreachable: no route", reason: "unreachable", bytes_sent: 0,
     });
@@ -215,5 +227,67 @@ describe("ExportShare printing", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Send to printer" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Send to printer" }));
     await waitFor(() => expect(screen.getByText("Couldn't reach the printer")).toBeInTheDocument());
+  });
+
+  describe("on a deployment that cannot reach a printer", () => {
+    it("still slices, rather than treating a missing address as a dead end", async () => {
+      // The old behaviour refused here. On anything in a datacentre that is
+      // every visitor, and the useful half of printing was reachable by nobody.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(HOSTED);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced({ estimated_time: "45m" }));
+      renderShare(version(["stl"]));
+      print();
+      await waitFor(() => expect(api.sliceVersion).toHaveBeenCalledWith(5));
+      expect(screen.getByText(/45m/)).toBeInTheDocument();
+    });
+
+    it("offers the download and never the send", async () => {
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(HOSTED);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
+      renderShare(version(["stl"]));
+      print();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Download G-code" })).toBeInTheDocument(),
+      );
+      expect(screen.queryByRole("button", { name: "Send to printer" })).not.toBeInTheDocument();
+    });
+
+    it("says why the file has to be carried over", async () => {
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(HOSTED);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
+      renderShare(version(["stl"]));
+      print();
+      await waitFor(() => expect(screen.getByText(/cannot reach a printer/)).toBeInTheDocument());
+    });
+
+    it("fetches the G-code with the action header and saves it", async () => {
+      const fetchFn = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["G28"]) });
+      vi.stubGlobal("fetch", fetchFn);
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(HOSTED);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
+      renderShare(version(["stl"]));
+      print();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Download G-code" })).toBeInTheDocument(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Download G-code" }));
+      await waitFor(() => expect(fetchFn).toHaveBeenCalled());
+      const [url, init] = fetchFn.mock.calls[0];
+      expect(url).toContain("/printing/versions/5/gcode");
+      // A plain <a href> cannot carry this, which is why the file is fetched.
+      expect(init.headers).toMatchObject({ "X-Cadless-Action": "1" });
+      await waitFor(() => expect(screen.getByText("G-code downloaded")).toBeInTheDocument());
+    });
+  });
+
+  it("offers both actions where both can work", async () => {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+    vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
+    renderShare(version(["stl"]));
+    print();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send to printer" })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Download G-code" })).toBeInTheDocument();
   });
 });
