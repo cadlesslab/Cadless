@@ -15,6 +15,8 @@ Contract (consumed by the API issues):
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import math
@@ -286,6 +288,90 @@ def _blocks_from_json(raw: str | None) -> list[ContentBlock]:
     if not raw:
         return []
     return [ContentBlock(**b) for b in json.loads(raw)]
+
+
+#: How old an unreferenced file must be before a sweep will consider it.
+#:
+#: Not zero, because a run's exports live in this tree without a row for as long
+#: as the run takes — minutes, for an agent turn. A day is far longer than any
+#: of them and far shorter than litter is worth keeping.
+DEFAULT_SWEEP_GRACE_DAYS = 1.0
+
+
+class ReferencesUnrecognisable(RuntimeError):
+    """The rows and the files on disk could not be matched up at all.
+
+    Raised rather than reported, because the two readings of "no row matches
+    anything" are "the tree is entirely litter" and "the comparison is broken",
+    and only one of them is ever true in practice.
+    """
+
+
+def _file_key(path: str) -> str:
+    """A spelling-independent name for a file, for comparing two of them.
+
+    ``add_artifact`` stores whatever string it was handed, while a sweep walks
+    with ``rglob``, so the same file reaches the comparison written two ways —
+    ``a/b/../b/c`` and ``a/b/c``, a relative row against an absolute walk.
+    Compared as text those are two files, and the one without a row is the one
+    that gets deleted.
+
+    It does not make every pair of spellings agree, and the gap is worth naming
+    because it is the one that bites. A **relative** row is resolved against the
+    *process* working directory, so a database written by a checkout running in
+    the repository root and later opened by a container whose ``WORKDIR`` is
+    ``/app`` produces keys that match nothing. Normalising cannot fix that —
+    the row does not say what it was relative to. :meth:`Store.sweep_orphans`
+    catches it downstream instead, by refusing to believe a sweep in which no
+    row matched anything at all.
+
+    Case is not folded either. On a case-insensitive filesystem ``model.step``
+    and ``Model.STEP`` are one file and two keys. Nothing generates such a pair
+    today — every artifact filename comes from code — but a delete mode should
+    not be justified by a sentence broader than this one.
+    """
+    return str(Path(path).resolve())
+
+
+def _scan(
+    artifacts_dir: Path,
+    referenced: set[str],
+    live_dirs: set[str],
+    keep: frozenset[str],
+    cutoff: float,
+) -> tuple[list[str], int, int]:
+    """Walk the tree once and sort it into orphans, matches and everything seen.
+
+    Sync and separate so the caller can hand it to a thread: it is thousands of
+    ``stat`` calls, which is more filesystem work than an event loop should do
+    inline.
+
+    ``matched`` and ``seen`` come back because the caller needs them to tell
+    "nothing is unreferenced" apart from "nothing could be recognised".
+    """
+    orphans: list[str] = []
+    matched = seen = 0
+    for f in artifacts_dir.rglob("*"):
+        try:
+            if not f.is_file():
+                continue
+            mtime = f.stat().st_mtime
+        except OSError:
+            # It went while we were looking. The worker writes into this tree
+            # from its own container, so a file arriving and leaving mid-walk is
+            # ordinary, and one of them must not end the pass.
+            continue
+        seen += 1
+        key = _file_key(str(f))
+        if key in referenced:
+            matched += 1
+            continue
+        if f.name in keep and str(Path(key).parent) in live_dirs:
+            continue
+        if mtime > cutoff:
+            continue
+        orphans.append(str(f))
+    return orphans, matched, seen
 
 
 class Store:
@@ -1407,23 +1493,65 @@ class Store:
         return scored[:top_k]
 
     # ---- housekeeping ---------------------------------------
-    async def sweep_orphans(self, *, dry_run: bool = False, grace_days: float = 0.0) -> list[str]:
+    async def sweep_orphans(
+        self,
+        *,
+        dry_run: bool = False,
+        grace_days: float = DEFAULT_SWEEP_GRACE_DAYS,
+        keep_names: tuple[str, ...] = (),
+    ) -> list[str]:
         """Delete artifact blob files with no referencing row.
 
-        Only files older than ``grace_days`` are eligible (0 = no grace). With
-        ``dry_run`` the orphans are listed but not deleted. Empty version dirs are
-        removed after a real sweep.
+        Only files older than ``grace_days`` are eligible. The default is not
+        zero, and that is a safety property rather than a preference: the
+        generation, chat and reparametrize paths stage their exports *inside*
+        this tree, with no row, for the whole of a run. Swept, the run finishes
+        with a version that has no artifacts and reports no error, because the
+        producers guard the copy with ``if src and Path(src).exists()``. A
+        caller that names no grace must not be able to do that.
+
+        ``keep_names`` are filenames a live version holds without a row — a
+        sliced print job is one, read back by the routes that send or download
+        it. They are kept only while something referenced sits beside them, so
+        the protection is "belongs to a version that still exists" rather than
+        "is called this", and a deleted version's leftovers are still reported.
+
+        With ``dry_run`` the orphans are listed but not deleted. Empty version
+        dirs are removed after a real sweep.
         """
-        referenced = await self.all_artifact_paths()
+        referenced = {_file_key(p) for p in await self.all_artifact_paths()}
+        # Directories that still hold something referenced. What a live version
+        # keeps without a row sits in one of these; a dead version's does not.
+        live_dirs = {str(Path(p).parent) for p in referenced}
         cutoff = time.time() - grace_days * 86400
         orphans: list[str] = []
+        keep = frozenset(keep_names)  # a bare str here would match by substring
         if not self.artifacts_dir.exists():
             return orphans
-        for f in self.artifacts_dir.rglob("*"):
-            if f.is_file() and str(f) not in referenced and f.stat().st_mtime <= cutoff:
-                orphans.append(str(f))
-                if not dry_run:
-                    f.unlink()
+
+        # The walk is thousands of `stat` calls and belongs off the event loop,
+        # the way `catalog/loader.py` pushes its own filesystem work across.
+        orphans, matched, seen = await asyncio.to_thread(
+            _scan, self.artifacts_dir, referenced, live_dirs, keep, cutoff
+        )
+
+        if referenced and seen and not matched:
+            # Every row points somewhere this walk did not go. Read literally
+            # that says the whole tree is litter, which is never what it means:
+            # it means the rows and the walk disagree about how to spell a path
+            # — a database written under one working directory and opened under
+            # another, most likely. Answering "all of it" to a question about
+            # what is safe to delete is the one answer that must never be a
+            # guess, so this refuses instead.
+            raise ReferencesUnrecognisable(
+                f"{len(referenced)} artifact row(s) on record and {seen} file(s) on disk, "
+                "and none of them are the same file. Refusing to call any of it unreferenced."
+            )
+
+        if not dry_run:
+            for path in orphans:
+                with contextlib.suppress(OSError):
+                    Path(path).unlink()
         if not dry_run:
             for d in sorted((p for p in self.artifacts_dir.rglob("*") if p.is_dir()), reverse=True):
                 try:

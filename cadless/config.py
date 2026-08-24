@@ -19,12 +19,45 @@ from cadless.model_profiles import resolve_model_id
 #: the import runs the other way.
 PRINTING_MODES = ("auto", "download", "off")
 
+#: What a start does about files nothing refers to.
+#:
+#: There is no value here that deletes. The rule that decides what an orphan is
+#: has never run outside a test, and it is a rule whose mistakes are not
+#: recoverable, so it reports for a while first. Adding `delete` is a separate
+#: decision, taken on what these reports turn out to say.
+SWEEP_MODES = ("report", "off")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CADLESS_", env_file=".env", extra="ignore")
 
     # Storage — DB + artifact blobs live under data_dir.
     data_dir: Path = Path("runtime-db")
+
+    # What a start does about artifact files nothing refers to. Operator-only:
+    # it is in none of the settings endpoint's field maps, so no request reaches
+    # it. `report` measures and logs; `off` does not look.
+    sweep_on_start: str = "report"
+
+    @field_validator("sweep_on_start")
+    @classmethod
+    def _known_sweep_mode(cls, value: str) -> str:
+        """Refuse a value this does not understand, at startup.
+
+        `Settings` is built at import, so this stops the process rather than
+        surfacing on a request. Reading an unknown value as "on" would be the
+        worse mistake in the other direction too: whichever way it guessed, the
+        operator would believe something that is not so about a pass that walks
+        their whole artifact tree.
+        """
+        cleaned = (value or "").strip().lower()
+        if not cleaned:
+            return SWEEP_MODES[0]  # unset, which a compose file spells `${VAR:-}`
+        if cleaned not in SWEEP_MODES:
+            raise ValueError(
+                f"CADLESS_SWEEP_ON_START={value!r} is not one of {', '.join(SWEEP_MODES)}."
+            )
+        return cleaned
 
     @property
     def db_path(self) -> Path:
