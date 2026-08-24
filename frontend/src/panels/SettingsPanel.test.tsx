@@ -16,6 +16,7 @@ const STATUS: SettingsStatus = {
   codegen_model_source: "default",
   aws_region: "us-east-1",
   aws_region_source: "default",
+  printer_address: null,
   secrets: {
     anthropic_api_key: { set: false, source: "unset" },
     openai_api_key: { set: false, source: "unset" },
@@ -249,5 +250,113 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
     expect(vi.mocked(api.saveSettings).mock.calls[0][0]).not.toHaveProperty("rag_top_k");
+  });
+
+  describe("the printer address", () => {
+    it("shows the saved address", async () => {
+      vi.mocked(api.getSettings).mockResolvedValue({ ...STATUS, printer_address: "192.168.1.7" });
+      renderWithProviders(<SettingsPanel />);
+      const input = (await screen.findByLabelText("3D printer address")) as HTMLInputElement;
+      expect(input.value).toBe("192.168.1.7");
+    });
+
+    it("is blank, not the string null, when none is set", async () => {
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      const input = (await screen.findByLabelText("3D printer address")) as HTMLInputElement;
+      expect(input.value).toBe("");
+    });
+
+    it("saves an entered address", async () => {
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      vi.mocked(api.saveSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      const input = await screen.findByLabelText("3D printer address");
+      fireEvent.change(input, { target: { value: " 192.168.1.9 " } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+      expect(vi.mocked(api.saveSettings).mock.calls[0][0].printer_address).toBe("192.168.1.9");
+    });
+
+    it("leaves a saved address alone when the box is emptied", async () => {
+      // The endpoint only ever sets, so sending "" would be a no-op that reads
+      // to the user as "forgotten". Omitting it says the same thing honestly.
+      vi.mocked(api.getSettings).mockResolvedValue({ ...STATUS, printer_address: "192.168.1.7" });
+      vi.mocked(api.saveSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      const input = await screen.findByLabelText("3D printer address");
+      fireEvent.change(input, { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+      expect(vi.mocked(api.saveSettings).mock.calls[0][0]).not.toHaveProperty("printer_address");
+    });
+
+    it("tests the address in the box rather than the saved one", async () => {
+      // Finding out an address is wrong should not require saving it first.
+      vi.mocked(api.getSettings).mockResolvedValue({ ...STATUS, printer_address: "192.168.1.7" });
+      const testPrinter = vi
+        .spyOn(api, "testPrinter")
+        .mockResolvedValue({ ok: true, detail: "open", reason: "", status: {}, status_detail: "" });
+      renderWithProviders(<SettingsPanel />);
+      const input = await screen.findByLabelText("3D printer address");
+      fireEvent.change(input, { target: { value: "192.168.1.99" } });
+      fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+      await waitFor(() => expect(testPrinter).toHaveBeenCalledWith("192.168.1.99"));
+      await waitFor(() => expect(screen.getByText("Printer answered")).toBeInTheDocument());
+    });
+
+    it("offers to forget only once there is something saved", async () => {
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      await screen.findByLabelText("3D printer address");
+      expect(screen.queryByRole("button", { name: "Forget" })).not.toBeInTheDocument();
+    });
+
+    it("forgets a saved address", async () => {
+      // Saving cannot do this — a blank box there means "leave it alone" — so
+      // without its own control a mistyped address is permanent.
+      vi.mocked(api.getSettings).mockResolvedValue({ ...STATUS, printer_address: "192.168.1.7" });
+      const forget = vi.spyOn(api, "forgetPrinterAddress").mockResolvedValue({ ok: true });
+      renderWithProviders(<SettingsPanel />);
+      const input = (await screen.findByLabelText("3D printer address")) as HTMLInputElement;
+      fireEvent.click(screen.getByRole("button", { name: "Forget" }));
+      await waitFor(() => expect(forget).toHaveBeenCalled());
+      await waitFor(() => expect(input.value).toBe(""));
+      expect(screen.queryByRole("button", { name: "Forget" })).not.toBeInTheDocument();
+    });
+
+    it("says what the printer is doing, not just that it answered", async () => {
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      vi.spyOn(api, "testPrinter").mockResolvedValue({
+        ok: true,
+        detail: "192.168.1.7:9100 is accepting connections",
+        reason: "",
+        status: { idle: true, printing: false },
+        status_detail: "",
+      });
+      renderWithProviders(<SettingsPanel />);
+      await screen.findByLabelText("3D printer address");
+      fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+      // An open port says the path is there; the device naming its own state is
+      // what says the thing listening is a printer.
+      await waitFor(() => expect(screen.getByText(/idle and ready/)).toBeInTheDocument());
+    });
+
+    it("reports a printer that did not answer", async () => {
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      vi.spyOn(api, "testPrinter").mockResolvedValue({
+        ok: false,
+        detail: "refused: nobody home",
+        reason: "refused",
+        status: {},
+        status_detail: "",
+      });
+      renderWithProviders(<SettingsPanel />);
+      await screen.findByLabelText("3D printer address");
+      fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+      await waitFor(() =>
+        expect(screen.getByText("No answer from the printer")).toBeInTheDocument(),
+      );
+    });
   });
 });

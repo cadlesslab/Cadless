@@ -118,6 +118,11 @@ def create_app(store: Store | None = None) -> FastAPI:
     # binds itself to the first event loop that contends on it, and a process
     # can build more than one app: the tests build one per case.
     app.state.import_gate = asyncio.Lock()
+    # One slice at a time, for the same reason as the gate above: the slicer is
+    # a large C++ parser run over a mesh this project treats as untrusted, and
+    # it runs in this container rather than behind the execution sandbox. A
+    # per-process CPU rlimit does not stop N of them arriving at once.
+    app.state.slice_gate = asyncio.Lock()
 
     app.add_middleware(
         CORSMiddleware,
@@ -200,6 +205,7 @@ ROUTER_MODULES = (
     "catalog",
     "settings",
     "packages",
+    "printing",
 )
 
 # Where a distribution installed beside this one says it has a router to add.

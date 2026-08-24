@@ -27,6 +27,7 @@ from typing import Any
 
 from cadless.config import settings
 from cadless.model_profiles import PROFILES
+from cadless.printing import AddressRefused, refuse_public_literal
 
 # Non-secret UI field -> environment variable (CADLESS_*) it corresponds to.
 _PLAIN_FIELDS: dict[str, str] = {
@@ -207,9 +208,15 @@ _FILE_ONLY_SECRETS: frozenset[str] = frozenset()
 
 # Saved state that is neither configuration nor secret: it persists in the same
 # file but maps to no environment variable and no Settings attribute, so it is
-# stored and reported without being applied to the running process. Empty in
-# this build, because nothing it ships keeps state of that shape.
-_SAVED_ONLY_FIELDS: tuple[str, ...] = ()
+# stored and reported without being applied to the running process.
+#
+# `printer_address` is here rather than among the plain fields for the reason
+# the plain fields are exported at all: those name a variable because something
+# downstream reads one. Nothing reads a printer's address from the environment
+# -- `cadless/printing.py` is handed it -- and exporting it would put the
+# address of a device on the operator's network into the environment that
+# `cadless/worker.py` hands to generated code.
+_SAVED_ONLY_FIELDS: tuple[str, ...] = ("printer_address",)
 
 PROVIDERS: tuple[str, ...] = ("bedrock", "anthropic", "openai")
 
@@ -309,7 +316,25 @@ def validate(patch: dict[str, Any]) -> None:
                     f"{field}={model!r} is a Bedrock/Claude model; when provider=openai, set "
                     f"{_PLAIN_FIELDS[field]} to an OpenAI model id (e.g. 'gpt-4o')"
                 )
+    _validate_printer_address(patch)
     _validate_knobs(patch)
+
+
+def _validate_printer_address(patch: dict[str, Any]) -> None:
+    """Refuse a printer address that is plainly off the local network.
+
+    Only the literal case is settled here. Resolving a name would make saving
+    settings wait on DNS, and `cadless/printing.py` applies the same rule to
+    whatever the name resolves to at the moment it dials -- so nothing reaches
+    the wire unchecked either way.
+    """
+    address = patch.get("printer_address")
+    if address is None:
+        return
+    try:
+        refuse_public_literal(str(address))
+    except AddressRefused as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _raises_spend(field: str, value: Any) -> bool:

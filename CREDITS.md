@@ -54,6 +54,24 @@ tie commercial-use rights to account type or subscription tier.
 The full resolved dependency tree is in `pyproject.toml` and
 `frontend/package.json`.
 
+## Bundled in the API container image
+
+| Project | Role | License |
+|---------|------|---------|
+| [PrusaSlicer](https://github.com/prusa3d/PrusaSlicer) | Turns an exported mesh into printable G-code | AGPL-3.0 |
+
+PrusaSlicer is **not** a dependency of the source in this repository — nothing
+here imports or links it. `backend/Dockerfile` installs the unmodified Debian
+package into the API image so that printing works without anything to install by
+hand, and `cadless/slicing.py` invokes it as a separate process over a file.
+
+> **Note on PrusaSlicer**: it is licensed AGPL-3.0, and the image published from
+> this repository redistributes it. Running it as a separate program does not
+> place this project's own MIT-licensed code under those terms, and the package
+> is unmodified — Debian's source for it is the corresponding source. If you
+> build and distribute your own image with a *modified* PrusaSlicer, its terms
+> apply to that build.
+
 > **Note on OCCT**: the geometry kernel reached through build123d is licensed
 > LGPL-2.1 with an exception. Using it through the published Python API — which
 > is what this project does — does not impose LGPL terms on your own designs or

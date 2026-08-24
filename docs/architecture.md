@@ -46,6 +46,19 @@ port, bound to loopback.
    validation is a separate caller responsibility: `run_code` does not enforce
    it. Upstream orchestration treats programs as text rather than importing and
    running them in the API process.
+
+   The slicer is the one place that reads a *product* of that execution outside
+   the boundary. `cadless/slicing.py` hands the exported mesh to a large
+   third-party parser running in the `api` container — which, unlike the worker,
+   has egress and holds provider credentials — so the mesh is untrusted input in
+   a place the sandbox does not cover. This is a deliberate trade and not an
+   oversight: the slicer has to reach the printer's network, which the worker
+   container is specifically denied. What bounds it instead is narrower than the
+   sandbox and is named here so it is not mistaken for it — the same CPU rlimit
+   the code-execution child runs under, a wall-clock timeout, and one slice at a
+   time through `app.state.slice_gate`. Moving it behind the worker, with the
+   G-code returned rather than the socket opened there, is the stronger shape and
+   is not what this does.
 6. What the unauthenticated settings endpoint can change MUST stay tiered.
    Runtime tuning is settable; anything that multiplies per-turn spend is
    settable only when the launch environment opts in; and configuration that
@@ -54,6 +67,17 @@ port, bound to loopback.
    request model rather than accepted and discarded. Tuning values MUST NOT be
    exported to `os.environ`, because the worker spawns generated code with the
    parent environment inherited. Tests enforce each of these.
+
+   The printer address is settable, and it is the one settable value that names
+   somewhere the API process will connect to. It is allowed because it cannot
+   widen reach: `cadless/printing.py` refuses anything that is not private,
+   loopback or link-local, checking what a name resolved to rather than the name,
+   and dialling the literal it checked. Read the two halves together — the stack
+   is loopback-only by invariant 2, so the caller is already on this machine, and
+   what the rule buys is that a mistyped or hostile value cannot turn this
+   process into a way out to the internet. It is saved-only for the reason above:
+   nothing reads it from the environment, so exporting it would hand a device
+   address on the operator's network to generated code for nothing in return.
 
 7. A request MUST reach persistence through the per-request scoped view, never
    through `Store` itself. The view carries the caller's principal into every
