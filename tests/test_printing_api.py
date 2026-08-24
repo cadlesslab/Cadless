@@ -14,6 +14,7 @@ scoped store, which is what stops one person printing another's model.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,9 @@ def settings_in_tmp(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "data_dir", tmp_path / "cfg")
     (tmp_path / "cfg").mkdir()
     monkeypatch.setattr(user_settings, "_ENV_AT_START", frozenset())
+    # Pinned rather than inherited: the mode is process-wide configuration, and
+    # a test that changed it would otherwise decide what later ones see.
+    monkeypatch.setattr(settings, "printing", "auto")
 
 
 @pytest.fixture
@@ -110,6 +114,7 @@ class TestTheActionHeader:
             ("post", "/printing/test"),
             ("post", "/printing/versions/1/slice"),
             ("post", "/printing/versions/1/send"),
+            ("get", "/printing/versions/1/gcode"),
             ("delete", "/printing/address"),
         ],
     )
@@ -278,6 +283,259 @@ class TestSending:
         assert body["reason"] == "unreachable"
 
 
+class TestWhatEachDeploymentOffers:
+    """The capability answer is what the UI draws its buttons from."""
+
+    def test_a_machine_with_a_printer_is_offered_both(self, client, monkeypatch):
+        monkeypatch.setattr(slicing, "find_slicer", lambda: "/usr/bin/prusa-slicer")
+        _configure()
+        body = client.get("/printing/capability").json()
+        assert (body["can_send"], body["can_download"]) == (True, True)
+        assert body["mode"] == "auto"
+
+    def test_a_deployment_with_no_address_is_offered_the_download(self, client, monkeypatch):
+        """Which is every visitor to a build in a datacentre: it can slice, and
+        it has no route to the network the printer is on."""
+        monkeypatch.setattr(slicing, "find_slicer", lambda: "/usr/bin/prusa-slicer")
+        body = client.get("/printing/capability").json()
+        assert (body["can_send"], body["can_download"]) == (False, True)
+
+    def test_no_slicer_is_offered_neither(self, client, monkeypatch):
+        monkeypatch.setattr(slicing, "find_slicer", lambda: None)
+        _configure()
+        body = client.get("/printing/capability").json()
+        assert (body["can_send"], body["can_download"]) == (False, False)
+
+    def test_download_mode_withholds_the_send(self, client, monkeypatch):
+        monkeypatch.setattr(slicing, "find_slicer", lambda: "/usr/bin/prusa-slicer")
+        monkeypatch.setattr(settings, "printing", "download")
+        _configure()
+        body = client.get("/printing/capability").json()
+        assert (body["can_send"], body["can_download"]) == (False, True)
+
+
+class TestTheModeIsEnforcedNotJustDisplayed:
+    """Hiding a button is not a rule. Anything that can reach the port is told no."""
+
+    def test_send_is_refused_in_download_mode(self, client, version_with_stl, monkeypatch):
+        _configure()
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        monkeypatch.setattr(settings, "printing", "download")
+        response = client.post(f"/printing/versions/{version_with_stl}/send")
+        assert response.status_code == 409
+        assert "download" in response.json()["detail"].lower()
+
+    def test_send_is_refused_when_printing_is_off(self, client, version_with_stl, monkeypatch):
+        _configure()
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        monkeypatch.setattr(settings, "printing", "off")
+        response = client.post(f"/printing/versions/{version_with_stl}/send")
+        assert response.status_code == 409
+        assert "switched off" in response.json()["detail"]
+
+    @pytest.mark.parametrize("configured", ["off", "download"])
+    def test_the_connection_test_is_refused_outside_auto(self, client, monkeypatch, configured):
+        """The only route that dials an address the *caller* supplies.
+
+        Left ungated it is a way to open TCP connections across the deployment's
+        own private network one address at a time, and to tell refused apart
+        from timed out — on a build whose operator has switched printing off.
+        """
+        dialled = []
+        monkeypatch.setattr(
+            printing, "probe", lambda *a, **k: dialled.append(1) or printing.PrintOutcome(True, "")
+        )
+        monkeypatch.setattr(settings, "printing", configured)
+        response = client.post("/printing/test", json={"address": "192.168.9.9"})
+        assert response.status_code == 409
+        assert dialled == []
+
+    def test_the_connection_test_is_refused_where_no_address_can_be_saved(
+        self, client, monkeypatch
+    ):
+        """Testing before saving is the point of the route; without saving there
+        is no point left, only the dialling."""
+        dialled = []
+        monkeypatch.setattr(
+            printing, "probe", lambda *a, **k: dialled.append(1) or printing.PrintOutcome(True, "")
+        )
+        monkeypatch.setattr(settings, "require_identity", True)
+        response = client.post("/printing/test", json={"address": "192.168.9.9"})
+        assert response.status_code == 409
+        assert dialled == []
+
+    def test_slicing_is_refused_when_printing_is_off(self, client, version_with_stl, monkeypatch):
+        monkeypatch.setattr(settings, "printing", "off")
+        assert client.post(f"/printing/versions/{version_with_stl}/slice").status_code == 409
+
+    def test_the_download_is_refused_when_printing_is_off(
+        self, client, version_with_stl, monkeypatch
+    ):
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        monkeypatch.setattr(settings, "printing", "off")
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 409
+
+
+class TestDownloadingTheJob:
+    """The half that works from anywhere, including from a datacentre."""
+
+    def test_it_serves_the_file_the_slice_produced(self, client, version_with_stl, monkeypatch):
+        monkeypatch.setattr(slicing, "slice_mesh", _slices(b"G28\nG1 X1 Y1\n"))
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        response = client.get(f"/printing/versions/{version_with_stl}/gcode")
+        assert response.status_code == 200
+        # The same bytes `/send` would have sent, so what is downloaded and what
+        # would be printed cannot drift apart.
+        assert response.content == b"G28\nG1 X1 Y1\n"
+
+    def test_it_arrives_as_a_named_attachment(self, client, version_with_stl, monkeypatch):
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        response = client.get(f"/printing/versions/{version_with_stl}/gcode")
+        assert "attachment" in response.headers["content-disposition"]
+        assert f"model_{version_with_stl}.gcode" in response.headers["content-disposition"]
+
+    def test_downloading_before_slicing_is_a_409(self, client, version_with_stl):
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 409
+
+    def test_it_needs_no_printer_address(self, client, version_with_stl, monkeypatch):
+        """The point of it: there is no address on a hosted build and never will be."""
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        assert not user_settings.load().get("printer_address")
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 200
+
+    def test_a_version_without_a_mesh_is_a_404(self, client, version_without_stl):
+        assert client.get(f"/printing/versions/{version_without_stl}/gcode").status_code == 404
+
+
+class TestAnAddressLeftOverFromALocalLaunch:
+    """`require_identity` refuses a settings *write*; it does not remove one.
+
+    It is a launch decision, so one data directory can be started locally, have
+    a printer saved into it, and then be started hosted. The address is then a
+    device on whoever ran it locally's network — and the people using the hosted
+    build are not on that network. Sending to it is the one outcome nobody
+    wants, and "a settings write is refused" does not prevent it.
+    """
+
+    @pytest.fixture
+    def hosted(self, tmp_path, monkeypatch):
+        store = Store(db_path=tmp_path / "h.sqlite", artifacts_dir=tmp_path / "h-artifacts")
+
+        async def seed():
+            await store.init()
+            project = await store.create_project("P", owner="someone")
+            version = await store.add_version(project.id, "x", "code", True, owner="someone")
+            directory = Path(store.version_artifact_dir(version.id))
+            (directory / "model.stl").write_bytes(b"\x00" * 84)
+            await store.add_artifact(
+                version.id, "stl", str(directory / "model.stl"), owner="someone"
+            )
+            return version.id
+
+        version_id = asyncio.run(seed())
+        # Saved while the build was still local. This is how it gets there.
+        _configure()
+        monkeypatch.setattr(settings, "require_identity", True)
+        monkeypatch.setattr(slicing, "find_slicer", lambda: "/usr/bin/prusa-slicer")
+        register_principal_resolver(lambda _request: Principal("someone"))
+        try:
+            with TestClient(create_app(store=store), headers=ACT) as client:
+                yield client, version_id
+        finally:
+            _unregister()
+
+    def test_the_capability_reports_the_address_and_still_refuses_to_send(self, hosted):
+        client, _ = hosted
+        body = client.get("/printing/capability").json()
+        assert body["printer_configured"] is True, "the address really is on disk"
+        assert body["can_send"] is False
+        assert body["can_download"] is True
+        # Without this the UI cannot tell a hosted build from somebody's laptop
+        # before they have set an address: the other fields are identical, and
+        # only one of those readers has something to go and fix.
+        assert body["can_configure"] is False
+
+    def test_a_build_that_accepts_settings_says_an_address_can_be_recorded(self, client):
+        assert client.get("/printing/capability").json()["can_configure"] is True
+
+    def test_the_send_route_says_the_same_thing(self, hosted, monkeypatch):
+        """The gates must not disagree inside one process.
+
+        An earlier shape of this had `/test` consulting `require_identity` while
+        the capability answer and `/send` did not, so one build told a visitor
+        both that no address was stored and that it would send to one.
+        """
+        client, version_id = hosted
+        sent = []
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        monkeypatch.setattr(
+            printing,
+            "send_gcode",
+            lambda *a, **k: sent.append(1) or printing.PrintOutcome(True, "sent"),
+        )
+        client.post(f"/printing/versions/{version_id}/slice")
+        response = client.post(f"/printing/versions/{version_id}/send")
+        assert response.status_code == 409
+        assert sent == [], "nothing may reach a printer on somebody else's network"
+
+    def test_the_download_still_works(self, hosted, monkeypatch):
+        """The half that was the point of this: a visitor still gets their job."""
+        client, version_id = hosted
+        monkeypatch.setattr(slicing, "slice_mesh", _slices(b"G28\n"))
+        client.post(f"/printing/versions/{version_id}/slice")
+        assert client.get(f"/printing/versions/{version_id}/gcode").status_code == 200
+
+    def test_forgetting_the_address_answers_rather_than_erroring(self, hosted):
+        """The recovery path from exactly this situation must not be a 500."""
+        client, _ = hosted
+        response = client.delete("/printing/address")
+        assert response.status_code == 409
+        assert response.json()["detail"]
+
+
+class TestTheJobMustMatchTheModel:
+    """A file being present is not the same as it being a file for this shape."""
+
+    def test_a_fresh_job_is_served(self, client, version_with_stl, monkeypatch):
+        """The control: the check must not refuse a job that is current."""
+        monkeypatch.setattr(slicing, "slice_mesh", _slices(b"; current\nG28\n"))
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 200
+
+    def test_gcode_older_than_the_mesh_is_refused(self, client, store, version_with_stl):
+        """A rerun rewrites the mesh in place and never touches the sliced job."""
+        artifact = asyncio.run(store.get_artifact(version_with_stl, "stl"))
+        directory = Path(artifact.path).parent
+        gcode = directory / printing_routes.GCODE_NAME
+        gcode.write_bytes(b"; sliced from the previous shape\nG28\n")
+        os.utime(gcode, (1, 1))  # older than the mesh beside it
+
+        response = client.get(f"/printing/versions/{version_with_stl}/gcode")
+        assert response.status_code == 409
+        assert "changed since it was sliced" in response.json()["detail"]
+
+    def test_send_refuses_a_stale_job_too(self, client, store, version_with_stl, monkeypatch):
+        _configure()
+        sent = []
+        monkeypatch.setattr(
+            printing,
+            "send_gcode",
+            lambda *a, **k: sent.append(1) or printing.PrintOutcome(True, "sent"),
+        )
+        artifact = asyncio.run(store.get_artifact(version_with_stl, "stl"))
+        gcode = Path(artifact.path).parent / printing_routes.GCODE_NAME
+        gcode.write_bytes(b"; sliced from the previous shape\nG28\n")
+        os.utime(gcode, (1, 1))
+
+        assert client.post(f"/printing/versions/{version_with_stl}/send").status_code == 409
+        assert sent == []
+
+
 class TestForgettingTheAddress:
     def test_it_removes_the_saved_value(self, client):
         _configure()
@@ -326,6 +584,24 @@ class TestOwnership:
         monkeypatch.setattr(slicing, "slice_mesh", _slices())
         response = client.post(f"/printing/versions/{version_id}/slice", headers={WHO: "user-b"})
         assert response.status_code == 404
+
+    def test_someone_else_cannot_download_its_gcode(self, hosted, monkeypatch):
+        """The download needs no address, so the scoped lookup is its only gate."""
+        client, version_id = hosted
+        monkeypatch.setattr(slicing, "slice_mesh", _slices())
+        client.post(f"/printing/versions/{version_id}/slice", headers={WHO: "user-a"})
+        assert (
+            client.get(
+                f"/printing/versions/{version_id}/gcode", headers={WHO: "user-a"}
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                f"/printing/versions/{version_id}/gcode", headers={WHO: "user-b"}
+            ).status_code
+            == 404
+        )
 
     def test_someone_else_cannot_send_it(self, hosted, monkeypatch):
         client, version_id = hosted

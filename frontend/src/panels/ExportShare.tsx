@@ -5,20 +5,25 @@ import {
   artifactUrl,
   type ArtifactKind,
   fetchPrintCapability,
+  gcodeUrl,
+  type PrintCapability,
+  printHeaders,
   sendVersionToPrinter,
   type SliceResult,
   sliceVersion,
   type Version,
 } from "../api";
-import { Button, ConfirmDialog, Modal, Tooltip, useToast } from "../components";
+import { Button, Modal, Tooltip, useToast } from "../components";
 import { errMessage } from "../errors";
 import { BASE_URL } from "../routing";
 import { availableFormats, downloadFilename, FORMAT_META, shareUrl } from "./exportFormats";
-import { sliceSummary } from "./printSummary";
+import { DEFAULT_CLOSING, sliceSummary } from "./printSummary";
 
-async function fetchAndSave(url: string, filename: string): Promise<void> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status}`);
+async function fetchAndSave(url: string, filename: string, init?: RequestInit): Promise<void> {
+  const res = await fetch(url, init);
+  // The status text as well as the number: this message is shown to someone,
+  // and a toast body reading only "409" tells them nothing they can act on.
+  if (!res.ok) throw new Error(res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`);
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -36,7 +41,7 @@ async function fetchAndSave(url: string, filename: string): Promise<void> {
  * place to go, and a message that dismisses itself is the wrong shape for one. */
 type Notice = { title: string; body: string } | null;
 
-/** A slice, carrying the version it is a slice *of*.
+/** A slice, carrying the version it is a slice *of* and what can be done with it.
  *
  * The id travels with the numbers because the two must not come apart. This
  * component is not remounted when the active version changes, and that change
@@ -44,13 +49,31 @@ type Notice = { title: string; body: string } | null;
  * project and moves the active version from an SSE event. Reading `version.id`
  * again at send time would then print whatever became current while the dialog
  * was open, under a summary describing something else.
+ *
+ * The capability travels with it for the same reason — the dialog must offer
+ * what was true when the slice was made, not what a later poll says.
  */
-type Sliced = { versionId: number; result: SliceResult } | null;
+type Sliced = { versionId: number; result: SliceResult; can: PrintCapability } | null;
+
+/** What the dialog says happens after the numbers.
+ *
+ * Three cases, and telling them apart matters because two of them are the
+ * reader's to fix and one is not. Somebody running this on their own machine
+ * who has not set an address yet was being told the installation cannot reach a
+ * printer, which is false and offers them nothing to do about it.
+ */
+export function closingFor(can: PrintCapability): string {
+  if (can.can_send) return DEFAULT_CLOSING;
+  if (can.mode === "auto" && !can.printer_configured && can.can_configure) {
+    return "Add your printer's address in Settings to send jobs straight to it.";
+  }
+  return "This installation cannot reach a printer, so take the file to yours.";
+}
 
 export function ExportShare({ version }: { version: Version }) {
   const toast = useToast();
   const [busy, setBusy] = useState<ArtifactKind | null>(null);
-  const [printStep, setPrintStep] = useState<"" | "slicing" | "sending">("");
+  const [printStep, setPrintStep] = useState<"" | "slicing" | "sending" | "saving">("");
   const [sliced, setSliced] = useState<Sliced>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const formats = availableFormats(version);
@@ -72,24 +95,24 @@ export function ExportShare({ version }: { version: Version }) {
   /** Slice, then ask. Nothing reaches the printer from this half.
    *
    * What can be known cheaply is checked first: slicing a model for two minutes
-   * only to report that no address was ever set wastes the reader's time on a
-   * question that could have been asked immediately. */
+   * only to report that this deployment cannot print at all wastes the reader's
+   * time on a question that could have been asked immediately. A missing
+   * printer address is *not* one of those cases any more — the job can still be
+   * downloaded, which is the only thing a deployment in a datacentre could ever
+   * have offered. */
   async function print() {
-    // Read once, at the moment the user asked. Everything below belongs to
-    // this version even if the active one moves while slicing runs.
     const target = version.id;
     setPrintStep("slicing");
     try {
       const capability = await fetchPrintCapability();
-      if (!capability.printer_configured) {
-        setNotice({
-          title: "No printer yet",
-          body: "Add your printer's address in Settings, then press Print again. It has to be a printer on your own network.",
-        });
-        return;
-      }
-      if (!capability.slicer_available) {
-        setNotice({ title: "No slicer yet", body: capability.slicer_hint });
+      if (!capability.can_send && !capability.can_download) {
+        // The mode first: a build with printing switched off *and* no slicer
+        // would otherwise be told to install one, which would not help.
+        setNotice(
+          capability.mode === "off"
+            ? { title: "Printing is off", body: "This installation has printing switched off." }
+            : { title: "No slicer yet", body: capability.slicer_hint },
+        );
         return;
       }
 
@@ -102,7 +125,7 @@ export function ExportShare({ version }: { version: Version }) {
         toast.error("Couldn't prepare this model", result.detail);
         return;
       }
-      setSliced({ versionId: target, result });
+      setSliced({ versionId: target, result, can: capability });
     } catch (err) {
       toast.error("Couldn't prepare this model", errMessage(err));
     } finally {
@@ -129,6 +152,22 @@ export function ExportShare({ version }: { version: Version }) {
     }
   }
 
+  /** Hand the job over as a file, for a printer this machine cannot reach. */
+  async function confirmDownload() {
+    if (!sliced) return;
+    const target = sliced.versionId;
+    setSliced(null);
+    setPrintStep("saving");
+    try {
+      await fetchAndSave(gcodeUrl(target), `model_${target}.gcode`, { headers: printHeaders() });
+      toast.success("G-code downloaded", "Send it to your printer the way you normally would.");
+    } catch (err) {
+      toast.error("Couldn't save the G-code", errMessage(err));
+    } finally {
+      setPrintStep("");
+    }
+  }
+
   function share() {
     const url = shareUrl(location.origin, BASE_URL, version.project_id, version.id);
     navigator.clipboard
@@ -138,7 +177,13 @@ export function ExportShare({ version }: { version: Version }) {
   }
 
   const printLabel =
-    printStep === "slicing" ? "Preparing…" : printStep === "sending" ? "Sending…" : "⎙ Print";
+    printStep === "slicing"
+      ? "Preparing…"
+      : printStep === "sending"
+        ? "Sending…"
+        : printStep === "saving"
+          ? "Saving…"
+          : "⎙ Print";
 
   return (
     <div className="export">
@@ -157,7 +202,7 @@ export function ExportShare({ version }: { version: Version }) {
       </div>
       <div className="export-actions">
         {printable && (
-          <Tooltip label="Slice this model and send it to your 3D printer">
+          <Tooltip label="Slice this model for your 3D printer">
             <Button size="sm" variant="ghost" disabled={printStep !== ""} onClick={print}>
               {printLabel}
             </Button>
@@ -168,15 +213,34 @@ export function ExportShare({ version }: { version: Version }) {
         </Button>
       </div>
 
-      <ConfirmDialog
+      <Modal
         open={sliced != null}
-        title="Send this to the printer?"
-        message={sliceSummary(sliced?.result.stats)}
-        confirmLabel="Send to printer"
-        destructive={false}
-        onConfirm={confirmSend}
-        onClose={() => setSliced(null)}
-      />
+        onOpenChange={(open) => !open && setSliced(null)}
+        title={sliced?.can.can_send ? "Send this to the printer?" : "Ready to print"}
+        description={
+          sliced ? sliceSummary(sliced.result.stats, closingFor(sliced.can)) : ""
+        }
+      >
+        <div className="modal-footer">
+          <Button type="button" variant="ghost" onClick={() => setSliced(null)}>
+            Cancel
+          </Button>
+          {sliced?.can.can_download && (
+            <Button
+              type="button"
+              variant={sliced?.can.can_send ? "ghost" : "primary"}
+              onClick={confirmDownload}
+            >
+              Download G-code
+            </Button>
+          )}
+          {sliced?.can.can_send && (
+            <Button type="button" variant="primary" onClick={confirmSend}>
+              Send to printer
+            </Button>
+          )}
+        </div>
+      </Modal>
 
       <Modal
         open={notice != null}

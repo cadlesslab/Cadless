@@ -19,7 +19,9 @@ Three rules shape this module:
   megabytes, and this is called from a request handler.
 
 The engine may not import the web or worker layers, so nothing here knows about
-requests, stores or settings files.
+requests or stores. It does read the engine's own configuration, for the one
+question an operator answers rather than a caller: what kind of printing this
+deployment offers at all.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ import os
 import socket
 from dataclasses import dataclass, field
 from typing import Any
+
+from cadless.config import PRINTING_MODES, settings
 
 #: The raw-print port. The printer's firmware reads PJL and G-code from it.
 PRINT_PORT = 9100
@@ -67,6 +71,7 @@ NAME_MAX = 64
 _IDLE_STATE = 10001
 _PRINTING_STATES = range(10002, 10024)
 
+
 #: Where a printer can be. An allow-list rather than a list of the ways out,
 #: because the ways out cannot be enumerated: ``is_private`` answers IANA's
 #: "not globally reachable", which is a different question and says yes to 6to4,
@@ -75,18 +80,102 @@ _PRINTING_STATES = range(10002, 10024)
 #: ``ip_address("2002:0808:0808::1").is_private`` is True while its ``sixtofour``
 #: is 8.8.8.8. Listing what is allowed fails closed on the next such prefix
 #: instead of waiting for someone to notice it.
+def _without(
+    net: ipaddress.IPv4Network | ipaddress.IPv6Network,
+    *holes: ipaddress.IPv4Network | ipaddress.IPv6Network,
+) -> tuple:
+    """``net`` minus ``holes``, as the networks that remain.
+
+    Written as an exclusion so the rule stays a list of what is allowed. A
+    deny-list consulted after an allow-list has the shape this module argues
+    against two paragraphs up: it covers the addresses somebody thought of, and
+    the next one a cloud platform introduces is allowed by default.
+    """
+    remaining = [net]
+    for hole in holes:
+        nxt: list = []
+        for candidate in remaining:
+            if hole.subnet_of(candidate):
+                nxt.extend(candidate.address_exclude(hole))
+            else:
+                nxt.append(candidate)
+        remaining = nxt
+    return tuple(remaining)
+
+
 _ALLOWED_V4 = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),
+    # Link-local, less the two blocks the major clouds put instance metadata,
+    # task credentials and their resolver in. The range is here for a device
+    # that assigned itself an address over a direct connection; nothing anyone
+    # prints to lives in those blocks, and this image runs on those hosts.
+    *_without(
+        ipaddress.ip_network("169.254.0.0/16"),
+        ipaddress.ip_network("169.254.169.0/24"),
+        ipaddress.ip_network("169.254.170.0/24"),
+    ),
 )
 _ALLOWED_V6 = (
     ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
+    *_without(ipaddress.ip_network("fc00::/7"), ipaddress.ip_network("fd00:ec2::/32")),
     ipaddress.ip_network("fe80::/10"),
 )
+
+
+#: What a deployment offers. `Settings.printing` documents what each means and
+#: refuses anything else while the settings object is being built, so by the
+#: time this module reads one it has already been checked.
+MODE_AUTO = "auto"
+MODE_DOWNLOAD = "download"
+MODE_OFF = "off"
+MODES = PRINTING_MODES
+
+
+@dataclass(frozen=True)
+class Actions:
+    """Which printing actions a deployment can actually complete."""
+
+    send: bool
+    download: bool
+
+
+def mode() -> str:
+    """The configured mode.
+
+    An operator's value cannot get here unchecked -- `Settings` refuses one it
+    does not know while it is being built. What this guards is the other way in:
+    the singleton is mutable and assignment is not validated, so a composed
+    build or a test can put anything on it. That case falls back to ``download``
+    rather than ``auto``, because the difference between them is whether this
+    process opens connections, and an unreadable value is not a reason to.
+    """
+    configured = str(settings.printing or "").strip().lower()
+    return configured if configured in MODES else MODE_DOWNLOAD
+
+
+def actions(*, slicer_available: bool, address_configured: bool) -> Actions:
+    """What this deployment can do, given what it has.
+
+    Sending needs somewhere to send to, so a configured address is most of the
+    question. It is not all of it. A build that refuses settings writes is not
+    thereby a build with no address: refusing a write does not remove what an
+    earlier launch of the same data directory saved, and `require_identity` is
+    a launch decision that can be turned on over a file already holding one.
+    That address is on whoever ran it locally's network, and the people using
+    the hosted build are not on it -- so a saved address there is somebody
+    else's printer, and sending to it is the one outcome nobody wants.
+
+    Downloading is offered wherever there is a slicer, because a file the user
+    carries to the printer themselves works from everywhere.
+    """
+    current = mode()
+    if not slicer_available or current == MODE_OFF:
+        return Actions(send=False, download=False)
+    sends = address_configured and current == MODE_AUTO and not settings.require_identity
+    return Actions(send=sends, download=True)
 
 
 class AddressRefused(ValueError):

@@ -12,8 +12,10 @@ import socket
 import threading
 
 import pytest
+from pydantic import ValidationError
 
 from cadless import printing
+from cadless.config import Settings
 
 
 def _listener():
@@ -45,6 +47,99 @@ def _job(tmp_path, body: bytes = b"G28\n"):
     path = tmp_path / "print.gcode"
     path.write_bytes(body)
     return str(path)
+
+
+class TestModes:
+    """Which actions a deployment offers, and why it is asked this way.
+
+    The question a deployment is really answering is whether it can reach the
+    device. It cannot be derived from where the process is running -- the same
+    image, compose file and ports serve a laptop and a server -- so it is asked
+    directly: is there an address to send to.
+    """
+
+    @pytest.fixture(autouse=True)
+    def default_mode(self, monkeypatch):
+        monkeypatch.setattr(printing.settings, "printing", "auto")
+
+    def test_a_machine_with_a_printer_can_do_both(self):
+        allowed = printing.actions(slicer_available=True, address_configured=True)
+        assert (allowed.send, allowed.download) == (True, True)
+
+    def test_a_deployment_with_no_address_can_still_hand_the_file_over(self):
+        """This is every visitor to a build in a datacentre."""
+        allowed = printing.actions(slicer_available=True, address_configured=False)
+        assert (allowed.send, allowed.download) == (False, True)
+
+    def test_no_slicer_means_neither(self):
+        allowed = printing.actions(slicer_available=False, address_configured=True)
+        assert (allowed.send, allowed.download) == (False, False)
+
+    def test_download_mode_refuses_to_send_even_with_an_address(self, monkeypatch):
+        monkeypatch.setattr(printing.settings, "printing", "download")
+        allowed = printing.actions(slicer_available=True, address_configured=True)
+        assert (allowed.send, allowed.download) == (False, True)
+
+    def test_off_removes_both(self, monkeypatch):
+        monkeypatch.setattr(printing.settings, "printing", "off")
+        allowed = printing.actions(slicer_available=True, address_configured=True)
+        assert (allowed.send, allowed.download) == (False, False)
+
+    def test_a_hosted_build_does_not_send_even_with_an_address_on_disk(self, monkeypatch):
+        """Refusing a settings *write* does not remove an address already saved.
+
+        `require_identity` is a launch decision, so the same data directory can
+        be started locally, have a printer saved, and then be started hosted.
+        The address is then a device on whoever ran it locally's network, and
+        the people using the hosted build are not on it.
+        """
+        monkeypatch.setattr(printing.settings, "require_identity", True)
+        allowed = printing.actions(slicer_available=True, address_configured=True)
+        assert (allowed.send, allowed.download) == (False, True)
+
+    @pytest.mark.parametrize("configured", ["off", "OFF", " off ", "Download", " AUTO"])
+    def test_a_mode_is_case_folded_and_trimmed_on_the_way_in(self, configured):
+        """Checked through `Settings`, which is where the normalising happens."""
+        assert Settings(printing=configured).printing == configured.strip().lower()
+
+    @pytest.mark.parametrize("configured", ["false", "0", "no", "none", "disabled", "nonsense"])
+    def test_a_value_that_is_not_a_mode_stops_the_process_starting(self, configured):
+        """The four an operator is most likely to write to mean "off".
+
+        A tolerant reading turns each of them into the most capable mode, which
+        is the failure `user_settings._env_flag` already refuses by name: a
+        boundary that opens when someone writes `=false` is worse than no
+        boundary, because it is believed to be closed. Raising is safe because
+        `Settings` is built at import, so this is a refusal to start rather than
+        an error on a request.
+        """
+        with pytest.raises(ValidationError):
+            Settings(printing=configured)
+
+    def test_an_empty_value_reads_as_unset(self):
+        """Which is how a compose file spells a default: `${CADLESS_PRINTING:-}`.
+
+        Different from `false`, and treated differently: nobody writes an empty
+        string to mean off.
+        """
+        assert Settings(printing="").printing == printing.MODE_AUTO
+
+    def test_a_value_that_bypassed_validation_fails_closed(self, monkeypatch):
+        """The singleton is mutable and assignment is not validated.
+
+        The difference between the fallback and `auto` is whether this process
+        opens connections, and an unreadable value is not a reason to.
+        """
+        monkeypatch.setattr(printing.settings, "printing", 5)
+        assert printing.mode() == printing.MODE_DOWNLOAD
+
+    def test_the_named_modes_are_the_configured_ones(self):
+        """Two places spell them; a drift between them would be silent."""
+        assert set(printing.MODES) == {
+            printing.MODE_AUTO,
+            printing.MODE_DOWNLOAD,
+            printing.MODE_OFF,
+        }
 
 
 class TestAddressRules:
@@ -105,6 +200,26 @@ class TestAddressRules:
     def test_a_local_ipv4_carried_inside_ipv6_is_still_accepted(self, address):
         """Unwrapping must not refuse a printer reached through one of these."""
         printing.refuse_public_literal(address)
+
+    @pytest.mark.parametrize(
+        "address",
+        ["169.254.169.254", "[fd00:ec2::254]", "::ffff:169.254.169.254"],
+    )
+    def test_the_cloud_metadata_address_is_refused(self, address):
+        """It sits inside an allowed range and is never a printer.
+
+        The link-local range is allowed for a device that assigned itself an
+        address over a direct connection. On the cloud hosts this same image
+        runs on, that range also holds the instance metadata service — the same
+        number on AWS, GCP and Azure — so it is excluded by address rather than
+        by dropping a range that has a legitimate use.
+        """
+        with pytest.raises(printing.AddressRefused):
+            printing.refuse_public_literal(address)
+
+    def test_the_rest_of_link_local_still_works(self):
+        """Excluding one address must not cost the case the range is for."""
+        printing.refuse_public_literal("169.254.10.10")
 
     @pytest.mark.parametrize("address", ["0.0.0.0", "::", "[::]"])
     def test_the_unspecified_address_is_refused(self, address):

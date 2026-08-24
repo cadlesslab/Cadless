@@ -648,6 +648,19 @@ export interface PrintCapability {
   /** What to install, when there is nothing to slice with. Empty otherwise. */
   slicer_hint: string;
   printer_configured: boolean;
+  /** Whether an address can be recorded here at all. Without it, "none yet" on
+   * a laptop and "none is possible" on a hosted build look identical, and one
+   * of those readers has something to go and do. */
+  can_configure: boolean;
+  /** `auto` | `download` | `off` — the operator's switch, for display only.
+   * What to draw is `can_send` / `can_download`, which already account for it. */
+  mode: string;
+  /** Whether this deployment can reach a printer at all. False on anything in a
+   * datacentre, which has no route to the network the printer is on. */
+  can_send: boolean;
+  /** Whether the sliced job can be handed back as a file. True wherever there
+   * is a slicer — it is the half that works from everywhere. */
+  can_download: boolean;
 }
 
 /** What slicing produced: the numbers someone wants before committing filament. */
@@ -702,6 +715,19 @@ export const testPrinter = (address?: string) =>
     headers: PRINT_HEADERS,
     body: JSON.stringify({ address: address ?? null }),
   });
+
+/** Where the sliced job can be fetched from.
+ *
+ * Not a plain link: the route carries the same action header as the rest of
+ * this group, and an `<a href>` cannot attach one. `ExportShare` fetches it and
+ * saves the blob, the way it already does for the export formats.
+ */
+export const gcodeUrl = (versionId: number) =>
+  `${BASE}/printing/versions/${versionId}/gcode`;
+
+/** The headers a fetch of that URL needs. Exported so the caller does not have
+ * to know the header's name to download a file. */
+export const printHeaders = (): Record<string, string> => ({ ...PRINT_HEADERS });
 
 /** Forget the saved address. Its own call because saving only ever sets, so an
  * emptied box cannot mean "remove this". */
