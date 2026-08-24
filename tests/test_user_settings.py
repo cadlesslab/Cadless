@@ -9,10 +9,11 @@ All offline — no real API calls, no live markers.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
-from cadless import user_settings
+from cadless import printing, user_settings
 from cadless.config import settings
 
 _MANAGED_ATTRS = (
@@ -549,3 +550,54 @@ def test_no_tuning_knob_reaches_the_environment(monkeypatch):
         assert getattr(settings, field) == value, field
     for field, env in user_settings._TUNING_FIELDS.items():
         assert os.environ.get(env) == before[env], f"{field} leaked into {env}"
+
+
+class TestPrinterAddress:
+    """Saved state that must persist without being applied to the process.
+
+    The address of a device on the operator's network has no reason to be in the
+    environment, and `cadless/worker.py` hands that environment to generated
+    code -- so "it is saved" and "it is not exported" are two separate claims
+    and both are pinned here.
+    """
+
+    def test_it_is_saved_and_reported(self):
+        user_settings.save({"printer_address": "192.168.1.50"})
+        assert user_settings.load()["printer_address"] == "192.168.1.50"
+        assert user_settings.status()["printer_address"] == "192.168.1.50"
+
+    def test_it_never_reaches_the_environment(self):
+        before = dict(os.environ)
+        user_settings.save({"printer_address": "192.168.1.50"})
+        added = {k: v for k, v in os.environ.items() if before.get(k) != v}
+        assert added == {}, f"printer_address leaked into {sorted(added)}"
+
+    def test_it_becomes_no_settings_attribute(self):
+        """It maps to no Settings field, so nothing reads it off the singleton."""
+        user_settings.save({"printer_address": "192.168.1.50"})
+        assert not hasattr(settings, "printer_address")
+
+    def test_a_public_address_is_refused_at_save_time(self):
+        with pytest.raises(ValueError, match="local network"):
+            user_settings.save({"printer_address": "8.8.8.8"})
+        assert "printer_address" not in user_settings.load()
+
+    def test_a_name_is_accepted_without_a_lookup(self, monkeypatch):
+        """Saving settings must not block on DNS; the name is checked when dialled.
+
+        Enforced by making a lookup fail the test rather than by timing one: the
+        cost of resolving is not the point, reaching the network from a settings
+        write is.
+        """
+
+        def no_lookups(*_a, **_k):
+            raise AssertionError("save() must not resolve the printer address")
+
+        monkeypatch.setattr(printing.socket, "getaddrinfo", no_lookups)
+        user_settings.save({"printer_address": "my-printer.local"})
+        assert user_settings.load()["printer_address"] == "my-printer.local"
+
+    def test_it_can_be_cleared(self):
+        user_settings.save({"printer_address": "192.168.1.50"})
+        user_settings.clear("printer_address")
+        assert not user_settings.load().get("printer_address")

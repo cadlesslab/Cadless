@@ -16,6 +16,7 @@ const STATUS: SettingsStatus = {
   codegen_model_source: "default",
   aws_region: "us-east-1",
   aws_region_source: "default",
+  printer_address: null,
   secrets: {
     anthropic_api_key: { set: false, source: "unset" },
     openai_api_key: { set: false, source: "unset" },

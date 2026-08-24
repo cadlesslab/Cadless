@@ -69,6 +69,8 @@ export function SettingsPanel() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [awsAccessKeyId, setAwsAccessKeyId] = useState("");
   const [awsSecretAccessKey, setAwsSecretAccessKey] = useState("");
+  const [printerAddress, setPrinterAddress] = useState("");
+  const [testingPrinter, setTestingPrinter] = useState(false);
   // Edit state for the knob table. Numbers and text are held as strings so a
   // half-typed "0." is not coerced away under the cursor; the patch converts.
   const [knobs, setKnobs] = useState<Record<string, string | boolean>>({});
@@ -88,6 +90,7 @@ export function SettingsPanel() {
         setOrchestratorModel(s.orchestrator_model);
         setCodegenModel(s.codegen_model);
         setAwsRegion(s.aws_region);
+        setPrinterAddress(s.printer_address ?? "");
         setKnobs(
           Object.fromEntries(
             TUNING_KNOBS.map((k) => {
@@ -125,6 +128,10 @@ export function SettingsPanel() {
     if (openaiKey) patch.openai_api_key = openaiKey;
     if (awsAccessKeyId) patch.aws_access_key_id = awsAccessKeyId;
     if (awsSecretAccessKey) patch.aws_secret_access_key = awsSecretAccessKey;
+    // Blank means "leave it alone", matching every other field here: the save
+    // endpoint only ever sets, so an emptied box is not a way to forget an
+    // address.
+    if (printerAddress.trim()) patch.printer_address = printerAddress.trim();
 
     // Only knobs the user actually moved. Sending the whole table would flip
     // every untouched knob's provenance from "default" to "saved", which reads
@@ -171,6 +178,24 @@ export function SettingsPanel() {
     const s = status?.secrets?.[field];
     return s?.set ? `Key set (${s.source}) — leave blank to keep` : undefined;
   };
+
+  /** Check the address in the box, saved or not.
+   *
+   * Testing what has been typed rather than what has been stored is the point:
+   * finding out an address is wrong should not require saving it first.
+   */
+  async function onTestPrinter() {
+    setTestingPrinter(true);
+    try {
+      const result = await api.testPrinter(printerAddress.trim() || undefined);
+      if (result.ok) toast.success("Printer answered", result.detail);
+      else toast.error("No answer from the printer", result.detail);
+    } catch (err) {
+      toast.error("Could not test the printer", errMessage(err));
+    } finally {
+      setTestingPrinter(false);
+    }
+  }
 
   function onProviderChange(next: string) {
     setProvider(next);
@@ -274,6 +299,28 @@ export function SettingsPanel() {
         <label className="settings-field">
           <span>Codegen model</span>
           <TextInput value={codegenModel} onChange={(e) => setCodegenModel(e.target.value)} />
+        </label>
+
+        <label className="settings-field">
+          <span>3D printer address</span>
+          <TextInput
+            placeholder="192.168.0.42"
+            value={printerAddress}
+            onChange={(e) => setPrinterAddress(e.target.value)}
+          />
+          <small>
+            The printer's address on your own network — Print sends jobs here. A public
+            address is refused.
+          </small>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={testingPrinter}
+            onClick={onTestPrinter}
+          >
+            {testingPrinter ? "Testing…" : "Test connection"}
+          </Button>
         </label>
 
         {provider === "openai" && (

@@ -586,6 +586,10 @@ export interface SettingsStatus extends TuningKnobs {
   codegen_model_source: string;
   aws_region: string;
   aws_region_source: string;
+  /** Where the 3D printer is, or null when none has been set. Saved state
+   * rather than configuration, so unlike the fields above it has no `_source`:
+   * there is only one place it can have come from. */
+  printer_address: string | null;
   secrets: Record<string, SecretStatus>;
 }
 
@@ -608,6 +612,7 @@ export interface SettingsUpdate {
   vlm_model_slug?: string;
   bedrock_model_slug?: string;
   bedrock_fast_model_slug?: string;
+  printer_address?: string;
 }
 
 /** What came of taking a received `.cls` into the catalog on this machine. */
@@ -630,6 +635,66 @@ export interface ImportResult {
 export const getSettings = () => req<SettingsStatus>("/settings");
 export const saveSettings = (patch: SettingsUpdate) =>
   req<SettingsStatus>("/settings", { method: "POST", body: JSON.stringify(patch) });
+
+/** What this installation can currently do about printing.
+ *
+ * Asked before a print is attempted so the UI can say what is missing up front.
+ * A Print button that explains it has no address beats one that fails after
+ * spending two minutes slicing.
+ */
+export interface PrintCapability {
+  slicer_available: boolean;
+  slicer_path: string;
+  /** What to install, when there is nothing to slice with. Empty otherwise. */
+  slicer_hint: string;
+  printer_configured: boolean;
+}
+
+/** What slicing produced: the numbers someone wants before committing filament. */
+export interface SliceResult {
+  ok: boolean;
+  detail: string;
+  /** Separate from `ok` because the answer is an install, not a retry. */
+  slicer_missing: boolean;
+  stats: Record<string, string>;
+}
+
+/** What came of putting a job on the wire. */
+export interface PrintResult {
+  ok: boolean;
+  detail: string;
+  /** The failure kind — `address`, `refused`, `timeout`, `unreachable`, `empty`
+   * — so the UI can choose a sentence without matching on prose. */
+  reason: string;
+  bytes_sent: number;
+}
+
+export interface PrinterTest {
+  ok: boolean;
+  detail: string;
+  reason: string;
+  status: Record<string, unknown>;
+  status_detail: string;
+}
+
+export const fetchPrintCapability = () => req<PrintCapability>("/printing/capability");
+
+/** Open and close the printer's job port. Prints nothing.
+ *
+ * Takes an address so the Settings panel can check a value the user has typed
+ * but not yet saved; omitting it tests the saved one.
+ */
+export const testPrinter = (address?: string) =>
+  req<PrinterTest>("/printing/test", {
+    method: "POST",
+    body: JSON.stringify({ address: address ?? null }),
+  });
+
+export const sliceVersion = (versionId: number) =>
+  req<SliceResult>(`/printing/versions/${versionId}/slice`, { method: "POST" });
+
+export const sendVersionToPrinter = (versionId: number) =>
+  req<PrintResult>(`/printing/versions/${versionId}/send`, { method: "POST" });
 /** Take a `.cls` already on this machine into the catalog.
  *
  * The file is the request body rather than a form field: there is exactly one,

@@ -200,6 +200,7 @@ ROUTER_MODULES = (
     "catalog",
     "settings",
     "packages",
+    "printing",
 )
 
 # Where a distribution installed beside this one says it has a router to add.

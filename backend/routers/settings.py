@@ -45,6 +45,11 @@ class SettingsUpdate(BaseModel):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
+    # Where the 3D printer lives. Saved state rather than configuration: it is
+    # persisted and reported, but never applied to the process or exported, so
+    # the address of a device on the operator's network stays out of the
+    # environment the code-execution subprocess inherits.
+    printer_address: str | None = None
     # Engine tuning knobs, typed rather than str so a JSON number arrives as a
     # number. The default stays None so `exclude_none` can tell "not sent" from
     # "sent as 0/false" — for a knob those are different instructions, where for

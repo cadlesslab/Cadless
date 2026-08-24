@@ -55,6 +55,17 @@ port, bound to loopback.
    exported to `os.environ`, because the worker spawns generated code with the
    parent environment inherited. Tests enforce each of these.
 
+   The printer address is settable, and it is the one settable value that names
+   somewhere the API process will connect to. It is allowed because it cannot
+   widen reach: `cadless/printing.py` refuses anything that is not private,
+   loopback or link-local, checking what a name resolved to rather than the name,
+   and dialling the literal it checked. Read the two halves together — the stack
+   is loopback-only by invariant 2, so the caller is already on this machine, and
+   what the rule buys is that a mistyped or hostile value cannot turn this
+   process into a way out to the internet. It is saved-only for the reason above:
+   nothing reads it from the environment, so exporting it would hand a device
+   address on the operator's network to generated code for nothing in return.
+
 7. A request MUST reach persistence through the per-request scoped view, never
    through `Store` itself. The view carries the caller's principal into every
    query and cannot be widened back; `Store` stays unscoped for startup, the
