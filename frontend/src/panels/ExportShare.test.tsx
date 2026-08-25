@@ -541,6 +541,66 @@ describe("printing over USB", () => {
     release(somePort);
   });
 
+  it("does not start a print that was cancelled while the chooser was up", async () => {
+    // The chooser is an await, and the dialog behind it deliberately stays open
+    // -- dismissing the chooser has to leave something to try again from. So
+    // Cancel, Esc and a click outside are all still reachable while it is up,
+    // and a print starting after somebody pressed Cancel is the one outcome
+    // this dialog exists to prevent.
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    withPrinter();
+    let release: (port: usb.PrinterPort) => void = () => {};
+    vi.mocked(usb.requestPrinterPort).mockReturnValue(
+      new Promise<usb.PrinterPort>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+    await waitFor(() => expect(usb.requestPrinterPort).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    release(somePort);
+    // Long enough for the continuation after the chooser to run, if it were
+    // going to.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(usb.handshake).not.toHaveBeenCalled();
+    expect(usb.streamJob).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("offers a way out while it is still looking for the printer", async () => {
+    // Connecting walks up to four baud candidates and opens a port on each,
+    // over a dialog that cannot be dismissed. A disabled Stop there is not a
+    // slow exit, it is no exit -- the tab has to be reloaded.
+    vi.stubGlobal("fetch", vi.fn());
+    vi.mocked(usb.isUsbPrintingSupported).mockReturnValue(true);
+    vi.mocked(usb.requestPrinterPort).mockResolvedValue(somePort);
+    let signal: AbortSignal | undefined;
+    vi.mocked(usb.handshake).mockImplementation(async (_port, _bauds, given) => {
+      signal = given;
+      await new Promise<void>((resolve) => {
+        given?.addEventListener("abort", () => resolve());
+      });
+      return { ok: false, detail: "Stopped before a printer answered." };
+    });
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+    await waitFor(() => expect(screen.getByText(/Looking for a printer/)).toBeInTheDocument());
+
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(stop).not.toBeDisabled();
+    fireEvent.click(stop);
+
+    // The signal reaching `handshake` at all is the other half of this: without
+    // it the abort has nothing to interrupt.
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+  });
+
   it("reports a printer that stopped answering, rather than claiming success", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => "G28\n" }));
     withPrinter();

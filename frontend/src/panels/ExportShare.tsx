@@ -1,5 +1,5 @@
 /** Export format picker + share link + print. */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   artifactUrl,
@@ -26,11 +26,15 @@ import {
   streamJob,
 } from "./usbPrinter";
 
+/** The status text as well as the number: this message is shown to someone, and
+ * a toast body reading only "409" tells them nothing they can act on. */
+function httpError(res: { status: number; statusText?: string }): Error {
+  return new Error(res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`);
+}
+
 async function fetchAndSave(url: string, filename: string, init?: RequestInit): Promise<void> {
   const res = await fetch(url, init);
-  // The status text as well as the number: this message is shown to someone,
-  // and a toast body reading only "409" tells them nothing they can act on.
-  if (!res.ok) throw new Error(res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`);
+  if (!res.ok) throw httpError(res);
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -50,7 +54,7 @@ async function fetchAndSave(url: string, filename: string, init?: RequestInit): 
  */
 async function fetchGcode(url: string): Promise<string> {
   const res = await fetch(url, { headers: printHeaders() });
-  if (!res.ok) throw new Error(res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`);
+  if (!res.ok) throw httpError(res);
   return res.text();
 }
 
@@ -108,6 +112,19 @@ export function ExportShare({ version }: { version: Version }) {
   const [busy, setBusy] = useState<ArtifactKind | null>(null);
   const [printStep, setPrintStep] = useState<"" | "slicing" | "sending" | "saving">("");
   const [sliced, setSliced] = useState<Sliced>(null);
+  /** What `sliced` is *now*, readable from inside a handler that has awaited.
+   *
+   * `confirmUsbPrint` is a closure built during a render, and it awaits the
+   * device chooser. Reading the state variable after that await answers with
+   * what was true when the button was pressed, not with what is true when the
+   * chooser comes back — so a dialog dismissed in between looked open, and the
+   * print started anyway. A ref is the same object across renders, so writing
+   * to it is visible through a closure that captured it earlier.
+   */
+  const slicedNow = useRef<Sliced>(null);
+  useEffect(() => {
+    slicedNow.current = sliced;
+  }, [sliced]);
   const [notice, setNotice] = useState<Notice>(null);
   const [usb, setUsb] = useState<UsbJob>(null);
   // True only while the device chooser is up. The dialog stays open behind
@@ -248,11 +265,20 @@ export function ExportShare({ version }: { version: Version }) {
       setChoosing(false);
     }
 
+    // Through the ref, not the captured state: the same reasoning as the id
+    // travelling with the numbers above. The dialog can be dismissed while the
+    // chooser is up, and a print starting after somebody pressed Cancel is the
+    // one outcome this whole dialog exists to prevent.
+    if (slicedNow.current?.versionId !== target) return;
+
     setSliced(null);
     const controller = new AbortController();
     setUsb({ phase: "connecting", sent: 0, total: 0, controller });
     try {
-      const shake = await handshake(port);
+      // The signal from the first moment: `handshake` walks up to four baud
+      // candidates at 2.5s each and opens a port on every one of them, and
+      // every one of those waits is time Stop has to be able to reach.
+      const shake = await handshake(port, undefined, controller.signal);
       if (!shake.ok || !shake.baudRate) {
         setNotice({
           title: "That is not a printer",
@@ -395,7 +421,7 @@ export function ExportShare({ version }: { version: Version }) {
         title="Printing over USB"
         description={
           usb?.phase === "connecting"
-            ? "Looking for a printer on that port…"
+            ? "Looking for a printer on that port… this can take a few seconds."
             : `${usb?.sent ?? 0} of ${usb?.total ?? 0} lines sent. ${USB_TETHER_WARNING}`
         }
       >
@@ -403,9 +429,9 @@ export function ExportShare({ version }: { version: Version }) {
           <Button
             type="button"
             variant="danger"
-            // Nothing has been sent yet while the handshake runs, and that step
-            // is bounded by its own timeouts rather than by the job's length.
-            disabled={usb?.phase !== "printing"}
+            // Enabled in both phases. Connecting can take four baud candidates
+            // and a port open apiece, and a disabled Stop over a dialog that
+            // cannot be dismissed leaves no way out of it at all.
             onClick={() => usb?.controller.abort()}
           >
             Stop
