@@ -5,12 +5,28 @@ import * as api from "../api";
 import type { PrintCapability, Version } from "../api";
 import { ToastProvider } from "../components";
 import { ExportShare } from "./ExportShare";
+import * as usb from "./usbPrinter";
 
 vi.mock("../api", async (orig) => ({
   ...(await orig<typeof import("../api")>()),
   fetchPrintCapability: vi.fn(),
   sliceVersion: vi.fn(),
   sendVersionToPrinter: vi.fn(),
+}));
+
+/** The USB half is stubbed at the module boundary rather than below it.
+ *
+ * What this file is for is the panel: which actions it offers, what it says
+ * before committing to one, and what it does with the answer. The conversation
+ * with the printer has its own tests against a scripted fake port, and faking a
+ * port here would only re-test that from further away.
+ */
+vi.mock("./usbPrinter", async (orig) => ({
+  ...(await orig<typeof import("./usbPrinter")>()),
+  isUsbPrintingSupported: vi.fn(() => false),
+  requestPrinterPort: vi.fn(),
+  handshake: vi.fn(),
+  streamJob: vi.fn(),
 }));
 
 /** A deployment that can reach a printer: someone's own machine, with an
@@ -333,5 +349,210 @@ describe("ExportShare printing", () => {
       expect(screen.getByRole("button", { name: "Send to printer" })).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "Download G-code" })).toBeInTheDocument();
+  });
+});
+
+describe("printing over USB", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  // The exact label, not /Print/: once the dialog is open two buttons match
+  // that pattern, and a helper that silently picks one is a trap for later.
+  const openPrint = () => fireEvent.click(screen.getByRole("button", { name: "⎙ Print" }));
+  const usbButton = () => screen.getByRole("button", { name: "Print over USB" });
+  const slice = (stats: Record<string, string> = {}) => ({
+    ok: true, detail: "", slicer_missing: false, stats,
+  });
+  // Nothing reads it: every function that would is mocked in this file.
+  const somePort = {} as usb.PrinterPort;
+
+  async function openDialog(cap: PrintCapability) {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValue(cap);
+    vi.mocked(api.sliceVersion).mockResolvedValue(slice({ estimated_time: "45m" }));
+    renderShare(version(["stl"]));
+    openPrint();
+    await waitFor(() => expect(screen.getByText(/45m/)).toBeInTheDocument());
+  }
+
+  /** A browser with Web Serial, a printer chosen, and a job that answers. */
+  function withPrinter(baudRate = 115200) {
+    vi.mocked(usb.isUsbPrintingSupported).mockReturnValue(true);
+    vi.mocked(usb.requestPrinterPort).mockResolvedValue(somePort);
+    vi.mocked(usb.handshake).mockResolvedValue({ ok: true, baudRate, firmware: "Marlin 2.1" });
+  }
+
+  it("offers nothing over USB where the browser has none", async () => {
+    // Safari, and every browser before Firefox 151. The action is absent
+    // rather than present-and-failing, and nothing else about the dialog moves.
+    vi.mocked(usb.isUsbPrintingSupported).mockReturnValue(false);
+    await openDialog(HOSTED);
+    expect(screen.queryByRole("button", { name: "Print over USB" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download G-code" })).toBeInTheDocument();
+    // And the cost of a path they cannot take is not read at them: there it
+    // would look like a rule about the download.
+    expect(screen.queryByText(/tab must stay open/)).not.toBeInTheDocument();
+  });
+
+  it("offers it where the browser has it", async () => {
+    withPrinter();
+    await openDialog(HOSTED);
+    expect(usbButton()).toBeInTheDocument();
+  });
+
+  it("states the tab must stay open before anything is committed", async () => {
+    // Where the decision is made, not after it. Somebody is agreeing to keep a
+    // tab open for the length of a print.
+    withPrinter();
+    await openDialog(HOSTED);
+    expect(screen.getByText(/tab must stay open/)).toBeInTheDocument();
+    expect(usb.requestPrinterPort).not.toHaveBeenCalled();
+  });
+
+  it("leaves the deployment's own two actions exactly as they were", async () => {
+    // Web Serial is a fact about the browser. It must not move what the server
+    // reports it can do, in either direction.
+    withPrinter();
+    await openDialog(LOCAL);
+    expect(screen.getByRole("button", { name: "Send to printer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download G-code" })).toBeInTheDocument();
+    expect(usbButton()).toBeInTheDocument();
+  });
+
+  it("asks for a port before the job leaves the server", async () => {
+    // Two reasons in one order. Requesting the port spends the click's user
+    // activation, so awaiting anything before it leaves the chooser with no
+    // gesture to open on; and a dismissed chooser must not have cost a
+    // download of a job nobody is going to print.
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    withPrinter();
+    vi.mocked(usb.requestPrinterPort).mockRejectedValue(new Error("No port selected."));
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+
+    await waitFor(() => expect(usb.requestPrinterPort).toHaveBeenCalled());
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(usb.streamJob).not.toHaveBeenCalled();
+    // Dismissing the chooser is an answer rather than a fault, so the dialog
+    // is still there to try again from.
+    expect(usbButton()).toBeInTheDocument();
+  });
+
+  it("sends no G-code to something that is not a printer", async () => {
+    // A serial port is just a port -- a debug console, a modem, an Arduino
+    // running something else. This is the whole reason for the handshake.
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    withPrinter();
+    vi.mocked(usb.handshake).mockResolvedValue({
+      ok: false,
+      detail: "Nothing on that port answered like a printer.",
+    });
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+
+    await waitFor(() => expect(screen.getByText(/answered like a printer/)).toBeInTheDocument());
+    expect(usb.streamJob).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("streams the job it sliced, at the rate the handshake found", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, text: async () => "G28\nG1 X10\n" });
+    vi.stubGlobal("fetch", fetchFn);
+    withPrinter(250000);
+    vi.mocked(usb.streamJob).mockResolvedValue({ ok: true, detail: "Sent 2 lines." });
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+
+    await waitFor(() => expect(usb.streamJob).toHaveBeenCalled());
+    const [, gcode, options] = vi.mocked(usb.streamJob).mock.calls[0];
+    // The same route and the same header the download uses. Same bytes, a
+    // different destination -- no server change was needed for any of this.
+    expect(fetchFn.mock.calls[0][0]).toContain("/printing/versions/5/gcode");
+    expect(fetchFn.mock.calls[0][1].headers).toMatchObject({ "X-Cadless-Action": "1" });
+    expect(gcode).toContain("G1 X10");
+    // Not a guess and not a question put to the reader: the rate the printer
+    // actually answered at.
+    expect(options.baudRate).toBe(250000);
+    await waitFor(() => expect(screen.getByText("Printed over USB")).toBeInTheDocument());
+  });
+
+  it("shows how far through it is", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => "G28\n" }));
+    withPrinter();
+    vi.mocked(usb.streamJob).mockImplementation(async (_port, _gcode, options) => {
+      options.onProgress?.({ sent: 40, total: 100 });
+      return { ok: true, detail: "done" };
+    });
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+
+    await waitFor(() => expect(screen.getByText(/40 of 100 lines sent/)).toBeInTheDocument());
+  });
+
+  it("stops a running print when asked", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => "G28\n" }));
+    withPrinter();
+    let signal: AbortSignal | undefined;
+    vi.mocked(usb.streamJob).mockImplementation(async (_port, _gcode, options) => {
+      signal = options.signal;
+      options.onProgress?.({ sent: 1, total: 100 });
+      await new Promise<void>((resolve) => {
+        options.signal?.addEventListener("abort", () => resolve());
+      });
+      return { ok: false, stopped: true, detail: "Stopped. The heaters were turned off." };
+    });
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+    await waitFor(() => expect(screen.getByText(/1 of 100 lines sent/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    // The signal is what reaches the stream, and the stream is what turns the
+    // heaters off -- a Stop that only closed the dialog would leave a hot
+    // nozzle parked over the part.
+    await waitFor(() => expect(signal?.aborted).toBe(true));
+    await waitFor(() => expect(screen.getByText("Print stopped")).toBeInTheDocument());
+  });
+
+  it("opens one chooser however many times the button is pressed", async () => {
+    // The dialog deliberately stays open behind the chooser, so the button is
+    // still there to be clicked again. Two choosers would race two handshakes
+    // at the same port.
+    withPrinter();
+    let release: (port: usb.PrinterPort) => void = () => {};
+    vi.mocked(usb.requestPrinterPort).mockReturnValue(
+      new Promise<usb.PrinterPort>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+    await waitFor(() => expect(usb.requestPrinterPort).toHaveBeenCalledTimes(1));
+    fireEvent.click(usbButton());
+    fireEvent.click(usbButton());
+
+    expect(usb.requestPrinterPort).toHaveBeenCalledTimes(1);
+    release(somePort);
+  });
+
+  it("reports a printer that stopped answering, rather than claiming success", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, text: async () => "G28\n" }));
+    withPrinter();
+    vi.mocked(usb.streamJob).mockResolvedValue({
+      ok: false,
+      detail: "The printer stopped answering.",
+    });
+
+    await openDialog(HOSTED);
+    fireEvent.click(usbButton());
+
+    await waitFor(() => expect(screen.getByText("The print stopped")).toBeInTheDocument());
+    expect(screen.getByText("The printer stopped answering.")).toBeInTheDocument();
   });
 });

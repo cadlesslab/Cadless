@@ -17,7 +17,14 @@ import { Button, Modal, Tooltip, useToast } from "../components";
 import { errMessage } from "../errors";
 import { BASE_URL } from "../routing";
 import { availableFormats, downloadFilename, FORMAT_META, shareUrl } from "./exportFormats";
-import { DEFAULT_CLOSING, sliceSummary } from "./printSummary";
+import { DEFAULT_CLOSING, sliceSummary, USB_TETHER_WARNING } from "./printSummary";
+import {
+  handshake,
+  isUsbPrintingSupported,
+  type PrinterPort,
+  requestPrinterPort,
+  streamJob,
+} from "./usbPrinter";
 
 async function fetchAndSave(url: string, filename: string, init?: RequestInit): Promise<void> {
   const res = await fetch(url, init);
@@ -33,6 +40,18 @@ async function fetchAndSave(url: string, filename: string, init?: RequestInit): 
   a.click();
   a.remove();
   URL.revokeObjectURL(objectUrl);
+}
+
+/** The same bytes as the download, as text rather than as a file.
+ *
+ * The USB path needs the job in hand to send it line by line, so it reads the
+ * body instead of handing it to the browser's downloader. Same URL, same
+ * header, same server route — only the destination differs.
+ */
+async function fetchGcode(url: string): Promise<string> {
+  const res = await fetch(url, { headers: printHeaders() });
+  if (!res.ok) throw new Error(res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`);
+  return res.text();
 }
 
 /** Something the reader has to go and do before printing can work.
@@ -55,6 +74,20 @@ type Notice = { title: string; body: string } | null;
  */
 type Sliced = { versionId: number; result: SliceResult; can: PrintCapability } | null;
 
+/** A print leaving through this tab's own USB connection.
+ *
+ * In state rather than in a ref because this dialog is the only thing telling
+ * the reader a print is running, and it has to re-render as the count moves.
+ * The controller travels with it so Stop reaches the stream that is actually
+ * running rather than one started after it.
+ */
+type UsbJob = {
+  phase: "connecting" | "printing";
+  sent: number;
+  total: number;
+  controller: AbortController;
+} | null;
+
 /** What the dialog says happens after the numbers.
  *
  * Three cases, and telling them apart matters because two of them are the
@@ -76,9 +109,27 @@ export function ExportShare({ version }: { version: Version }) {
   const [printStep, setPrintStep] = useState<"" | "slicing" | "sending" | "saving">("");
   const [sliced, setSliced] = useState<Sliced>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [usb, setUsb] = useState<UsbJob>(null);
+  // True only while the device chooser is up. The dialog stays open behind
+  // it -- dismissing the chooser has to leave something to try again from --
+  // so without this a second click opens a second chooser and races a second
+  // handshake at the same port.
+  const [choosing, setChoosing] = useState(false);
   const formats = availableFormats(version);
   if (formats.length === 0) return null;
   const printable = formats.includes("stl");
+
+  // Whether this browser can talk to a USB device at all. A browser fact rather
+  // than a server one, so it is read here and never asked of `PrintCapability`
+  // — the deployment has no way to know and no business deciding.
+  const usbAvailable = isUsbPrintingSupported();
+  // Web Serial is necessary and not sufficient: this streams the same bytes the
+  // download saves, from the same route, so a deployment that will not serve
+  // the G-code cannot be printed from either.
+  const usbOffered = usbAvailable && sliced != null && sliced.can.can_download;
+  // Where the deployment cannot reach a printer itself, USB is the only offer
+  // that actually prints something, so it takes the emphasis the download had.
+  const usbIsBest = usbOffered && sliced != null && !sliced.can.can_send;
 
   async function download(kind: ArtifactKind) {
     setBusy(kind);
@@ -168,6 +219,77 @@ export function ExportShare({ version }: { version: Version }) {
     }
   }
 
+  /** Print through this tab, to a printer plugged into this machine.
+   *
+   * The order of the first three steps is load-bearing, and each has a
+   * different reason:
+   *
+   * 1. `requestPrinterPort` spends the click's user activation, so it goes
+   *    first. Awaiting anything before it — the G-code, a capability check —
+   *    leaves the chooser with no gesture left to open on.
+   * 2. The handshake goes before the fetch because a port that turns out not to
+   *    be a printer should cost one exchange rather than a whole download.
+   * 3. Only then does the job leave the server, and it is the same job the
+   *    Download button would have saved.
+   */
+  async function confirmUsbPrint() {
+    if (!sliced || choosing) return;
+    const target = sliced.versionId;
+
+    let port: PrinterPort;
+    setChoosing(true);
+    try {
+      port = await requestPrinterPort();
+    } catch {
+      // The chooser was dismissed, or held nothing to choose. That is an answer
+      // rather than a fault, so the dialog stays open behind it.
+      return;
+    } finally {
+      setChoosing(false);
+    }
+
+    setSliced(null);
+    const controller = new AbortController();
+    setUsb({ phase: "connecting", sent: 0, total: 0, controller });
+    try {
+      const shake = await handshake(port);
+      if (!shake.ok || !shake.baudRate) {
+        setNotice({
+          title: "That is not a printer",
+          body: shake.detail ?? "Nothing on that port answered like a printer.",
+        });
+        return;
+      }
+
+      const gcode = await fetchGcode(gcodeUrl(target));
+      setUsb({ phase: "printing", sent: 0, total: 0, controller });
+
+      let shownPercent = -1;
+      const result = await streamJob(port, gcode, {
+        baudRate: shake.baudRate,
+        signal: controller.signal,
+        onProgress: ({ sent, total }) => {
+          // A real part is tens of thousands of lines, and a `setState` per
+          // acknowledgement would spend the tab's frame budget on renders the
+          // reader cannot perceive. A whole percent is the smallest step that
+          // actually moves anything on screen.
+          const percent = Math.floor((sent / total) * 100);
+          if (percent === shownPercent && sent < total) return;
+          shownPercent = percent;
+          setUsb({ phase: "printing", sent, total, controller });
+        },
+      });
+
+      if (result.ok) toast.success("Printed over USB", result.detail);
+      else if (result.stopped) toast.success("Print stopped", result.detail);
+      else toast.error("The print stopped", result.detail);
+    } catch (err) {
+      toast.error("The print stopped", errMessage(err));
+    } finally {
+      setUsb(null);
+    }
+  }
+
   function share() {
     const url = shareUrl(location.origin, BASE_URL, version.project_id, version.id);
     navigator.clipboard
@@ -218,7 +340,18 @@ export function ExportShare({ version }: { version: Version }) {
         onOpenChange={(open) => !open && setSliced(null)}
         title={sliced?.can.can_send ? "Send this to the printer?" : "Ready to print"}
         description={
-          sliced ? sliceSummary(sliced.result.stats, closingFor(sliced.can)) : ""
+          sliced ? (
+            <>
+              {sliceSummary(sliced.result.stats, closingFor(sliced.can))}
+              {/* Stated here rather than after the click, because keeping a tab
+                  open for the length of a print is the cost being weighed
+                  against the walk to the printer — and only the USB option
+                  carries it. */}
+              {usbOffered && <span className="print-tether"> Over USB: {USB_TETHER_WARNING}</span>}
+            </>
+          ) : (
+            ""
+          )
         }
       >
         <div className="modal-footer">
@@ -228,10 +361,20 @@ export function ExportShare({ version }: { version: Version }) {
           {sliced?.can.can_download && (
             <Button
               type="button"
-              variant={sliced?.can.can_send ? "ghost" : "primary"}
+              variant={sliced?.can.can_send || usbIsBest ? "ghost" : "primary"}
               onClick={confirmDownload}
             >
               Download G-code
+            </Button>
+          )}
+          {usbOffered && (
+            <Button
+              type="button"
+              variant={usbIsBest ? "primary" : "ghost"}
+              disabled={choosing}
+              onClick={confirmUsbPrint}
+            >
+              Print over USB
             </Button>
           )}
           {sliced?.can.can_send && (
@@ -239,6 +382,34 @@ export function ExportShare({ version }: { version: Version }) {
               Send to printer
             </Button>
           )}
+        </div>
+      </Modal>
+
+      <Modal
+        open={usb != null}
+        /* Deliberately not dismissable. Esc and a click outside both arrive
+           here, and either one closing this would leave a print running with
+           nothing on screen saying so — and no way back to the Stop button.
+           Ending a print is what Stop is for. */
+        onOpenChange={() => undefined}
+        title="Printing over USB"
+        description={
+          usb?.phase === "connecting"
+            ? "Looking for a printer on that port…"
+            : `${usb?.sent ?? 0} of ${usb?.total ?? 0} lines sent. ${USB_TETHER_WARNING}`
+        }
+      >
+        <div className="modal-footer">
+          <Button
+            type="button"
+            variant="danger"
+            // Nothing has been sent yet while the handshake runs, and that step
+            // is bounded by its own timeouts rather than by the job's length.
+            disabled={usb?.phase !== "printing"}
+            onClick={() => usb?.controller.abort()}
+          >
+            Stop
+          </Button>
         </div>
       </Modal>
 
