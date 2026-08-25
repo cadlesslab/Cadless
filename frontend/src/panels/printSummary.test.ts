@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sliceSummary } from "./printSummary";
+import { sliceSummary, USB_TETHER_WARNING } from "./printSummary";
 
 describe("sliceSummary", () => {
   it("states both numbers when the slicer reported them", () => {
@@ -41,5 +41,20 @@ describe("sliceSummary", () => {
       expect(sliceSummary(stats)).not.toContain("undefined");
       expect(sliceSummary(stats)).not.toContain("null");
     }
+  });
+});
+
+describe("USB_TETHER_WARNING", () => {
+  it("says the tab has to stay open, in words the reader can act on", () => {
+    // The whole point of the sentence. Somebody is agreeing to keep a tab open
+    // for the length of a print, and a warning that does not say so is not one.
+    expect(USB_TETHER_WARNING).toMatch(/tab/i);
+    expect(USB_TETHER_WARNING).toMatch(/open/i);
+  });
+
+  it("says why, and not only what", () => {
+    // "Keep this tab open" on its own reads as an arbitrary rule. It is a
+    // consequence of the browser being the thing sending the job.
+    expect(USB_TETHER_WARNING).toMatch(/browser/i);
   });
 });

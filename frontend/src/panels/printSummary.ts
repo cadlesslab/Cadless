@@ -44,3 +44,14 @@ export function sliceSummary(
   }
   return `This print takes ${parts.join(" and uses ")}. ${closing}`;
 }
+
+/** What the reader is agreeing to when they print over USB.
+ *
+ * Streaming makes the browser the print host: the job leaves this tab one line
+ * at a time for as long as the print takes, which for a real part is hours.
+ * Exported rather than written inline so the wording is unit-tested, and stated
+ * in the dialog rather than after the click, because it is the cost the reader
+ * is weighing against the walk to the printer.
+ */
+export const USB_TETHER_WARNING =
+  "Your browser sends the job line by line, so this tab must stay open until the print finishes.";
