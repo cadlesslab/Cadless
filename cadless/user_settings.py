@@ -29,6 +29,7 @@ from typing import Any
 from cadless.config import settings
 from cadless.model_profiles import PROFILES
 from cadless.printing import AddressRefused, refuse_public_literal
+from cadless.slicing import PRINTER_PROFILE_LIMITS
 
 # Non-secret UI field -> environment variable (CADLESS_*) it corresponds to.
 _PLAIN_FIELDS: dict[str, str] = {
@@ -222,21 +223,12 @@ _FILE_ONLY_SECRETS: frozenset[str] = frozenset()
 #: ``cadless/slicing.py`` is handed them -- and exporting them would put them in
 #: the environment ``cadless/worker.py`` gives to generated code.
 #:
-#: Each range is what a value has to be to be *usable*, not what is sensible. A
-#: bed of 0 makes a command the slicer cannot act on and a 50 mm nozzle is not a
-#: nozzle; refusing here means the reader is told at the input rather than after
-#: waiting for a slicer to run and reading a message about print volumes.
-_PRINTER_PROFILE_LIMITS: dict[str, tuple[float, float]] = {
-    "printer_bed_width": (1.0, 2000.0),
-    "printer_bed_depth": (1.0, 2000.0),
-    "printer_max_height": (1.0, 2000.0),
-    "printer_nozzle_diameter": (0.1, 2.0),
-    "printer_filament_diameter": (0.5, 5.0),
-    "printer_nozzle_temperature": (0.0, 500.0),
-    "printer_bed_temperature": (0.0, 200.0),
-}
-
-_SAVED_ONLY_FIELDS: tuple[str, ...] = ("printer_address", *_PRINTER_PROFILE_LIMITS)
+#: The ranges are `cadless.slicing.PRINTER_PROFILE_LIMITS`, imported rather than
+#: restated. That module owns them because it owns the units, the defaults and
+#: the flags they become; this one owns refusing a value at the input, so that
+#: the reader is told there rather than after waiting for a slicer to run and
+#: reading a message about print volumes. Two tables would drift silently.
+_SAVED_ONLY_FIELDS: tuple[str, ...] = ("printer_address", *PRINTER_PROFILE_LIMITS)
 
 PROVIDERS: tuple[str, ...] = ("bedrock", "anthropic", "openai")
 
@@ -359,14 +351,24 @@ def _validate_printer_address(patch: dict[str, Any]) -> None:
 
 
 def _validate_printer_profile(patch: dict[str, Any]) -> None:
-    """Refuse a printer measurement that cannot be acted on.
+    """Refuse a printer measurement that cannot be acted on, and store it as a number.
 
     The value is checked rather than the spelling: whatever arrives is coerced
     the way :func:`cadless.slicing.profile_from_settings` will coerce it, and the
-    *result* is what has to be a finite number inside the range. Checking the
-    input's type instead would pass a string that later reads as a bed of zero.
+    *result* is what has to be finite and inside the range. Checking the input's
+    type instead would pass a string that later reads as a bed of zero.
+
+    It also **writes the coerced number back into the patch**, which is why this
+    is not purely a validator. A Python caller can pass ``"300"``; stored as
+    text it goes onto the wire against a typed field, renders as an empty box,
+    and is silently used by the slicer anyway -- the panel saying nothing is set
+    while the printer is cut for 300 mm.
+
+    The `bool` guard protects this entry point only: the request model declares
+    these `float`, so pydantic turns a JSON `true` into `1.0` before anything
+    here sees it.
     """
-    for field, (low, high) in _PRINTER_PROFILE_LIMITS.items():
+    for field, (low, high) in PRINTER_PROFILE_LIMITS.items():
         if field not in patch:
             continue
         raw = patch[field]
@@ -381,6 +383,7 @@ def _validate_printer_profile(patch: dict[str, Any]) -> None:
             raise ValueError(f"{field}={raw!r} is not a finite number")
         if not low <= value <= high:
             raise ValueError(f"{field}={raw!r} is outside the usable range {low} to {high}")
+        patch[field] = value
 
 
 def _raises_spend(field: str, value: Any) -> bool:

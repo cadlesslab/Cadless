@@ -27,6 +27,8 @@ weaker boundary than the one generated code runs behind, and it is recorded in
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import math
 import os
 import re
@@ -66,6 +68,12 @@ CONFIG_BLOCK = "prusaslicer_config = begin"
 #: final name would be indistinguishable from a finished one.
 PART_SUFFIX = ".part"
 
+#: Written beside a finished job, naming the profile it was sliced under.
+#:
+#: Beside rather than inside: these bytes are streamed to a printer, and the one
+#: thing this file must not do is change what the printer receives.
+PROFILE_SUFFIX = ".profile"
+
 #: The build volume assumed when the user has not said what they own, in
 #: millimetres. Named rather than written into the profile string, because the
 #: fit check below and the ``bed-shape`` flag have to be the same numbers -- two
@@ -74,6 +82,27 @@ PART_SUFFIX = ".part"
 DEFAULT_BED_WIDTH = 210.0
 DEFAULT_BED_DEPTH = 200.0
 DEFAULT_MAX_HEIGHT = 195.0
+
+#: What each saved measurement has to be to be *usable*, in millimetres and
+#: degrees Celsius. Not what is sensible -- what the slicer can act on.
+#:
+#: One table, read at both ends and for different failures. `cadless/user_settings.py`
+#: refuses a value outside it at save time, so the reader is told at the input.
+#: `_number` below falls back to the default for one that got in anyway, so a
+#: hand-edited file cannot put `1e-09` on a command line. Two tables would drift,
+#: and the drift would be invisible until a printer did something odd.
+PRINTER_PROFILE_LIMITS: dict[str, tuple[float, float]] = {
+    "printer_bed_width": (1.0, 2000.0),
+    "printer_bed_depth": (1.0, 2000.0),
+    "printer_max_height": (1.0, 2000.0),
+    "printer_nozzle_diameter": (0.1, 2.0),
+    "printer_filament_diameter": (0.5, 5.0),
+    # The floor is the physical one: an extruder refuses to move cold, and
+    # nothing extrudes near room temperature. Zero is a real answer for a bed
+    # (there are printers without a heated one) and not for a nozzle.
+    "printer_nozzle_temperature": (150.0, 500.0),
+    "printer_bed_temperature": (0.0, 200.0),
+}
 
 #: How much hotter the first layer runs than the rest. The default profile
 #: already does this (205 then 210), and saving a different filament has to move
@@ -85,6 +114,17 @@ def _fmt(value: float) -> str:
     """A number as a flag value: no trailing ``.0`` on a whole one."""
     whole = int(value)
     return str(whole) if value == whole else str(value)
+
+
+def _mm(value: float) -> str:
+    """A measurement for a sentence somebody reads, rather than for a flag.
+
+    Rounded, because a bounding box carries whatever floating-point noise the
+    geometry left in it and "1100.0000000000002 x 600 x 450 mm" reads as a bug in
+    the tool. :func:`_fmt` stays exact: it feeds the slicer, where a rounded
+    nozzle diameter would be a different print.
+    """
+    return _fmt(round(value, 1))
 
 
 def _bed_shape(width: float, depth: float) -> str:
@@ -124,18 +164,19 @@ class BuildVolume:
     height: float
 
 
-def _number(
-    saved: Mapping[str, Any] | None, field_name: str, *, allow_zero: bool = False
-) -> float | None:
+def _number(saved: Mapping[str, Any] | None, field_name: str) -> float | None:
     """A saved value as a usable number, or ``None`` when it is not one.
 
     Fail closed at the point of use rather than trusting what was validated on
     the way in. ``settings.json`` can be hand-edited, half-written, or left by an
     older build, and the command that reaches a printer has to stay one the
-    slicer can act on -- a bed of ``nan`` is not a bed.
+    slicer can act on -- a bed of ``nan`` is not a bed, and a nozzle of ``1e-09``
+    is a flag value in scientific notation.
 
-    ``allow_zero`` because a temperature of zero is a real answer (no heated
-    bed) while a dimension of zero is not.
+    The range is :data:`PRINTER_PROFILE_LIMITS`, the same one the save path
+    refuses on. Whether zero is allowed is a property of the field rather than of
+    the caller, so it lives in that table too: a bed at 0 degrees is a printer
+    without a heated bed, and a nozzle at 0 is nothing.
     """
     if not saved:
         return None
@@ -149,17 +190,29 @@ def _number(
         return None
     if not math.isfinite(value):
         return None
-    if value < 0 or (value == 0 and not allow_zero):
+    low, high = PRINTER_PROFILE_LIMITS[field_name]
+    if not low <= value <= high:
         return None
     return value
+
+
+def _or_default(value: float | None, fallback: float) -> float:
+    """``value`` unless it is absent. Written out rather than ``or``.
+
+    ``or`` would also replace a valid zero. No dimension can be zero today --
+    every one has a floor above it in the table -- so this is not a bug being
+    fixed but a trap being removed: the next field to allow zero would otherwise
+    inherit a silent substitution nobody wrote.
+    """
+    return fallback if value is None else value
 
 
 def build_volume(saved: Mapping[str, Any] | None = None) -> BuildVolume:
     """The printer's build volume: what the user saved, or the default."""
     return BuildVolume(
-        width=_number(saved, "printer_bed_width") or DEFAULT_BED_WIDTH,
-        depth=_number(saved, "printer_bed_depth") or DEFAULT_BED_DEPTH,
-        height=_number(saved, "printer_max_height") or DEFAULT_MAX_HEIGHT,
+        width=_or_default(_number(saved, "printer_bed_width"), DEFAULT_BED_WIDTH),
+        depth=_or_default(_number(saved, "printer_bed_depth"), DEFAULT_BED_DEPTH),
+        height=_or_default(_number(saved, "printer_max_height"), DEFAULT_MAX_HEIGHT),
     )
 
 
@@ -181,11 +234,15 @@ def profile_from_settings(saved: Mapping[str, Any] | None = None) -> dict[str, s
     filament = _number(saved, "printer_filament_diameter")
     if filament is not None:
         profile["filament-diameter"] = _fmt(filament)
-    hot = _number(saved, "printer_nozzle_temperature", allow_zero=True)
+    hot = _number(saved, "printer_nozzle_temperature")
     if hot is not None:
         profile["temperature"] = _fmt(hot)
-        profile["first-layer-temperature"] = _fmt(hot + FIRST_LAYER_BONUS_C)
-    bed = _number(saved, "printer_bed_temperature", allow_zero=True)
+        # Capped at the same ceiling the value itself is held to. Adding the
+        # bonus unconditionally put the first layer above a limit the save path
+        # calls unusable, which is the guard contradicting itself one line later.
+        ceiling = PRINTER_PROFILE_LIMITS["printer_nozzle_temperature"][1]
+        profile["first-layer-temperature"] = _fmt(min(hot + FIRST_LAYER_BONUS_C, ceiling))
+    bed = _number(saved, "printer_bed_temperature")
     if bed is not None:
         profile["bed-temperature"] = _fmt(bed)
         profile["first-layer-bed-temperature"] = _fmt(bed)
@@ -202,9 +259,19 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
 
     **Deliberately conservative.** This exists to say something more useful than
     the slicer would, so refusing a model that could be printed is the worse
-    error. The footprint is therefore compared in both orientations -- turning a
-    part a quarter turn costs the operator nothing -- and a bounding box that is
-    not three usable numbers is not refused at all.
+    error. The footprint is therefore compared in both orientations, because the
+    slicer may place a part either way and this check must never be the stricter
+    of the two; and a bounding box that is not three usable numbers is not
+    refused at all.
+
+    **It cannot see units, and that is a known gap.** ``bbox`` is recorded in the
+    project's *authoring* units while the exported STL is always millimetres
+    (``cadless/worker.py`` ``export_scale``), so for a domain authored in metres
+    -- ``house`` is one -- the numbers here are a thousand times too small and
+    nothing is ever refused. That fails **open**: the reader gets the slicer's
+    own message instead of this one, which is worse copy and not a wrong answer.
+    Closing it needs a version-to-domain link the store does not carry, so it is
+    recorded here rather than guessed at.
     """
     try:
         width, depth, height = (float(value) for value in bbox)  # type: ignore[misc]
@@ -219,8 +286,8 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
     if fits_flat and height <= volume.height:
         return ""
     return (
-        f"This model is {_fmt(width)} x {_fmt(depth)} x {_fmt(height)} mm, and the printer's "
-        f"build volume is {_fmt(volume.width)} x {_fmt(volume.depth)} x {_fmt(volume.height)} mm. "
+        f"This model is {_mm(width)} x {_mm(depth)} x {_mm(height)} mm, and the printer's "
+        f"build volume is {_mm(volume.width)} x {_mm(volume.depth)} x {_mm(volume.height)} mm. "
         "Ask for a smaller model, or set your printer's real size in Settings."
     )
 
@@ -300,10 +367,51 @@ def read_stats(gcode_path: str) -> dict[str, Any]:
     return stats
 
 
+def profile_fingerprint(profile: Mapping[str, str]) -> str:
+    """A stable short digest of the profile a job was sliced under.
+
+    Exists because the profile stopped being a constant. While it was one, "the
+    mesh has not changed" meant "this job was built for this printer"; now the
+    user can correct their bed between slicing and sending, and the refusal this
+    module produces tells them to do exactly that. Without a fingerprint the
+    stale job goes to the machine, and its moves leave the bed.
+
+    Sorted before hashing so the digest is a property of the values rather than
+    of dict ordering.
+    """
+    payload = json.dumps(dict(sorted(profile.items())), separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _what_it_said(done: subprocess.CompletedProcess) -> str:
+    """The last few lines the slicer wrote, or ``""`` when it said nothing.
+
+    One helper for both failure branches. They quote the same thing for the same
+    reason -- the slicer is what knows why -- and two copies eight lines apart is
+    one place for the next person to change and one to forget.
+    """
+    said = (done.stderr or done.stdout or "").strip().splitlines()
+    return " ".join(line.strip() for line in said[-3:])
+
+
 def _discard(path: str) -> None:
     """Remove a part-file, ignoring the case where it was never created."""
     with contextlib.suppress(OSError):
         os.unlink(path)
+
+
+def sliced_under(gcode_path: str) -> str:
+    """The fingerprint recorded beside a job, or ``""`` when there is none.
+
+    Empty for a job sliced before this existed. The caller decides what that
+    means -- refusing every job an older build left behind would turn an upgrade
+    into a re-slice of everything, for a mismatch nobody has evidence of.
+    """
+    try:
+        with open(gcode_path + PROFILE_SUFFIX) as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
 
 
 def slice_mesh(
@@ -357,8 +465,7 @@ def slice_mesh(
         _discard(part_path)
         # The slicer's own words are the useful part -- it is the thing that
         # knows the model is too tall or the mesh is not manifold.
-        said = (done.stderr or done.stdout or "").strip().splitlines()
-        tail = " ".join(said[-3:]) if said else f"exit code {done.returncode}"
+        tail = _what_it_said(done) or f"exit code {done.returncode}"
         return SliceOutcome(False, f"The slicer refused this model: {tail}")
 
     if not os.path.exists(part_path) or os.path.getsize(part_path) == 0:
@@ -367,8 +474,7 @@ def slice_mesh(
         # outside the print volume -- and it says so on stderr before doing it.
         # Reading that only on the non-zero branch turned a precise explanation
         # into "wrote no G-code", which names nothing the reader can act on.
-        said = (done.stderr or done.stdout or "").strip().splitlines()
-        tail = " ".join(line.strip() for line in said[-3:])
+        tail = _what_it_said(done)
         if tail:
             return SliceOutcome(False, f"The slicer produced no G-code: {tail}")
         return SliceOutcome(False, "The slicer reported success but wrote no G-code.")
@@ -378,5 +484,12 @@ def slice_mesh(
     except OSError as exc:
         _discard(part_path)
         return SliceOutcome(False, f"The sliced file could not be put in place: {exc}")
+
+    # After the rename, never before: a fingerprint sitting beside a job that
+    # does not exist would answer for the next one written under that name.
+    _discard(out_path + PROFILE_SUFFIX)
+    with contextlib.suppress(OSError):
+        with open(out_path + PROFILE_SUFFIX, "w") as handle:
+            handle.write(profile_fingerprint(profile or DEFAULT_PROFILE))
 
     return SliceOutcome(True, "", gcode_path=out_path, stats=read_stats(out_path))

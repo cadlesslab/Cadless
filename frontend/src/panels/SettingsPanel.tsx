@@ -53,6 +53,11 @@ const TUNING_KNOBS: Knob[] = [
 // The knob table is keyed by name, so reading a value out of the typed status
 // needs one cast. Confined to these two helpers rather than spread through the
 // component, and the names themselves are checked by `TuningKnobs` in api.ts.
+const readKnob = (s: SettingsStatus, field: string) =>
+  (s as unknown as Record<string, string | number | boolean>)[field];
+const knobSource = (s: SettingsStatus | null, field: string) =>
+  s ? (s as unknown as Record<string, string>)[`${field}_source`] : undefined;
+
 /** The printer's own measurements, in the order somebody would read them off it.
  *
  * The build volume first, because it is the one that decides whether a model
@@ -91,11 +96,6 @@ const PRINTER_FIELDS: PrinterField[] = [
  */
 const numberOrBlank = (value: unknown): string =>
   typeof value === "number" && Number.isFinite(value) ? String(value) : "";
-
-const readKnob = (s: SettingsStatus, field: string) =>
-  (s as unknown as Record<string, string | number | boolean>)[field];
-const knobSource = (s: SettingsStatus | null, field: string) =>
-  s ? (s as unknown as Record<string, string>)[`${field}_source`] : undefined;
 
 export function SettingsPanel() {
   const toast = useToast();
@@ -179,15 +179,19 @@ export function SettingsPanel() {
     // endpoint only ever sets, so an emptied box is not a way to forget an
     // address.
     if (printerAddress.trim()) patch.printer_address = printerAddress.trim();
-    for (const { field } of PRINTER_FIELDS) {
+    const unusable: string[] = [];
+    for (const { field, label } of PRINTER_FIELDS) {
       const typed = (printer[field] ?? "").trim();
+      // Blank means "leave it as it is": the endpoint only ever sets, and the
+      // engine keeps its default for anything it is not told.
       if (!typed) continue;
       const value = Number(typed);
-      // Blank means "leave it as it is", and the engine keeps its default for
-      // anything it is not told. Something that is not a number is left out
-      // rather than sent as NaN: the server refuses it either way, and a
-      // refusal naming a field nobody typed into would be the wrong error.
       if (Number.isFinite(value)) patch[field] = value;
+      // Every box that reaches here was typed into by hand -- a seeded value is
+      // always a finite number rendered back as text -- so dropping one silently
+      // under a green "Settings saved" tells somebody their measurement took
+      // when it did not.
+      else unusable.push(label);
     }
 
     // Only knobs the user actually moved. Sending the whole table would flip
@@ -222,7 +226,14 @@ export function SettingsPanel() {
       setOpenaiKey("");
       setAwsAccessKeyId("");
       setAwsSecretAccessKey("");
-      toast.success("Settings saved", "Applied without a restart.");
+      if (unusable.length) {
+        toast.error(
+          "Some measurements were not saved",
+          `${unusable.join(", ")} — each needs a number.`,
+        );
+      } else {
+        toast.success("Settings saved", "Applied without a restart.");
+      }
     } catch (err) {
       toast.error("Could not save settings", errMessage(err));
     } finally {
@@ -275,6 +286,26 @@ export function SettingsPanel() {
       toast.success("Printer address forgotten");
     } catch (err) {
       toast.error("Could not forget the printer address", errMessage(err));
+    }
+  }
+
+  /** Return every measurement to its default. Saving cannot do this, for the
+   * same reason it cannot forget an address: a blank box means "leave it". */
+  async function onForgetProfile() {
+    try {
+      await api.forgetPrinterProfile();
+      setPrinter({});
+      setStatus((s) =>
+        s
+          ? {
+              ...s,
+              ...Object.fromEntries(PRINTER_FIELDS.map(({ field }) => [field, null])),
+            }
+          : s,
+      );
+      toast.success("Printer profile forgotten", "Back to the defaults.");
+    } catch (err) {
+      toast.error("Could not forget the printer profile", errMessage(err));
     }
   }
 
@@ -404,9 +435,10 @@ export function SettingsPanel() {
         <details className="settings-tuning">
           <summary>Printer profile</summary>
           <small className="settings-note">
-            What your printer is, as against where it is. Anything left blank keeps the
-            default, and the build volume is what decides whether a model is refused as
-            too big before slicing even starts.
+            What your printer is, as against where it is. The build volume decides whether
+            a model is refused as too big before slicing starts. A blank box means "leave
+            this alone" rather than "use the default" — Forget is what returns a saved
+            measurement to the default.
           </small>
           {PRINTER_FIELDS.map(({ field, label, placeholder }) => (
             <label className="settings-field" key={field}>
@@ -420,6 +452,11 @@ export function SettingsPanel() {
               />
             </label>
           ))}
+          <div className="export-actions">
+            <Button type="button" size="sm" variant="ghost" onClick={onForgetProfile}>
+              Forget measurements
+            </Button>
+          </div>
         </details>
         <div className="export-actions">
           <Button

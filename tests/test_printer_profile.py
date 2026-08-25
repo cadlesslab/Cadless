@@ -60,13 +60,53 @@ class TestTheProfileFollowsTheSavedPrinter:
         profile = slicing.profile_from_settings({"printer_bed_width": 300})
         assert set(profile) == set(slicing.DEFAULT_PROFILE)
 
-    @pytest.mark.parametrize("junk", ["not a number", "", None, [], float("nan"), float("inf")])
+    @pytest.mark.parametrize(
+        "junk",
+        ["not a number", "", None, [], True, float("nan"), float("inf"), 0, -5, 1e9],
+    )
     def test_a_corrupted_value_falls_back_rather_than_breaking_the_argv(self, junk):
         # Fail closed at the point of use. Whatever is in settings.json -- hand
         # edited, half written, written by an older build -- the command that
-        # reaches a printer stays a usable one.
+        # reaches a printer stays a usable one. The range is part of that: a
+        # hand-edited 1e9 is finite and positive and still not a bed.
         profile = slicing.profile_from_settings({"printer_bed_width": junk})
         assert profile["bed-shape"] == slicing.DEFAULT_PROFILE["bed-shape"]
+
+    def test_an_out_of_range_nozzle_never_reaches_the_argv(self):
+        # The measured shape of this: 1e-9 is finite and positive, and `_fmt`
+        # renders it as "1e-09" -- scientific notation on a slicer's command
+        # line, from a file the save path never approved.
+        profile = slicing.profile_from_settings({"printer_nozzle_diameter": 1e-9})
+        assert profile["nozzle-diameter"] == slicing.DEFAULT_PROFILE["nozzle-diameter"]
+        assert "e-" not in profile["nozzle-diameter"]
+
+    def test_a_cold_nozzle_is_not_a_temperature(self):
+        # Zero is a real answer for a bed -- there are printers without a heated
+        # one -- and nothing at all for a nozzle: it cannot extrude, and the
+        # first layer would come out 5 degrees above nothing.
+        profile = slicing.profile_from_settings({"printer_nozzle_temperature": 0})
+        assert profile["temperature"] == slicing.DEFAULT_PROFILE["temperature"]
+
+    def test_a_bed_at_zero_is_kept_because_that_is_a_real_printer(self):
+        profile = slicing.profile_from_settings({"printer_bed_temperature": 0})
+        assert profile["bed-temperature"] == "0"
+        assert profile["first-layer-bed-temperature"] == "0"
+
+    def test_the_first_layer_stays_inside_the_range_the_value_is_held_to(self):
+        # Adding the bonus unconditionally put the first layer above the ceiling
+        # the same guard calls unusable -- the rule contradicting itself one
+        # line after enforcing it.
+        ceiling = slicing.PRINTER_PROFILE_LIMITS["printer_nozzle_temperature"][1]
+        profile = slicing.profile_from_settings({"printer_nozzle_temperature": ceiling})
+        assert float(profile["first-layer-temperature"]) <= ceiling
+
+    def test_the_bonus_matches_what_the_default_profile_actually_does(self):
+        # The constant's reason for existing is that the defaults already run the
+        # first layer hotter. Pinned rather than described, so changing one and
+        # not the other goes red instead of quietly making a comment wrong.
+        default = slicing.DEFAULT_PROFILE
+        gap = float(default["first-layer-temperature"]) - float(default["temperature"])
+        assert gap == slicing.FIRST_LAYER_BONUS_C
 
 
 class TestWhetherItCouldFitAtAll:
@@ -111,6 +151,28 @@ class TestWhetherItCouldFitAtAll:
         assert why
         assert "500" in why
 
+    def test_a_bbox_in_authoring_units_is_not_refused_and_that_is_known(self):
+        """The gap this check cannot see, pinned so it cannot be forgotten.
+
+        ``bbox`` is in the project's authoring units while the exported STL is
+        always millimetres, so a domain authored in metres -- the shipped
+        ``house`` one is -- produces numbers a thousand times too small here.
+        The 12 x 8 x 0.3 in this case is the demo house's real manifest: twelve
+        metres, and this returns "fits".
+
+        It fails **open**, which is why it is recorded rather than guarded: the
+        reader gets the slicer's own message instead of this one. Closing it
+        needs a version-to-domain link the store does not carry.
+        """
+        assert slicing.too_big_for([12.0, 8.0, 0.3], self.default()) == ""
+        # The same object in millimetres is refused, which is what shows the
+        # check works and the units are the whole of the gap.
+        assert slicing.too_big_for([12000.0, 8000.0, 300.0], self.default()) != ""
+
+    def test_the_sentence_does_not_read_out_floating_point_noise(self):
+        why = slicing.too_big_for([1100.0000000000002, 600.0, 450.0], self.default())
+        assert "1100 x 600 x 450" in why
+
     def test_a_bbox_that_is_not_three_numbers_is_not_refused(self):
         # An older version row, or one that never recorded a bbox. Refusing on
         # missing information would block prints that are perfectly printable.
@@ -140,6 +202,8 @@ class TestSavingTheProfile:
             {"printer_nozzle_diameter": 50},
             {"printer_filament_diameter": 0.01},
             {"printer_nozzle_temperature": 1000},
+            {"printer_nozzle_temperature": 0},
+            {"printer_nozzle_temperature": 20},
             {"printer_bed_temperature": -5},
             {"printer_bed_width": "wide"},
             {"printer_bed_width": float("nan")},
@@ -161,12 +225,31 @@ class TestSavingTheProfile:
         # The reason these sit beside `printer_address` rather than among the
         # plain fields: `cadless/worker.py` hands its environment to generated
         # code, so anything exported there is readable by it.
+        #
+        # Compared whole rather than by name. Looking only for new keys spelled
+        # "PRINTER" would pass a field wired to CADLESS_BED_WIDTH, and would pass
+        # one that overwrote a variable that already existed.
         import os
 
         before = dict(os.environ)
-        user_settings.save({"printer_bed_width": 300.0, "printer_bed_temperature": 100.0})
-        leaked = [key for key in os.environ if key not in before and "PRINTER" in key.upper()]
-        assert leaked == []
+        user_settings.save(
+            {
+                "printer_bed_width": 300.0,
+                "printer_bed_temperature": 100.0,
+                "printer_nozzle_temperature": 240.0,
+            }
+        )
+        assert dict(os.environ) == before
+
+    def test_a_numeric_string_is_stored_as_a_number(self):
+        # A Python caller can pass "300". Stored as text it goes onto the wire
+        # against a typed field, renders as an empty box, and is used by the
+        # slicer anyway -- the panel saying nothing is set while the printer is
+        # cut for 300 mm.
+        user_settings.save({"printer_bed_width": "300"})
+        stored = user_settings.load()["printer_bed_width"]
+        assert stored == 300.0
+        assert isinstance(stored, float)
 
     def test_the_profile_can_be_cleared(self):
         user_settings.save({"printer_bed_width": 300.0})
@@ -176,3 +259,31 @@ class TestSavingTheProfile:
     def test_the_status_reports_the_profile(self):
         user_settings.save({"printer_bed_width": 300.0})
         assert user_settings.status()["printer_bed_width"] == 300.0
+
+
+class TestKnowingWhatAJobWasSlicedUnder:
+    """The profile stopped being a constant, so "the mesh is unchanged" stopped
+    meaning "this job suits this printer"."""
+
+    def test_the_same_profile_fingerprints_the_same(self):
+        first = slicing.profile_from_settings({"printer_bed_width": 300})
+        second = slicing.profile_from_settings({"printer_bed_width": 300})
+        assert slicing.profile_fingerprint(first) == slicing.profile_fingerprint(second)
+
+    def test_key_order_does_not_change_the_fingerprint(self):
+        # A property of the values, not of dict construction order.
+        forward = {"a": "1", "b": "2"}
+        backward = {"b": "2", "a": "1"}
+        assert slicing.profile_fingerprint(forward) == slicing.profile_fingerprint(backward)
+
+    def test_a_different_bed_fingerprints_differently(self):
+        default = slicing.profile_from_settings({})
+        wider = slicing.profile_from_settings({"printer_bed_width": 300})
+        assert slicing.profile_fingerprint(default) != slicing.profile_fingerprint(wider)
+
+    def test_a_job_with_no_fingerprint_beside_it_reports_none(self, tmp_path):
+        # What an older build left behind. The caller decides what that means;
+        # refusing every one of them would make an upgrade re-slice everything.
+        job = tmp_path / "print.gcode"
+        job.write_text("G28\\n")
+        assert slicing.sliced_under(str(job)) == ""

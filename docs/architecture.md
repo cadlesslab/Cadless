@@ -79,6 +79,23 @@ port, bound to loopback.
    nothing reads it from the environment, so exporting it would hand a device
    address on the operator's network to generated code for nothing in return.
 
+   **What the printer is** — its build volume, nozzle, filament and the two
+   temperatures — is settable on the same terms and saved-only for the same
+   reason. These reach an external process's *command line*: `cadless/slicing.py`
+   turns them into slicer flags. That is why every one is checked twice against a
+   single range table, `slicing.PRINTER_PROFILE_LIMITS` — refused at the input so
+   the reader is told there, and fallen back to the default on the way out so a
+   hand-edited `settings.json` cannot put `1e-09` in an argv. The argv is a list
+   and never a shell string, so the risk being managed is an unusable value
+   rather than an injected one. Unset stays unset: an installation that has saved
+   nothing slices exactly as it did before the profile existed.
+
+   A sliced job records which profile it was cut under, and `/gcode` and `/send`
+   refuse one that disagrees with the profile configured now. While the profile
+   was a constant, "the mesh has not changed" implied "this job suits this
+   printer"; once it is the user's, the two questions come apart, and the answer
+   to the second is a print whose moves leave the bed.
+
    Whether sending is on offer at all is `CADLESS_PRINTING`, and it is operator
    configuration rather than a setting: it is in none of the field maps, so the
    request model refuses it like the rest of that tier. It exists because the

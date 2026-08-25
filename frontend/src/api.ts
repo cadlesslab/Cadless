@@ -751,6 +751,14 @@ export const printHeaders = (): Record<string, string> => ({ ...PRINT_HEADERS })
 export const forgetPrinterAddress = () =>
   req<{ ok: boolean }>("/printing/address", { method: "DELETE", headers: PRINT_HEADERS });
 
+/** Forget every saved measurement, returning the profile to its defaults.
+ *
+ * Saving cannot do this: that endpoint only ever sets, so a blank box means
+ * "leave it alone" -- right for a value nobody retyped, and no way back for one
+ * they got wrong. */
+export const forgetPrinterProfile = () =>
+  req<{ ok: boolean }>("/printing/profile", { method: "DELETE", headers: PRINT_HEADERS });
+
 export const sliceVersion = (versionId: number) =>
   req<SliceResult>(`/printing/versions/${versionId}/slice`, {
     method: "POST",

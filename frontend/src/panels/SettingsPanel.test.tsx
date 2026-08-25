@@ -39,6 +39,7 @@ vi.mock("../api", async (orig) => ({
   ...(await orig<typeof import("../api")>()),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
+  forgetPrinterProfile: vi.fn(),
 }));
 
 afterEach(() => vi.clearAllMocks());
@@ -332,6 +333,45 @@ describe("SettingsPanel", () => {
       expect(patch).not.toHaveProperty("printer_bed_width");
       // The good field still goes: one unusable box does not cost the save.
       expect(patch.printer_bed_depth).toBe(250);
+    });
+
+    it("says which boxes did not take, rather than a green save", async () => {
+      // Every box that reaches the drop was typed into by hand -- a seeded value
+      // is always a finite number rendered back as text -- so a silent drop
+      // under "Settings saved" tells somebody their measurement took when it
+      // did not.
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      vi.mocked(api.saveSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      fireEvent.change(await screen.findByLabelText("Bed width (mm)"), {
+        target: { value: "wide" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() =>
+        expect(screen.getByText("Some measurements were not saved")).toBeInTheDocument(),
+      );
+      // The toast body, not the field's own label -- both carry the name, and
+      // only one of them is the thing under test.
+      expect(
+        screen.getByText("Bed width (mm) — each needs a number."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Settings saved")).not.toBeInTheDocument();
+    });
+
+    it("forgets every measurement, which saving cannot do", async () => {
+      // A blank box means "leave it alone", so without this a mistyped bed is
+      // permanent short of editing settings.json by hand.
+      vi.mocked(api.getSettings).mockResolvedValue({ ...STATUS, printer_bed_width: 300 });
+      vi.mocked(api.forgetPrinterProfile).mockResolvedValue({ ok: true });
+      renderWithProviders(<SettingsPanel />);
+      const input = (await screen.findByLabelText("Bed width (mm)")) as HTMLInputElement;
+      expect(input.value).toBe("300");
+
+      fireEvent.click(screen.getByRole("button", { name: "Forget measurements" }));
+
+      await waitFor(() => expect(api.forgetPrinterProfile).toHaveBeenCalled());
+      await waitFor(() => expect(input.value).toBe(""));
     });
 
     it("offers every measurement the slicer is given", async () => {
