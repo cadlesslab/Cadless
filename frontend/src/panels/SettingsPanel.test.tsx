@@ -17,6 +17,15 @@ const STATUS: SettingsStatus = {
   aws_region: "us-east-1",
   aws_region_source: "default",
   printer_address: null,
+  // Nothing saved: the engine keeps its own default for each of these, which is
+  // the state every existing installation is in.
+  printer_bed_width: null,
+  printer_bed_depth: null,
+  printer_max_height: null,
+  printer_nozzle_diameter: null,
+  printer_filament_diameter: null,
+  printer_nozzle_temperature: null,
+  printer_bed_temperature: null,
   secrets: {
     anthropic_api_key: { set: false, source: "unset" },
     openai_api_key: { set: false, source: "unset" },
@@ -250,6 +259,98 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
     expect(vi.mocked(api.saveSettings).mock.calls[0][0]).not.toHaveProperty("rag_top_k");
+  });
+
+  describe("the printer profile", () => {
+    it("shows a saved measurement", async () => {
+      vi.mocked(api.getSettings).mockResolvedValue({ ...STATUS, printer_bed_width: 300 });
+      renderWithProviders(<SettingsPanel />);
+      const input = (await screen.findByLabelText("Bed width (mm)")) as HTMLInputElement;
+      expect(input.value).toBe("300");
+    });
+
+    it("is blank, not the default's value, when nothing is saved", async () => {
+      // The placeholder shows what the engine would use. Filling the box with
+      // it would make "I have not said" indistinguishable from "I chose exactly
+      // the default", and the two behave differently on the next upgrade.
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      const input = (await screen.findByLabelText("Bed width (mm)")) as HTMLInputElement;
+      expect(input.value).toBe("");
+    });
+
+    it("sends a typed measurement as a number", async () => {
+      // A number, not the text that was typed: the endpoint's model is typed,
+      // and "300" would be stored as text for `slicing` to coerce later.
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      vi.mocked(api.saveSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      fireEvent.change(await screen.findByLabelText("Bed width (mm)"), {
+        target: { value: "300" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+      expect(vi.mocked(api.saveSettings).mock.calls[0][0].printer_bed_width).toBe(300);
+    });
+
+    it("leaves the fields it was not given alone", async () => {
+      // Same rule as the address: this endpoint only ever sets, so a blank box
+      // means "keep what is there" rather than "make it zero". Saved alongside
+      // a field that *was* filled in, which is also what shows the seven are
+      // independent of each other rather than sent as a block.
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      vi.mocked(api.saveSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      fireEvent.change(await screen.findByLabelText("Bed depth (mm)"), {
+        target: { value: "250" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+
+      const patch = vi.mocked(api.saveSettings).mock.calls[0][0];
+      expect(patch.printer_bed_depth).toBe(250);
+      expect(patch).not.toHaveProperty("printer_bed_width");
+      expect(patch).not.toHaveProperty("printer_nozzle_diameter");
+    });
+
+    it("does not send something that is not a number", async () => {
+      // The server refuses it either way; sending it would produce a refusal
+      // naming a field, over a box the reader can see is wrong themselves.
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      vi.mocked(api.saveSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      fireEvent.change(await screen.findByLabelText("Bed width (mm)"), {
+        target: { value: "wide" },
+      });
+      fireEvent.change(await screen.findByLabelText("Bed depth (mm)"), {
+        target: { value: "250" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+
+      const patch = vi.mocked(api.saveSettings).mock.calls[0][0];
+      expect(patch).not.toHaveProperty("printer_bed_width");
+      // The good field still goes: one unusable box does not cost the save.
+      expect(patch.printer_bed_depth).toBe(250);
+    });
+
+    it("offers every measurement the slicer is given", async () => {
+      // The set is the contract: a field the panel cannot set is a default
+      // nobody can correct.
+      vi.mocked(api.getSettings).mockResolvedValue(STATUS);
+      renderWithProviders(<SettingsPanel />);
+      for (const label of [
+        "Bed width (mm)",
+        "Bed depth (mm)",
+        "Maximum height (mm)",
+        "Nozzle (mm)",
+        "Filament (mm)",
+        "Nozzle temperature (°C)",
+        "Bed temperature (°C)",
+      ]) {
+        expect(await screen.findByLabelText(label)).toBeInTheDocument();
+      }
+    });
   });
 
   describe("the printer address", () => {

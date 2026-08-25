@@ -590,6 +590,16 @@ export interface SettingsStatus extends TuningKnobs {
    * rather than configuration, so unlike the fields above it has no `_source`:
    * there is only one place it can have come from. */
   printer_address: string | null;
+  /** What the printer is, as against where it is. Null for anything the user
+   * has not said, and the engine keeps its own default for each of those, so a
+   * panel nobody has opened changes nothing about how a model is sliced. */
+  printer_bed_width: number | null;
+  printer_bed_depth: number | null;
+  printer_max_height: number | null;
+  printer_nozzle_diameter: number | null;
+  printer_filament_diameter: number | null;
+  printer_nozzle_temperature: number | null;
+  printer_bed_temperature: number | null;
   secrets: Record<string, SecretStatus>;
 }
 
@@ -613,6 +623,13 @@ export interface SettingsUpdate {
   bedrock_model_slug?: string;
   bedrock_fast_model_slug?: string;
   printer_address?: string;
+  printer_bed_width?: number;
+  printer_bed_depth?: number;
+  printer_max_height?: number;
+  printer_nozzle_diameter?: number;
+  printer_filament_diameter?: number;
+  printer_nozzle_temperature?: number;
+  printer_bed_temperature?: number;
 }
 
 /** What came of taking a received `.cls` into the catalog on this machine. */

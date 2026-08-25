@@ -53,6 +53,45 @@ const TUNING_KNOBS: Knob[] = [
 // The knob table is keyed by name, so reading a value out of the typed status
 // needs one cast. Confined to these two helpers rather than spread through the
 // component, and the names themselves are checked by `TuningKnobs` in api.ts.
+/** The printer's own measurements, in the order somebody would read them off it.
+ *
+ * The build volume first, because it is the one that decides whether a model
+ * can be printed at all -- the rest decides whether it comes out well. Every
+ * field is optional: the engine keeps its own default for anything left blank,
+ * so a panel nobody opens changes nothing about how a model is sliced.
+ */
+type PrinterField = {
+  field:
+    | "printer_bed_width"
+    | "printer_bed_depth"
+    | "printer_max_height"
+    | "printer_nozzle_diameter"
+    | "printer_filament_diameter"
+    | "printer_nozzle_temperature"
+    | "printer_bed_temperature";
+  label: string;
+  placeholder: string;
+};
+
+const PRINTER_FIELDS: PrinterField[] = [
+  { field: "printer_bed_width", label: "Bed width (mm)", placeholder: "210" },
+  { field: "printer_bed_depth", label: "Bed depth (mm)", placeholder: "200" },
+  { field: "printer_max_height", label: "Maximum height (mm)", placeholder: "195" },
+  { field: "printer_nozzle_diameter", label: "Nozzle (mm)", placeholder: "0.4" },
+  { field: "printer_filament_diameter", label: "Filament (mm)", placeholder: "1.75" },
+  { field: "printer_nozzle_temperature", label: "Nozzle temperature (°C)", placeholder: "205" },
+  { field: "printer_bed_temperature", label: "Bed temperature (°C)", placeholder: "60" },
+];
+
+/** A saved number as text for an input, or blank when nothing is saved.
+ *
+ * Blank rather than the default's value, so the placeholder can show what the
+ * engine would use while the field itself stays empty -- which is what makes
+ * "I have not said" distinguishable from "I chose exactly the default".
+ */
+const numberOrBlank = (value: unknown): string =>
+  typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+
 const readKnob = (s: SettingsStatus, field: string) =>
   (s as unknown as Record<string, string | number | boolean>)[field];
 const knobSource = (s: SettingsStatus | null, field: string) =>
@@ -70,6 +109,9 @@ export function SettingsPanel() {
   const [awsAccessKeyId, setAwsAccessKeyId] = useState("");
   const [awsSecretAccessKey, setAwsSecretAccessKey] = useState("");
   const [printerAddress, setPrinterAddress] = useState("");
+  // Held as text, not numbers: an input mid-typing is "3", "30", "30." before
+  // it is 300, and coercing on every keystroke fights the person typing.
+  const [printer, setPrinter] = useState<Record<string, string>>({});
   const [testingPrinter, setTestingPrinter] = useState(false);
   // Edit state for the knob table. Numbers and text are held as strings so a
   // half-typed "0." is not coerced away under the cursor; the patch converts.
@@ -91,6 +133,11 @@ export function SettingsPanel() {
         setCodegenModel(s.codegen_model);
         setAwsRegion(s.aws_region);
         setPrinterAddress(s.printer_address ?? "");
+        setPrinter(
+          Object.fromEntries(
+            PRINTER_FIELDS.map(({ field }) => [field, numberOrBlank(s[field])]),
+          ),
+        );
         setKnobs(
           Object.fromEntries(
             TUNING_KNOBS.map((k) => {
@@ -132,6 +179,16 @@ export function SettingsPanel() {
     // endpoint only ever sets, so an emptied box is not a way to forget an
     // address.
     if (printerAddress.trim()) patch.printer_address = printerAddress.trim();
+    for (const { field } of PRINTER_FIELDS) {
+      const typed = (printer[field] ?? "").trim();
+      if (!typed) continue;
+      const value = Number(typed);
+      // Blank means "leave it as it is", and the engine keeps its default for
+      // anything it is not told. Something that is not a number is left out
+      // rather than sent as NaN: the server refuses it either way, and a
+      // refusal naming a field nobody typed into would be the wrong error.
+      if (Number.isFinite(value)) patch[field] = value;
+    }
 
     // Only knobs the user actually moved. Sending the whole table would flip
     // every untouched knob's provenance from "default" to "saved", which reads
@@ -340,6 +397,30 @@ export function SettingsPanel() {
             address is refused.
           </small>
         </label>
+        {/* Collapsed, like Engine tuning: most people print on whatever the
+            defaults describe, and the panel's common errand is a key or a
+            provider. It is here rather than elsewhere because the bed is what
+            decides whether a model can be printed at all. */}
+        <details className="settings-tuning">
+          <summary>Printer profile</summary>
+          <small className="settings-note">
+            What your printer is, as against where it is. Anything left blank keeps the
+            default, and the build volume is what decides whether a model is refused as
+            too big before slicing even starts.
+          </small>
+          {PRINTER_FIELDS.map(({ field, label, placeholder }) => (
+            <label className="settings-field" key={field}>
+              <span>{label}</span>
+              <TextInput
+                aria-label={label}
+                inputMode="decimal"
+                placeholder={placeholder}
+                value={printer[field] ?? ""}
+                onChange={(e) => setPrinter((p) => ({ ...p, [field]: e.target.value }))}
+              />
+            </label>
+          ))}
+        </details>
         <div className="export-actions">
           <Button
             type="button"

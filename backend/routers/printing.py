@@ -241,9 +241,22 @@ async def slice_version(
     untrusted geometry inside this container, so one at a time.
     """
     mesh = await _mesh_path(store, version_id)
+    saved = user_settings.load()
+
+    # Answered before the slicer runs, because the answer is already known. The
+    # version carries its bounding box, and a model that fits in no orientation
+    # costs a slicer run to be told "All objects are outside of the print
+    # volume" -- which names neither the model's size nor the printer's.
+    version = await store.get_version(version_id)
+    if version is not None:
+        why = slicing.too_big_for(version.bbox, slicing.build_volume(saved))
+        if why:
+            return {"ok": False, "detail": why, "slicer_missing": False, "stats": {}}
+
     out_path = os.path.join(os.path.dirname(mesh), GCODE_NAME)
+    profile = slicing.profile_from_settings(saved)
     async with request.app.state.slice_gate:
-        outcome = await asyncio.to_thread(slicing.slice_mesh, mesh, out_path)
+        outcome = await asyncio.to_thread(slicing.slice_mesh, mesh, out_path, profile=profile)
     return {
         "ok": outcome.ok,
         "detail": outcome.detail,

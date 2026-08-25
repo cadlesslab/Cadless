@@ -27,10 +27,12 @@ weaker boundary than the one generated code runs behind, and it is recorded in
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,6 +66,32 @@ CONFIG_BLOCK = "prusaslicer_config = begin"
 #: final name would be indistinguishable from a finished one.
 PART_SUFFIX = ".part"
 
+#: The build volume assumed when the user has not said what they own, in
+#: millimetres. Named rather than written into the profile string, because the
+#: fit check below and the ``bed-shape`` flag have to be the same numbers -- two
+#: copies would drift, and the one that drifts is the one telling somebody their
+#: model does not fit.
+DEFAULT_BED_WIDTH = 210.0
+DEFAULT_BED_DEPTH = 200.0
+DEFAULT_MAX_HEIGHT = 195.0
+
+#: How much hotter the first layer runs than the rest. The default profile
+#: already does this (205 then 210), and saving a different filament has to move
+#: the first layer with it rather than leaving it on the old constant.
+FIRST_LAYER_BONUS_C = 5.0
+
+
+def _fmt(value: float) -> str:
+    """A number as a flag value: no trailing ``.0`` on a whole one."""
+    whole = int(value)
+    return str(whole) if value == whole else str(value)
+
+
+def _bed_shape(width: float, depth: float) -> str:
+    """The four corners PrusaSlicer wants, anticlockwise from the origin."""
+    return f"0x0,{_fmt(width)}x0,{_fmt(width)}x{_fmt(depth)},0x{_fmt(depth)}"
+
+
 #: The print profile, as explicit flags. These are the values a first print on a
 #: 210 x 200 x 195 mm FDM machine with a 0.4 mm nozzle and 1.75 mm PLA wants;
 #: they are deliberately conservative rather than fast.
@@ -82,9 +110,119 @@ DEFAULT_PROFILE: dict[str, str] = {
     "bottom-solid-layers": "3",
     "skirts": "1",
     "gcode-flavor": "marlin",
-    "bed-shape": "0x0,210x0,210x200,0x200",
-    "max-print-height": "195",
+    "bed-shape": _bed_shape(DEFAULT_BED_WIDTH, DEFAULT_BED_DEPTH),
+    "max-print-height": _fmt(DEFAULT_MAX_HEIGHT),
 }
+
+
+@dataclass(frozen=True)
+class BuildVolume:
+    """What the printer can physically hold, in millimetres."""
+
+    width: float
+    depth: float
+    height: float
+
+
+def _number(
+    saved: Mapping[str, Any] | None, field_name: str, *, allow_zero: bool = False
+) -> float | None:
+    """A saved value as a usable number, or ``None`` when it is not one.
+
+    Fail closed at the point of use rather than trusting what was validated on
+    the way in. ``settings.json`` can be hand-edited, half-written, or left by an
+    older build, and the command that reaches a printer has to stay one the
+    slicer can act on -- a bed of ``nan`` is not a bed.
+
+    ``allow_zero`` because a temperature of zero is a real answer (no heated
+    bed) while a dimension of zero is not.
+    """
+    if not saved:
+        return None
+    raw = saved.get(field_name)
+    # `bool` is an `int`, and `True` would otherwise become a 1 mm nozzle.
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    if value < 0 or (value == 0 and not allow_zero):
+        return None
+    return value
+
+
+def build_volume(saved: Mapping[str, Any] | None = None) -> BuildVolume:
+    """The printer's build volume: what the user saved, or the default."""
+    return BuildVolume(
+        width=_number(saved, "printer_bed_width") or DEFAULT_BED_WIDTH,
+        depth=_number(saved, "printer_bed_depth") or DEFAULT_BED_DEPTH,
+        height=_number(saved, "printer_max_height") or DEFAULT_MAX_HEIGHT,
+    )
+
+
+def profile_from_settings(saved: Mapping[str, Any] | None = None) -> dict[str, str]:
+    """:data:`DEFAULT_PROFILE`, with whatever the user has saved about their printer.
+
+    Every unset value keeps today's default, which is the whole upgrade path: an
+    installation that has never opened Settings goes on producing exactly the
+    G-code it produced before any of this existed.
+    """
+    profile = dict(DEFAULT_PROFILE)
+    volume = build_volume(saved)
+    profile["bed-shape"] = _bed_shape(volume.width, volume.depth)
+    profile["max-print-height"] = _fmt(volume.height)
+
+    nozzle = _number(saved, "printer_nozzle_diameter")
+    if nozzle is not None:
+        profile["nozzle-diameter"] = _fmt(nozzle)
+    filament = _number(saved, "printer_filament_diameter")
+    if filament is not None:
+        profile["filament-diameter"] = _fmt(filament)
+    hot = _number(saved, "printer_nozzle_temperature", allow_zero=True)
+    if hot is not None:
+        profile["temperature"] = _fmt(hot)
+        profile["first-layer-temperature"] = _fmt(hot + FIRST_LAYER_BONUS_C)
+    bed = _number(saved, "printer_bed_temperature", allow_zero=True)
+    if bed is not None:
+        profile["bed-temperature"] = _fmt(bed)
+        profile["first-layer-bed-temperature"] = _fmt(bed)
+    return profile
+
+
+def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
+    """Why this model cannot fit, or ``""`` when it might.
+
+    Answered from the bounding box the version already carries, so the reader
+    hears it immediately instead of waiting for a slicer to run and then being
+    told less. PrusaSlicer's own answer to this is ``All objects are outside of
+    the print volume``, which names neither size.
+
+    **Deliberately conservative.** This exists to say something more useful than
+    the slicer would, so refusing a model that could be printed is the worse
+    error. The footprint is therefore compared in both orientations -- turning a
+    part a quarter turn costs the operator nothing -- and a bounding box that is
+    not three usable numbers is not refused at all.
+    """
+    try:
+        width, depth, height = (float(value) for value in bbox)  # type: ignore[misc]
+    except (TypeError, ValueError):
+        return ""
+    if not all(math.isfinite(value) for value in (width, depth, height)):
+        return ""
+
+    footprint = sorted((width, depth))
+    bed = sorted((volume.width, volume.depth))
+    fits_flat = footprint[0] <= bed[0] and footprint[1] <= bed[1]
+    if fits_flat and height <= volume.height:
+        return ""
+    return (
+        f"This model is {_fmt(width)} x {_fmt(depth)} x {_fmt(height)} mm, and the printer's "
+        f"build volume is {_fmt(volume.width)} x {_fmt(volume.depth)} x {_fmt(volume.height)} mm. "
+        "Ask for a smaller model, or set your printer's real size in Settings."
+    )
 
 
 @dataclass(frozen=True)
@@ -225,6 +363,14 @@ def slice_mesh(
 
     if not os.path.exists(part_path) or os.path.getsize(part_path) == 0:
         _discard(part_path)
+        # It exited zero and wrote nothing, which happens when every object is
+        # outside the print volume -- and it says so on stderr before doing it.
+        # Reading that only on the non-zero branch turned a precise explanation
+        # into "wrote no G-code", which names nothing the reader can act on.
+        said = (done.stderr or done.stdout or "").strip().splitlines()
+        tail = " ".join(line.strip() for line in said[-3:])
+        if tail:
+            return SliceOutcome(False, f"The slicer produced no G-code: {tail}")
         return SliceOutcome(False, "The slicer reported success but wrote no G-code.")
 
     try:
