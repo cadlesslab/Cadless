@@ -14,12 +14,14 @@ import {
   CubeIcon,
   FolderIcon,
   HistoryIcon,
+  ExportIcon,
   ImportIcon,
   InfoIcon,
   SettingsIcon,
   SlidersIcon,
 } from "../components";
 import { CatalogPanel } from "./CatalogPanel";
+import { ExportPanel } from "./ExportPanel";
 import { ImportPanel } from "./ImportPanel";
 import { Inspector } from "./Inspector";
 import { ParametersPanel } from "./ParametersPanel";
@@ -46,6 +48,14 @@ registerPanel("import", {
 });
 registerPanel("view", { label: "View", icon: <CubeIcon />, render: () => <ViewPanel /> });
 registerPanel("details", { label: "Details", icon: <InfoIcon />, render: () => <Inspector /> });
+// Beside Details rather than in it. Somebody who wants a file, a link or a
+// physical object out of this should not have to know that "Details" was where
+// the printing lived.
+registerPanel("export", {
+  label: "Export",
+  icon: <ExportIcon />,
+  render: () => <ExportPanel />,
+});
 registerPanel("parameters", {
   label: "Parameters",
   icon: <SlidersIcon />,
