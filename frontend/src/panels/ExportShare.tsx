@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   artifactUrl,
   type ArtifactKind,
+  fetchFilamentLevel,
+  type FilamentLevel,
   fetchPrintCapability,
   gcodeUrl,
   type PrintCapability,
@@ -17,7 +19,12 @@ import { Button, Modal, Tooltip, useToast } from "../components";
 import { errMessage } from "../errors";
 import { BASE_URL } from "../routing";
 import { availableFormats, downloadFilename, FORMAT_META, shareUrl } from "./exportFormats";
-import { DEFAULT_CLOSING, sliceSummary, USB_TETHER_WARNING } from "./printSummary";
+import {
+  DEFAULT_CLOSING,
+  filamentNote,
+  sliceSummary,
+  USB_TETHER_WARNING,
+} from "./printSummary";
 import {
   handshake,
   isUsbPrintingSupported,
@@ -76,7 +83,16 @@ type Notice = { title: string; body: string } | null;
  * The capability travels with it for the same reason — the dialog must offer
  * what was true when the slice was made, not what a later poll says.
  */
-type Sliced = { versionId: number; result: SliceResult; can: PrintCapability } | null;
+type Sliced = {
+  versionId: number;
+  result: SliceResult;
+  can: PrintCapability;
+  /** What the machine said it had left when this was sliced, or null when it
+   * had nothing to say. Carried with the slice for the same reason the
+   * capability is: the dialog reports what was true when the numbers were made,
+   * not what a later poll says. */
+  level: FilamentLevel | null;
+} | null;
 
 /** A print leaving through this tab's own USB connection.
  *
@@ -150,6 +166,11 @@ export function ExportShare({ version }: { version: Version }) {
   // Where the deployment cannot reach a printer itself, USB is the only offer
   // that actually prints something, so it takes the emphasis the download had.
   const usbIsBest = usbOffered && sliced != null && !sliced.can.can_send;
+  // Computed once: the dialog renders it, and calling it twice to ask whether
+  // there is anything to render would ask the same question twice.
+  const filament = sliced
+    ? filamentNote(sliced.level, sliced.result.stats?.filament_grams)
+    : "";
 
   async function download(kind: ArtifactKind) {
     setBusy(kind);
@@ -187,7 +208,14 @@ export function ExportShare({ version }: { version: Version }) {
         return;
       }
 
-      const result = await sliceVersion(target);
+      // Asked alongside the slice rather than before it. Slicing is the slow
+      // step, so the round trip to the printer costs nothing on the clock — and
+      // a printer that is off, absent or has no cartridge answers `ok: false`
+      // rather than throwing, so it cannot stop a print being offered.
+      const [result, level] = await Promise.all([
+        sliceVersion(target),
+        fetchFilamentLevel().catch(() => null),
+      ]);
       if (result.slicer_missing) {
         setNotice({ title: "No slicer yet", body: result.detail });
         return;
@@ -196,7 +224,7 @@ export function ExportShare({ version }: { version: Version }) {
         toast.error("Couldn't prepare this model", result.detail);
         return;
       }
-      setSliced({ versionId: target, result, can: capability });
+      setSliced({ versionId: target, result, can: capability, level });
     } catch (err) {
       toast.error("Couldn't prepare this model", errMessage(err));
     } finally {
@@ -372,6 +400,9 @@ export function ExportShare({ version }: { version: Version }) {
           sliced ? (
             <>
               {sliceSummary(sliced.result.stats, closingFor(sliced.can))}
+              {/* What the machine has left, next to what this will take. The
+                  pair is the whole question somebody is answering here. */}
+              {filament && <span className="print-filament"> {filament}</span>}
               {/* Stated here rather than after the click, because keeping a tab
                   open for the length of a print is the cost being weighed
                   against the walk to the printer — and only the USB option

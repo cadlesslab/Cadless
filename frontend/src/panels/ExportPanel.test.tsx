@@ -35,6 +35,8 @@ const STATUS = {
   printer_max_height: null,
   printer_nozzle_diameter: null,
   printer_filament_diameter: null,
+  printer_filament_density: null,
+  printer_cartridge_grams: null,
   printer_nozzle_temperature: null,
   printer_bed_temperature: null,
   secrets: {},

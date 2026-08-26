@@ -321,6 +321,79 @@ class TestSlicing:
         assert Path(seen["out"]).name == printing_routes.GCODE_NAME
 
 
+class TestWhatTheMachineHasLeft:
+    """One extra fact on the way into a confirmation dialog.
+
+    Everything here is about it never becoming more than that: a printer that is
+    off, absent or empty answers, and the print is still offered.
+    """
+
+    def test_no_address_is_an_answer_rather_than_an_error(self, client):
+        body = client.get("/printing/filament").json()
+        assert body["ok"] is False
+        assert body["percent"] is None
+
+    def test_a_printer_that_will_not_answer_is_reported_not_raised(self, client, monkeypatch):
+        _configure()
+        monkeypatch.setattr(
+            printing,
+            "fetch_status",
+            lambda *a, **k: printing.StatusOutcome(False, "timeout: no answer"),
+        )
+        answer = client.get("/printing/filament")
+        assert answer.status_code == 200
+        assert answer.json()["ok"] is False
+
+    def test_the_figure_comes_back_when_the_printer_gives_one(self, client, monkeypatch):
+        _configure()
+        monkeypatch.setattr(
+            printing,
+            "fetch_status",
+            lambda *a, **k: printing.StatusOutcome(
+                True,
+                "",
+                {"filament_percent": 98, "filament_loaded": True, "filament_colour": "#000000"},
+            ),
+        )
+        body = client.get("/printing/filament").json()
+        assert body["ok"] is True
+        assert body["percent"] == 98
+        assert body["colour"] == "#000000"
+        # No capacity saved, so there is no honest way to say it in grams.
+        assert body["grams_left"] is None
+
+    def test_a_saved_capacity_turns_the_proportion_into_grams(self, client, monkeypatch):
+        _configure()
+        user_settings.save({"printer_cartridge_grams": 700.0})
+        monkeypatch.setattr(
+            printing,
+            "fetch_status",
+            lambda *a, **k: printing.StatusOutcome(
+                True, "", {"filament_percent": 50, "filament_loaded": True}
+            ),
+        )
+        body = client.get("/printing/filament").json()
+        assert body["grams_left"] == 350.0
+        assert body["cartridge_grams"] == 700.0
+
+    def test_an_empty_machine_reports_no_figure(self, client, monkeypatch):
+        # The printer keeps showing the last cartridge's number here, and it is
+        # `parse_status` that refuses it -- this asserts the route carries the
+        # refusal through rather than filling it back in.
+        _configure()
+        monkeypatch.setattr(
+            printing,
+            "fetch_status",
+            lambda *a, **k: printing.StatusOutcome(
+                True, "", {"filament_percent": None, "filament_loaded": False}
+            ),
+        )
+        body = client.get("/printing/filament").json()
+        assert body["percent"] is None
+        assert body["loaded"] is False
+        assert body["grams_left"] is None
+
+
 class TestAJobIsForThePrinterItWasCutFor:
     """A job sliced under one profile must not be handed out under another.
 
