@@ -172,11 +172,6 @@ export function SettingsPanel() {
     return s?.set ? `Key set (${s.source}) — leave blank to keep` : undefined;
   };
 
-  /** Check the address in the box, saved or not.
-   *
-   * Testing what has been typed rather than what has been stored is the point:
-   * finding out an address is wrong should not require saving it first.
-   */
   function onProviderChange(next: string) {
     setProvider(next);
     const d = MODEL_DEFAULTS[next] ?? MODEL_DEFAULTS.anthropic;

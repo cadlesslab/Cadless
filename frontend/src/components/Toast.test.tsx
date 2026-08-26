@@ -142,7 +142,12 @@ describe("where a toast appears", () => {
     } as DOMRect);
   }
 
-  const viewport = () => document.querySelector(".toast-viewport") as HTMLElement;
+  /** The card carrying this message. Placement lives on the message now, not on
+   * the viewport they share — which is the whole of what this block is about. */
+  const card = (text: string) =>
+    [...document.querySelectorAll(".toast")].find((el) =>
+      el.textContent?.includes(text),
+    ) as HTMLElement;
 
   function mount() {
     render(
@@ -161,12 +166,32 @@ describe("where a toast appears", () => {
     sized(button, {});
     fireEvent.click(button);
 
-    const style = viewport().style;
-    expect(style.top).toBe("100px");
+    const saved = card("Saved");
+    expect(saved.className).toContain("toast-anchored");
+    expect(saved.style.top).toBe("100px");
     // To the right of the control, with room to breathe.
-    expect(style.left).toBe("148px");
-    // The stylesheet pins it to the right edge; both set would fight.
-    expect(style.right).toBe("auto");
+    expect(saved.style.left).toBe("148px");
+  });
+
+  it("does not move a message that is already up when the next one arrives", () => {
+    // The failure this shape exists to prevent. Errors never time out, so two
+    // cards from two controls is the ordinary state — and a place shared
+    // between them meant the second dragged the first to a control it had
+    // nothing to do with, which is the inverse of what anchoring is for.
+    mount();
+    const failing = screen.getByText("fail");
+    sized(failing, { top: 100, left: 40, right: 140 });
+    fireEvent.click(failing);
+    const first = card("Action failed");
+    expect(first.style.top).toBe("100px");
+
+    const saving = screen.getByText("ok");
+    sized(saving, { top: 400, left: 40, right: 140 });
+    fireEvent.click(saving);
+
+    // Each stays with the control that caused it.
+    expect(card("Action failed").style.top).toBe("100px");
+    expect(card("Saved").style.top).toBe("400px");
   });
 
   it("keeps the corner for a message with nothing to point at", () => {
@@ -182,8 +207,10 @@ describe("where a toast appears", () => {
         <Spontaneous />
       </ToastProvider>,
     );
-    expect(viewport().style.top).toBe("");
-    expect(screen.getByText("Generation finished")).toBeInTheDocument();
+    const spontaneous = card("Generation finished");
+    expect(spontaneous).toBeInTheDocument();
+    expect(spontaneous.className).not.toContain("toast-anchored");
+    expect(spontaneous.style.top).toBe("");
   });
 
   it("keeps the corner once the moment has passed", () => {
@@ -194,20 +221,24 @@ describe("where a toast appears", () => {
     const button = screen.getByText("ok");
     sized(button, {});
     fireEvent.click(button);
-    expect(viewport().style.top).toBe("100px");
+    expect(card("Saved").style.top).toBe("100px");
 
     const later = Date.now() + 10_000;
-    vi.spyOn(Date, "now").mockReturnValue(later);
-    fireEvent.click(screen.getByText("fail"));
-    expect(viewport().style.top).toBe("");
-    vi.mocked(Date.now).mockRestore();
+    try {
+      vi.spyOn(Date, "now").mockReturnValue(later);
+      fireEvent.click(screen.getByText("fail"));
+      expect(card("Action failed").className).not.toContain("toast-anchored");
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+    // ...and the one that was already placed did not move to join it.
+    expect(card("Saved").style.top).toBe("100px");
   });
 
   it("keeps the corner when the control has gone", async () => {
     // The shape of a real one: a dialog closes on the click, and the toast
     // arrives when the request it started comes back — by which time the button
-    // is not there to point at. Pointing at where it used to be would be
-    // pointing at nothing.
+    // is not there to point at.
     function Vanishing() {
       const toast = useToast();
       const [gone, setGone] = useState(false);
@@ -216,7 +247,6 @@ describe("where a toast appears", () => {
         <button
           onClick={() => {
             setGone(true);
-            // A microtask later, after React has taken the button away.
             void Promise.resolve().then(() => toast.success("Saved"));
           }}
         >
@@ -235,7 +265,7 @@ describe("where a toast appears", () => {
 
     await screen.findByText("Saved");
     expect(screen.queryByText("go")).toBeNull();
-    expect(viewport().style.top).toBe("");
+    expect(card("Saved").className).not.toContain("toast-anchored");
   });
 
   it("stays inside the window when there is no room beside the control", () => {
@@ -246,8 +276,23 @@ describe("where a toast appears", () => {
     sized(button, { left: 900, right: 1000, top: 50 });
     fireEvent.click(button);
 
-    const left = Number.parseInt(viewport().style.left, 10);
+    const left = Number.parseInt(card("Saved").style.left, 10);
     expect(left).toBeGreaterThanOrEqual(0);
     expect(left + 360).toBeLessThanOrEqual(window.innerWidth);
+  });
+
+  it("sends everything back to the corner when the window is resized", () => {
+    // A placement is a set of window coordinates, and an error does not time
+    // out — so a card placed against the old width would sit off the edge for
+    // as long as it stayed open. The corner is the answer that is never wrong.
+    mount();
+    const button = screen.getByText("fail");
+    sized(button, {});
+    fireEvent.click(button);
+    expect(card("Action failed").className).toContain("toast-anchored");
+
+    fireEvent(window, new Event("resize"));
+
+    expect(card("Action failed").className).not.toContain("toast-anchored");
   });
 });

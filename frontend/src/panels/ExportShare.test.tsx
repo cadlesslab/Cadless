@@ -306,7 +306,9 @@ describe("ExportShare printing", () => {
       vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
       renderShare(version(["stl"]));
       print();
-      await waitFor(() => expect(screen.getByText(/address in Settings/)).toBeInTheDocument());
+      // The address is in this panel now, so the instruction has to point at it
+      // rather than at Settings, where it no longer is.
+      await waitFor(() => expect(screen.getByText(/address below/)).toBeInTheDocument());
       expect(screen.queryByText(/cannot reach a printer/)).not.toBeInTheDocument();
     });
 
