@@ -451,6 +451,51 @@ class TestStatusParsing:
         assert fields["nozzle_temp"] == 205
         assert fields["filename"] == "part.gcode"
 
+    def test_the_filament_fields_are_read_too(self):
+        """Six positions that used to be dropped on the floor.
+
+        The printer's own page names them —
+        ``set_status(Estimatetime, PrintJobStatus, PrintJobprocessing,
+        filamentRemain, filamentSub, R, G, B, Material, bedTemp, NozzleTemp,
+        FileName)`` — and this fixture carries 80% of a red cartridge.
+        """
+        fields = printing.parse_status(self.REPLY)
+        assert fields["filament_percent"] == 80
+        assert fields["filament_loaded"] is True
+        assert fields["filament_colour"] == "#ff0000"
+
+    def test_nothing_loaded_means_no_figure_rather_than_a_stale_one(self):
+        """``Material == 255`` is the printer's "no cartridge" flag.
+
+        Its own page notes beside the check that the remaining value is then
+        whatever the last cartridge left in shared memory. A number that was true
+        an hour ago is worse than none, because nothing about it says so.
+        """
+        empty = self.REPLY.replace(", 1, 60, 205,", ", 255, 60, 205,")
+        fields = printing.parse_status(empty)
+        assert fields["filament_loaded"] is False
+        assert fields["filament_percent"] is None
+        assert fields["filament_colour"] is None
+
+    def test_a_machine_still_coming_up_reports_no_filament(self):
+        # Their page tests the whole row against 9999 before believing any of it.
+        booting = self.REPLY.replace(", 1, 60, 205,", ", 9999, 60, 205,")
+        fields = printing.parse_status(booting)
+        assert fields["filament_loaded"] is False
+        assert fields["filament_percent"] is None
+
+    @pytest.mark.parametrize("value", ["-5", "101", "9999", "notanumber"])
+    def test_a_figure_that_is_not_a_percentage_is_refused(self, value):
+        # Refused rather than clamped: outside 0..100 it is not a proportion of
+        # anything, and guessing which end it meant would be inventing a number.
+        odd = self.REPLY.replace("42, 80, 0,", f"42, {value}, 0,")
+        assert printing.parse_status(odd)["filament_percent"] is None
+
+    def test_a_colour_that_is_not_three_bytes_is_not_offered(self):
+        for broken in ("ff, 00, zz", "ff, 00", "fff, 00, 00"):
+            reply = self.REPLY.replace("ff, 00, 00", broken)
+            assert printing.parse_status(reply).get("filament_colour") is None
+
     def test_a_printing_state_is_recognised(self):
         assert printing.parse_status(self.REPLY)["printing"] is True
         assert printing.parse_status(self.REPLY)["idle"] is False

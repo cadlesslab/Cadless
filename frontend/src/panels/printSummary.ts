@@ -15,6 +15,42 @@ export interface SliceStats {
   filament_mm?: string;
 }
 
+/** What the printer says it has left, as a sentence for the confirmation.
+ *
+ * Three shapes, because three different things are known. With a capacity saved
+ * both figures are grams and they can be compared, which is the only version
+ * that answers "will this finish". Without one, the printer reports a proportion
+ * and never says of what, so a proportion is all that can honestly be said. And
+ * with no cartridge in the machine there is nothing to report at all — the
+ * figure the printer keeps showing there is the last one, and stale.
+ *
+ * Returns `""` for everything that is not worth a line: no printer, one that is
+ * off, one that will not say. This is one extra fact on the way into a dialog
+ * and must never be able to stop a print being offered.
+ */
+export function filamentNote(
+  level: { ok: boolean; percent: number | null; loaded?: boolean; grams_left?: number | null } | null,
+  neededGrams?: string,
+): string {
+  if (!level?.ok) return "";
+  if (level.loaded === false) return "There is no cartridge in the printer.";
+  if (level.percent === null || level.percent === undefined) return "";
+
+  const left = level.grams_left;
+  if (left === null || left === undefined) {
+    return `The cartridge is ${Math.round(level.percent)}% full.`;
+  }
+
+  const needed = Number(neededGrams);
+  const rounded = Math.round(left);
+  if (Number.isFinite(needed) && needed > left) {
+    // A warning rather than a refusal: somebody may be about to change the
+    // cartridge, and the tool does not get to decide that for them.
+    return `About ${rounded} g left — less than this print needs.`;
+  }
+  return `About ${rounded} g left in the cartridge.`;
+}
+
 /** What happens next, when nothing more specific is known. */
 export const DEFAULT_CLOSING = "The printer will start as soon as it arrives.";
 

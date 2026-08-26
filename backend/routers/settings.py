@@ -60,6 +60,8 @@ class SettingsUpdate(BaseModel):
     printer_max_height: float | None = None
     printer_nozzle_diameter: float | None = None
     printer_filament_diameter: float | None = None
+    printer_filament_density: float | None = None
+    printer_cartridge_grams: float | None = None
     printer_nozzle_temperature: float | None = None
     printer_bed_temperature: float | None = None
     # Engine tuning knobs, typed rather than str so a JSON number arrives as a

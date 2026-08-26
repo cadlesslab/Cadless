@@ -41,6 +41,31 @@ class TestTheProfileFollowsTheSavedPrinter:
         assert profile["nozzle-diameter"] == "0.6"
         assert profile["filament-diameter"] == "2.85"
 
+    def test_a_density_reaches_the_argv_so_grams_are_not_zero(self):
+        """The reason the confirmation has always read 0.00 g.
+
+        Measured against the real binary: with no density PrusaSlicer reports
+        `filament used [g] = 0.00`; with `--filament-density 1.24` the same
+        washer is 2.07 g. It cannot convert a length into a weight without one.
+        """
+        assert slicing.DEFAULT_PROFILE["filament-density"] == "1.24"
+        profile = slicing.profile_from_settings({"printer_filament_density": 1.27})
+        assert profile["filament-density"] == "1.27"
+
+    def test_the_cartridge_capacity_is_saved_but_never_reaches_the_slicer(self):
+        # It exists so "needs 12 g" and "98% left" can be said in one unit. The
+        # slicer has no use for it, and an unknown flag is a command that fails.
+        profile = slicing.profile_from_settings({"printer_cartridge_grams": 700})
+        assert profile == slicing.DEFAULT_PROFILE
+        assert slicing.cartridge_grams({"printer_cartridge_grams": 700}) == 700.0
+
+    def test_no_capacity_is_the_ordinary_answer(self):
+        # And the honest one: guessing turns a helpful number into a confident
+        # claim about whether a ten-hour print survives.
+        assert slicing.cartridge_grams({}) is None
+        assert slicing.cartridge_grams(None) is None
+        assert slicing.cartridge_grams({"printer_cartridge_grams": "heavy"}) is None
+
     def test_the_first_layer_moves_with_the_temperature_it_follows(self):
         # The default profile runs the first layer hotter than the rest; saving
         # a hotter filament must keep that relationship rather than leaving the

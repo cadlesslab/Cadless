@@ -163,6 +163,49 @@ def _gcode_for(mesh_path: str, saved: dict | None = None) -> str:
     return path
 
 
+@router.get("/filament", dependencies=[Depends(require_mode(printing.MODE_AUTO))])
+async def filament() -> dict:
+    """How much filament the machine says it has left.
+
+    Its own figure rather than a count kept here. A tally of what this tool has
+    printed would drift the moment somebody printed from the panel or changed the
+    cartridge, and the printer already knows.
+
+    **Never an error.** This is one extra fact on the way into a confirmation
+    dialog, and a printer that is off, unreachable or has no cartridge must not
+    be able to stop a print being offered — every one of those answers `ok:
+    false` with a reason and nothing else changes.
+
+    Gated on `auto` because it dials the printer: a download-only deployment has
+    no address to ask and nothing to ask it about.
+    """
+    address = await asyncio.to_thread(_saved_address)
+    if not address:
+        return {"ok": False, "detail": "No printer address is configured.", "percent": None}
+
+    outcome = await asyncio.to_thread(printing.fetch_status, address)
+    if not outcome.ok:
+        return {"ok": False, "detail": outcome.detail, "percent": None}
+
+    fields = outcome.fields
+    saved = await asyncio.to_thread(user_settings.load)
+    capacity = slicing.cartridge_grams(saved)
+    percent = fields.get("filament_percent")
+    return {
+        "ok": True,
+        "detail": "",
+        # None when the machine reports no cartridge: the figure it keeps
+        # showing there is the last one, and stale.
+        "percent": percent,
+        "loaded": fields.get("filament_loaded", False),
+        "colour": fields.get("filament_colour"),
+        # Only when somebody has said how much a full one holds. Without that,
+        # a percentage is all there honestly is.
+        "grams_left": None if percent is None or capacity is None else capacity * percent / 100,
+        "cartridge_grams": capacity,
+    }
+
+
 @router.get("/capability")
 async def capability() -> dict:
     """What this installation can currently do, so the UI can say so up front.

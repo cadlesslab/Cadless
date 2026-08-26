@@ -83,6 +83,15 @@ DEFAULT_BED_WIDTH = 210.0
 DEFAULT_BED_DEPTH = 200.0
 DEFAULT_MAX_HEIGHT = 195.0
 
+#: Grams per cubic centimetre of filament. PLA's figure, because that is what
+#: the rest of this profile is written for.
+#:
+#: Without it PrusaSlicer cannot turn the length it extrudes into a weight, and
+#: reports ``filament used [g] = 0.00`` — which is the number the confirmation
+#: dialog has been showing since printing shipped. Measured on a washer: no
+#: density gives 0.00 g, `--filament-density 1.24` gives 2.07 g.
+DEFAULT_FILAMENT_DENSITY = 1.24
+
 #: What each saved measurement has to be to be *usable*, in millimetres and
 #: degrees Celsius. Not what is sensible -- what the slicer can act on.
 #:
@@ -97,6 +106,14 @@ PRINTER_PROFILE_LIMITS: dict[str, tuple[float, float]] = {
     "printer_max_height": (1.0, 2000.0),
     "printer_nozzle_diameter": (0.1, 2.0),
     "printer_filament_diameter": (0.5, 5.0),
+    # Roughly PLA at the bottom of the range and a filled filament at the top;
+    # anything outside is not a thermoplastic.
+    "printer_filament_density": (0.5, 3.0),
+    # What a full cartridge holds. Read by nothing that reaches the slicer -- it
+    # is here so "needs 12 g" and "98% left" can be said in one unit, and there
+    # is deliberately no default, because a guessed capacity turns a helpful
+    # number into a confident claim about whether a ten-hour print will survive.
+    "printer_cartridge_grams": (1.0, 10000.0),
     # The floor is the physical one: an extruder refuses to move cold, and
     # nothing extrudes near room temperature. Zero is a real answer for a bed
     # (there are printers without a heated one) and not for a nozzle.
@@ -140,6 +157,7 @@ DEFAULT_PROFILE: dict[str, str] = {
     "first-layer-height": "0.3",
     "nozzle-diameter": "0.4",
     "filament-diameter": "1.75",
+    "filament-density": _fmt(DEFAULT_FILAMENT_DENSITY),
     "temperature": "205",
     "first-layer-temperature": "210",
     "bed-temperature": "60",
@@ -234,6 +252,9 @@ def profile_from_settings(saved: Mapping[str, Any] | None = None) -> dict[str, s
     filament = _number(saved, "printer_filament_diameter")
     if filament is not None:
         profile["filament-diameter"] = _fmt(filament)
+    density = _number(saved, "printer_filament_density")
+    if density is not None:
+        profile["filament-density"] = _fmt(density)
     hot = _number(saved, "printer_nozzle_temperature")
     if hot is not None:
         profile["temperature"] = _fmt(hot)
@@ -247,6 +268,17 @@ def profile_from_settings(saved: Mapping[str, Any] | None = None) -> dict[str, s
         profile["bed-temperature"] = _fmt(bed)
         profile["first-layer-bed-temperature"] = _fmt(bed)
     return profile
+
+
+def cartridge_grams(saved: Mapping[str, Any] | None = None) -> float | None:
+    """What a full cartridge holds, or ``None`` when nobody has said.
+
+    ``None`` is the ordinary answer and the honest one. The printer reports how
+    much is left as a *percentage* and never says of what, so without this the
+    only true sentence pairs a weight with a proportion; with it both become
+    grams and "this print needs more than is left" becomes sayable.
+    """
+    return _number(saved, "printer_cartridge_grams")
 
 
 def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
