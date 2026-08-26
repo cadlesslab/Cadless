@@ -598,6 +598,8 @@ export interface SettingsStatus extends TuningKnobs {
   printer_max_height: number | null;
   printer_nozzle_diameter: number | null;
   printer_filament_diameter: number | null;
+  printer_filament_density: number | null;
+  printer_cartridge_grams: number | null;
   printer_nozzle_temperature: number | null;
   printer_bed_temperature: number | null;
   secrets: Record<string, SecretStatus>;
@@ -628,6 +630,8 @@ export interface SettingsUpdate {
   printer_max_height?: number;
   printer_nozzle_diameter?: number;
   printer_filament_diameter?: number;
+  printer_filament_density?: number;
+  printer_cartridge_grams?: number;
   printer_nozzle_temperature?: number;
   printer_bed_temperature?: number;
 }
@@ -739,6 +743,31 @@ export const testPrinter = (address?: string) =>
  * this group, and an `<a href>` cannot attach one. `ExportShare` fetches it and
  * saves the blob, the way it already does for the export formats.
  */
+/** What the machine says it has left.
+ *
+ * Its own figure rather than a tally kept here: a count of what this tool has
+ * printed would drift the moment somebody printed from the panel or changed the
+ * cartridge.
+ *
+ * `ok: false` is an ordinary answer — no address, printer off, no cartridge —
+ * and never a reason not to offer the print.
+ */
+export interface FilamentLevel {
+  ok: boolean;
+  detail: string;
+  /** How full the cartridge is, or null when the machine will not say. */
+  percent: number | null;
+  loaded?: boolean;
+  colour?: string | null;
+  /** The same figure in grams, and only when somebody has said how much a full
+   * cartridge holds. The printer reports a proportion and never says of what. */
+  grams_left?: number | null;
+  cartridge_grams?: number | null;
+}
+
+export const fetchFilamentLevel = () =>
+  req<FilamentLevel>("/printing/filament", { headers: PRINT_HEADERS });
+
 export const gcodeUrl = (versionId: number) =>
   `${BASE}/printing/versions/${versionId}/gcode`;
 

@@ -37,6 +37,8 @@ type PrinterField = {
     | "printer_max_height"
     | "printer_nozzle_diameter"
     | "printer_filament_diameter"
+    | "printer_filament_density"
+    | "printer_cartridge_grams"
     | "printer_nozzle_temperature"
     | "printer_bed_temperature";
   label: string;
@@ -49,6 +51,11 @@ export const PRINTER_FIELDS: PrinterField[] = [
   { field: "printer_max_height", label: "Maximum height (mm)", placeholder: "195" },
   { field: "printer_nozzle_diameter", label: "Nozzle (mm)", placeholder: "0.4" },
   { field: "printer_filament_diameter", label: "Filament (mm)", placeholder: "1.75" },
+  { field: "printer_filament_density", label: "Filament density (g/cm³)", placeholder: "1.24" },
+  // No placeholder standing in for a default, because there is no default: a
+  // guessed capacity would turn "12 g of 690 g left" into a confident claim
+  // about whether a ten-hour print survives, made up out of nothing.
+  { field: "printer_cartridge_grams", label: "Full cartridge (g)", placeholder: "" },
   { field: "printer_nozzle_temperature", label: "Nozzle temperature (°C)", placeholder: "205" },
   { field: "printer_bed_temperature", label: "Bed temperature (°C)", placeholder: "60" },
 ];

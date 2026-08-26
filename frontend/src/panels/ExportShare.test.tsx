@@ -12,6 +12,14 @@ vi.mock("../api", async (orig) => ({
   fetchPrintCapability: vi.fn(),
   sliceVersion: vi.fn(),
   sendVersionToPrinter: vi.fn(),
+  // Mocked at the api layer like its neighbours, so it does not land in the
+  // `fetch` stub the download tests count calls on. The default is the ordinary
+  // answer for a deployment with no printer to ask.
+  fetchFilamentLevel: vi.fn(async () => ({
+    ok: false,
+    detail: "No printer address is configured.",
+    percent: null,
+  })),
 }));
 
 /** The USB half is stubbed at the module boundary rather than below it.
@@ -339,6 +347,50 @@ describe("ExportShare printing", () => {
       // A plain <a href> cannot carry this, which is why the file is fetched.
       expect(init.headers).toMatchObject({ "X-Cadless-Action": "1" });
       await waitFor(() => expect(screen.getByText("G-code downloaded")).toBeInTheDocument());
+    });
+  });
+
+  describe("what the machine has left", () => {
+    it("shows it beside what the print will take", async () => {
+      // The pair is the whole question somebody is answering at this dialog.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced({ estimated_time: "1h", filament_grams: "12.3" }));
+      vi.mocked(api.fetchFilamentLevel).mockResolvedValue({
+        ok: true, detail: "", percent: 98, loaded: true, grams_left: 689.6,
+      });
+      renderShare(version(["stl"]));
+      print();
+
+      await waitFor(() => expect(screen.getByText(/12\.3 g/)).toBeInTheDocument());
+      expect(screen.getByText(/About 690 g left/)).toBeInTheDocument();
+    });
+
+    it("asks the printer while the slicer is running, not before it", async () => {
+      // Slicing is the slow step, so the round trip costs nothing on the clock.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced());
+      vi.mocked(api.fetchFilamentLevel).mockResolvedValue({
+        ok: true, detail: "", percent: 50, loaded: true,
+      });
+      renderShare(version(["stl"]));
+      print();
+
+      await waitFor(() => expect(api.fetchFilamentLevel).toHaveBeenCalled());
+      expect(api.sliceVersion).toHaveBeenCalled();
+    });
+
+    it("offers the print anyway when the printer will not answer", async () => {
+      // A printer that is off must not be able to stop a job being offered.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue(sliced({ estimated_time: "1h" }));
+      vi.mocked(api.fetchFilamentLevel).mockRejectedValue(new Error("unreachable"));
+      renderShare(version(["stl"]));
+      print();
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Send to printer" })).toBeInTheDocument(),
+      );
+      expect(screen.queryByText(/cartridge/i)).not.toBeInTheDocument();
     });
   });
 

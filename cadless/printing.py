@@ -71,6 +71,19 @@ NAME_MAX = 64
 _IDLE_STATE = 10001
 _PRINTING_STATES = range(10002, 10024)
 
+#: What ``Material`` reads when there is no cartridge in the machine.
+#:
+#: The printer's own page treats it as the "nothing loaded" flag and notes,
+#: beside the check, that the remaining figure is then whatever was in shared
+#: memory before it was taken out. Stale, so it is refused rather than shown --
+#: a number that was true an hour ago is worse than no number, because nothing
+#: about it says so.
+_NO_FILAMENT = 255
+
+#: What every field reads while the machine is still coming up. Their page tests
+#: the whole row against it before believing any of it, and so does this.
+_NOT_READY = 9999
+
 
 #: Where a printer can be. An allow-list rather than a list of the ways out,
 #: because the ways out cannot be enumerated: ``is_private`` answers IANA's
@@ -434,6 +447,20 @@ def send_gcode(
     return PrintOutcome(True, f"sent {sent} bytes to {target}", bytes_sent=sent)
 
 
+def _colour(parts: list[str]) -> str | None:
+    """The cartridge's colour as ``#rrggbb``, or ``None`` when it is not one.
+
+    Sent as three separate two-digit hex strings rather than as numbers, which
+    is why they are re-joined here instead of being read with :func:`int`.
+    """
+    if len(parts) < 8:
+        return None
+    channels = parts[5:8]
+    if not all(len(c) == 2 and all(ch in "0123456789abcdefABCDEF" for ch in c) for c in channels):
+        return None
+    return ("#" + "".join(channels)).lower()
+
+
 def parse_status(body: str) -> dict[str, Any]:
     """Pull the fields out of the ``set_status(...)`` reply.
 
@@ -441,6 +468,20 @@ def parse_status(body: str) -> dict[str, Any]:
     positional and unnamed. Anchored on the call's own name: without that, any
     page with a bracket in it parses -- an HTML error page reading "Not Found
     (404)" came back as an estimate of 404 seconds and a healthy printer.
+
+    **The positions are the printer's own.** Its page declares them::
+
+        set_status(Estimatetime, PrintJobStatus, PrintJobprocessing,
+                   filamentRemain, filamentSub, R, G, B,
+                   Material, bedTemp, NozzleTemp, FileName)
+
+    Read off the machine on 2026-08-26, just after a print::
+
+        set_status(0, 10001, 100, 98, 98, '00', '00', '00', 1, 51, 80, '');
+
+    -- 98% of a black cartridge left, and one loaded. Six of those fields used to
+    be dropped, which is why the tool could not say how much filament a print
+    would leave behind.
     """
     start = body.find(STATUS_CALL)
     if start == -1:
@@ -462,10 +503,22 @@ def parse_status(body: str) -> dict[str, Any]:
         # The job state is the one field everything else is read against. A
         # reply that has not got one is not this endpoint's reply.
         return {}
+    material = _int(8)
+    loaded = material is not None and material not in (_NO_FILAMENT, _NOT_READY)
+    remaining = _int(3)
+    # Refused rather than clamped. Outside 0..100 it is not a percentage, and
+    # with nothing loaded it is the last cartridge's figure still sitting in
+    # shared memory -- in both cases the honest answer is that there is none.
+    if not loaded or remaining is None or not 0 <= remaining <= 100:
+        remaining = None
+
     return {
         "estimate_seconds": _int(0),
         "state_code": state,
         "percent": _int(2),
+        "filament_percent": remaining,
+        "filament_loaded": loaded,
+        "filament_colour": _colour(parts) if loaded else None,
         "bed_temp": _int(9),
         "nozzle_temp": _int(10),
         "filename": parts[11] if len(parts) > 11 else None,
