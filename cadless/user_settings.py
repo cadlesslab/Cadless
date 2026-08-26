@@ -28,8 +28,8 @@ from typing import Any
 
 from cadless.config import settings
 from cadless.model_profiles import PROFILES
+from cadless.printer_profile import PRINTER_PROFILE_LIMITS
 from cadless.printing import AddressRefused, refuse_public_literal
-from cadless.slicing import PRINTER_PROFILE_LIMITS
 
 # Non-secret UI field -> environment variable (CADLESS_*) it corresponds to.
 _PLAIN_FIELDS: dict[str, str] = {

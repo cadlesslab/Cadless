@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.routers import printing as printing_routes
-from cadless import printing, slicing, user_settings
+from cadless import print_fit, printer_profile, printing, slicing, user_settings
 from cadless.config import settings
 from cadless.identity import Principal, register_principal_resolver
 from cadless.identity import unregister_principal_resolver as _unregister
@@ -377,8 +377,8 @@ class TestOfferingToScaleItDown:
         assert body["ok"] is True
         assert body["scaled"] is True
         # Inside the bed, with room left for a skirt.
-        volume = slicing.build_volume({})
-        assert seen["fit_to"] == slicing.scaled_target(volume)
+        volume = printer_profile.build_volume({})
+        assert seen["fit_to"] == print_fit.scaled_target(volume)
 
     def test_the_turn_the_offer_assumed_is_the_turn_that_is_taken(
         self, client, turned_version, monkeypatch
@@ -399,8 +399,8 @@ class TestOfferingToScaleItDown:
         client.post(f"/printing/versions/{turned_version}/slice?scale_to_fit=true")
 
         assert offer is not None
-        assert seen["rotate"] == slicing.QUARTER_TURN
-        assert seen["fit_to"] == slicing.scaled_target(slicing.build_volume({}))
+        assert seen["rotate"] == print_fit.QUARTER_TURN
+        assert seen["fit_to"] == print_fit.scaled_target(printer_profile.build_volume({}))
 
     def test_a_model_that_fits_is_never_scaled(self, client, version_with_stl, monkeypatch):
         # Even when the flag is sent: the offer is what makes scaling legitimate,
@@ -522,7 +522,7 @@ class TestAJobIsForThePrinterItWasCutFor:
             # The real `slice_mesh` records this beside the job; the fake has to
             # as well, or this tests the fake rather than the rule.
             Path(out_path + slicing.PROFILE_SUFFIX).write_text(
-                slicing.profile_fingerprint(profile or slicing.DEFAULT_PROFILE)
+                slicing.profile_fingerprint(profile or printer_profile.DEFAULT_PROFILE)
             )
             return slicing.SliceOutcome(True, "", gcode_path=out_path)
 

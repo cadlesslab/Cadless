@@ -14,7 +14,7 @@ import subprocess
 
 import pytest
 
-from cadless import slicing
+from cadless import printer_profile, slicing
 
 
 @pytest.fixture
@@ -74,8 +74,8 @@ class TestFindingTheBinary:
 
 class TestTheCommand:
     def test_every_profile_value_is_passed(self):
-        argv = slicing.build_command("/s", "in.stl", "out.gcode", slicing.DEFAULT_PROFILE)
-        for key, value in slicing.DEFAULT_PROFILE.items():
+        argv = slicing.build_command("/s", "in.stl", "out.gcode", printer_profile.DEFAULT_PROFILE)
+        for key, value in printer_profile.DEFAULT_PROFILE.items():
             assert f"--{key}" in argv
             assert argv[argv.index(f"--{key}") + 1] == value
 
@@ -92,7 +92,7 @@ class TestTheCommand:
         """A missing one of these makes the slicer fall back to its own default,
         which would make output depend on the installed build."""
         for key in ("layer-height", "nozzle-diameter", "filament-diameter", "bed-shape"):
-            assert key in slicing.DEFAULT_PROFILE
+            assert key in printer_profile.DEFAULT_PROFILE
 
 
 class TestSlicing:
@@ -182,7 +182,7 @@ class TestSlicing:
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         monkeypatch.setattr(slicing.subprocess, "run", run)
-        profile = slicing.profile_from_settings({"printer_bed_width": 300})
+        profile = printer_profile.profile_from_settings({"printer_bed_width": 300})
         slicing.slice_mesh(mesh, out, profile=profile)
 
         argv = seen[0]

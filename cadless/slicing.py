@@ -2,7 +2,10 @@
 
 A printer does not read STL. Between the mesh this project exports and the job
 the device runs sits a slicer, and this module is the whole of that step: find
-the binary, run it over a file, and report what came back.
+the binary, run it over a file, and report what came back. What machine it is
+being run for lives in :mod:`cadless.printer_profile`, and whether the model
+fits that machine in :mod:`cadless.print_fit` -- both are answered before
+anything here starts, and neither needs a subprocess.
 
 The slicer is a separate process rather than a library, which is what keeps its
 licence its own. It is expected to be on ``PATH`` -- the API image installs it,
@@ -10,10 +13,6 @@ so the ordinary Docker run needs nothing from the user. A checkout run outside
 that image may not have it, and :attr:`SliceOutcome.missing` is that case
 reported on its own rather than folded into a generic failure, because the
 answer to it is an install rather than a retry.
-
-Every profile value is passed explicitly. Leaning on a slicer's built-in
-defaults would make the output depend on which build is installed, and a print
-that silently changes with a package upgrade is worse than one that fails.
 
 **On the trust boundary.** The mesh handed to the slicer was produced by code
 this project treats as untrusted -- a catalogue item can arrive from elsewhere
@@ -29,15 +28,15 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from cadless.printer_profile import DEFAULT_PROFILE, BuildVolume, fmt
 from cadless.worker import _limit_resources
 
 #: Names the binary goes by. Debian ships ``prusa-slicer``; the upstream builds
@@ -73,368 +72,6 @@ PART_SUFFIX = ".part"
 #: Beside rather than inside: these bytes are streamed to a printer, and the one
 #: thing this file must not do is change what the printer receives.
 PROFILE_SUFFIX = ".profile"
-
-#: The build volume assumed when the user has not said what they own, in
-#: millimetres. Named rather than written into the profile string, because the
-#: fit check below and the ``bed-shape`` flag have to be the same numbers -- two
-#: copies would drift, and the one that drifts is the one telling somebody their
-#: model does not fit.
-DEFAULT_BED_WIDTH = 210.0
-DEFAULT_BED_DEPTH = 200.0
-DEFAULT_MAX_HEIGHT = 195.0
-
-#: Grams per cubic centimetre of filament. PLA's figure, because that is what
-#: the rest of this profile is written for.
-#:
-#: Without it PrusaSlicer cannot turn the length it extrudes into a weight, and
-#: reports ``filament used [g] = 0.00`` — which is the number the confirmation
-#: dialog has been showing since printing shipped. Measured on a washer: no
-#: density gives 0.00 g, `--filament-density 1.24` gives 2.07 g.
-DEFAULT_FILAMENT_DENSITY = 1.24
-
-#: What each saved measurement has to be to be *usable*, in millimetres and
-#: degrees Celsius. Not what is sensible -- what the slicer can act on.
-#:
-#: One table, read at both ends and for different failures. `cadless/user_settings.py`
-#: refuses a value outside it at save time, so the reader is told at the input.
-#: `_number` below falls back to the default for one that got in anyway, so a
-#: hand-edited file cannot put `1e-09` on a command line. Two tables would drift,
-#: and the drift would be invisible until a printer did something odd.
-PRINTER_PROFILE_LIMITS: dict[str, tuple[float, float]] = {
-    "printer_bed_width": (1.0, 2000.0),
-    "printer_bed_depth": (1.0, 2000.0),
-    "printer_max_height": (1.0, 2000.0),
-    "printer_nozzle_diameter": (0.1, 2.0),
-    "printer_filament_diameter": (0.5, 5.0),
-    # Roughly PLA at the bottom of the range and a filled filament at the top;
-    # anything outside is not a thermoplastic.
-    "printer_filament_density": (0.5, 3.0),
-    # What a full cartridge holds. Read by nothing that reaches the slicer -- it
-    # is here so "needs 12 g" and "98% left" can be said in one unit, and there
-    # is deliberately no default, because a guessed capacity turns a helpful
-    # number into a confident claim about whether a ten-hour print will survive.
-    "printer_cartridge_grams": (1.0, 10000.0),
-    # The floor is the physical one: an extruder refuses to move cold, and
-    # nothing extrudes near room temperature. Zero is a real answer for a bed
-    # (there are printers without a heated one) and not for a nozzle.
-    "printer_nozzle_temperature": (150.0, 500.0),
-    "printer_bed_temperature": (0.0, 200.0),
-}
-
-#: How much of the bed to leave free around a scaled object, in millimetres.
-#:
-#: A skirt is drawn beside the part, not on it, so a model scaled to the exact
-#: build volume is a model whose skirt does not fit. Split across both sides.
-SCALE_MARGIN_MM = 10.0
-
-#: How much hotter the first layer runs than the rest. The default profile
-#: already does this (205 then 210), and saving a different filament has to move
-#: the first layer with it rather than leaving it on the old constant.
-FIRST_LAYER_BONUS_C = 5.0
-
-
-def _fmt(value: float) -> str:
-    """A number as a flag value: no trailing ``.0`` on a whole one."""
-    whole = int(value)
-    return str(whole) if value == whole else str(value)
-
-
-def _mm(value: float) -> str:
-    """A measurement for a sentence somebody reads, rather than for a flag.
-
-    Rounded, because a bounding box carries whatever floating-point noise the
-    geometry left in it and "1100.0000000000002 x 600 x 450 mm" reads as a bug in
-    the tool. :func:`_fmt` stays exact: it feeds the slicer, where a rounded
-    nozzle diameter would be a different print.
-    """
-    return _fmt(round(value, 1))
-
-
-def _bed_shape(width: float, depth: float) -> str:
-    """The four corners PrusaSlicer wants, anticlockwise from the origin."""
-    return f"0x0,{_fmt(width)}x0,{_fmt(width)}x{_fmt(depth)},0x{_fmt(depth)}"
-
-
-#: The print profile, as explicit flags. These are the values a first print on a
-#: 210 x 200 x 195 mm FDM machine with a 0.4 mm nozzle and 1.75 mm PLA wants;
-#: they are deliberately conservative rather than fast.
-DEFAULT_PROFILE: dict[str, str] = {
-    "layer-height": "0.2",
-    "first-layer-height": "0.3",
-    "nozzle-diameter": "0.4",
-    "filament-diameter": "1.75",
-    "filament-density": _fmt(DEFAULT_FILAMENT_DENSITY),
-    "temperature": "205",
-    "first-layer-temperature": "210",
-    "bed-temperature": "60",
-    "first-layer-bed-temperature": "60",
-    "fill-density": "20%",
-    "perimeters": "2",
-    "top-solid-layers": "4",
-    "bottom-solid-layers": "3",
-    "skirts": "1",
-    "gcode-flavor": "marlin",
-    "bed-shape": _bed_shape(DEFAULT_BED_WIDTH, DEFAULT_BED_DEPTH),
-    "max-print-height": _fmt(DEFAULT_MAX_HEIGHT),
-}
-
-
-@dataclass(frozen=True)
-class BuildVolume:
-    """What the printer can physically hold, in millimetres."""
-
-    width: float
-    depth: float
-    height: float
-
-
-def _number(saved: Mapping[str, Any] | None, field_name: str) -> float | None:
-    """A saved value as a usable number, or ``None`` when it is not one.
-
-    Fail closed at the point of use rather than trusting what was validated on
-    the way in. ``settings.json`` can be hand-edited, half-written, or left by an
-    older build, and the command that reaches a printer has to stay one the
-    slicer can act on -- a bed of ``nan`` is not a bed, and a nozzle of ``1e-09``
-    is a flag value in scientific notation.
-
-    The range is :data:`PRINTER_PROFILE_LIMITS`, the same one the save path
-    refuses on. Whether zero is allowed is a property of the field rather than of
-    the caller, so it lives in that table too: a bed at 0 degrees is a printer
-    without a heated bed, and a nozzle at 0 is nothing.
-    """
-    if not saved:
-        return None
-    raw = saved.get(field_name)
-    # `bool` is an `int`, and `True` would otherwise become a 1 mm nozzle.
-    if raw is None or isinstance(raw, bool):
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(value):
-        return None
-    low, high = PRINTER_PROFILE_LIMITS[field_name]
-    if not low <= value <= high:
-        return None
-    return value
-
-
-def _or_default(value: float | None, fallback: float) -> float:
-    """``value`` unless it is absent. Written out rather than ``or``.
-
-    ``or`` would also replace a valid zero. No dimension can be zero today --
-    every one has a floor above it in the table -- so this is not a bug being
-    fixed but a trap being removed: the next field to allow zero would otherwise
-    inherit a silent substitution nobody wrote.
-    """
-    return fallback if value is None else value
-
-
-def build_volume(saved: Mapping[str, Any] | None = None) -> BuildVolume:
-    """The printer's build volume: what the user saved, or the default."""
-    return BuildVolume(
-        width=_or_default(_number(saved, "printer_bed_width"), DEFAULT_BED_WIDTH),
-        depth=_or_default(_number(saved, "printer_bed_depth"), DEFAULT_BED_DEPTH),
-        height=_or_default(_number(saved, "printer_max_height"), DEFAULT_MAX_HEIGHT),
-    )
-
-
-def profile_from_settings(saved: Mapping[str, Any] | None = None) -> dict[str, str]:
-    """:data:`DEFAULT_PROFILE`, with whatever the user has saved about their printer.
-
-    Every unset value keeps today's default, which is the whole upgrade path: an
-    installation that has never opened Settings goes on producing exactly the
-    G-code it produced before any of this existed.
-    """
-    profile = dict(DEFAULT_PROFILE)
-    volume = build_volume(saved)
-    profile["bed-shape"] = _bed_shape(volume.width, volume.depth)
-    profile["max-print-height"] = _fmt(volume.height)
-
-    nozzle = _number(saved, "printer_nozzle_diameter")
-    if nozzle is not None:
-        profile["nozzle-diameter"] = _fmt(nozzle)
-    filament = _number(saved, "printer_filament_diameter")
-    if filament is not None:
-        profile["filament-diameter"] = _fmt(filament)
-    density = _number(saved, "printer_filament_density")
-    if density is not None:
-        profile["filament-density"] = _fmt(density)
-    hot = _number(saved, "printer_nozzle_temperature")
-    if hot is not None:
-        profile["temperature"] = _fmt(hot)
-        # Capped at the same ceiling the value itself is held to. Adding the
-        # bonus unconditionally put the first layer above a limit the save path
-        # calls unusable, which is the guard contradicting itself one line later.
-        ceiling = PRINTER_PROFILE_LIMITS["printer_nozzle_temperature"][1]
-        profile["first-layer-temperature"] = _fmt(min(hot + FIRST_LAYER_BONUS_C, ceiling))
-    bed = _number(saved, "printer_bed_temperature")
-    if bed is not None:
-        profile["bed-temperature"] = _fmt(bed)
-        profile["first-layer-bed-temperature"] = _fmt(bed)
-    return profile
-
-
-def _dimensions(bbox: Sequence[Any] | None) -> tuple[float, float, float] | None:
-    """The bounding box as three usable numbers, or ``None``.
-
-    ``None`` covers everything that is not three finite numbers: a missing box, a
-    short one, a string where a number should be, a NaN. Every caller here
-    answers that the same way -- say nothing, and let the slicer be the one to
-    speak -- which is why the unpacking is one piece of code rather than three
-    copies drifting apart.
-    """
-    try:
-        width, depth, height = (float(value) for value in bbox)  # type: ignore[misc]
-    except (TypeError, ValueError):
-        return None
-    if not all(math.isfinite(value) for value in (width, depth, height)):
-        return None
-    return width, depth, height
-
-
-@dataclass(frozen=True)
-class ScaleOffer:
-    """What scaling a too-big model down would give, as something to be asked.
-
-    ``percent`` and ``size`` are worked out from the recorded bounding box and
-    are therefore an estimate — the slicer does the real arithmetic against the
-    mesh. They agree wherever this offer can appear at all, because the check
-    that produces it reads the same box. Said as "about" for that reason.
-
-    ``turned`` is the orientation those numbers assume, and it is here because
-    they are only true if it is taken. The slicer scales each axis against the
-    matching one, so a model laid the other way round comes out at a different
-    size than the one that was agreed to.
-    """
-
-    percent: float
-    size: tuple[float, float, float]
-    turned: bool = False
-
-
-def scaled_target(volume: BuildVolume) -> BuildVolume:
-    """The volume to aim a scaled model at: the bed, less room for a skirt."""
-    return BuildVolume(
-        width=max(1.0, volume.width - SCALE_MARGIN_MM),
-        depth=max(1.0, volume.depth - SCALE_MARGIN_MM),
-        height=volume.height,
-    )
-
-
-def scale_offer(bbox: Sequence[Any] | None, volume: BuildVolume) -> ScaleOffer | None:
-    """What to offer for a model that will not fit, or ``None`` when there is
-    nothing to offer.
-
-    ``None`` for a model that already fits — there is nothing to ask — and for a
-    bounding box that is not three usable numbers, which is the same silence
-    :func:`too_big_for` keeps.
-    """
-    if not too_big_for(bbox, volume):
-        return None
-    dimensions = _dimensions(bbox)
-    if dimensions is None:
-        return None
-    width, depth, height = dimensions
-    if not all(value > 0 for value in dimensions):
-        return None
-
-    target = scaled_target(volume)
-    # Each axis against the matching one, because that is what the slicer does.
-    # Both orientations are worked out and the better wins -- and which one won
-    # is *returned*, because an offer that assumes a turn nobody takes is a
-    # number the reader is shown and then does not get. Measured: PrusaSlicer
-    # applies `--rotate` before `--scale-to-fit`, so the turn is the slicer's
-    # own starting point and this arithmetic is the arithmetic it will do.
-    flat = min(target.width / width, target.depth / depth, target.height / height)
-    turned = min(target.width / depth, target.depth / width, target.height / height)
-    factor, quarter_turn = (turned, True) if turned > flat else (flat, False)
-    if factor >= 1:
-        return None
-
-    percent = round(factor * 100, 1)
-    size = (round(width * factor, 1), round(depth * factor, 1), round(height * factor, 1))
-    # Nothing to offer when the answer rounds away. "About 0%", or a model one of
-    # whose sides is 0 mm, is not something a person can agree to, and the button
-    # beside it would start a print of nothing.
-    if percent <= 0 or any(value <= 0 for value in size):
-        return None
-    return ScaleOffer(percent=percent, size=size, turned=quarter_turn)
-
-
-#: A quarter turn about Z, in degrees. The only rotation anything here asks for
-#: -- both the allowance :func:`too_big_for` makes and the orientation
-#: :func:`scale_offer` assumes are the footprint laid the other way round.
-QUARTER_TURN = 90.0
-
-
-def needs_quarter_turn(bbox: Sequence[Any] | None, volume: BuildVolume) -> bool:
-    """Whether this model fits turned a quarter and does not fit as it stands.
-
-    :func:`too_big_for` compares the footprint in both orientations, so it passes
-    a model that only fits turned. Nothing was turning it, which made that
-    allowance a claim the tool did not keep.
-    """
-    dimensions = _dimensions(bbox)
-    if dimensions is None:
-        return False
-    width, depth, _height = dimensions
-    fits_flat = width <= volume.width and depth <= volume.depth
-    fits_turned = depth <= volume.width and width <= volume.depth
-    return fits_turned and not fits_flat
-
-
-def cartridge_grams(saved: Mapping[str, Any] | None = None) -> float | None:
-    """What a full cartridge holds, or ``None`` when nobody has said.
-
-    ``None`` is the ordinary answer and the honest one. The printer reports how
-    much is left as a *percentage* and never says of what, so without this the
-    only true sentence pairs a weight with a proportion; with it both become
-    grams and "this print needs more than is left" becomes sayable.
-    """
-    return _number(saved, "printer_cartridge_grams")
-
-
-def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
-    """Why this model cannot fit, or ``""`` when it might.
-
-    Answered from the bounding box the version already carries, so the reader
-    hears it immediately instead of waiting for a slicer to run and then being
-    told less. PrusaSlicer's own answer to this is ``All objects are outside of
-    the print volume``, which names neither size.
-
-    **Deliberately conservative.** This exists to say something more useful than
-    the slicer would, so refusing a model that could be printed is the worse
-    error. The footprint is therefore compared in both orientations, because the
-    slicer may place a part either way and this check must never be the stricter
-    of the two; and a bounding box that is not three usable numbers is not
-    refused at all.
-
-    **It cannot see units, and that is a known gap.** ``bbox`` is recorded in the
-    project's *authoring* units while the exported STL is always millimetres
-    (``cadless/worker.py`` ``export_scale``), so for a domain authored in metres
-    -- ``house`` is one -- the numbers here are a thousand times too small and
-    nothing is ever refused. That fails **open**: the reader gets the slicer's
-    own message instead of this one, which is worse copy and not a wrong answer.
-    Closing it needs a version-to-domain link the store does not carry, so it is
-    recorded here rather than guessed at.
-    """
-    dimensions = _dimensions(bbox)
-    if dimensions is None:
-        return ""
-    width, depth, height = dimensions
-
-    footprint = sorted((width, depth))
-    bed = sorted((volume.width, volume.depth))
-    fits_flat = footprint[0] <= bed[0] and footprint[1] <= bed[1]
-    if fits_flat and height <= volume.height:
-        return ""
-    return (
-        f"This model is {_mm(width)} x {_mm(depth)} x {_mm(height)} mm, and the printer's "
-        f"build volume is {_mm(volume.width)} x {_mm(volume.depth)} x {_mm(volume.height)} mm. "
-        "Ask for a smaller model, or set your printer's real size in Settings."
-    )
 
 
 @dataclass(frozen=True)
@@ -510,11 +147,11 @@ def build_command(
     for key, value in profile.items():
         argv += [f"--{key}", value]
     if rotate_degrees:
-        argv += ["--rotate", _fmt(rotate_degrees)]
+        argv += ["--rotate", fmt(rotate_degrees)]
     if fit_to is not None:
         argv += [
             "--scale-to-fit",
-            f"{_fmt(fit_to.width)},{_fmt(fit_to.depth)},{_fmt(fit_to.height)}",
+            f"{fmt(fit_to.width)},{fmt(fit_to.depth)},{fmt(fit_to.height)}",
         ]
     argv.append(mesh_path)
     return argv
@@ -582,6 +219,7 @@ def profile_fingerprint(profile: Mapping[str, str]) -> str:
 #: case because nothing promises which the slicer uses, and the prefix is
 #: dropped from what is returned -- the reader wants the sentence, not the label.
 _WARNING_START = re.compile(r"print warning:", re.IGNORECASE)
+
 _PROGRESS_LINE = re.compile(r"^\s*\d+ =>")
 
 
