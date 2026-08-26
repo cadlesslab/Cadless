@@ -289,6 +289,7 @@ async def test_connection(body: AddressBody | None = None) -> dict:
 async def slice_version(
     version_id: int,
     request: Request,
+    scale_to_fit: bool = False,
     store: ScopedStore = Depends(get_store),
 ) -> dict:
     """Slice the version's mesh and report what the print would cost.
@@ -303,25 +304,71 @@ async def slice_version(
     mesh = await _mesh_path(store, version_id)
     saved = await asyncio.to_thread(user_settings.load)
 
+    volume = slicing.build_volume(saved)
+    version = await store.get_version(version_id)
+    fit_to = None
+    rotate = 0.0
+
     # Answered before the slicer runs, because the answer is already known. The
     # version carries its bounding box, and a model that fits in no orientation
     # costs a slicer run to be told "All objects are outside of the print
     # volume" -- which names neither the model's size nor the printer's.
-    version = await store.get_version(version_id)
     if version is not None:
-        why = slicing.too_big_for(version.bbox, slicing.build_volume(saved))
+        why = slicing.too_big_for(version.bbox, volume)
         if why:
-            return {"ok": False, "detail": why, "slicer_missing": False, "stats": {}}
+            offer = slicing.scale_offer(version.bbox, volume)
+            if not scale_to_fit:
+                # Not a dead end any more: most of the catalogue is furniture at
+                # real scale, so for that half the plain refusal was always the
+                # last word. The offer is returned beside the refusal and nothing
+                # is sliced until it comes back accepted.
+                return {
+                    "ok": False,
+                    "detail": why,
+                    "slicer_missing": False,
+                    "stats": {},
+                    "scale_offer": (
+                        None
+                        if offer is None
+                        else {"percent": offer.percent, "size": list(offer.size)}
+                    ),
+                }
+            fit_to = slicing.scaled_target(volume)
+            # The turn those numbers assume, actually taken. The slicer fits each
+            # axis against the matching one, so laying the model the other way
+            # round than the offer assumed prints a different size than the one
+            # somebody agreed to.
+            if offer is not None and offer.turned:
+                rotate = slicing.QUARTER_TURN
+        # The quarter turn `too_big_for` allows, actually taken. Without it that
+        # allowance was a claim about a capability nothing in the tool had. Only
+        # reachable when the model fits, since a model that fits turned is not
+        # one `too_big_for` refuses.
+        elif slicing.needs_quarter_turn(version.bbox, volume):
+            rotate = slicing.QUARTER_TURN
 
     out_path = os.path.join(os.path.dirname(mesh), GCODE_NAME)
     profile = slicing.profile_from_settings(saved)
     async with request.app.state.slice_gate:
-        outcome = await asyncio.to_thread(slicing.slice_mesh, mesh, out_path, profile=profile)
+        outcome = await asyncio.to_thread(
+            slicing.slice_mesh,
+            mesh,
+            out_path,
+            profile=profile,
+            fit_to=fit_to,
+            rotate_degrees=rotate,
+        )
     return {
         "ok": outcome.ok,
         "detail": outcome.detail,
         "slicer_missing": outcome.missing,
         "stats": outcome.stats,
+        # What the slicer said about a print it nonetheless made. It matters most
+        # here, where the tool is the one that proposed the scale.
+        "warning": outcome.warning,
+        # Only of a job that exists. A failed slice produced nothing, scaled or
+        # otherwise, and saying it was scaled describes a print that is not there.
+        "scaled": outcome.ok and fit_to is not None,
     }
 
 

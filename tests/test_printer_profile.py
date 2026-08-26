@@ -312,3 +312,144 @@ class TestKnowingWhatAJobWasSlicedUnder:
         job = tmp_path / "print.gcode"
         job.write_text("G28\\n")
         assert slicing.sliced_under(str(job)) == ""
+
+
+class TestOfferingToScaleItDown:
+    """Turning "it will not fit" into a question.
+
+    The numbers are the shipped dining table's, measured: 1600 x 900 x 750 mm
+    against the default 210 x 200 x 195 bed.
+    """
+
+    TABLE = [1600.0, 900.0, 750.0]
+
+    def default(self):
+        return slicing.build_volume({})
+
+    def test_a_model_that_fits_is_not_offered_anything(self):
+        # There is no question to ask.
+        assert slicing.scale_offer([70.0, 70.0, 12.0], self.default()) is None
+
+    def test_the_table_is_offered_a_scale_that_fits(self):
+        offer = slicing.scale_offer(self.TABLE, self.default())
+        assert offer is not None
+        assert 0 < offer.percent < 100
+        # And what comes out is inside the bed, with room left for a skirt --
+        # axis against axis, in the orientation it will be printed in, because
+        # that is the comparison the slicer makes. Sorting the pair first would
+        # pass a model laid the wrong way round.
+        self._fits_as_it_will_be_laid(offer, slicing.scaled_target(self.default()))
+
+    @staticmethod
+    def _fits_as_it_will_be_laid(offer, target):
+        laid = (offer.size[1], offer.size[0]) if offer.turned else offer.size[:2]
+        assert laid[0] <= target.width + 0.1, (offer, target)
+        assert laid[1] <= target.depth + 0.1, (offer, target)
+        assert offer.size[2] <= target.height + 0.1, (offer, target)
+
+    def test_the_size_offered_is_the_size_that_gets_printed(self):
+        # The slicer fits each axis against the matching one, so which way round
+        # the model lies is part of the arithmetic rather than a detail left to
+        # it. An offer that assumes a turn nobody takes is a number somebody is
+        # shown and then does not get -- and they never find out, because the
+        # confirmation afterwards reports time and grams and never dimensions.
+        for bbox, saved in (
+            ([1600.0, 900.0, 750.0], {}),
+            ([900.0, 1600.0, 750.0], {}),
+            ([100.0, 1000.0, 10.0], {"printer_bed_width": 400.0, "printer_bed_depth": 200.0}),
+            ([1000.0, 100.0, 10.0], {"printer_bed_width": 200.0, "printer_bed_depth": 400.0}),
+        ):
+            volume = slicing.build_volume(saved)
+            target = slicing.scaled_target(volume)
+            offer = slicing.scale_offer(bbox, volume)
+            assert offer is not None, bbox
+            self._fits_as_it_will_be_laid(offer, target)
+
+            # And it is not merely inside the bed but the size actually promised:
+            # what `--scale-to-fit` will do to that box, turned first if the turn
+            # is being asked for.
+            width, depth, height = bbox
+            if offer.turned:
+                width, depth = depth, width
+            factor = min(target.width / width, target.depth / depth, target.height / height)
+            assert offer.percent == round(factor * 100, 1), (bbox, offer)
+
+    def test_nothing_is_offered_when_the_answer_rounds_away(self):
+        # "About 0%", or a model one of whose sides is 0 mm, is not something a
+        # person can agree to -- and the button beside it starts a print.
+        volume = self.default()
+        for bbox in ([1600.0, 900.0, 0.2], [0.001, 0.001, 300.0], [1.0, 1.0, 1e6]):
+            assert slicing.scale_offer(bbox, volume) is None, bbox
+
+    def test_the_target_leaves_the_bed_room_for_a_skirt(self):
+        # A model scaled to the exact bed is a model whose skirt does not fit.
+        volume = self.default()
+        target = slicing.scaled_target(volume)
+        assert target.width < volume.width
+        assert target.depth < volume.depth
+        # Height needs none: nothing is drawn beside it upward.
+        assert target.height == volume.height
+
+    def test_a_bigger_printer_changes_the_offer(self):
+        # The offer is about this printer, not about this model.
+        small = slicing.scale_offer(self.TABLE, self.default())
+        big = slicing.scale_offer(
+            self.TABLE,
+            slicing.build_volume(
+                {"printer_bed_width": 900, "printer_bed_depth": 900, "printer_max_height": 900}
+            ),
+        )
+        assert big is not None and small is not None
+        assert big.percent > small.percent
+
+    def test_an_unusable_bounding_box_is_offered_nothing(self):
+        # The same silence `too_big_for` keeps.
+        for bbox in (None, [], [1.0, 2.0], ["a", "b", "c"], [0.0, 0.0, 0.0]):
+            assert slicing.scale_offer(bbox, self.default()) is None
+        # A zero side with a usable height reaches further in than the others: it
+        # is the positive-number guard that has to stop it, not the unpacking.
+        assert slicing.scale_offer([0.0, 0.0, 300.0], self.default()) is None
+
+    def test_a_model_that_only_fits_turned_is_turned(self):
+        # `too_big_for` allows the quarter turn, so something has to take it --
+        # otherwise the allowance is a claim about a capability nothing has.
+        volume = self.default()  # 210 x 200
+        assert slicing.needs_quarter_turn([195.0, 205.0, 10.0], volume) is True
+        assert slicing.needs_quarter_turn([70.0, 70.0, 12.0], volume) is False
+        assert slicing.needs_quarter_turn(None, volume) is False
+
+
+class TestWhatTheSlicerIsTold:
+    def test_a_fit_target_reaches_the_argv(self):
+        argv = slicing.build_command(
+            "prusa-slicer",
+            "m.stl",
+            "out.gcode",
+            slicing.DEFAULT_PROFILE,
+            fit_to=slicing.BuildVolume(200.0, 190.0, 195.0),
+        )
+        assert "--scale-to-fit" in argv
+        assert argv[argv.index("--scale-to-fit") + 1] == "200,190,195"
+
+    def test_a_quarter_turn_reaches_the_argv(self):
+        argv = slicing.build_command(
+            "prusa-slicer", "m.stl", "out.gcode", slicing.DEFAULT_PROFILE, rotate_degrees=90
+        )
+        assert argv[argv.index("--rotate") + 1] == "90"
+
+    def test_neither_appears_when_neither_was_asked_for(self):
+        # An ordinary print must produce exactly the command it always did.
+        argv = slicing.build_command("prusa-slicer", "m.stl", "out.gcode", slicing.DEFAULT_PROFILE)
+        assert "--scale-to-fit" not in argv
+        assert "--rotate" not in argv
+
+    def test_the_mesh_stays_the_final_positional(self):
+        argv = slicing.build_command(
+            "prusa-slicer",
+            "m.stl",
+            "out.gcode",
+            slicing.DEFAULT_PROFILE,
+            fit_to=slicing.BuildVolume(200.0, 190.0, 195.0),
+            rotate_degrees=90,
+        )
+        assert argv[-1] == "m.stl"

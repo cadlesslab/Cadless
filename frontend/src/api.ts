@@ -684,6 +684,17 @@ export interface PrintCapability {
   can_download: boolean;
 }
 
+/** What scaling a too-big model down would give.
+ *
+ * Present only on a refusal that has an offer to make. Worked out from the
+ * recorded bounding box, while the slicer does the real arithmetic against the
+ * mesh — so these are "about", and said that way.
+ */
+export interface ScaleOffer {
+  percent: number;
+  size: [number, number, number];
+}
+
 /** What slicing produced: the numbers someone wants before committing filament. */
 export interface SliceResult {
   ok: boolean;
@@ -691,6 +702,12 @@ export interface SliceResult {
   /** Separate from `ok` because the answer is an install, not a retry. */
   slicer_missing: boolean;
   stats: Record<string, string>;
+  /** On a refusal: what could be printed instead, if anything. */
+  scale_offer?: ScaleOffer | null;
+  /** What the slicer said about a print it nonetheless made. */
+  warning?: string;
+  /** Whether this job was scaled down to fit. */
+  scaled?: boolean;
 }
 
 /** What came of putting a job on the wire. */
@@ -788,11 +805,23 @@ export const forgetPrinterAddress = () =>
 export const forgetPrinterProfile = () =>
   req<{ ok: boolean }>("/printing/profile", { method: "DELETE", headers: PRINT_HEADERS });
 
-export const sliceVersion = (versionId: number) =>
-  req<SliceResult>(`/printing/versions/${versionId}/slice`, {
-    method: "POST",
-    headers: PRINT_HEADERS,
-  });
+/** Slice the version's mesh.
+ *
+ * `scaleToFit` is the answer to an offer this route made on a previous call.
+ * Nothing here sends it first — a model is only ever scaled because somebody was
+ * asked and said yes — but that is this caller's discipline rather than a rule
+ * the route keeps. What the route does keep is that a model which fits is never
+ * scaled whatever the flag says, because the offer is what makes scaling
+ * legitimate and a model that fits was never made one.
+ */
+export const sliceVersion = (versionId: number, options?: { scaleToFit?: boolean }) =>
+  req<SliceResult>(
+    `/printing/versions/${versionId}/slice${options?.scaleToFit ? "?scale_to_fit=true" : ""}`,
+    {
+      method: "POST",
+      headers: PRINT_HEADERS,
+    },
+  );
 
 export const sendVersionToPrinter = (versionId: number) =>
   req<PrintResult>(`/printing/versions/${versionId}/send`, {

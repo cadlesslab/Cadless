@@ -81,6 +81,19 @@ export function sliceSummary(
   return `This print takes ${parts.join(" and uses ")}. ${closing}`;
 }
 
+/** What a scaled model is, said before it is agreed to.
+ *
+ * Not "the same thing, smaller". Scaling is uniform, so a hole scales with
+ * everything else and stops fitting the bolt it was sized for, and a wall
+ * thinner than the nozzle is not thinned — it is not printed at all. For a table
+ * that is exactly what somebody wants; for a bracket it is not, and the tool
+ * cannot tell which this is. So it says what happens and lets the reader decide.
+ */
+export const SCALED_MODEL_WARNING =
+  "Scaling is uniform: holes stop fitting what they were sized for, and anything " +
+  "thinner than the nozzle is not printed at all. This gives you a model of the " +
+  "thing rather than a smaller one of it.";
+
 /** What the reader is agreeing to when they print over USB.
  *
  * Streaming makes the browser the print host: the job leaves this tab one line

@@ -95,11 +95,19 @@
 }
 .modal-title { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
 .modal-desc { margin: 0 0 var(--space-4); color: var(--muted); font-size: var(--text-sm); }
-/* The USB tether warning, inside that description. Its own line and the
-   ordinary foreground colour: it is the one sentence in the dialog the reader
-   is being asked to accept a cost from, and running it on the end of the
-   slicer's numbers in muted grey is how it would be missed. */
+/* Every line the print dialog adds to the slicer's own numbers gets its own
+   line and the ordinary foreground colour. They are the sentences somebody is
+   being asked to accept a cost from, and running them together in muted grey at
+   the end of a paragraph of figures is how they would be missed. */
+.print-filament,
+.print-scale,
+.print-scaled,
+.print-slicer-warning,
 .print-tether { display: block; margin-top: var(--space-2); color: var(--fg); }
+/* The one that says what a scaled model is not. It is the reason to say no, so
+   it does not blend into the sentence proposing the scale. */
+.print-scale-warning { display: block; margin-top: var(--space-2); color: var(--warn, var(--fg)); }
+
 .modal-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .modal-label { display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-sm); color: var(--muted); }
 .modal-footer { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
