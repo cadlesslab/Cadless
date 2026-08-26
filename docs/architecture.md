@@ -81,9 +81,10 @@ port, bound to loopback.
 
    **What the printer is** — its build volume, nozzle, filament and the two
    temperatures — is settable on the same terms and saved-only for the same
-   reason. These reach an external process's *command line*: `cadless/slicing.py`
-   turns them into slicer flags. That is why every one is checked twice against a
-   single range table, `slicing.PRINTER_PROFILE_LIMITS` — refused at the input so
+   reason. These reach an external process's *command line*:
+   `cadless/printer_profile.py` turns them into slicer flags. That is why every
+   one is checked twice against a single range table,
+   `printer_profile.PRINTER_PROFILE_LIMITS` — refused at the input so
    the reader is told there, and fallen back to the default on the way out so a
    hand-edited `settings.json` cannot put `1e-09` in an argv. The argv is a list
    and never a shell string, so the risk being managed is an unusable value

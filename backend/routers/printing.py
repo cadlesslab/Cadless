@@ -34,7 +34,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 
 from backend.deps import get_store
-from cadless import printing, slicing, user_settings
+from cadless import print_fit, printer_profile, printing, slicing, user_settings
 from cadless.config import settings
 from cadless.scoped_store import ScopedStore
 
@@ -150,7 +150,7 @@ def _gcode_for(mesh_path: str, saved: dict | None = None) -> str:
     # An empty fingerprint is a job from a build that did not write one. Refusing
     # those would make an upgrade re-slice everything for a mismatch there is no
     # evidence of; a recorded one that disagrees is evidence.
-    if was and was != slicing.profile_fingerprint(slicing.profile_from_settings(saved)):
+    if was and was != slicing.profile_fingerprint(printer_profile.profile_from_settings(saved)):
         raise HTTPException(
             status_code=409,
             detail="This job was sliced for a different printer. Slice it again.",
@@ -189,7 +189,7 @@ async def filament() -> dict:
 
     fields = outcome.fields
     saved = await asyncio.to_thread(user_settings.load)
-    capacity = slicing.cartridge_grams(saved)
+    capacity = printer_profile.cartridge_grams(saved)
     percent = fields.get("filament_percent")
     return {
         "ok": True,
@@ -304,7 +304,7 @@ async def slice_version(
     mesh = await _mesh_path(store, version_id)
     saved = await asyncio.to_thread(user_settings.load)
 
-    volume = slicing.build_volume(saved)
+    volume = printer_profile.build_volume(saved)
     version = await store.get_version(version_id)
     fit_to = None
     rotate = 0.0
@@ -314,9 +314,9 @@ async def slice_version(
     # costs a slicer run to be told "All objects are outside of the print
     # volume" -- which names neither the model's size nor the printer's.
     if version is not None:
-        why = slicing.too_big_for(version.bbox, volume)
+        why = print_fit.too_big_for(version.bbox, volume)
         if why:
-            offer = slicing.scale_offer(version.bbox, volume)
+            offer = print_fit.scale_offer(version.bbox, volume)
             if not scale_to_fit:
                 # Not a dead end any more: most of the catalogue is furniture at
                 # real scale, so for that half the plain refusal was always the
@@ -333,22 +333,22 @@ async def slice_version(
                         else {"percent": offer.percent, "size": list(offer.size)}
                     ),
                 }
-            fit_to = slicing.scaled_target(volume)
+            fit_to = print_fit.scaled_target(volume)
             # The turn those numbers assume, actually taken. The slicer fits each
             # axis against the matching one, so laying the model the other way
             # round than the offer assumed prints a different size than the one
             # somebody agreed to.
             if offer is not None and offer.turned:
-                rotate = slicing.QUARTER_TURN
+                rotate = print_fit.QUARTER_TURN
         # The quarter turn `too_big_for` allows, actually taken. Without it that
         # allowance was a claim about a capability nothing in the tool had. Only
         # reachable when the model fits, since a model that fits turned is not
         # one `too_big_for` refuses.
-        elif slicing.needs_quarter_turn(version.bbox, volume):
-            rotate = slicing.QUARTER_TURN
+        elif print_fit.needs_quarter_turn(version.bbox, volume):
+            rotate = print_fit.QUARTER_TURN
 
     out_path = os.path.join(os.path.dirname(mesh), GCODE_NAME)
-    profile = slicing.profile_from_settings(saved)
+    profile = printer_profile.profile_from_settings(saved)
     async with request.app.state.slice_gate:
         outcome = await asyncio.to_thread(
             slicing.slice_mesh,
@@ -449,7 +449,7 @@ async def forget_profile() -> dict:
     machine, and half of one is not a smaller description of it. `user_settings.clear`
     accepts these because they are saved state rather than configuration.
     """
-    await asyncio.to_thread(user_settings.clear, *slicing.PRINTER_PROFILE_LIMITS)
+    await asyncio.to_thread(user_settings.clear, *printer_profile.PRINTER_PROFILE_LIMITS)
     return {"ok": True}
 
 

@@ -19,6 +19,7 @@ import {
 import { Button, Modal, Tooltip, useToast } from "../components";
 import { errMessage } from "../errors";
 import { BASE_URL } from "../routing";
+import { fetchAndSave } from "./download";
 import { availableFormats, downloadFilename, FORMAT_META, shareUrl } from "./exportFormats";
 import {
   DEFAULT_CLOSING,
@@ -27,45 +28,8 @@ import {
   sliceSummary,
   USB_TETHER_WARNING,
 } from "./printSummary";
-import {
-  handshake,
-  isUsbPrintingSupported,
-  type PrinterPort,
-  requestPrinterPort,
-  streamJob,
-} from "./usbPrinter";
-
-/** The status text as well as the number: this message is shown to someone, and
- * a toast body reading only "409" tells them nothing they can act on. */
-function httpError(res: { status: number; statusText?: string }): Error {
-  return new Error(res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`);
-}
-
-async function fetchAndSave(url: string, filename: string, init?: RequestInit): Promise<void> {
-  const res = await fetch(url, init);
-  if (!res.ok) throw httpError(res);
-  const blob = await res.blob();
-  const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = objectUrl;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(objectUrl);
-}
-
-/** The same bytes as the download, as text rather than as a file.
- *
- * The USB path needs the job in hand to send it line by line, so it reads the
- * body instead of handing it to the browser's downloader. Same URL, same
- * header, same server route — only the destination differs.
- */
-async function fetchGcode(url: string): Promise<string> {
-  const res = await fetch(url, { headers: printHeaders() });
-  if (!res.ok) throw httpError(res);
-  return res.text();
-}
+import { isUsbPrintingSupported } from "./usbPrinter";
+import { useUsbPrint } from "./useUsbPrint";
 
 /** Something the reader has to go and do before printing can work.
  *
@@ -103,20 +67,6 @@ type Sliced = {
    * capability is: the dialog reports what was true when the numbers were made,
    * not what a later poll says. */
   level: FilamentLevel | null;
-} | null;
-
-/** A print leaving through this tab's own USB connection.
- *
- * In state rather than in a ref because this dialog is the only thing telling
- * the reader a print is running, and it has to re-render as the count moves.
- * The controller travels with it so Stop reaches the stream that is actually
- * running rather than one started after it.
- */
-type UsbJob = {
-  phase: "connecting" | "printing";
-  sent: number;
-  total: number;
-  controller: AbortController;
 } | null;
 
 /** What the dialog says happens after the numbers.
@@ -157,12 +107,13 @@ export function ExportShare({ version }: { version: Version }) {
   }, [sliced]);
   const [notice, setNotice] = useState<Notice>(null);
   const [tooBig, setTooBig] = useState<TooBig>(null);
-  const [usb, setUsb] = useState<UsbJob>(null);
-  // True only while the device chooser is up. The dialog stays open behind
-  // it -- dismissing the chooser has to leave something to try again from --
-  // so without this a second click opens a second chooser and races a second
-  // handshake at the same port.
-  const [choosing, setChoosing] = useState(false);
+  // The USB flow keeps its own state: a chooser, a handshake and a stream are a
+  // flow rather than a handler, and none of it is about offering formats.
+  // `slicedNow` is what it reads to find out whether this dialog is still the
+  // one that was open when the chooser went up.
+  const { job: usb, choosing, start: startUsbPrint } = useUsbPrint(slicedNow, () =>
+    setSliced(null),
+  );
   const formats = availableFormats(version);
   if (formats.length === 0) return null;
   const printable = formats.includes("stl");
@@ -337,84 +288,16 @@ export function ExportShare({ version }: { version: Version }) {
     }
   }
 
-  /** Print through this tab, to a printer plugged into this machine.
+  /** Hand the print to the USB flow, and show what it hands back.
    *
-   * The order of the first three steps is load-bearing, and each has a
-   * different reason:
-   *
-   * 1. `requestPrinterPort` spends the click's user activation, so it goes
-   *    first. Awaiting anything before it — the G-code, a capability check —
-   *    leaves the chooser with no gesture left to open on.
-   * 2. The handshake goes before the fetch because a port that turns out not to
-   *    be a printer should cost one exchange rather than a whole download.
-   * 3. Only then does the job leave the server, and it is the same job the
-   *    Download button would have saved.
+   * The whole of the streaming lives in the hook; what belongs here is the one
+   * thing the panel owns — a dialog for something the reader has to go and do,
+   * which is what "that port is not a printer" is.
    */
   async function confirmUsbPrint() {
-    if (!sliced || choosing) return;
-    const target = sliced.versionId;
-
-    let port: PrinterPort;
-    setChoosing(true);
-    try {
-      port = await requestPrinterPort();
-    } catch {
-      // The chooser was dismissed, or held nothing to choose. That is an answer
-      // rather than a fault, so the dialog stays open behind it.
-      return;
-    } finally {
-      setChoosing(false);
-    }
-
-    // Through the ref, not the captured state: the same reasoning as the id
-    // travelling with the numbers above. The dialog can be dismissed while the
-    // chooser is up, and a print starting after somebody pressed Cancel is the
-    // one outcome this whole dialog exists to prevent.
-    if (slicedNow.current?.versionId !== target) return;
-
-    setSliced(null);
-    const controller = new AbortController();
-    setUsb({ phase: "connecting", sent: 0, total: 0, controller });
-    try {
-      // The signal from the first moment: `handshake` walks up to four baud
-      // candidates at 2.5s each and opens a port on every one of them, and
-      // every one of those waits is time Stop has to be able to reach.
-      const shake = await handshake(port, undefined, controller.signal);
-      if (!shake.ok || !shake.baudRate) {
-        setNotice({
-          title: "That is not a printer",
-          body: shake.detail ?? "Nothing on that port answered like a printer.",
-        });
-        return;
-      }
-
-      const gcode = await fetchGcode(gcodeUrl(target));
-      setUsb({ phase: "printing", sent: 0, total: 0, controller });
-
-      let shownPercent = -1;
-      const result = await streamJob(port, gcode, {
-        baudRate: shake.baudRate,
-        signal: controller.signal,
-        onProgress: ({ sent, total }) => {
-          // A real part is tens of thousands of lines, and a `setState` per
-          // acknowledgement would spend the tab's frame budget on renders the
-          // reader cannot perceive. A whole percent is the smallest step that
-          // actually moves anything on screen.
-          const percent = Math.floor((sent / total) * 100);
-          if (percent === shownPercent && sent < total) return;
-          shownPercent = percent;
-          setUsb({ phase: "printing", sent, total, controller });
-        },
-      });
-
-      if (result.ok) toast.success("Printed over USB", result.detail);
-      else if (result.stopped) toast.success("Print stopped", result.detail);
-      else toast.error("The print stopped", result.detail);
-    } catch (err) {
-      toast.error("The print stopped", errMessage(err));
-    } finally {
-      setUsb(null);
-    }
+    if (!sliced) return;
+    const said = await startUsbPrint(sliced.versionId);
+    if (said) setNotice(said);
   }
 
   function share() {
