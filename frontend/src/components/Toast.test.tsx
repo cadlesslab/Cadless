@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ToastProvider, useToast } from "./Toast";
@@ -127,5 +128,126 @@ describe("Toast", () => {
     const fail = screen.getByText("fail");
     for (let i = 0; i < 6; i++) fireEvent.click(fail);
     expect(screen.getAllByText("Action failed")).toHaveLength(4);
+  });
+});
+
+describe("where a toast appears", () => {
+  /** jsdom measures everything as nothing, which is exactly the "no usable
+   * rect" case the placement refuses — so a test about placement has to give
+   * the element a size before it can be about anything. */
+  function sized(el: Element, rect: Partial<DOMRect>) {
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue({
+      top: 100, left: 40, right: 140, bottom: 130, width: 100, height: 30,
+      x: 40, y: 100, toJSON: () => ({}), ...rect,
+    } as DOMRect);
+  }
+
+  const viewport = () => document.querySelector(".toast-viewport") as HTMLElement;
+
+  function mount() {
+    render(
+      <ToastProvider>
+        <Triggers />
+      </ToastProvider>,
+    );
+  }
+
+  it("puts it beside the control that caused it", () => {
+    // The whole point: on a wide monitor the far corner is far enough from the
+    // button to be missed, and a message about something you just did belongs
+    // where you just did it.
+    mount();
+    const button = screen.getByText("ok");
+    sized(button, {});
+    fireEvent.click(button);
+
+    const style = viewport().style;
+    expect(style.top).toBe("100px");
+    // To the right of the control, with room to breathe.
+    expect(style.left).toBe("148px");
+    // The stylesheet pins it to the right edge; both set would fight.
+    expect(style.right).toBe("auto");
+  });
+
+  it("keeps the corner for a message with nothing to point at", () => {
+    // An SSE event, a print ending an hour later. This is the case that stops
+    // the feature being "anchor everything": a message with nowhere to anchor
+    // must not be a message that disappears.
+    function Spontaneous() {
+      const toast = useToast();
+      return <span ref={() => toast.success("Generation finished")} />;
+    }
+    render(
+      <ToastProvider>
+        <Spontaneous />
+      </ToastProvider>,
+    );
+    expect(viewport().style.top).toBe("");
+    expect(screen.getByText("Generation finished")).toBeInTheDocument();
+  });
+
+  it("keeps the corner once the moment has passed", () => {
+    // Slicing and printing take minutes to hours. By then the reader has looked
+    // away, and a bubble beside a button nobody is watching says less than a
+    // message where messages go.
+    mount();
+    const button = screen.getByText("ok");
+    sized(button, {});
+    fireEvent.click(button);
+    expect(viewport().style.top).toBe("100px");
+
+    const later = Date.now() + 10_000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    fireEvent.click(screen.getByText("fail"));
+    expect(viewport().style.top).toBe("");
+    vi.mocked(Date.now).mockRestore();
+  });
+
+  it("keeps the corner when the control has gone", async () => {
+    // The shape of a real one: a dialog closes on the click, and the toast
+    // arrives when the request it started comes back — by which time the button
+    // is not there to point at. Pointing at where it used to be would be
+    // pointing at nothing.
+    function Vanishing() {
+      const toast = useToast();
+      const [gone, setGone] = useState(false);
+      if (gone) return null;
+      return (
+        <button
+          onClick={() => {
+            setGone(true);
+            // A microtask later, after React has taken the button away.
+            void Promise.resolve().then(() => toast.success("Saved"));
+          }}
+        >
+          go
+        </button>
+      );
+    }
+    render(
+      <ToastProvider>
+        <Vanishing />
+      </ToastProvider>,
+    );
+    const button = screen.getByText("go");
+    sized(button, {});
+    fireEvent.click(button);
+
+    await screen.findByText("Saved");
+    expect(screen.queryByText("go")).toBeNull();
+    expect(viewport().style.top).toBe("");
+  });
+
+  it("stays inside the window when there is no room beside the control", () => {
+    // A control near the right edge would otherwise push the card half off
+    // screen, which says less than the corner it came from.
+    mount();
+    const button = screen.getByText("ok");
+    sized(button, { left: 900, right: 1000, top: 50 });
+    fireEvent.click(button);
+
+    const left = Number.parseInt(viewport().style.left, 10);
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(left + 360).toBeLessThanOrEqual(window.innerWidth);
   });
 });

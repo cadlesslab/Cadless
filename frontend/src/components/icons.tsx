@@ -23,12 +23,19 @@ function Svg({ size = 16, children }: { size?: number; children: ReactNode }) {
 
 type IconProps = { size?: number };
 
-/** Gear — Settings panel. Center hub + eight spokes, matching the stroked 16×16 toolbar
- * convention. */
+/** Gear — Settings panel.
+ *
+ * A ring with eight teeth around a hub, and the ring is the whole point. The
+ * glyph here used to be a hub with eight rays coming out of it, which is a
+ * *sun* — the same drawing as `SunIcon` below at a different radius, two
+ * positions away from it in the same rail. Whatever else this is, it must not
+ * be mistakable for the thing that changes the theme.
+ */
 export const SettingsIcon = ({ size }: IconProps) => (
   <Svg size={size}>
-    <circle cx="8" cy="8" r="2.25" />
-    <path d="M8 1.4v2.1M8 12.5v2.1M1.4 8h2.1M12.5 8h2.1M3.35 3.35l1.5 1.5M11.15 11.15l1.5 1.5M12.65 3.35l-1.5 1.5M4.85 11.15l-1.5 1.5" />
+    <circle cx="8" cy="8" r="4.3" />
+    <circle cx="8" cy="8" r="1.8" />
+    <path d="M12.3 8h1.6M2.1 8h1.6M8 2.1v1.6M8 12.3v1.6M11.04 4.96l1.13-1.13M4.96 11.04l-1.13 1.13M4.96 4.96l-1.13-1.13M11.04 11.04l1.13 1.13" />
   </Svg>
 );
 
@@ -152,6 +159,18 @@ export const ImportIcon = ({ size }: IconProps) => (
   <Svg size={size}>
     <path d="M8 2.5v6" />
     <path d="M5.5 6.25 8 8.75l2.5-2.5" />
+    <path d="M3 10.75v1.75a0.75 0.75 0 0 0 .75.75h8.5a0.75 0.75 0 0 0 .75-.75v-1.75" />
+  </Svg>
+);
+
+/** Arrow out of a tray — the mirror of {@link ImportIcon}, and deliberately so.
+ * Import and export are the two directions of one idea, and drawing them as the
+ * same tray with the arrow reversed is what makes the pair legible in a rail
+ * where every other mark stands alone. */
+export const ExportIcon = ({ size }: IconProps) => (
+  <Svg size={size}>
+    <path d="M8 8.75v-6" />
+    <path d="M5.5 5 8 2.5l2.5 2.5" />
     <path d="M3 10.75v1.75a0.75 0.75 0 0 0 .75.75h8.5a0.75 0.75 0 0 0 .75-.75v-1.75" />
   </Svg>
 );
