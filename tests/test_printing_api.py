@@ -76,6 +76,28 @@ def version_with_stl(store):
 
 
 @pytest.fixture
+def oversized_version(store):
+    """A version whose bounding box will not fit any default bed.
+
+    The numbers are the ones measured on the real failure: a 1100 x 600 x 450 mm
+    desk against a 210 x 200 x 195 mm bed, which is what produced "The slicer
+    reported success but wrote no G-code."
+    """
+
+    async def go():
+        project = await store.create_project("P")
+        version = await store.add_version(
+            project.id, "a desk", "result=1", ok=True, bbox=(1100.0, 600.0, 450.0)
+        )
+        directory = Path(store.version_artifact_dir(version.id))
+        (directory / "model.stl").write_bytes(b"\x00" * 84)
+        await store.add_artifact(version.id, "stl", str(directory / "model.stl"))
+        return version.id
+
+    return asyncio.run(go())
+
+
+@pytest.fixture
 def version_without_stl(store):
     async def go():
         project = await store.create_project("P")
@@ -226,6 +248,65 @@ class TestSlicing:
         assert body["ok"] is True
         assert body["stats"]["estimated_time"] == "1h 2m"
 
+    def test_a_model_too_big_for_the_bed_is_refused_before_the_slicer_runs(
+        self, client, oversized_version, monkeypatch
+    ):
+        """The measured bug, at the level the user meets it.
+
+        The bounding box is already known, so spending a slicer run to be told
+        "All objects are outside of the print volume" -- which names neither the
+        model nor the bed -- is a wait for a worse answer.
+        """
+
+        def never(*_a, **_k):
+            raise AssertionError("the slicer must not run for a model that cannot fit")
+
+        monkeypatch.setattr(slicing, "slice_mesh", never)
+        body = client.post(f"/printing/versions/{oversized_version}/slice").json()
+
+        assert body["ok"] is False
+        assert body["slicer_missing"] is False
+        # Both sizes: one of them is the thing the reader can change.
+        assert "1100 x 600 x 450" in body["detail"]
+        assert "210 x 200 x 195" in body["detail"]
+
+    def test_the_same_model_is_sliced_once_the_printer_is_big_enough(
+        self, client, oversized_version, monkeypatch
+    ):
+        # The other half of the rule: the refusal is about this printer, not
+        # about this model, so saying you own a bigger one changes the answer.
+        user_settings.save(
+            {
+                "printer_bed_width": 1500.0,
+                "printer_bed_depth": 1000.0,
+                "printer_max_height": 800.0,
+            }
+        )
+
+        def fake(_mesh, out_path, **_kwargs):
+            Path(out_path).write_text("G28\n")
+            return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        assert client.post(f"/printing/versions/{oversized_version}/slice").json()["ok"] is True
+
+    def test_the_saved_printer_reaches_the_slicer(self, client, version_with_stl, monkeypatch):
+        # The seam the whole change exists for: a profile nothing passes along
+        # is a setting that does nothing.
+        user_settings.save({"printer_bed_width": 300.0, "printer_nozzle_diameter": 0.6})
+        seen = {}
+
+        def fake(_mesh, out_path, *, profile=None, **_kwargs):
+            seen["profile"] = profile
+            Path(out_path).write_text("G28\n")
+            return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+
+        assert seen["profile"]["bed-shape"] == "0x0,300x0,300x200,0x200"
+        assert seen["profile"]["nozzle-diameter"] == "0.6"
+
     def test_the_gcode_lands_beside_the_mesh(self, client, version_with_stl, monkeypatch):
         seen = {}
 
@@ -238,6 +319,78 @@ class TestSlicing:
         client.post(f"/printing/versions/{version_with_stl}/slice")
         assert Path(seen["out"]).parent == Path(seen["mesh"]).parent
         assert Path(seen["out"]).name == printing_routes.GCODE_NAME
+
+
+class TestAJobIsForThePrinterItWasCutFor:
+    """A job sliced under one profile must not be handed out under another.
+
+    Before the profile was configurable this could not happen: "the mesh has not
+    changed" implied "this job was built for this printer". It is the user's
+    now, and the refusal for an oversized model ends by telling them to go and
+    change it -- so correcting the bed and then sending is a sequence the
+    product actively invites.
+    """
+
+    def _slice_it(self, client, version_id, monkeypatch):
+        def fake(_mesh, out_path, *, profile=None, **_kwargs):
+            Path(out_path).write_text("G28\n")
+            # The real `slice_mesh` records this beside the job; the fake has to
+            # as well, or this tests the fake rather than the rule.
+            Path(out_path + slicing.PROFILE_SUFFIX).write_text(
+                slicing.profile_fingerprint(profile or slicing.DEFAULT_PROFILE)
+            )
+            return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        assert client.post(f"/printing/versions/{version_id}/slice").json()["ok"] is True
+
+    def test_the_download_refuses_a_job_cut_for_another_bed(
+        self, client, version_with_stl, monkeypatch
+    ):
+        self._slice_it(client, version_with_stl, monkeypatch)
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 200
+
+        user_settings.save({"printer_bed_width": 50.0, "printer_bed_depth": 50.0})
+
+        answer = client.get(f"/printing/versions/{version_with_stl}/gcode")
+        assert answer.status_code == 409
+        assert "different printer" in answer.json()["detail"]
+
+    def test_sending_refuses_it_too(self, client, version_with_stl, monkeypatch):
+        # The route where it matters: those moves would run off the new bed.
+        _configure()
+        self._slice_it(client, version_with_stl, monkeypatch)
+        user_settings.save({"printer_bed_width": 50.0, "printer_bed_depth": 50.0})
+
+        sent = []
+        monkeypatch.setattr(printing, "send_gcode", lambda *a, **k: sent.append(a))
+        answer = client.post(f"/printing/versions/{version_with_stl}/send")
+
+        assert answer.status_code == 409
+        assert sent == []
+
+    def test_re_slicing_makes_it_servable_again(self, client, version_with_stl, monkeypatch):
+        self._slice_it(client, version_with_stl, monkeypatch)
+        user_settings.save({"printer_bed_width": 50.0, "printer_bed_depth": 50.0})
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 409
+
+        self._slice_it(client, version_with_stl, monkeypatch)
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 200
+
+    def test_a_job_from_a_build_that_recorded_nothing_is_still_served(
+        self, client, version_with_stl, monkeypatch
+    ):
+        # An upgrade must not re-slice everything for a mismatch nobody has
+        # evidence of. An absent fingerprint is absence of evidence.
+        def fake(_mesh, out_path, **_kwargs):
+            Path(out_path).write_text("G28\n")
+            return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        client.post(f"/printing/versions/{version_with_stl}/slice")
+        user_settings.save({"printer_bed_width": 50.0, "printer_bed_depth": 50.0})
+
+        assert client.get(f"/printing/versions/{version_with_stl}/gcode").status_code == 200
 
 
 class TestSending:

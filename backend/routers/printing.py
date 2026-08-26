@@ -126,7 +126,7 @@ async def _mesh_path(store: ScopedStore, version_id: int) -> str:
     return artifact.path
 
 
-def _gcode_for(mesh_path: str) -> str:
+def _gcode_for(mesh_path: str, saved: dict | None = None) -> str:
     """The sliced job for this mesh, or a 409 saying what is wrong with it.
 
     Newer than the mesh, not merely present. A failed re-slice discards its
@@ -134,10 +134,27 @@ def _gcode_for(mesh_path: str) -> str:
     the mesh in place without touching it -- so "a file is there" is not "a file
     for the shape that is there now", and the gap between them is a print of the
     wrong object.
+
+    **And sliced for the printer that is configured now.** The mesh's own
+    timestamp used to answer both questions, because the slicing profile was a
+    constant. It is the user's since the build volume became configurable, and
+    the refusal this router produces for an oversized model ends with "set your
+    printer's real size in Settings" -- so correcting the bed and then sending is
+    a sequence the product actively invites. Without this check that sends the
+    job cut for the old bed, whose moves run off the new one.
     """
     path = os.path.join(os.path.dirname(mesh_path), GCODE_NAME)
     if not os.path.exists(path):
         raise HTTPException(status_code=409, detail="This version has not been sliced yet.")
+    was = slicing.sliced_under(path)
+    # An empty fingerprint is a job from a build that did not write one. Refusing
+    # those would make an upgrade re-slice everything for a mismatch there is no
+    # evidence of; a recorded one that disagrees is evidence.
+    if was and was != slicing.profile_fingerprint(slicing.profile_from_settings(saved)):
+        raise HTTPException(
+            status_code=409,
+            detail="This job was sliced for a different printer. Slice it again.",
+        )
     if os.path.getmtime(path) < os.path.getmtime(mesh_path):
         raise HTTPException(
             status_code=409,
@@ -241,9 +258,22 @@ async def slice_version(
     untrusted geometry inside this container, so one at a time.
     """
     mesh = await _mesh_path(store, version_id)
+    saved = await asyncio.to_thread(user_settings.load)
+
+    # Answered before the slicer runs, because the answer is already known. The
+    # version carries its bounding box, and a model that fits in no orientation
+    # costs a slicer run to be told "All objects are outside of the print
+    # volume" -- which names neither the model's size nor the printer's.
+    version = await store.get_version(version_id)
+    if version is not None:
+        why = slicing.too_big_for(version.bbox, slicing.build_volume(saved))
+        if why:
+            return {"ok": False, "detail": why, "slicer_missing": False, "stats": {}}
+
     out_path = os.path.join(os.path.dirname(mesh), GCODE_NAME)
+    profile = slicing.profile_from_settings(saved)
     async with request.app.state.slice_gate:
-        outcome = await asyncio.to_thread(slicing.slice_mesh, mesh, out_path)
+        outcome = await asyncio.to_thread(slicing.slice_mesh, mesh, out_path, profile=profile)
     return {
         "ok": outcome.ok,
         "detail": outcome.detail,
@@ -278,7 +308,7 @@ async def send_version(version_id: int, store: ScopedStore = Depends(get_store))
         )
 
     mesh = await _mesh_path(store, version_id)
-    gcode_path = _gcode_for(mesh)
+    gcode_path = _gcode_for(mesh, await asyncio.to_thread(user_settings.load))
 
     outcome = await asyncio.to_thread(
         printing.send_gcode, address, gcode_path, name=f"cadless-{version_id}"
@@ -308,11 +338,29 @@ async def download_gcode(version_id: int, store: ScopedStore = Depends(get_store
     `/send` would have sent.
     """
     mesh = await _mesh_path(store, version_id)
+    saved = await asyncio.to_thread(user_settings.load)
     return FileResponse(
-        _gcode_for(mesh),
+        _gcode_for(mesh, saved),
         media_type="text/x.gcode",
         filename=f"model_{version_id}.gcode",
     )
+
+
+@router.delete("/profile", dependencies=[Depends(require_mode(*printing.MODES))])
+async def forget_profile() -> dict:
+    """Forget every saved printer measurement, returning to the defaults.
+
+    The same gap `forget_address` exists for, one field over: `save()` only ever
+    sets, so a blank box means "leave this alone" -- right for a value somebody
+    did not retype, and no way back for one they got wrong. Without this the only
+    route to the defaults is editing `settings.json` by hand.
+
+    All seven together rather than one at a time: a printer profile describes one
+    machine, and half of one is not a smaller description of it. `user_settings.clear`
+    accepts these because they are saved state rather than configuration.
+    """
+    await asyncio.to_thread(user_settings.clear, *slicing.PRINTER_PROFILE_LIMITS)
+    return {"ok": True}
 
 
 @router.delete("/address", dependencies=[Depends(require_mode(*printing.MODES))])

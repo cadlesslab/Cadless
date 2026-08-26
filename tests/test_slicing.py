@@ -121,7 +121,11 @@ class TestSlicing:
         assert "too tall" in outcome.detail
 
     def test_success_without_a_file_is_still_a_failure(self, installed, monkeypatch, mesh, out):
-        """A zero exit with nothing written must not read as a print-ready job."""
+        """A zero exit with nothing written must not read as a print-ready job.
+
+        The silent case: nothing on either stream, so there is nothing to quote
+        and the generic sentence is all there is to say.
+        """
         monkeypatch.setattr(
             slicing.subprocess,
             "run",
@@ -130,6 +134,59 @@ class TestSlicing:
         outcome = slicing.slice_mesh(mesh, out)
         assert not outcome.ok
         assert "wrote no G-code" in outcome.detail
+
+    def test_a_zero_exit_that_explained_itself_is_quoted(self, installed, monkeypatch, mesh, out):
+        """The usual case, and the one that made this branch worth fixing.
+
+        Measured against the real binary on a model larger than the bed:
+        PrusaSlicer writes "All objects are outside of the print volume." to
+        stderr, exits 0, and creates no file. Reading stderr only on the
+        non-zero branch turned that into "wrote no G-code" -- true, and naming
+        nothing the reader could act on.
+        """
+        monkeypatch.setattr(
+            slicing.subprocess,
+            "run",
+            lambda argv, **k: subprocess.CompletedProcess(
+                argv, 0, "", "All objects are outside of the print volume."
+            ),
+        )
+        outcome = slicing.slice_mesh(mesh, out)
+        assert not outcome.ok
+        assert "outside of the print volume" in outcome.detail
+
+    def test_a_zero_exit_that_only_spoke_on_stdout_is_quoted_too(
+        self, installed, monkeypatch, mesh, out
+    ):
+        # Same rule as the non-zero branch: stderr first, stdout when that is
+        # empty. Which stream a slicer build chooses is not the reader's problem.
+        monkeypatch.setattr(
+            slicing.subprocess,
+            "run",
+            lambda argv, **k: subprocess.CompletedProcess(argv, 0, "nothing to slice", ""),
+        )
+        outcome = slicing.slice_mesh(mesh, out)
+        assert not outcome.ok
+        assert "nothing to slice" in outcome.detail
+
+    def test_a_saved_profile_reaches_the_command(self, installed, monkeypatch, mesh, out):
+        # The profile is a parameter, so the route can hand it the user's own
+        # printer. Asserted on the argv rather than on the outcome, because the
+        # argv is the whole of what the slicer is told.
+        seen: list[list[str]] = []
+
+        def run(argv, **_kwargs):
+            seen.append(argv)
+            with open(_output_path(argv), "w") as handle:
+                handle.write("G28\n")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(slicing.subprocess, "run", run)
+        profile = slicing.profile_from_settings({"printer_bed_width": 300})
+        slicing.slice_mesh(mesh, out, profile=profile)
+
+        argv = seen[0]
+        assert "0x0,300x0,300x200,0x200" in argv
 
     def test_a_timeout_is_reported_rather_than_raised(self, installed, monkeypatch, mesh, out):
         def boom(*_a, **_k):

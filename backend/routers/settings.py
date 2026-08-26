@@ -50,6 +50,18 @@ class SettingsUpdate(BaseModel):
     # the address of a device on the operator's network stays out of the
     # environment the code-execution subprocess inherits.
     printer_address: str | None = None
+    # What the printer is, as against where it is. Saved state on the same terms
+    # as the address above, and typed as numbers so a JSON number arrives as one
+    # -- a bed sent as the string "300" would otherwise be stored as text and
+    # read back as something `slicing` has to coerce. Ranges live in
+    # `user_settings`, which `save()` enforces for Python callers too.
+    printer_bed_width: float | None = None
+    printer_bed_depth: float | None = None
+    printer_max_height: float | None = None
+    printer_nozzle_diameter: float | None = None
+    printer_filament_diameter: float | None = None
+    printer_nozzle_temperature: float | None = None
+    printer_bed_temperature: float | None = None
     # Engine tuning knobs, typed rather than str so a JSON number arrives as a
     # number. The default stays None so `exclude_none` can tell "not sent" from
     # "sent as 0/false" — for a knob those are different instructions, where for

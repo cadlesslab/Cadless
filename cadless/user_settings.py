@@ -22,12 +22,14 @@ set and where it came from, never its value.
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import Any
 
 from cadless.config import settings
 from cadless.model_profiles import PROFILES
 from cadless.printing import AddressRefused, refuse_public_literal
+from cadless.slicing import PRINTER_PROFILE_LIMITS
 
 # Non-secret UI field -> environment variable (CADLESS_*) it corresponds to.
 _PLAIN_FIELDS: dict[str, str] = {
@@ -216,7 +218,17 @@ _FILE_ONLY_SECRETS: frozenset[str] = frozenset()
 # -- `cadless/printing.py` is handed it -- and exporting it would put the
 # address of a device on the operator's network into the environment that
 # `cadless/worker.py` hands to generated code.
-_SAVED_ONLY_FIELDS: tuple[str, ...] = ("printer_address",)
+#: The printer's own measurements, saved beside ``printer_address`` and for the
+#: same reason: nothing downstream reads them from the environment --
+#: ``cadless/slicing.py`` is handed them -- and exporting them would put them in
+#: the environment ``cadless/worker.py`` gives to generated code.
+#:
+#: The ranges are `cadless.slicing.PRINTER_PROFILE_LIMITS`, imported rather than
+#: restated. That module owns them because it owns the units, the defaults and
+#: the flags they become; this one owns refusing a value at the input, so that
+#: the reader is told there rather than after waiting for a slicer to run and
+#: reading a message about print volumes. Two tables would drift silently.
+_SAVED_ONLY_FIELDS: tuple[str, ...] = ("printer_address", *PRINTER_PROFILE_LIMITS)
 
 PROVIDERS: tuple[str, ...] = ("bedrock", "anthropic", "openai")
 
@@ -317,6 +329,7 @@ def validate(patch: dict[str, Any]) -> None:
                     f"{_PLAIN_FIELDS[field]} to an OpenAI model id (e.g. 'gpt-4o')"
                 )
     _validate_printer_address(patch)
+    _validate_printer_profile(patch)
     _validate_knobs(patch)
 
 
@@ -335,6 +348,42 @@ def _validate_printer_address(patch: dict[str, Any]) -> None:
         refuse_public_literal(str(address))
     except AddressRefused as exc:
         raise ValueError(str(exc)) from exc
+
+
+def _validate_printer_profile(patch: dict[str, Any]) -> None:
+    """Refuse a printer measurement that cannot be acted on, and store it as a number.
+
+    The value is checked rather than the spelling: whatever arrives is coerced
+    the way :func:`cadless.slicing.profile_from_settings` will coerce it, and the
+    *result* is what has to be finite and inside the range. Checking the input's
+    type instead would pass a string that later reads as a bed of zero.
+
+    It also **writes the coerced number back into the patch**, which is why this
+    is not purely a validator. A Python caller can pass ``"300"``; stored as
+    text it goes onto the wire against a typed field, renders as an empty box,
+    and is silently used by the slicer anyway -- the panel saying nothing is set
+    while the printer is cut for 300 mm.
+
+    The `bool` guard protects this entry point only: the request model declares
+    these `float`, so pydantic turns a JSON `true` into `1.0` before anything
+    here sees it.
+    """
+    for field, (low, high) in PRINTER_PROFILE_LIMITS.items():
+        if field not in patch:
+            continue
+        raw = patch[field]
+        # `bool` is an `int`, and `True` would otherwise be a 1 mm nozzle.
+        if isinstance(raw, bool):
+            raise ValueError(f"{field}={raw!r} is not a measurement")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{field}={raw!r} is not a number") from None
+        if not math.isfinite(value):
+            raise ValueError(f"{field}={raw!r} is not a finite number")
+        if not low <= value <= high:
+            raise ValueError(f"{field}={raw!r} is outside the usable range {low} to {high}")
+        patch[field] = value
 
 
 def _raises_spend(field: str, value: Any) -> bool:
