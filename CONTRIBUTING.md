@@ -182,6 +182,23 @@ it locally:
 python tools/leak_guard.py
 ```
 
+**Your commit messages and your PR description are checked too.** They are
+published exactly as a tracked file is, and no walk of the tree can see either,
+so they are scanned separately against the same patterns:
+
+```bash
+git log --format='%B' main..HEAD > messages.txt
+python tools/leak_guard.py --text messages.txt
+```
+
+Fixing this one is more urgent than fixing the tree, because it cannot be fixed
+later: opening a pull request creates a `refs/pull/N/head` that GitHub never
+deletes, so rewriting the branch afterwards cleans the branch and not the
+repository. Reword and force-push **before** you open it.
+
+Your `Signed-off-by` address is exempt — the DCO requires it, and GitHub already
+publishes it in the commit's author field.
+
 ## Code of conduct
 
 Participation in this project is covered by our

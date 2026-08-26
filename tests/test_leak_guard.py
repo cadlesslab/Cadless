@@ -165,5 +165,123 @@ def test_cli_exit_codes(tmp_path):
     assert subprocess.run([sys.executable, str(_GUARD), str(dirty)]).returncode == 1
 
 
+class TestTheTextACommitIsPublishedWith:
+    """A commit message is not in the tree, so walking the tree cannot see it.
+
+    Two commits reached this repository's `origin` carrying an internal tracker
+    key in their messages while every check passed. The pattern was present and
+    correct; what was missing was any path from it to the text being published.
+    A pull request mints `refs/pull/N/head` the moment it opens and GitHub never
+    deletes those, so catching it after the push does not help.
+    """
+
+    def test_a_tracker_key_in_a_commit_message_is_found(self, tmp_path):
+        message = tmp_path / "messages.txt"
+        message.write_text(
+            "fix: keep a job with the printer it was cut for\n"
+            "\n"
+            "The staleness check added in " + "INNOL-" + "653 refuses it.\n"
+        )
+        assert leak_guard.run_text([message]) is False
+
+    def test_a_tracker_key_in_a_pull_request_body_is_found(self, tmp_path):
+        # Published the same way, and the guard beside this one already treats a
+        # body as in scope. Measured on the stack this was found in: one body
+        # carried the key, written while reporting the leak.
+        body = tmp_path / "pr_body.txt"
+        body.write_text("Recorded for a decision: " + "INNOL-" + "653 is in a commit message.\n")
+        assert leak_guard.run_text([body]) is False
+
+    @pytest.mark.parametrize("sample", INTERNAL_SAMPLES.values(), ids=INTERNAL_SAMPLES.keys())
+    def test_every_internal_pattern_reaches_this_path_too(self, tmp_path, sample):
+        # One pattern set, both ways in. A pattern that fails the tree and passes
+        # a commit message would be the same hole one door along.
+        text = tmp_path / "messages.txt"
+        text.write_text(f"feat: something\n\n{sample}\n")
+        assert leak_guard.run_text([text]) is False
+
+    def test_ordinary_text_passes(self, tmp_path):
+        text = tmp_path / "messages.txt"
+        text.write_text(
+            "feat: offer to scale a model down instead of stopping\n"
+            "\n"
+            "Measured on the shipped dining table, 1600 x 900 x 750 mm.\n"
+            "\n"
+            "Signed-off-by: A Developer <dev@example.com>\n"
+        )
+        assert leak_guard.run_text([text]) is True
+
+    def test_a_branch_name_is_not_what_this_reads(self, tmp_path):
+        # Deliberate: a tracker key in a branch name is allowed, because a branch
+        # name is not published text. Only what is handed to this is scanned.
+        text = tmp_path / "messages.txt"
+        text.write_text("Merge pull request from a feature branch\n")
+        assert leak_guard.run_text([text]) is True
+
+    def test_the_sign_off_a_commit_is_required_to_carry_is_not_a_finding(self, tmp_path):
+        # `git commit -s` writes the trailer from the author's own address, and
+        # CONTRIBUTING.md requires it on every commit. Without this exemption the
+        # guard would fail every conforming commit for conforming -- measured:
+        # the first run of this over the real branch reported the trailer three
+        # times and the actual leak once.
+        text = tmp_path / "messages.txt"
+        text.write_text(
+            "feat: something\n\nA change.\n\n"
+            "Signed-off-by: A Developer <dev@" + "inno" + "lingua" + ".ai>\n"
+        )
+        assert leak_guard.run_text([text]) is True
+
+    def test_the_exemption_covers_the_address_and_not_the_line(self, tmp_path):
+        # Only what the trailer is required to carry is exempt. A key written
+        # into the name is not the address, so it is still found -- otherwise the
+        # exemption would be a place to hide one.
+        text = tmp_path / "messages.txt"
+        text.write_text("feat: something\n\nSigned-off-by: " + "INNOL-" + "1 <dev@example.com>\n")
+        assert leak_guard.run_text([text]) is False
+
+    def test_a_signed_off_commit_still_has_its_message_read(self, tmp_path):
+        # Where the two commits this was added for actually put theirs: in the
+        # body, above a perfectly good sign-off.
+        text = tmp_path / "messages.txt"
+        text.write_text(
+            "fix: keep a job with the printer it was cut for\n\n"
+            "The staleness check added in " + "INNOL-" + "653 refuses it.\n\n"
+            "Signed-off-by: A Developer <dev@" + "inno" + "lingua" + ".ai>\n"
+        )
+        assert leak_guard.run_text([text]) is False
+
+    def test_a_file_that_cannot_be_read_is_a_failure(self, tmp_path):
+        # Fail-closed, as the tree scan is: text that was not scanned is not
+        # text that was found clean.
+        assert leak_guard.run_text([tmp_path / "absent.txt"]) is False
+
+    def test_no_input_is_a_failure(self):
+        # Being asked to check nothing is a wiring mistake, and answering "clean"
+        # to it would hide the wiring mistake behind a pass.
+        assert leak_guard.run_text([]) is False
+
+    def test_the_cli_scans_text_when_asked(self, tmp_path):
+        text = tmp_path / "messages.txt"
+        text.write_text("chore: tidy up\n\n" + "INNOL-" + "1 mentioned here.\n")
+        done = subprocess.run(
+            [sys.executable, str(_GUARD), "--text", str(text)], capture_output=True, text=True
+        )
+        assert done.returncode == 1
+        assert "tracker key" in done.stderr
+
+        text.write_text("chore: tidy up\n")
+        done = subprocess.run(
+            [sys.executable, str(_GUARD), "--text", str(text)], capture_output=True, text=True
+        )
+        assert done.returncode == 0
+
+    def test_the_tree_scan_is_unchanged_by_this(self, tmp_path):
+        # The default path takes no flag and still means "walk this tree".
+        (tmp_path / "ok.py").write_text("print('hello')\n")
+        assert leak_guard.run(tmp_path) is True
+        (tmp_path / "bad.py").write_text("# " + "INNOL-" + "1\n")
+        assert leak_guard.run(tmp_path) is False
+
+
 def test_repository_tree_is_clean():
     assert leak_guard.run(_ROOT) is True
