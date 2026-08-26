@@ -16,7 +16,7 @@
  * provider or a key it does not name, and a component that loads what it shows
  * cannot drift from a parent that stopped rendering it.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import * as api from "../api";
 import type { SettingsStatus, SettingsUpdate } from "../api";
@@ -70,6 +70,10 @@ export function PrinterSettings() {
   // it is 300, and coercing on every keystroke fights the person typing.
   const [printer, setPrinter] = useState<Record<string, string>>({});
   const [testing, setTesting] = useState(false);
+  // The panel is only mounted one at a time today, but an id chosen by React
+  // rather than written by hand cannot collide if that ever stops being true --
+  // and `HelpPopover` next door already does it this way.
+  const addressId = useId();
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -130,6 +134,11 @@ export function PrinterSettings() {
     }
   }
 
+  /** Check the address in the box, saved or not.
+   *
+   * Testing what has been typed rather than what has been stored is the point:
+   * finding out an address is wrong should not require saving it first.
+   */
   async function onTest() {
     setTesting(true);
     try {
@@ -183,8 +192,12 @@ export function PrinterSettings() {
 
   return (
     <div className="printer-settings">
+      {/* The mark sits outside the label on purpose: inside one, a click on it
+          would also count as a click on the field it labels. That is why this
+          field is shaped differently from the seven below, which keep the
+          wrapping-label idiom. */}
       <div className="settings-head">
-        <label htmlFor="printer-address">3D printer address</label>
+        <label htmlFor={addressId}>3D printer address</label>
         {/* A mark rather than a paragraph. The explanation is worth having and
             is not worth re-reading on every visit by everyone who set the
             address months ago. */}
@@ -193,9 +206,12 @@ export function PrinterSettings() {
           refused.
         </HelpPopover>
       </div>
+      {/* Named by the label alone. An `aria-label` beside it would win the
+          accessible name and leave the `<label>` decorative -- two mechanisms
+          that can drift, where the tests would go on passing off the one that
+          is not wired to anything. */}
       <TextInput
-        id="printer-address"
-        aria-label="3D printer address"
+        id={addressId}
         placeholder="192.168.0.42"
         value={address}
         onChange={(e) => setAddress(e.target.value)}

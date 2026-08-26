@@ -12,15 +12,20 @@
  */
 import { EmptyState, Panel } from "../components";
 import { useActiveVersion } from "../state";
+import { availableFormats } from "./exportFormats";
 import { ExportShare } from "./ExportShare";
 import { PrinterSettings } from "./PrinterSettings";
 
 export function ExportPanel() {
   const version = useActiveVersion();
+  // `ok` is not enough: `ExportShare` renders nothing at all when the version
+  // carries no exportable artifact, and a panel with neither the actions nor a
+  // word about why is worse than one that says there is nothing here.
+  const exportable = version?.ok === true && availableFormats(version).length > 0;
 
   return (
     <Panel title="Export">
-      {version?.ok ? (
+      {exportable && version ? (
         <ExportShare version={version} />
       ) : (
         // The printer settings stay reachable either way: setting an address is

@@ -36,14 +36,21 @@ describe("SettingsIcon", () => {
     expect(container.querySelectorAll("circle")).toHaveLength(2);
   });
 
-  it("is not the same drawing as the theme toggle beside it", () => {
-    // The regression this file exists to stop coming back: a docstring calling
-    // it a gear while the markup drew a sun went unnoticed for as long as
-    // nothing compared the two.
-    const gear = render(<SettingsIcon />).container.innerHTML;
-    const sun = render(<SunIcon />).container.innerHTML;
-    expect(gear).not.toBe(sun);
-    expect(render(<SunIcon />).container.querySelectorAll("circle")).toHaveLength(1);
+  it("would have failed on the sun that used to be here", () => {
+    // Comparing the two as strings does not do it: the old glyph was a hub with
+    // eight rays -- the same drawing as `SunIcon` at a different radius -- so it
+    // was never byte-identical and `not.toBe` passed while the bug was there.
+    // What separates a gear from a sun is the ring around the hub.
+    const radii = (root: Element) =>
+      [...root.querySelectorAll("circle")].map((c) => Number(c.getAttribute("r")));
+
+    const gear = radii(render(<SettingsIcon />).container);
+    const sun = radii(render(<SunIcon />).container);
+
+    expect(sun).toHaveLength(1);
+    expect(gear).toHaveLength(2);
+    // And the outer circle is a ring around the hub rather than a second hub.
+    expect(Math.max(...gear)).toBeGreaterThan(Math.min(...gear) * 2);
   });
 });
 

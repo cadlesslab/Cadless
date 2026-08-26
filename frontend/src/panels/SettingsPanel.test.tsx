@@ -17,8 +17,8 @@ const STATUS: SettingsStatus = {
   aws_region: "us-east-1",
   aws_region_source: "default",
   printer_address: null,
-  // Nothing saved: the engine keeps its own default for each of these, which is
-  // the state every existing installation is in.
+  // Present because `SettingsStatus` requires them, not because this panel shows
+  // them any more — the printer moved to Export.
   printer_bed_width: null,
   printer_bed_depth: null,
   printer_max_height: null,
@@ -39,7 +39,6 @@ vi.mock("../api", async (orig) => ({
   ...(await orig<typeof import("../api")>()),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
-  forgetPrinterProfile: vi.fn(),
 }));
 
 afterEach(() => vi.clearAllMocks());
