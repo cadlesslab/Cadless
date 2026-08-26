@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import "./components.css";
 import { ToastProvider, useToast } from "./Toast";
 
 function Triggers() {
@@ -294,5 +295,60 @@ describe("where a toast appears", () => {
     fireEvent(window, new Event("resize"));
 
     expect(card("Action failed").className).not.toContain("toast-anchored");
+  });
+});
+
+describe("the stylesheet the anchoring depends on", () => {
+  /** The real rules, applied the way a browser applies them.
+   *
+   * Every other test here asserts the inline `top`/`left` the component writes,
+   * and those were right the whole time. What decides whether they mean
+   * viewport coordinates or an offset from wherever the flex column already put
+   * the card is `position`, and that comes from the stylesheet -- so a suite
+   * that never loads the stylesheet cannot see it, which is how an anchoring
+   * that never worked in a browser shipped green.
+   *
+   * The import is what makes this possible: vitest blanks CSS by default, and
+   * `?raw` and `?inline` both come back empty under it, so `vite.config.ts` now
+   * processes this one file.
+   */
+  function toast(className: string): HTMLElement {
+    const el = document.createElement("div");
+    el.className = className;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  it("lets an anchored toast leave the viewport's column", () => {
+    // `.toast` sets `position: relative`. While the anchored rule was a single
+    // class written above it, that one won, every anchored card stayed inside
+    // `.toast-viewport` -- `top: 48px; right: 0` -- and the coordinates moved it
+    // further right instead of beside its trigger.
+    const el = toast("toast toast-error toast-anchored");
+    expect(getComputedStyle(el).position).toBe("fixed");
+    el.remove();
+  });
+
+  it("leaves an unanchored toast alone", () => {
+    // The corner is still where a message with no origin belongs, and it gets
+    // there by staying in the viewport's flow.
+    const el = toast("toast toast-success");
+    expect(getComputedStyle(el).position).toBe("relative");
+    el.remove();
+  });
+
+  it("beats the base rule on specificity, not only on being written later", () => {
+    // The assertion above cannot see this one. jsdom resolves the cascade by
+    // source order and has no notion of specificity -- measured: with the
+    // compound selector written first it answers `relative` where a browser
+    // answers `fixed` -- so a suite that only reads computed style would go
+    // green on an ordering that a single reshuffle undoes. The selector is the
+    // part a browser actually uses, so read that too.
+    const selectors = Array.from(document.styleSheets)
+      .flatMap((sheet) => Array.from(sheet.cssRules))
+      .map((rule) => (rule as CSSStyleRule).selectorText)
+      .filter((text) => text?.includes("toast-anchored"));
+
+    expect(selectors).toEqual([".toast.toast-anchored"]);
   });
 });
