@@ -3,9 +3,12 @@
 # The tree must stay free of internal references and credential shapes
 # (tools/leak_guard.py, fail-closed -- this repo used to be produced by a
 # scrubbing extractor; direct commits mean the scrub must live here now),
-# every pull-request commit must carry a Signed-off-by trailer (DCO -- see
-# CONTRIBUTING.md), and no commit message or pull-request body may carry
-# AI-assistant attribution (tools/attribution_guard.py).
+# and so must the text a change is *published* with: a commit message and a
+# pull-request body reach the world exactly as a tracked file does, and no
+# tree walk can see either. Every pull-request commit must carry a
+# Signed-off-by trailer (DCO -- see CONTRIBUTING.md), and no commit message
+# or pull-request body may carry AI-assistant attribution
+# (tools/attribution_guard.py).
 name: leak-guard
 
 on:
@@ -76,3 +79,9 @@ jobs:
           git log --no-merges --format='%B' "$BASE".."$HEAD" > messages.txt
           printf '%s' "$PR_BODY" > pr_body.txt
           python tools/attribution_guard.py messages.txt pr_body.txt
+
+      # The same two files, read for the other thing that must not be published.
+      # Separate step so a failure names which of the two rules was broken --
+      # they have different remedies and one is far more urgent than the other.
+      - name: No internal references in commit messages or the PR body
+        run: python tools/leak_guard.py --text messages.txt pr_body.txt

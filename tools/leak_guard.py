@@ -10,9 +10,13 @@ and anything shaped like a credential.
 Fail-closed: any unexpected error is a failure, never a pass.
 
     python tools/leak_guard.py [tree]
+    python tools/leak_guard.py --text FILE [FILE ...]
 
-Scans the repository root when no tree is given. Exit code 0 means clean,
-1 means findings (or an internal error), 2 means bad usage.
+Scans the repository root when no tree is given. ``--text`` scans the given
+files instead, for the text a change is *published* with rather than the text
+it leaves in the tree -- commit messages and the pull request body, which no
+tree walk can reach. Exit code 0 means clean, 1 means findings (or an internal
+error), 2 means bad usage.
 """
 
 from __future__ import annotations
@@ -158,23 +162,76 @@ def iter_text_files(root: Path):
                 continue
 
 
-def scan_tree(root: Path) -> list[str]:
-    """Return one finding line per pattern match found under root."""
-    compiled = [
+#: The address inside a Developer Certificate of Origin trailer.
+#:
+#: `CONTRIBUTING.md` requires the trailer on every commit and `git commit -s`
+#: writes it from the author's own address, so matching the domain patterns
+#: against it would fail every commit for carrying the very thing that makes it
+#: conform. It is not a leak either: GitHub already publishes that address in
+#: the commit's author field, where no scan of the message could reach it.
+#:
+#: Only the address is exempt, not the line. A tracker key written into the name
+#: is still found, and so is one anywhere else in the message -- which is where
+#: the two commits this was added for actually put theirs.
+_SIGN_OFF_ADDRESS = re.compile(r"(?im)^(Signed-off-by:[^<>\n]*)<[^<>\s]+>(\s*)$")
+
+
+def _compiled():
+    """Every pattern, compiled once. One set, whichever way the text arrives."""
+    return [
         (label, name, re.compile(rx))
         for label, patterns in (("internal", INTERNAL_PATTERNS), ("secret", SECRET_PATTERNS))
         for name, rx in patterns.items()
     ]
+
+
+def _findings_in(text: str, where: str, compiled) -> list[str]:
+    """One finding line per match in a single piece of text."""
+    found: list[str] = []
+    for label, name, rx in compiled:
+        for match in rx.finditer(text):
+            line = text[: match.start()].count("\n") + 1
+            snippet = text[max(0, match.start() - 30) : match.end() + 20].replace("\n", " ").strip()
+            found.append(f"[{label}/{name}] {where}:{line}  …{snippet}…")
+    return found
+
+
+def scan_tree(root: Path) -> list[str]:
+    """Return one finding line per pattern match found under root."""
+    compiled = _compiled()
     findings: list[str] = []
     for path, text in iter_text_files(root):
-        rel = path.relative_to(root)
-        for label, name, rx in compiled:
-            for match in rx.finditer(text):
-                line = text[: match.start()].count("\n") + 1
-                snippet = (
-                    text[max(0, match.start() - 30) : match.end() + 20].replace("\n", " ").strip()
-                )
-                findings.append(f"[{label}/{name}] {rel}:{line}  …{snippet}…")
+        findings += _findings_in(text, str(path.relative_to(root)), compiled)
+    return findings
+
+
+def scan_text(paths: list[Path]) -> list[str]:
+    """Return one finding line per pattern match in the given text files.
+
+    Exists because a commit message is not in the tree, and neither is a pull
+    request body. :func:`scan_tree` reaches its patterns through ``os.walk``, so
+    the pattern most likely to appear in a subject line -- the internal tracker
+    key -- was the one nothing could see. Two commits reached this repository's
+    ``origin`` carrying one while every check passed.
+
+    Catching it *before* the push is the only catch that helps: a pull request
+    mints ``refs/pull/N/head`` the moment it opens, and GitHub never deletes
+    those, so a key that gets that far cannot be taken back by rewriting the
+    branch.
+
+    The sign-off address is exempt -- see :data:`_SIGN_OFF_ADDRESS`. Nothing else
+    is: this reads the same pattern set the tree scan does.
+
+    Raises rather than skipping a file it cannot read -- see :func:`run_text`.
+    """
+    compiled = _compiled()
+    findings: list[str] = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        # Blanked rather than removed, so the line numbers reported still count
+        # from the top of the file the reader will open.
+        text = _SIGN_OFF_ADDRESS.sub(r"\1\2", text)
+        findings += _findings_in(text, path.name, compiled)
     return findings
 
 
@@ -198,7 +255,43 @@ def run(root: Path) -> bool:
     return False
 
 
+def run_text(paths: list[Path]) -> bool:
+    """Return True when every given file is clean. Any error counts as a failure.
+
+    **No input is a failure.** Being handed nothing to check is a wiring mistake
+    in whatever assembled the arguments, and answering "clean" would hide that
+    mistake behind a pass -- which is the same shape of hole this function was
+    added to close.
+    """
+    if not paths:
+        print("leak guard errored — nothing to scan", file=sys.stderr)
+        return False
+    try:
+        findings = scan_text(paths)
+    except Exception as exc:  # fail-closed: text that was not read is not clean text
+        print(f"leak guard errored — treating as failure: {exc!r}", file=sys.stderr)
+        return False
+
+    if not findings:
+        print(f"leak guard passed — {len(paths)} text input(s) carry no internal references")
+        return True
+
+    print(f"leak guard failed — {len(findings)} finding(s) in published text", file=sys.stderr)
+    for finding in findings[:60]:
+        print(f"  {finding}", file=sys.stderr)
+    if len(findings) > 60:
+        print(f"  … and {len(findings) - 60} more", file=sys.stderr)
+    print(
+        "This text is published and cannot be taken back once a pull request exists. "
+        "Reword the commit or the body, then force-push before merging.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) > 1 and argv[1] == "--text":
+        return 0 if run_text([Path(arg) for arg in argv[2:]]) else 1
     if len(argv) > 2:
         print(__doc__)
         return 2
