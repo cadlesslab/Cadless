@@ -241,6 +241,100 @@ class TestSlicing:
         assert callable(seen["preexec"])
 
 
+class TestAdviceAboutAPrintItStillMade:
+    """The slicer warns and exits zero, so nothing used to read it."""
+
+    #: The real output, from running the scaled dining table in the API image.
+    REAL = """10 => Processing triangulated mesh
+65 => Searching support spots
+69 => Alert if supports needed
+print warning: Detected print stability issues:
+
+model.stl
+Floating bridge anchors, Low bed adhesion, Long bridging extrusions
+
+Consider enabling supports.
+Also consider enabling brim.
+89 => Calculating overhanging perimeters
+90 => Exporting G-code to /tmp/out.gcode
+Slicing result exported to /tmp/out.gcode"""
+
+    def _writes_saying(self, said: str):
+        def run(argv, **_kwargs):
+            with open(_output_path(argv), "w") as handle:
+                handle.write("G28\n")
+            return subprocess.CompletedProcess(argv, 0, said, "")
+
+        return run
+
+    def test_the_advice_reaches_the_outcome(self, installed, monkeypatch, mesh, out):
+        monkeypatch.setattr(slicing.subprocess, "run", self._writes_saying(self.REAL))
+        outcome = slicing.slice_mesh(mesh, out)
+        assert outcome.ok is True
+        assert "stability issues" in outcome.warning
+        assert "Consider enabling supports." in outcome.warning
+
+    def test_the_progress_around_it_is_not_carried_with_it(self):
+        # Its output interleaves the two, so taking the last few lines -- which
+        # is what the failure branches do -- picks up progress rather than the
+        # thing worth reading.
+        monkeypatched = subprocess.CompletedProcess([], 0, self.REAL, "")
+        said = slicing._warning_from(monkeypatched)
+        assert "Exporting G-code" not in said
+        assert "Processing triangulated mesh" not in said
+
+    def test_the_containers_noise_is_not_read_out_as_advice(self):
+        # A block that runs to the end of stdout used to continue into stderr,
+        # where this container's own graphics complaints live -- and what comes
+        # back here is put in front of the reader verbatim.
+        said = slicing._warning_from(
+            subprocess.CompletedProcess(
+                [],
+                0,
+                "10 => Processing\nprint warning: Low bed adhesion.\nConsider a brim.",
+                "libGL error: MESA-LOADER: failed to open swrast\n"
+                "Gtk-Message: Failed to load module\n"
+                "QStandardPaths: XDG_RUNTIME_DIR not set",
+            )
+        )
+        assert said == "Low bed adhesion. Consider a brim."
+
+    def test_advice_on_stderr_is_still_read(self):
+        # Whichever stream holds it. Only the reading of one past its end stops.
+        said = slicing._warning_from(
+            subprocess.CompletedProcess([], 0, "10 => Processing\n", "print warning: Warped.")
+        )
+        assert said == "Warped."
+
+    def test_every_block_survives_not_just_the_first(self):
+        # The slicer says its piece, carries on slicing, and says another.
+        said = slicing._warning_from(
+            subprocess.CompletedProcess(
+                [],
+                0,
+                "print warning: First problem.\n50 => Slicing\nprint warning: Second problem.\n"
+                "60 => Done",
+                "",
+            )
+        )
+        assert said == "First problem. Second problem."
+
+    def test_the_label_is_not_read_out_and_the_case_is_not_load_bearing(self):
+        # "print warning:" is how the slicer marks it, not part of what it says.
+        said = slicing._warning_from(
+            subprocess.CompletedProcess([], 0, "Print Warning: Low bed adhesion.", "")
+        )
+        assert said == "Low bed adhesion."
+
+    def test_a_clean_run_says_nothing(self, installed, monkeypatch, mesh, out):
+        monkeypatch.setattr(
+            slicing.subprocess,
+            "run",
+            self._writes_saying("10 => Processing\n90 => Exporting\nSlicing result exported."),
+        )
+        assert slicing.slice_mesh(mesh, out).warning == ""
+
+
 class TestNothingHalfWrittenSurvives:
     """The caller treats the file's presence as evidence of a finished slice."""
 

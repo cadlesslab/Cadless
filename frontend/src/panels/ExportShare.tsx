@@ -5,6 +5,7 @@ import {
   artifactUrl,
   type ArtifactKind,
   fetchFilamentLevel,
+  type ScaleOffer,
   type FilamentLevel,
   fetchPrintCapability,
   gcodeUrl,
@@ -22,6 +23,7 @@ import { availableFormats, downloadFilename, FORMAT_META, shareUrl } from "./exp
 import {
   DEFAULT_CLOSING,
   filamentNote,
+  SCALED_MODEL_WARNING,
   sliceSummary,
   USB_TETHER_WARNING,
 } from "./printSummary";
@@ -70,6 +72,15 @@ async function fetchGcode(url: string): Promise<string> {
  * Its own dialog rather than a toast: both cases are an instruction with a
  * place to go, and a message that dismisses itself is the wrong shape for one. */
 type Notice = { title: string; body: string } | null;
+
+/** A model that will not fit, and what could be printed instead.
+ *
+ * Its own state rather than a `Notice`, because it is a question with two
+ * answers rather than something to acknowledge. The version id travels with it
+ * for the reason the sliced numbers carry theirs: the active version moves
+ * without a click, and answering yes must scale the model that was measured.
+ */
+type TooBig = { versionId: number; detail: string; offer: ScaleOffer } | null;
 
 /** A slice, carrying the version it is a slice *of* and what can be done with it.
  *
@@ -145,6 +156,7 @@ export function ExportShare({ version }: { version: Version }) {
     slicedNow.current = sliced;
   }, [sliced]);
   const [notice, setNotice] = useState<Notice>(null);
+  const [tooBig, setTooBig] = useState<TooBig>(null);
   const [usb, setUsb] = useState<UsbJob>(null);
   // True only while the device chooser is up. The dialog stays open behind
   // it -- dismissing the chooser has to leave something to try again from --
@@ -192,21 +204,60 @@ export function ExportShare({ version }: { version: Version }) {
    * printer address is *not* one of those cases any more — the job can still be
    * downloaded, which is the only thing a deployment in a datacentre could ever
    * have offered. */
+  /** Whether this deployment can do anything at all with a sliced job.
+   *
+   * Checked before slicing, because slicing a model for two minutes only to
+   * report that this deployment cannot print wastes the reader's time on a
+   * question that could have been asked immediately. The mode comes first: a
+   * build with printing switched off *and* no slicer would otherwise be told to
+   * install one, which would not help. */
+  function cannotPrint(capability: PrintCapability): boolean {
+    if (capability.can_send || capability.can_download) return false;
+    setNotice(
+      capability.mode === "off"
+        ? { title: "Printing is off", body: "This installation has printing switched off." }
+        : { title: "No slicer yet", body: capability.slicer_hint },
+    );
+    return true;
+  }
+
+  /** What to do with a slice result, wherever it came from.
+   *
+   * Both the first call and the scaled second one land here, because both meet
+   * the same three answers: no slicer, a refusal, a job. Written once so the
+   * second cannot quietly keep a shorter list than the first — it had one, and
+   * a slicer that went missing between the two calls came back as "couldn't
+   * prepare this model" with the install hint as the body. */
+  function settle(
+    target: number,
+    result: SliceResult,
+    capability: PrintCapability,
+    level: FilamentLevel | null,
+  ) {
+    if (result.slicer_missing) {
+      setNotice({ title: "No slicer yet", body: result.detail });
+      return;
+    }
+    if (!result.ok) {
+      // A refusal that has something to offer is a question rather than a dead
+      // end. Most of the catalogue is furniture at real scale, so for that half
+      // "it will not fit" was always the last word.
+      if (result.scale_offer) {
+        setTooBig({ versionId: target, detail: result.detail, offer: result.scale_offer });
+        return;
+      }
+      toast.error("Couldn't prepare this model", result.detail);
+      return;
+    }
+    setSliced({ versionId: target, result, can: capability, level });
+  }
+
   async function print() {
     const target = version.id;
     setPrintStep("slicing");
     try {
       const capability = await fetchPrintCapability();
-      if (!capability.can_send && !capability.can_download) {
-        // The mode first: a build with printing switched off *and* no slicer
-        // would otherwise be told to install one, which would not help.
-        setNotice(
-          capability.mode === "off"
-            ? { title: "Printing is off", body: "This installation has printing switched off." }
-            : { title: "No slicer yet", body: capability.slicer_hint },
-        );
-        return;
-      }
+      if (cannotPrint(capability)) return;
 
       // Asked alongside the slice rather than before it. Slicing is the slow
       // step, so the round trip to the printer costs nothing on the clock — and
@@ -216,15 +267,34 @@ export function ExportShare({ version }: { version: Version }) {
         sliceVersion(target),
         fetchFilamentLevel().catch(() => null),
       ]);
-      if (result.slicer_missing) {
-        setNotice({ title: "No slicer yet", body: result.detail });
-        return;
-      }
-      if (!result.ok) {
-        toast.error("Couldn't prepare this model", result.detail);
-        return;
-      }
-      setSliced({ versionId: target, result, can: capability, level });
+      settle(target, result, capability, level);
+    } catch (err) {
+      toast.error("Couldn't prepare this model", errMessage(err));
+    } finally {
+      setPrintStep("");
+    }
+  }
+
+  /** Slice it again, small enough to fit, because somebody said to.
+   *
+   * A second call rather than a flag carried from the first, so the model is
+   * only ever scaled as the answer to a question that was asked. That is kept
+   * here, by there being no other place the flag is set; the route will accept
+   * it on a first call, and declines to scale a model that fits regardless.
+   */
+  async function confirmScaled() {
+    if (!tooBig) return;
+    const target = tooBig.versionId;
+    setTooBig(null);
+    setPrintStep("slicing");
+    try {
+      const capability = await fetchPrintCapability();
+      if (cannotPrint(capability)) return;
+      const [result, level] = await Promise.all([
+        sliceVersion(target, { scaleToFit: true }),
+        fetchFilamentLevel().catch(() => null),
+      ]);
+      settle(target, result, capability, level);
     } catch (err) {
       toast.error("Couldn't prepare this model", errMessage(err));
     } finally {
@@ -400,9 +470,23 @@ export function ExportShare({ version }: { version: Version }) {
           sliced ? (
             <>
               {sliceSummary(sliced.result.stats, closingFor(sliced.can))}
+              {/* That this is not the model as it was drawn. The figures above
+                  are the slicer's own and describe the scaled object without
+                  ever saying it is one, and the decision to scale was made a
+                  dialog ago — so the last screen before the material is
+                  committed says which model this is. */}
+              {sliced.result.scaled && (
+                <span className="print-scaled"> Scaled down to fit the bed.</span>
+              )}
               {/* What the machine has left, next to what this will take. The
                   pair is the whole question somebody is answering here. */}
               {filament && <span className="print-filament"> {filament}</span>}
+              {/* What the slicer said while still producing a job. It matters
+                  most on a scaled model, where the tool proposed the shape that
+                  is now hard to print. */}
+              {sliced.result.warning && (
+                <span className="print-slicer-warning"> {sliced.result.warning}</span>
+              )}
               {/* Stated here rather than after the click, because keeping a tab
                   open for the length of a print is the cost being weighed
                   against the walk to the printer — and only the USB option
@@ -469,6 +553,39 @@ export function ExportShare({ version }: { version: Version }) {
             onClick={() => usb?.controller.abort()}
           >
             Stop
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={tooBig != null}
+        onOpenChange={(open) => !open && setTooBig(null)}
+        title="Too big for this printer"
+        description={
+          tooBig ? (
+            <>
+              {tooBig.detail}
+              <span className="print-scale">
+                {" "}
+                Scaled to about {tooBig.offer.percent}% it would be{" "}
+                {tooBig.offer.size.join(" × ")} mm.
+              </span>
+              {/* Before the decision, not after: what comes out is a model of
+                  the thing rather than a smaller one of it, and only the reader
+                  knows which of those they wanted. */}
+              <span className="print-scale-warning"> {SCALED_MODEL_WARNING}</span>
+            </>
+          ) : (
+            ""
+          )
+        }
+      >
+        <div className="modal-footer">
+          <Button type="button" variant="ghost" onClick={() => setTooBig(null)}>
+            Cancel
+          </Button>
+          <Button type="button" variant="primary" onClick={confirmScaled}>
+            Scale it and print
           </Button>
         </div>
       </Modal>

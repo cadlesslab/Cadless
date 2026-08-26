@@ -350,6 +350,148 @@ describe("ExportShare printing", () => {
     });
   });
 
+  describe("a model that will not fit", () => {
+    const offer = { percent: 12.5, size: [200, 112.5, 93.8] as [number, number, number] };
+    const refusal = {
+      ok: false,
+      detail: "This model is 1600 x 900 x 750 mm, and the printer's build volume is 210 x 200 x 195 mm.",
+      slicer_missing: false,
+      stats: {},
+      scale_offer: offer,
+    };
+
+    it("asks instead of stopping", async () => {
+      // Most of the catalogue is furniture at real scale, so for that half the
+      // plain refusal was always the last word.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue(refusal);
+      renderShare(version(["stl"]));
+      print();
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Scale it and print" })).toBeInTheDocument(),
+      );
+      // Both sizes, and what it would become.
+      expect(screen.getByText(/1600 x 900 x 750/)).toBeInTheDocument();
+      expect(screen.getByText(/200 × 112.5 × 93.8 mm/)).toBeInTheDocument();
+      expect(screen.getByText(/12.5%/)).toBeInTheDocument();
+    });
+
+    it("says what a scaled model is, before it is agreed to", async () => {
+      // Not "the same thing, smaller". Only the reader knows which of those
+      // they wanted, so the tool says what happens rather than choosing.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue(refusal);
+      renderShare(version(["stl"]));
+      print();
+
+      await screen.findByRole("button", { name: "Scale it and print" });
+      expect(screen.getByText(/holes stop fitting what they were sized for/)).toBeInTheDocument();
+    });
+
+    it("slices nothing until the offer is accepted", async () => {
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue(refusal);
+      renderShare(version(["stl"]));
+      print();
+
+      await screen.findByRole("button", { name: "Cancel" });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      // One call: the one that produced the refusal. Declining asks for nothing.
+      expect(vi.mocked(api.sliceVersion).mock.calls).toHaveLength(1);
+      expect(vi.mocked(api.sliceVersion).mock.calls[0][1]).toBeUndefined();
+    });
+
+    it("asks for a scaled job only once the answer is yes", async () => {
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion)
+        .mockResolvedValueOnce(refusal)
+        .mockResolvedValueOnce(sliced({ estimated_time: "10h 51m", filament_grams: "97.3" }));
+      renderShare(version(["stl"]));
+      print();
+
+      await screen.findByRole("button", { name: "Scale it and print" });
+      fireEvent.click(screen.getByRole("button", { name: "Scale it and print" }));
+
+      await waitFor(() => expect(vi.mocked(api.sliceVersion).mock.calls).toHaveLength(2));
+      // The version the dialog measured, not whichever is active by now: the
+      // offer's numbers describe that one and no other.
+      expect(vi.mocked(api.sliceVersion).mock.calls[1][0]).toBe(
+        vi.mocked(api.sliceVersion).mock.calls[0][0],
+      );
+      expect(vi.mocked(api.sliceVersion).mock.calls[1][1]).toEqual({ scaleToFit: true });
+      // And the numbers shown are the slicer's own, for the print that will run.
+      await waitFor(() => expect(screen.getByText(/10h 51m/)).toBeInTheDocument());
+    });
+
+    it("says the model was scaled, on the screen that commits the material", async () => {
+      // The figures are the slicer's own and describe the scaled object without
+      // ever saying it is one, and the decision was made a dialog ago.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion)
+        .mockResolvedValueOnce(refusal)
+        .mockResolvedValueOnce({ ...sliced({ estimated_time: "10h 51m" }), scaled: true });
+      renderShare(version(["stl"]));
+      print();
+
+      await screen.findByRole("button", { name: "Scale it and print" });
+      fireEvent.click(screen.getByRole("button", { name: "Scale it and print" }));
+
+      await waitFor(() =>
+        expect(screen.getByText(/Scaled down to fit the bed/)).toBeInTheDocument(),
+      );
+    });
+
+    it("meets the same answers on the second call as on the first", async () => {
+      // The scaled call used to keep a shorter list of what can come back, so a
+      // slicer that went missing between the two was reported as a model that
+      // could not be prepared, with the install hint as the body.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion)
+        .mockResolvedValueOnce(refusal)
+        .mockResolvedValueOnce({
+          ok: false,
+          detail: "Install PrusaSlicer to print.",
+          slicer_missing: true,
+          stats: {},
+        });
+      renderShare(version(["stl"]));
+      print();
+
+      await screen.findByRole("button", { name: "Scale it and print" });
+      fireEvent.click(screen.getByRole("button", { name: "Scale it and print" }));
+
+      await waitFor(() => expect(screen.getByText("No slicer yet")).toBeInTheDocument());
+    });
+
+    it("still fails plainly when there is nothing to offer", async () => {
+      // A model the slicer refused for some other reason has no question to ask.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue({
+        ok: false, detail: "Object too tall", slicer_missing: false, stats: {},
+      });
+      renderShare(version(["stl"]));
+      print();
+
+      await waitFor(() => expect(screen.getByText("Object too tall")).toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: "Scale it and print" })).not.toBeInTheDocument();
+    });
+
+    it("passes on what the slicer said about a print it did make", async () => {
+      // It matters most here, where the tool proposed the shape.
+      vi.mocked(api.fetchPrintCapability).mockResolvedValue(LOCAL);
+      vi.mocked(api.sliceVersion).mockResolvedValue({
+        ...sliced({ estimated_time: "1h" }),
+        warning: "print warning: Low bed adhesion. Consider enabling brim.",
+      });
+      renderShare(version(["stl"]));
+      print();
+
+      await waitFor(() => expect(screen.getByText(/Low bed adhesion/)).toBeInTheDocument());
+    });
+  });
+
   describe("what the machine has left", () => {
     it("shows it beside what the print will take", async () => {
       // The pair is the whole question somebody is answering at this dialog.

@@ -121,6 +121,12 @@ PRINTER_PROFILE_LIMITS: dict[str, tuple[float, float]] = {
     "printer_bed_temperature": (0.0, 200.0),
 }
 
+#: How much of the bed to leave free around a scaled object, in millimetres.
+#:
+#: A skirt is drawn beside the part, not on it, so a model scaled to the exact
+#: build volume is a model whose skirt does not fit. Split across both sides.
+SCALE_MARGIN_MM = 10.0
+
 #: How much hotter the first layer runs than the rest. The default profile
 #: already does this (205 then 210), and saving a different filament has to move
 #: the first layer with it rather than leaving it on the old constant.
@@ -270,6 +276,115 @@ def profile_from_settings(saved: Mapping[str, Any] | None = None) -> dict[str, s
     return profile
 
 
+def _dimensions(bbox: Sequence[Any] | None) -> tuple[float, float, float] | None:
+    """The bounding box as three usable numbers, or ``None``.
+
+    ``None`` covers everything that is not three finite numbers: a missing box, a
+    short one, a string where a number should be, a NaN. Every caller here
+    answers that the same way -- say nothing, and let the slicer be the one to
+    speak -- which is why the unpacking is one piece of code rather than three
+    copies drifting apart.
+    """
+    try:
+        width, depth, height = (float(value) for value in bbox)  # type: ignore[misc]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (width, depth, height)):
+        return None
+    return width, depth, height
+
+
+@dataclass(frozen=True)
+class ScaleOffer:
+    """What scaling a too-big model down would give, as something to be asked.
+
+    ``percent`` and ``size`` are worked out from the recorded bounding box and
+    are therefore an estimate — the slicer does the real arithmetic against the
+    mesh. They agree wherever this offer can appear at all, because the check
+    that produces it reads the same box. Said as "about" for that reason.
+
+    ``turned`` is the orientation those numbers assume, and it is here because
+    they are only true if it is taken. The slicer scales each axis against the
+    matching one, so a model laid the other way round comes out at a different
+    size than the one that was agreed to.
+    """
+
+    percent: float
+    size: tuple[float, float, float]
+    turned: bool = False
+
+
+def scaled_target(volume: BuildVolume) -> BuildVolume:
+    """The volume to aim a scaled model at: the bed, less room for a skirt."""
+    return BuildVolume(
+        width=max(1.0, volume.width - SCALE_MARGIN_MM),
+        depth=max(1.0, volume.depth - SCALE_MARGIN_MM),
+        height=volume.height,
+    )
+
+
+def scale_offer(bbox: Sequence[Any] | None, volume: BuildVolume) -> ScaleOffer | None:
+    """What to offer for a model that will not fit, or ``None`` when there is
+    nothing to offer.
+
+    ``None`` for a model that already fits — there is nothing to ask — and for a
+    bounding box that is not three usable numbers, which is the same silence
+    :func:`too_big_for` keeps.
+    """
+    if not too_big_for(bbox, volume):
+        return None
+    dimensions = _dimensions(bbox)
+    if dimensions is None:
+        return None
+    width, depth, height = dimensions
+    if not all(value > 0 for value in dimensions):
+        return None
+
+    target = scaled_target(volume)
+    # Each axis against the matching one, because that is what the slicer does.
+    # Both orientations are worked out and the better wins -- and which one won
+    # is *returned*, because an offer that assumes a turn nobody takes is a
+    # number the reader is shown and then does not get. Measured: PrusaSlicer
+    # applies `--rotate` before `--scale-to-fit`, so the turn is the slicer's
+    # own starting point and this arithmetic is the arithmetic it will do.
+    flat = min(target.width / width, target.depth / depth, target.height / height)
+    turned = min(target.width / depth, target.depth / width, target.height / height)
+    factor, quarter_turn = (turned, True) if turned > flat else (flat, False)
+    if factor >= 1:
+        return None
+
+    percent = round(factor * 100, 1)
+    size = (round(width * factor, 1), round(depth * factor, 1), round(height * factor, 1))
+    # Nothing to offer when the answer rounds away. "About 0%", or a model one of
+    # whose sides is 0 mm, is not something a person can agree to, and the button
+    # beside it would start a print of nothing.
+    if percent <= 0 or any(value <= 0 for value in size):
+        return None
+    return ScaleOffer(percent=percent, size=size, turned=quarter_turn)
+
+
+#: A quarter turn about Z, in degrees. The only rotation anything here asks for
+#: -- both the allowance :func:`too_big_for` makes and the orientation
+#: :func:`scale_offer` assumes are the footprint laid the other way round.
+QUARTER_TURN = 90.0
+
+
+def needs_quarter_turn(bbox: Sequence[Any] | None, volume: BuildVolume) -> bool:
+    """Whether this model fits turned a quarter and does not fit as it stands.
+
+    :func:`too_big_for` compares the footprint in both orientations, so it passes
+    a model that only fits turned. Nothing was turning it, which made that
+    allowance a claim the tool did not keep.
+    """
+    dimensions = _dimensions(bbox)
+    if dimensions is None:
+        return False
+    width, depth, _height = dimensions
+    fits_flat = width <= volume.width and depth <= volume.depth
+    fits_turned = depth <= volume.width and width <= volume.depth
+    return fits_turned and not fits_flat
+
+
 def cartridge_grams(saved: Mapping[str, Any] | None = None) -> float | None:
     """What a full cartridge holds, or ``None`` when nobody has said.
 
@@ -305,12 +420,10 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
     Closing it needs a version-to-domain link the store does not carry, so it is
     recorded here rather than guessed at.
     """
-    try:
-        width, depth, height = (float(value) for value in bbox)  # type: ignore[misc]
-    except (TypeError, ValueError):
+    dimensions = _dimensions(bbox)
+    if dimensions is None:
         return ""
-    if not all(math.isfinite(value) for value in (width, depth, height)):
-        return ""
+    width, depth, height = dimensions
 
     footprint = sorted((width, depth))
     bed = sorted((volume.width, volume.depth))
@@ -338,6 +451,13 @@ class SliceOutcome:
     gcode_path: str = ""
     missing: bool = False
     stats: dict[str, Any] = field(default_factory=dict)
+    #: What the slicer said about the print while still producing one.
+    #:
+    #: It writes these on a *successful* run and exits zero, so nothing here used
+    #: to read them. A table scaled to a tenth is thin legs under a floating top
+    #: — the print most likely to come off the bed — and the slicer says so.
+    #: That matters most when the tool is the one that proposed the scale.
+    warning: str = ""
 
 
 def find_slicer() -> str | None:
@@ -349,16 +469,53 @@ def find_slicer() -> str | None:
     return None
 
 
-def build_command(binary: str, mesh_path: str, out_path: str, profile: dict[str, str]) -> list[str]:
+def build_command(
+    binary: str,
+    mesh_path: str,
+    out_path: str,
+    profile: dict[str, str],
+    *,
+    fit_to: BuildVolume | None = None,
+    rotate_degrees: float = 0.0,
+) -> list[str]:
     """The argument vector, as a list so nothing goes through a shell.
 
     Kept separate from :func:`slice_mesh` so a test can assert on what would be
     run without running it, and so the profile is visible as data rather than
     buried in a call.
+
+    ``fit_to`` shrinks the model until it fits the volume given. The slicer does
+    that arithmetic against the **mesh**, which is always millimetres, rather
+    than against the bounding box this project records in the project's own
+    authoring units — so the shrinking itself is unit-correct once it is asked
+    for. It does **not** close :func:`too_big_for`'s units gap: what asks for it
+    is that same bounding-box check, so a model whose box reads a thousand times
+    too small is never refused and never offered this either.
+
+    ``rotate_degrees`` turns it about Z, only ever :data:`QUARTER_TURN`, for a
+    model that fits turned and not as it stands or one whose offered size assumes
+    that orientation.
+
+    **The order of the two is load-bearing and measured.** ``--rotate`` is
+    emitted first, and PrusaSlicer applies the transforms in that order: the same
+    model and volume give 97.4% rotated-then-fitted and 92.7% the other way
+    round. :func:`scale_offer` promises the first of those, so reordering these
+    two blocks would break the promise with every test still green. Measured
+    against the real binary in the API image, 1600 x 900 x 750 mm on the default
+    bed: ``--rotate 90 --scale-to-fit 200,190,195`` puts extruding moves across
+    106.42 x 189.55 mm, which is that box turned and scaled by 11.875%, not by
+    the 12.5% an unrotated fit would give.
     """
     argv = [binary, "--export-gcode", "--output", out_path]
     for key, value in profile.items():
         argv += [f"--{key}", value]
+    if rotate_degrees:
+        argv += ["--rotate", _fmt(rotate_degrees)]
+    if fit_to is not None:
+        argv += [
+            "--scale-to-fit",
+            f"{_fmt(fit_to.width)},{_fmt(fit_to.depth)},{_fmt(fit_to.height)}",
+        ]
     argv.append(mesh_path)
     return argv
 
@@ -410,9 +567,80 @@ def profile_fingerprint(profile: Mapping[str, str]) -> str:
 
     Sorted before hashing so the digest is a property of the values rather than
     of dict ordering.
+
+    **What it does not cover**: :data:`SCALE_MARGIN_MM` is not part of the
+    profile, so a job scaled under one margin stays servable after that constant
+    is edited. That takes a source change rather than anything a user can do, so
+    it is written down rather than guarded.
     """
     payload = json.dumps(dict(sorted(profile.items())), separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+#: Where the slicer's advice starts, and the shape of the progress lines that
+#: surround it. Its own output interleaves the two. Matched without regard to
+#: case because nothing promises which the slicer uses, and the prefix is
+#: dropped from what is returned -- the reader wants the sentence, not the label.
+_WARNING_START = re.compile(r"print warning:", re.IGNORECASE)
+_PROGRESS_LINE = re.compile(r"^\s*\d+ =>")
+
+
+def _advice_in(text: str) -> str:
+    """Every warning block in one stream, joined, with the prefixes dropped.
+
+    A block runs from ``print warning:`` to the next progress line, and there can
+    be more than one -- the slicer says its piece, carries on slicing, and says
+    another. Taking only the first dropped advice about a print that was made.
+
+    **One limit, deliberately left.** Advice whose own text is shaped like a
+    progress line (``100 => ...``) ends the block early. Nothing in the output
+    distinguishes the two, so the alternative is reading progress lines to the
+    reader as though they were advice, which is the worse of the two errors.
+    """
+    blocks: list[str] = []
+    said: list[str] = []
+    for raw in text.splitlines():
+        found = _WARNING_START.search(raw)
+        if found:
+            if said:
+                blocks.append(" ".join(said))
+            said = []
+            rest = raw[found.end() :].strip()
+            if rest:
+                said.append(rest)
+            continue
+        if not said:
+            continue
+        if _PROGRESS_LINE.match(raw):
+            blocks.append(" ".join(said))
+            said = []
+            continue
+        line = raw.strip()
+        if line:
+            said.append(line)
+    if said:
+        blocks.append(" ".join(said))
+    return " ".join(blocks)
+
+
+def _warning_from(done: subprocess.CompletedProcess) -> str:
+    """The slicer's advice about a print it nonetheless produced.
+
+    Its output interleaves progress lines with the warning block, so the last few
+    lines -- which is what :func:`_what_it_said` takes -- are usually progress
+    rather than the thing worth reading. This reads the blocks instead.
+
+    **One stream at a time, and this is load-bearing.** Searching the two joined
+    let a block that ran to the end of stdout continue straight into stderr,
+    where this container's ``libGL`` and ``Gtk-Message`` noise lives -- and what
+    comes back here is rendered to the reader verbatim. Whichever stream holds
+    the advice, it also holds its end.
+    """
+    for stream in (done.stdout or "", done.stderr or ""):
+        found = _advice_in(stream)
+        if found:
+            return found
+    return ""
 
 
 def _what_it_said(done: subprocess.CompletedProcess) -> str:
@@ -451,6 +679,8 @@ def slice_mesh(
     out_path: str,
     *,
     profile: dict[str, str] | None = None,
+    fit_to: BuildVolume | None = None,
+    rotate_degrees: float = 0.0,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> SliceOutcome:
     """Slice ``mesh_path`` into ``out_path``.
@@ -473,7 +703,14 @@ def slice_mesh(
 
     part_path = out_path + PART_SUFFIX
     _discard(part_path)
-    argv = build_command(binary, mesh_path, part_path, profile or DEFAULT_PROFILE)
+    argv = build_command(
+        binary,
+        mesh_path,
+        part_path,
+        profile or DEFAULT_PROFILE,
+        fit_to=fit_to,
+        rotate_degrees=rotate_degrees,
+    )
     try:
         done = subprocess.run(  # noqa: S603 - argv built here; never a shell string
             argv,
@@ -524,4 +761,10 @@ def slice_mesh(
         with open(out_path + PROFILE_SUFFIX, "w") as handle:
             handle.write(profile_fingerprint(profile or DEFAULT_PROFILE))
 
-    return SliceOutcome(True, "", gcode_path=out_path, stats=read_stats(out_path))
+    return SliceOutcome(
+        True,
+        "",
+        gcode_path=out_path,
+        stats=read_stats(out_path),
+        warning=_warning_from(done),
+    )

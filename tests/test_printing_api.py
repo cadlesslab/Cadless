@@ -63,6 +63,28 @@ def bare_client(store):
 
 
 @pytest.fixture
+def turned_version(store):
+    """A version whose offered size is only true if the model is turned.
+
+    600 x 1100 mm against a bed that is wider than it is deep. Laid as it stands
+    the slicer has to fit 1100 mm into 190; laid across, into 200. The offer
+    takes the better of the two, so something has to take the turn as well.
+    """
+
+    async def go():
+        project = await store.create_project("P")
+        version = await store.add_version(
+            project.id, "a shelf", "result=1", ok=True, bbox=(600.0, 1100.0, 450.0)
+        )
+        directory = Path(store.version_artifact_dir(version.id))
+        (directory / "model.stl").write_bytes(b"\x00" * 84)
+        await store.add_artifact(version.id, "stl", str(directory / "model.stl"))
+        return version.id
+
+    return asyncio.run(go())
+
+
+@pytest.fixture
 def version_with_stl(store):
     async def go():
         project = await store.create_project("P")
@@ -319,6 +341,96 @@ class TestSlicing:
         client.post(f"/printing/versions/{version_with_stl}/slice")
         assert Path(seen["out"]).parent == Path(seen["mesh"]).parent
         assert Path(seen["out"]).name == printing_routes.GCODE_NAME
+
+
+class TestOfferingToScaleItDown:
+    """The refusal, turned into a question.
+
+    Nothing is sliced until the question comes back answered -- which is the
+    difference between offering a scale and quietly deciding on one.
+    """
+
+    def test_the_refusal_carries_an_offer(self, client, oversized_version, monkeypatch):
+        def never(*_a, **_k):
+            raise AssertionError("nothing is sliced until the offer is accepted")
+
+        monkeypatch.setattr(slicing, "slice_mesh", never)
+        body = client.post(f"/printing/versions/{oversized_version}/slice").json()
+
+        assert body["ok"] is False
+        offer = body["scale_offer"]
+        assert offer is not None
+        assert 0 < offer["percent"] < 100
+        assert len(offer["size"]) == 3
+
+    def test_accepting_it_scales_the_job(self, client, oversized_version, monkeypatch):
+        seen = {}
+
+        def fake(_mesh, out_path, *, fit_to=None, rotate_degrees=0.0, **_kwargs):
+            seen["fit_to"] = fit_to
+            Path(out_path).write_text("G28\n")
+            return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        body = client.post(f"/printing/versions/{oversized_version}/slice?scale_to_fit=true").json()
+
+        assert body["ok"] is True
+        assert body["scaled"] is True
+        # Inside the bed, with room left for a skirt.
+        volume = slicing.build_volume({})
+        assert seen["fit_to"] == slicing.scaled_target(volume)
+
+    def test_the_turn_the_offer_assumed_is_the_turn_that_is_taken(
+        self, client, turned_version, monkeypatch
+    ):
+        # The offered size is only true in one orientation. Without the turn the
+        # slicer lays it the other way and fits each axis against the matching
+        # one, so the print comes out smaller than the size that was agreed to.
+        seen = {}
+
+        def fake(_mesh, out_path, *, fit_to=None, rotate_degrees=0.0, **_kwargs):
+            seen["fit_to"] = fit_to
+            seen["rotate"] = rotate_degrees
+            Path(out_path).write_text("G28\n")
+            return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        offer = client.post(f"/printing/versions/{turned_version}/slice").json()["scale_offer"]
+        client.post(f"/printing/versions/{turned_version}/slice?scale_to_fit=true")
+
+        assert offer is not None
+        assert seen["rotate"] == slicing.QUARTER_TURN
+        assert seen["fit_to"] == slicing.scaled_target(slicing.build_volume({}))
+
+    def test_a_model_that_fits_is_never_scaled(self, client, version_with_stl, monkeypatch):
+        # Even when the flag is sent: the offer is what makes scaling legitimate,
+        # and a model that fits was never offered one.
+        seen = {}
+
+        def fake(_mesh, out_path, *, fit_to=None, **_kwargs):
+            seen["fit_to"] = fit_to
+            Path(out_path).write_text("G28\n")
+            return slicing.SliceOutcome(True, "", gcode_path=out_path)
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        body = client.post(f"/printing/versions/{version_with_stl}/slice?scale_to_fit=true").json()
+
+        assert body["ok"] is True
+        assert body["scaled"] is False
+        assert seen["fit_to"] is None
+
+    def test_the_slicers_advice_reaches_the_caller(self, client, version_with_stl, monkeypatch):
+        # It matters most on a scaled model, where the tool proposed the shape
+        # that is now hard to print.
+        def fake(_mesh, out_path, **_kwargs):
+            Path(out_path).write_text("G28\n")
+            return slicing.SliceOutcome(
+                True, "", gcode_path=out_path, warning="print warning: Low bed adhesion"
+            )
+
+        monkeypatch.setattr(slicing, "slice_mesh", fake)
+        body = client.post(f"/printing/versions/{version_with_stl}/slice").json()
+        assert "Low bed adhesion" in body["warning"]
 
 
 class TestWhatTheMachineHasLeft:
