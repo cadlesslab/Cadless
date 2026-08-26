@@ -24,6 +24,7 @@ export {
   CloseIcon,
   CatalogIcon,
   ImportIcon,
+  ExportIcon,
   HouseIcon,
   CadlessIcon,
   domainIcon,

@@ -102,7 +102,10 @@ type UsbJob = {
 export function closingFor(can: PrintCapability): string {
   if (can.can_send) return DEFAULT_CLOSING;
   if (can.mode === "auto" && !can.printer_configured && can.can_configure) {
-    return "Add your printer's address in Settings to send jobs straight to it.";
+    // "below", not "in Settings": the address moved here, and this dialog opens
+    // over the panel that now holds it. Sending somebody to Settings would be
+    // sending them past the box they are looking for.
+    return "Add your printer's address below to send jobs straight to it.";
   }
   return "This installation cannot reach a printer, so take the file to yours.";
 }

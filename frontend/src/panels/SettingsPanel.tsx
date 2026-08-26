@@ -58,45 +58,6 @@ const readKnob = (s: SettingsStatus, field: string) =>
 const knobSource = (s: SettingsStatus | null, field: string) =>
   s ? (s as unknown as Record<string, string>)[`${field}_source`] : undefined;
 
-/** The printer's own measurements, in the order somebody would read them off it.
- *
- * The build volume first, because it is the one that decides whether a model
- * can be printed at all -- the rest decides whether it comes out well. Every
- * field is optional: the engine keeps its own default for anything left blank,
- * so a panel nobody opens changes nothing about how a model is sliced.
- */
-type PrinterField = {
-  field:
-    | "printer_bed_width"
-    | "printer_bed_depth"
-    | "printer_max_height"
-    | "printer_nozzle_diameter"
-    | "printer_filament_diameter"
-    | "printer_nozzle_temperature"
-    | "printer_bed_temperature";
-  label: string;
-  placeholder: string;
-};
-
-const PRINTER_FIELDS: PrinterField[] = [
-  { field: "printer_bed_width", label: "Bed width (mm)", placeholder: "210" },
-  { field: "printer_bed_depth", label: "Bed depth (mm)", placeholder: "200" },
-  { field: "printer_max_height", label: "Maximum height (mm)", placeholder: "195" },
-  { field: "printer_nozzle_diameter", label: "Nozzle (mm)", placeholder: "0.4" },
-  { field: "printer_filament_diameter", label: "Filament (mm)", placeholder: "1.75" },
-  { field: "printer_nozzle_temperature", label: "Nozzle temperature (°C)", placeholder: "205" },
-  { field: "printer_bed_temperature", label: "Bed temperature (°C)", placeholder: "60" },
-];
-
-/** A saved number as text for an input, or blank when nothing is saved.
- *
- * Blank rather than the default's value, so the placeholder can show what the
- * engine would use while the field itself stays empty -- which is what makes
- * "I have not said" distinguishable from "I chose exactly the default".
- */
-const numberOrBlank = (value: unknown): string =>
-  typeof value === "number" && Number.isFinite(value) ? String(value) : "";
-
 export function SettingsPanel() {
   const toast = useToast();
   const [status, setStatus] = useState<SettingsStatus | null>(null);
@@ -108,11 +69,6 @@ export function SettingsPanel() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [awsAccessKeyId, setAwsAccessKeyId] = useState("");
   const [awsSecretAccessKey, setAwsSecretAccessKey] = useState("");
-  const [printerAddress, setPrinterAddress] = useState("");
-  // Held as text, not numbers: an input mid-typing is "3", "30", "30." before
-  // it is 300, and coercing on every keystroke fights the person typing.
-  const [printer, setPrinter] = useState<Record<string, string>>({});
-  const [testingPrinter, setTestingPrinter] = useState(false);
   // Edit state for the knob table. Numbers and text are held as strings so a
   // half-typed "0." is not coerced away under the cursor; the patch converts.
   const [knobs, setKnobs] = useState<Record<string, string | boolean>>({});
@@ -132,12 +88,6 @@ export function SettingsPanel() {
         setOrchestratorModel(s.orchestrator_model);
         setCodegenModel(s.codegen_model);
         setAwsRegion(s.aws_region);
-        setPrinterAddress(s.printer_address ?? "");
-        setPrinter(
-          Object.fromEntries(
-            PRINTER_FIELDS.map(({ field }) => [field, numberOrBlank(s[field])]),
-          ),
-        );
         setKnobs(
           Object.fromEntries(
             TUNING_KNOBS.map((k) => {
@@ -175,24 +125,6 @@ export function SettingsPanel() {
     if (openaiKey) patch.openai_api_key = openaiKey;
     if (awsAccessKeyId) patch.aws_access_key_id = awsAccessKeyId;
     if (awsSecretAccessKey) patch.aws_secret_access_key = awsSecretAccessKey;
-    // Blank means "leave it alone", matching every other field here: the save
-    // endpoint only ever sets, so an emptied box is not a way to forget an
-    // address.
-    if (printerAddress.trim()) patch.printer_address = printerAddress.trim();
-    const unusable: string[] = [];
-    for (const { field, label } of PRINTER_FIELDS) {
-      const typed = (printer[field] ?? "").trim();
-      // Blank means "leave it as it is": the endpoint only ever sets, and the
-      // engine keeps its default for anything it is not told.
-      if (!typed) continue;
-      const value = Number(typed);
-      if (Number.isFinite(value)) patch[field] = value;
-      // Every box that reaches here was typed into by hand -- a seeded value is
-      // always a finite number rendered back as text -- so dropping one silently
-      // under a green "Settings saved" tells somebody their measurement took
-      // when it did not.
-      else unusable.push(label);
-    }
 
     // Only knobs the user actually moved. Sending the whole table would flip
     // every untouched knob's provenance from "default" to "saved", which reads
@@ -226,14 +158,7 @@ export function SettingsPanel() {
       setOpenaiKey("");
       setAwsAccessKeyId("");
       setAwsSecretAccessKey("");
-      if (unusable.length) {
-        toast.error(
-          "Some measurements were not saved",
-          `${unusable.join(", ")} — each needs a number.`,
-        );
-      } else {
-        toast.success("Settings saved", "Applied without a restart.");
-      }
+      toast.success("Settings saved", "Applied without a restart.");
     } catch (err) {
       toast.error("Could not save settings", errMessage(err));
     } finally {
@@ -246,68 +171,6 @@ export function SettingsPanel() {
     const s = status?.secrets?.[field];
     return s?.set ? `Key set (${s.source}) — leave blank to keep` : undefined;
   };
-
-  /** Check the address in the box, saved or not.
-   *
-   * Testing what has been typed rather than what has been stored is the point:
-   * finding out an address is wrong should not require saving it first.
-   */
-  async function onTestPrinter() {
-    setTestingPrinter(true);
-    try {
-      const result = await api.testPrinter(printerAddress.trim() || undefined);
-      if (!result.ok) {
-        toast.error("No answer from the printer", result.detail);
-        return;
-      }
-      // An open port says the path is there; the device naming its own state
-      // says the thing at the other end is a printer. Worth showing, since the
-      // second is the half that distinguishes it from anything else listening.
-      const state = result.status?.printing
-        ? "It is printing something now."
-        : result.status?.idle
-          ? "It is idle and ready."
-          : "";
-      toast.success("Printer answered", [result.detail, state].filter(Boolean).join(" "));
-    } catch (err) {
-      toast.error("Could not test the printer", errMessage(err));
-    } finally {
-      setTestingPrinter(false);
-    }
-  }
-
-  /** Remove the saved address. Saving cannot do this: a blank box there means
-   * "leave it alone", which would make a typo permanent. */
-  async function onForgetPrinter() {
-    try {
-      await api.forgetPrinterAddress();
-      setPrinterAddress("");
-      setStatus((s) => (s ? { ...s, printer_address: null } : s));
-      toast.success("Printer address forgotten");
-    } catch (err) {
-      toast.error("Could not forget the printer address", errMessage(err));
-    }
-  }
-
-  /** Return every measurement to its default. Saving cannot do this, for the
-   * same reason it cannot forget an address: a blank box means "leave it". */
-  async function onForgetProfile() {
-    try {
-      await api.forgetPrinterProfile();
-      setPrinter({});
-      setStatus((s) =>
-        s
-          ? {
-              ...s,
-              ...Object.fromEntries(PRINTER_FIELDS.map(({ field }) => [field, null])),
-            }
-          : s,
-      );
-      toast.success("Printer profile forgotten", "Back to the defaults.");
-    } catch (err) {
-      toast.error("Could not forget the printer profile", errMessage(err));
-    }
-  }
 
   function onProviderChange(next: string) {
     setProvider(next);
@@ -412,68 +275,6 @@ export function SettingsPanel() {
           <span>Codegen model</span>
           <TextInput value={codegenModel} onChange={(e) => setCodegenModel(e.target.value)} />
         </label>
-
-        {/* The button sits outside the label: inside one, a click on it also
-            counts as a click on the field it labels. */}
-        <label className="settings-field">
-          <span>3D printer address</span>
-          <TextInput
-            aria-label="3D printer address"
-            placeholder="192.168.0.42"
-            value={printerAddress}
-            onChange={(e) => setPrinterAddress(e.target.value)}
-          />
-          <small>
-            The printer's address on your own network — Print sends jobs here. A public
-            address is refused.
-          </small>
-        </label>
-        {/* Collapsed, like Engine tuning: most people print on whatever the
-            defaults describe, and the panel's common errand is a key or a
-            provider. It is here rather than elsewhere because the bed is what
-            decides whether a model can be printed at all. */}
-        <details className="settings-tuning">
-          <summary>Printer profile</summary>
-          <small className="settings-note">
-            What your printer is, as against where it is. The build volume decides whether
-            a model is refused as too big before slicing starts. A blank box means "leave
-            this alone" rather than "use the default" — Forget is what returns a saved
-            measurement to the default.
-          </small>
-          {PRINTER_FIELDS.map(({ field, label, placeholder }) => (
-            <label className="settings-field" key={field}>
-              <span>{label}</span>
-              <TextInput
-                aria-label={label}
-                inputMode="decimal"
-                placeholder={placeholder}
-                value={printer[field] ?? ""}
-                onChange={(e) => setPrinter((p) => ({ ...p, [field]: e.target.value }))}
-              />
-            </label>
-          ))}
-          <div className="export-actions">
-            <Button type="button" size="sm" variant="ghost" onClick={onForgetProfile}>
-              Forget measurements
-            </Button>
-          </div>
-        </details>
-        <div className="export-actions">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={testingPrinter}
-            onClick={onTestPrinter}
-          >
-            {testingPrinter ? "Testing…" : "Test connection"}
-          </Button>
-          {status?.printer_address && (
-            <Button type="button" size="sm" variant="ghost" onClick={onForgetPrinter}>
-              Forget
-            </Button>
-          )}
-        </div>
 
         {provider === "openai" && (
           <small className="settings-note">

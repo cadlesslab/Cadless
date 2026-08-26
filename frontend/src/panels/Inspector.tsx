@@ -1,9 +1,13 @@
-/** Details inspector: status, metrics, code, downloads (foundation).
- * Code highlighting and the export picker extend this. */
+/** Details inspector: what this version is — status, metrics, and the code that
+ * made it.
+ *
+ * Getting something *out* of it used to be here too, which is how the formats,
+ * Print and Share came to live behind a tab called "Details". They are their own
+ * panel now; this one answers what you are looking at rather than what you can
+ * do with it. */
 import { EmptyState, Panel } from "../components";
 import { useActiveVersion } from "../state";
 import { CodePanel } from "./CodePanel";
-import { ExportShare } from "./ExportShare";
 
 export function Inspector() {
   const version = useActiveVersion();
@@ -34,8 +38,6 @@ export function Inspector() {
         </div>
 
         {version.error && <p className="detail-error">{version.error}</p>}
-
-        {version.ok && <ExportShare version={version} />}
 
         {version.code && <CodePanel code={version.code} error={version.error} />}
       </div>
