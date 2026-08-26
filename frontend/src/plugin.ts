@@ -157,6 +157,33 @@ export { errMessage } from "./errors";
 // `requestHeaders.ts` records both limits in full.
 export { registerRequestHeaders, type HeaderContributor } from "./requestHeaders";
 
+// Getting something out of this build, so a panel can put its own way of doing
+// that *beside* the ones here rather than instead of them.
+//
+// The reason it is the component and not a hook: a build that reaches a printer
+// this one cannot — over its own network, through something it runs there —
+// still wants the formats, the size check and the USB path exactly as they are.
+// Withholding `ExportShare` does not prevent that panel; it makes it reimplement
+// four behaviours that already had to be reconciled once, and then disagree with
+// this build the first time either side changes.
+//
+// The alternative was a separate panel of its own, needing nothing from here.
+// It was rejected because it splits getting-a-file-out from sending-it-somewhere
+// back apart, which is the split this build deliberately closed.
+//
+// **All three names or none.** The component takes a `Version`, so a build with
+// no name for that type cannot write the prop; and a panel is mounted by the
+// rail with no props at all, so the version has to be *found* rather than
+// handed over. Exporting the component alone would be a contract that
+// type-checks here and nowhere else — the failure this file exists to prevent.
+//
+// What this does not widen: the store behind the hook stays withheld, exactly as
+// `useApp` and `Store` are above. A panel may ask what is open; it may not
+// assemble the state that answers.
+export { ExportShare } from "./panels/ExportShare";
+export type { Version } from "./api";
+export { useActiveVersion } from "./state";
+
 // Showing a model this build does not hold yet. A panel hands over what to draw
 // and the engine decides how, which is the difference between a capability and
 // the store that backs it — the store is still withheld above.
