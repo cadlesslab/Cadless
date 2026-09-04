@@ -8,12 +8,13 @@ provider name (``bedrock``/``anthropic``/``openai``) and skipped by the default
 
 from __future__ import annotations
 
+import base64
 import os
 
 import pytest
 
 from cadless.config import Settings
-from cadless.llm.provider import ChatProvider, EmbeddingsUnsupported
+from cadless.llm.provider import ChatProvider, EmbeddingsUnsupported, ImagesUnsupported
 from cadless.llm.providers import StreamChunk
 from cadless.llm.providers.anthropic import AnthropicChatProvider
 from cadless.llm.providers.bedrock import BedrockChatProvider
@@ -137,6 +138,14 @@ def test_fake_complete_concatenates_text_deltas():
     ]
     provider = FakeChatProvider(script=script)
     assert provider.complete(model="m", system="s", user="u") == "abcdef"
+
+
+def test_fake_capabilities_report_image_support():
+    """The offline double has to be able to stand in for a vision model: an
+    attached picture is refused before the turn starts whenever the provider
+    reports it cannot see."""
+    provider = FakeChatProvider(script=[])
+    assert provider.capabilities("any-model").supports_images is True
 
 
 def test_fake_satisfies_chatprovider_protocol():
@@ -449,6 +458,100 @@ def test_bedrock_capabilities_reports_thinking_and_tool_choice():
     assert caps.supports_thinking is True
     assert caps.supports_tool_choice is True
     assert caps.max_output_tokens > 0
+
+
+def test_bedrock_encodes_image_block_as_converse_image():
+    """Converse takes the picture as raw bytes: boto3 base64-encodes a ``bytes``
+    member itself, so handing it our base64 string would double-encode it."""
+    from cadless.llm.providers.bedrock import _block_to_bedrock
+
+    png = b"\x89PNG\r\n\x1a\n"
+    block = ContentBlock.of_image(
+        data=base64.b64encode(png).decode(),
+        media_type="image/png",
+        reading="a bracket with two holes",
+    )
+    # Exact shape: the reading is engine-side only and never reaches the wire.
+    assert _block_to_bedrock(block) == {"image": {"format": "png", "source": {"bytes": png}}}
+    assert isinstance(_block_to_bedrock(block)["image"]["source"]["bytes"], bytes)
+
+
+def test_bedrock_maps_each_supported_media_type_to_a_format_token():
+    from cadless.llm.providers.bedrock import _block_to_bedrock
+
+    tokens = {
+        media_type: _block_to_bedrock(ContentBlock.of_image(data="aGk=", media_type=media_type))[
+            "image"
+        ]["format"]
+        for media_type in ("image/png", "image/jpeg", "image/gif", "image/webp")
+    }
+    assert tokens == {
+        "image/png": "png",
+        "image/jpeg": "jpeg",
+        "image/gif": "gif",
+        "image/webp": "webp",
+    }
+
+
+def test_bedrock_rejects_unmapped_image_media_type():
+    """A defaulted format token comes back as an opaque ValidationException, so an
+    unmapped type fails here instead — naming the type."""
+    from cadless.llm.providers.bedrock import _block_to_bedrock
+
+    block = ContentBlock.of_image(data="aGk=", media_type="image/tiff")
+    with pytest.raises(ValueError, match="image/tiff"):
+        _block_to_bedrock(block)
+
+
+def test_bedrock_sends_image_and_text_in_block_order():
+    provider, client = _provider_with(_text_stream("x"))
+    png = b"\x89PNG"
+    messages = [
+        Message(
+            role="user",
+            content=[
+                ContentBlock.of_image(data=base64.b64encode(png).decode(), media_type="image/png"),
+                ContentBlock.of_text("make this"),
+            ],
+        )
+    ]
+    list(
+        provider.stream_turn(
+            model="sonnet-4-6", system="s", messages=messages, tools=[], params=TurnParams()
+        )
+    )
+    assert client.calls[0]["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"image": {"format": "png", "source": {"bytes": png}}},
+                {"text": "make this"},
+            ],
+        }
+    ]
+
+
+def test_bedrock_text_only_message_encoding_is_unchanged():
+    """The image branch is additive: a message carrying no picture encodes exactly
+    as it did before images existed."""
+    provider, client = _provider_with(_text_stream("x"))
+    list(
+        provider.stream_turn(
+            model="sonnet-4-6",
+            system="s",
+            messages=[Message(role="user", content=[ContentBlock.of_text("make a box")])],
+            tools=[],
+            params=TurnParams(),
+        )
+    )
+    assert client.calls[0]["messages"] == [{"role": "user", "content": [{"text": "make a box"}]}]
+
+
+def test_bedrock_capabilities_report_image_support_per_slug():
+    provider, _ = _provider_with([])
+    assert provider.capabilities("sonnet-4-6").supports_images is True
+    # A slug nobody confirmed vision for fails closed rather than claiming it.
+    assert provider.capabilities("titan-text-lite").supports_images is False
 
 
 def test_bedrock_satisfies_chatprovider_protocol():
@@ -980,6 +1083,82 @@ def test_anthropic_encodes_tool_use_and_tool_result_blocks():
     ]
 
 
+def test_anthropic_encodes_image_block_as_base64_source():
+    """The Messages API takes the payload base64-encoded, which is how the neutral
+    block already carries it — nothing is decoded on this path (unlike Converse)."""
+    from cadless.llm.providers.anthropic import _block_to_anthropic
+
+    block = ContentBlock.of_image(
+        data="aGVsbG8=", media_type="image/png", reading="a bracket with two holes"
+    )
+    # Exact shape: the reading is engine-side only and never reaches the wire.
+    assert _block_to_anthropic(block) == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="},
+    }
+
+
+def test_anthropic_sends_image_and_text_in_block_order():
+    provider, client = _anthropic_with(_anthropic_text_stream("x"))
+    messages = [
+        Message(
+            role="user",
+            content=[
+                ContentBlock.of_image(data="aGVsbG8=", media_type="image/jpeg"),
+                ContentBlock.of_text("make this"),
+            ],
+        )
+    ]
+    list(
+        provider.stream_turn(
+            model="sonnet-4-6", system="s", messages=messages, tools=[], params=TurnParams()
+        )
+    )
+    assert client.calls[0]["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": "aGVsbG8=",
+                    },
+                },
+                {"type": "text", "text": "make this"},
+            ],
+        }
+    ]
+
+
+def test_anthropic_text_only_message_encoding_is_unchanged():
+    """The image branch is additive: a message carrying no picture encodes exactly
+    as it did before images existed."""
+    provider, client = _anthropic_with(_anthropic_text_stream("x"))
+    list(
+        provider.stream_turn(
+            model="sonnet-4-6",
+            system="s",
+            messages=[Message(role="user", content=[ContentBlock.of_text("make a box")])],
+            tools=[],
+            params=TurnParams(),
+        )
+    )
+    assert client.calls[0]["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "make a box"}]}
+    ]
+
+
+def test_anthropic_capabilities_report_image_support_per_model():
+    provider, _ = _anthropic_with([])
+    assert provider.capabilities("sonnet-4-6").supports_images is True
+    # The raw API id is the same model under its other name, so it reads the same.
+    assert provider.capabilities("claude-sonnet-4-6").supports_images is True
+    # An id nobody confirmed vision for fails closed rather than claiming it.
+    assert provider.capabilities("claude-2.1").supports_images is False
+
+
 def test_anthropic_embed_raises_typed_embeddings_unsupported():
     # No injected client: embed must refuse BEFORE any SDK/client work.
     provider = AnthropicChatProvider(config=Settings())
@@ -1423,6 +1602,105 @@ def test_openai_replays_tool_call_provider_raw_verbatim():
         )
     )
     assert client.calls[0]["messages"][1]["tool_calls"] == [raw]
+
+
+def test_openai_encodes_image_block_as_data_url():
+    provider, client = _openai_with(_openai_text_stream("x"))
+    messages = [
+        Message(
+            role="user",
+            content=[
+                ContentBlock.of_image(
+                    data="aGVsbG8=", media_type="image/png", reading="a bracket with two holes"
+                )
+            ],
+        )
+    ]
+    list(
+        provider.stream_turn(
+            model="gpt-4o", system="", messages=messages, tools=[], params=TurnParams()
+        )
+    )
+    # Exact shape: the reading is engine-side only and never reaches the wire.
+    assert client.calls[0]["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+            ],
+        }
+    ]
+
+
+def test_openai_mixes_text_and_image_into_array_content_in_block_order():
+    provider, client = _openai_with(_openai_text_stream("x"))
+    messages = [
+        Message(
+            role="user",
+            content=[
+                ContentBlock.of_text("make this"),
+                ContentBlock.of_image(data="aGVsbG8=", media_type="image/jpeg"),
+                ContentBlock.of_text("in aluminium"),
+            ],
+        )
+    ]
+    list(
+        provider.stream_turn(
+            model="gpt-4o", system="SYS", messages=messages, tools=[], params=TurnParams()
+        )
+    )
+    assert client.calls[0]["messages"][1] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "make this"},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,aGVsbG8="}},
+            {"type": "text", "text": "in aluminium"},
+        ],
+    }
+
+
+def test_openai_text_only_user_message_keeps_the_joined_string():
+    """The array content form is what a picture needs; with none the flat joined
+    string is preserved exactly, so no existing request changes shape."""
+    provider, client = _openai_with(_openai_text_stream("x"))
+    messages = [
+        Message(
+            role="user",
+            content=[ContentBlock.of_text("make a box"), ContentBlock.of_text("50mm")],
+        )
+    ]
+    list(
+        provider.stream_turn(
+            model="gpt-4o", system="SYS", messages=messages, tools=[], params=TurnParams()
+        )
+    )
+    assert client.calls[0]["messages"] == [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "make a box\n\n50mm"},
+    ]
+
+
+def test_openai_assistant_image_block_stays_an_unsupported_shape():
+    """An assistant-emitted image has no place in the request shape at all, which
+    is a different failure from a model that cannot read one — so it stays a
+    ValueError rather than becoming ImagesUnsupported."""
+    from cadless.llm.providers.openai import _assistant_to_openai
+
+    message = Message(
+        role="assistant",
+        content=[ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")],
+    )
+    with pytest.raises(ValueError) as exc:
+        _assistant_to_openai(message)
+    assert "image" in str(exc.value)
+    assert not isinstance(exc.value, ImagesUnsupported)
+
+
+def test_openai_capabilities_report_image_support_per_model():
+    provider, _ = _openai_with([])
+    assert provider.capabilities("gpt-4o").supports_images is True
+    # A model nobody confirmed vision for fails closed rather than claiming it.
+    assert provider.capabilities("gpt-3.5-turbo").supports_images is False
 
 
 def test_openai_embed_single_and_batch_align_by_index():
