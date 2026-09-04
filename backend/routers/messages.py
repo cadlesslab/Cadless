@@ -82,6 +82,22 @@ async def list_messages(project_id: int, store: ScopedStore = Depends(get_store)
     return _legacy_transcript(await store.list_versions(project_id))
 
 
+def _attachment_cache_headers() -> dict[str, str]:
+    """How long a browser may keep an attachment, and what that depends on.
+
+    The bytes at one of these addresses never change, so caching them saves the
+    transcript re-asking for every picture on every reload. But a browser cache is
+    keyed by URL and knows nothing about who is asking — and these ids are small
+    integers. Where the build requires an identity, two people sharing a browser
+    profile would mean the second reads the first's upload out of the cache without
+    the request ever reaching the owner-scoped lookup that would refuse it. So the
+    saving is only taken where there is one principal by construction.
+    """
+    if settings.require_identity:
+        return {"Cache-Control": "no-store"}
+    return {"Cache-Control": "private, max-age=3600", "Vary": "Cookie, Authorization"}
+
+
 @router.get("/projects/{project_id}/messages/{message_id}/attachments/{index}")
 async def get_attachment(
     project_id: int,
@@ -134,10 +150,6 @@ async def get_attachment(
         media_type=ctype,
         headers={
             "X-Content-Type-Options": "nosniff",
-            # The bytes at this address never change — an attachment is written once
-            # with its turn — so without this the browser asks again for every
-            # picture on every reload of the transcript. Private: it is one
-            # person's upload behind an owner-scoped lookup.
-            "Cache-Control": "private, max-age=3600",
+            **_attachment_cache_headers(),
         },
     )

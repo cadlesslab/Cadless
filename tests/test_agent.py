@@ -173,6 +173,33 @@ class SpyPipeline:
         )
 
 
+def test_the_loop_refuses_an_image_a_blind_model_cannot_read():
+    """The backstop on the other entry point.
+
+    A chat turn is refused at the request boundary, so this is unreachable from
+    HTTP. It is here for anything driving the loop directly, which would otherwise
+    hand the picture to a vendor and get back that vendor's word for "malformed".
+    """
+    from cadless.llm.provider import ImagesUnsupported
+    from cadless.llm.types import ContentBlock
+
+    provider = CapProvider(
+        [_text_turn("never reached")],
+        caps=Capabilities(supports_thinking=False, supports_images=False),
+    )
+    context = _context()
+    context.images = [ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")]
+    agent = Agent(provider=provider, model="fake-model")
+
+    try:
+        agent.run_turn(user_text="build this", context=context)
+    except ImagesUnsupported:
+        pass
+    else:  # pragma: no cover - the assertion below is the failure report
+        raise AssertionError("an image reached a model that cannot read one")
+    assert provider.calls == []  # refused before anything was sent
+
+
 def _context(pipeline=None, reparametrize=None, grounding=None) -> ToolContext:
     return ToolContext(
         pipeline=pipeline or SpyPipeline(),

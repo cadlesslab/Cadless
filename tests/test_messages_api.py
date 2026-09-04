@@ -167,6 +167,40 @@ def test_attachment_route_marks_even_an_allowed_type_nosniff(client, store):
     assert r.headers["x-content-type-options"] == "nosniff"
 
 
+def test_attachment_caching_depends_on_whether_there_is_one_principal(client, store, monkeypatch):
+    # A browser cache is keyed by URL and knows nothing about who asked. Where the
+    # build requires an identity, two people on one browser profile would let the
+    # second read the first's upload without the request reaching the owner-scoped
+    # lookup at all — so the saving is only taken where it cannot happen.
+    import base64
+
+    from backend.routers import messages as messages_mod
+    from cadless.llm.types import ContentBlock
+
+    async def go():
+        p = await store.create_project("P")
+        s = await store.get_or_create_session(p.id)
+        block = ContentBlock.of_image(data=base64.b64encode(b"x").decode(), media_type="image/png")
+        m = await store.add_message(s.id, "user", "build this", blocks=[block])
+        return p.id, m.id
+
+    pid, mid = asyncio.run(go())
+
+    monkeypatch.setattr(messages_mod.settings, "require_identity", False)
+    served = client.get(f"/projects/{pid}/messages/{mid}/attachments/0")
+    assert "private" in served.headers["cache-control"]
+    assert "max-age" in served.headers["cache-control"]
+    assert "Cookie" in served.headers["vary"]
+
+    # The identity-required case is checked on the decision itself rather than over
+    # HTTP: with that setting on and no principal resolver registered the request is
+    # refused before the route runs at all, so the response carries no header to
+    # look at — and standing a resolver up here would be testing the identity seam
+    # rather than this decision.
+    monkeypatch.setattr(messages_mod.settings, "require_identity", True)
+    assert messages_mod._attachment_cache_headers() == {"Cache-Control": "no-store"}
+
+
 def test_attachment_route_404s_past_the_last_image(client, store):
     import base64
 

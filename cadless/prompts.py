@@ -303,7 +303,12 @@ class CodeGenerator:
             # engine reach this directly, and without the check the picture goes to
             # the vendor and comes back as whatever that API calls a malformed
             # request. Refuse in the seam's own vocabulary instead.
-            raise ImagesUnsupported(settings.llm_provider)
+            # Named off the provider in hand, not the configured one: this generator
+            # may have been given a provider directly, and reporting the setting
+            # would name something that was never called.
+            raise ImagesUnsupported(
+                getattr(self._provider, "PROVIDER_NAME", type(self._provider).__name__)
+            )
 
         parts: list[str] = []
         content = [*images, ContentBlock.of_text(user)]

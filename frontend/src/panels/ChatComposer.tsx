@@ -11,7 +11,14 @@
  * held here as chips until the turn goes out, and the limits are checked on this
  * side as well as the server's — refusing a 10MB screenshot after it has been
  * uploaded is the one refusal that costs the user something to receive. */
-import { useRef, useState, type ClipboardEvent, type RefObject } from "react";
+import {
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 
 import { IMAGE_LIMITS, type ImageAttachment } from "../api";
 import { Button, Textarea, Tooltip } from "../components";
@@ -112,17 +119,15 @@ export function ChatComposer({
   // Reference pictures for the next turn. Owned by the panel, like `value`, so
   // that clearing them is part of the same "the turn went out" step.
   attachments?: ComposerAttachment[];
-  onAttachmentsChange?: (next: ComposerAttachment[]) => void;
+  // Takes an updater as well as a value, because the merge cannot be computed from
+  // anything this component can see. Reading a file is async, and a render in that
+  // window — someone typing is enough — hands back the prop as it was before the
+  // read started. Only the state owner knows what is current, so the merge is
+  // expressed as a function of it rather than a value computed against a snapshot.
+  onAttachmentsChange?: Dispatch<SetStateAction<ComposerAttachment[]>>;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
-  // What was last handed up, which is not the same thing as the prop. Reading a
-  // file is async, so a second paste can start before the first one's result has
-  // come back down — and merging onto the captured prop would make the second
-  // write drop the first. A silently lost attachment is the one outcome this
-  // feature exists to refuse, so the merge reads this instead.
-  const handedUp = useRef<ComposerAttachment[]>(attachments);
-  handedUp.current = attachments;
   const canAttach = Boolean(onAttachmentsChange) && !disabled && !generating;
 
   const hasText = value.trim().length > 0;
@@ -135,9 +140,12 @@ export function ChatComposer({
 
   async function attach(files: File[]) {
     if (!onAttachmentsChange || files.length === 0) return;
-    // Refused once here so an obviously-too-big file is not read at all, and once
-    // again after the read against whatever else landed meanwhile.
-    const why = refusal(handedUp.current, files);
+    // Advisory, and deliberately so. It runs against what is on screen, to spare
+    // the user reading a 10MB file only to be told no. The server enforces the
+    // same limits and is what actually decides — so two pastes racing can leave
+    // one chip more than the ceiling, and that turn is refused with the limit
+    // named rather than an attachment being dropped to make the count fit.
+    const why = refusal(attachments, files);
     if (why) {
       setAttachError(why);
       return;
@@ -152,14 +160,11 @@ export function ChatComposer({
           bytes: file.size,
         })),
       );
-      const late = refusal(handedUp.current, files);
-      if (late) {
-        setAttachError(late);
-        return;
-      }
-      const next = [...handedUp.current, ...read];
-      handedUp.current = next;
-      onAttachmentsChange(next);
+      // The merge is a function of what the owner currently holds, never of the
+      // prop captured before the read. Anything else loses an attachment whenever
+      // a render lands in that window, and losing one silently is precisely what
+      // this feature must not do.
+      onAttachmentsChange((prev) => [...prev, ...read]);
     } catch {
       // Said rather than swallowed: a file that will not read leaves no chip, and
       // silence there looks exactly like an attachment that worked.
@@ -180,9 +185,7 @@ export function ChatComposer({
 
   function remove(index: number) {
     setAttachError(null);
-    const next = handedUp.current.filter((_, i) => i !== index);
-    handedUp.current = next;
-    onAttachmentsChange?.(next);
+    onAttachmentsChange?.((prev) => prev.filter((_, i) => i !== index));
   }
 
   return (

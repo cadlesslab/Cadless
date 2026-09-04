@@ -38,6 +38,22 @@ function attached(name: string, bytes = 4): ComposerAttachment {
   return { media_type: "image/png", data: "AAAA", name, bytes };
 }
 
+/** What the owning panel would be holding after everything the composer handed up.
+ *
+ * The composer hands up updaters rather than values, because the merge has to be a
+ * function of what the owner currently holds — a value computed against the prop
+ * loses an attachment whenever a render lands mid-read. Applying them in order is
+ * exactly what `setAttachments` does. */
+function applied(
+  spy: ReturnType<typeof vi.fn>,
+  initial: ComposerAttachment[] = [],
+): ComposerAttachment[] {
+  return spy.mock.calls.reduce<ComposerAttachment[]>(
+    (acc, [arg]) => (typeof arg === "function" ? arg(acc) : arg),
+    initial,
+  );
+}
+
 /** Paste one or more files into the field, answering false when the composer
  * took the paste for itself. `fireEvent` defines `clipboardData` on the event,
  * because jsdom has no `DataTransfer` to build one from. */
@@ -130,7 +146,7 @@ describe("ChatComposer attachments", () => {
     paste(field, [imageFile("second.png")]);
 
     await waitFor(() => expect(onAttachmentsChange).toHaveBeenCalledTimes(2));
-    const last = onAttachmentsChange.mock.calls[1][0] as ComposerAttachment[];
+    const last = applied(onAttachmentsChange);
     expect(last.map((a) => a.name)).toEqual(["first.png", "second.png"]);
   });
 
@@ -145,7 +161,7 @@ describe("ChatComposer attachments", () => {
     // Taken by the composer, so the field never sees it.
     expect(reachedField).toBe(false);
     await waitFor(() => expect(onAttachmentsChange).toHaveBeenCalledTimes(1));
-    expect(onAttachmentsChange.mock.calls[0][0]).toEqual([
+    expect(applied(onAttachmentsChange)).toEqual([
       { media_type: "image/png", data: expect.any(String), name: "bracket.png", bytes: 4 },
     ]);
   });
@@ -171,7 +187,7 @@ describe("ChatComposer attachments", () => {
     pick(container, [imageFile("sketch.jpg", "image/jpeg")]);
 
     await waitFor(() => expect(onAttachmentsChange).toHaveBeenCalledTimes(1));
-    expect(onAttachmentsChange.mock.calls[0][0][0]).toMatchObject({
+    expect(applied(onAttachmentsChange)[0]).toMatchObject({
       media_type: "image/jpeg",
       name: "sketch.jpg",
     });
@@ -186,8 +202,8 @@ describe("ChatComposer attachments", () => {
     pick(container, [imageFile("bracket.png")]);
 
     await waitFor(() => expect(onAttachmentsChange).toHaveBeenCalled());
-    expect(onAttachmentsChange.mock.calls[0][0][0].data).not.toContain("data:");
-    expect(onAttachmentsChange.mock.calls[0][0][0].data).not.toContain(",");
+    expect(applied(onAttachmentsChange)[0].data).not.toContain("data:");
+    expect(applied(onAttachmentsChange)[0].data).not.toContain(",");
   });
 
   it("refuses an image over the per-image limit, naming the limit", async () => {
@@ -252,7 +268,8 @@ describe("ChatComposer attachments", () => {
 
     fireEvent.click(getByLabelText("Remove first.png"));
 
-    expect(onAttachmentsChange).toHaveBeenCalledWith([attached("second.png")]);
+    const held = [attached("first.png"), attached("second.png")];
+    expect(applied(onAttachmentsChange, held)).toEqual([attached("second.png")]);
   });
 
   it("enables Send with an attachment and no text at all", () => {

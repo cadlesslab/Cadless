@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cadless.config import Settings, settings
-from cadless.llm.provider import ChatProvider
+from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.types import (
     ContentBlock,
     Message,
@@ -740,6 +740,14 @@ class Agent:
         # rather than on whether anything else happens to be in the list: a context
         # block is also non-empty, and keying off that would silently change the
         # shape a caller passing blank text with no attachment has always got.
+        if context.images and not self._caps.supports_images:
+            # The same backstop the code generator carries, on the other entry
+            # point. The request boundary checks both models before a chat turn
+            # starts, so this is unreachable from HTTP — it is here for an
+            # embedder driving the loop directly, which would otherwise hand the
+            # picture to a vendor and get back that vendor's word for "malformed".
+            # The capabilities were read once at construction, so it costs nothing.
+            raise ImagesUnsupported(self._model)
         user_content.extend(context.images)
         if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))
@@ -862,6 +870,14 @@ class Agent:
         # rather than on whether anything else happens to be in the list: a context
         # block is also non-empty, and keying off that would silently change the
         # shape a caller passing blank text with no attachment has always got.
+        if context.images and not self._caps.supports_images:
+            # The same backstop the code generator carries, on the other entry
+            # point. The request boundary checks both models before a chat turn
+            # starts, so this is unreachable from HTTP — it is here for an
+            # embedder driving the loop directly, which would otherwise hand the
+            # picture to a vendor and get back that vendor's word for "malformed".
+            # The capabilities were read once at construction, so it costs nothing.
+            raise ImagesUnsupported(self._model)
         user_content.extend(context.images)
         if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))

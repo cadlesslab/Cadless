@@ -104,14 +104,22 @@ def test_the_composers_limits_are_the_servers_limits():
     turns the server would have taken, or waving through ones it will not — and
     both suites stay green, because each side asserts its own copy.
     """
-    from cadless.config import settings
+    from cadless.config import Settings
+
+    # Compared against the declared defaults rather than the live settings: those
+    # are environment-configurable, and the TypeScript side is a build-time
+    # literal that can only ever mirror the default. Reading the live value would
+    # fail this test on a checkout that merely tunes the limit, while proving
+    # nothing extra about drift.
+    def default(field: str):
+        return Settings.model_fields[field].default
 
     limits = _ts_image_limits(_ts_source())
 
-    assert limits["maxBytes"] == settings.chat_image_max_bytes
-    assert limits["maxTurnBytes"] == settings.chat_image_max_turn_bytes
-    assert limits["maxCount"] == settings.chat_image_max_count
-    assert limits["mediaTypes"] == list(settings.chat_image_media_types)
+    assert limits["maxBytes"] == default("chat_image_max_bytes")
+    assert limits["maxTurnBytes"] == default("chat_image_max_turn_bytes")
+    assert limits["maxCount"] == default("chat_image_max_count")
+    assert limits["mediaTypes"] == list(default("chat_image_media_types"))
 
 
 def test_the_image_kind_is_present_on_both_sides():

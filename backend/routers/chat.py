@@ -190,9 +190,11 @@ def _check_images(images: list[ImageAttachment]) -> None:
         total += len(raw)
         if total > settings.chat_image_max_turn_bytes:
             # Checked inside the loop so a turn already over its ceiling stops
-            # decoding rather than finishing the batch to say so.
+            # decoding rather than finishing the batch to say so — which is also
+            # why the message says "already more than" rather than quoting a
+            # running total the user would read as everything they sent.
             raise ValueError(
-                f"the attachments total {total} bytes, over the "
+                "the attachments already come to more than the "
                 f"{settings.chat_image_max_turn_bytes}-byte limit for one turn"
             )
 
