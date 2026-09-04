@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from backend.deps import get_store
 from backend.schemas import MessageOut
+from cadless.config import settings
 from cadless.llm.types import ContentBlock
 from cadless.scoped_store import ScopedStore
 from cadless.store import ScriptVersion
@@ -111,4 +112,18 @@ async def get_attachment(
     except (binascii.Error, ValueError) as exc:
         # Stored data that will not decode is a corrupt row, not a missing one.
         raise HTTPException(status_code=500, detail="attachment is unreadable") from exc
-    return Response(content=raw, media_type=block.media_type or "application/octet-stream")
+
+    # The stored media type is checked again here rather than trusted. It was
+    # allow-listed when the attachment arrived, but that check lives in one
+    # caller: a row written by any other path — a future import, or a
+    # distribution mounting this router with its own writer — would reach this
+    # line unchecked, and a Content-Type this origin serves is the difference
+    # between a picture and script. Every other route in this tree answers with a
+    # server-side constant; this is the only one echoing stored input, so it
+    # narrows to a type that cannot execute, and tells the browser not to guess.
+    ctype = (
+        block.media_type
+        if block.media_type in settings.chat_image_media_types
+        else "application/octet-stream"
+    )
+    return Response(content=raw, media_type=ctype, headers={"X-Content-Type-Options": "nosniff"})

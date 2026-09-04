@@ -64,5 +64,13 @@ answer here would have been the obvious move.
   "make it twice as tall" and not "the fillet on the left bracket is wrong".
 - A turn that attaches an image but runs no codegen leaves no reading, so a
   later turn has no reference. That is accepted rather than solved here.
+- The reading is model-written text about attacker-chooseable content, stored and
+  replayed into later turns as context. Under the bring-your-own-key posture the
+  person who chooses the picture is the person whose key pays for the turns, and
+  generated code still goes through validation and the sandboxed worker
+  regardless of what the reading says, so it grants no capability. It stops being
+  self-contained wherever a conversation is carried to someone else — cloning a
+  catalog item carries its transcript across — and that is a distribution's
+  concern rather than the engine's.
 - `vlm_critique.py` still calls Bedrock directly. This ADR gives it somewhere to
   move to; moving it is separate work.

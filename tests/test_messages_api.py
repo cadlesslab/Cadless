@@ -119,6 +119,54 @@ def test_attachment_route_serves_the_stored_image(client, store):
     assert r.headers["content-type"].startswith("image/png")
 
 
+def test_attachment_route_narrows_a_media_type_it_does_not_recognise(client, store):
+    # The type was allow-listed when the attachment arrived, but that check lives
+    # in one caller. A row written by any other path reaches the serve route
+    # unchecked, and this is the only response in the tree whose Content-Type
+    # comes from stored input — so it is narrowed here too, to something a
+    # browser will not execute, and marked so it will not guess.
+    import base64
+
+    from cadless.llm.types import ContentBlock
+
+    async def go():
+        p = await store.create_project("P")
+        s = await store.get_or_create_session(p.id)
+        block = ContentBlock.of_image(
+            data=base64.b64encode(b"<svg/>").decode(), media_type="image/svg+xml"
+        )
+        m = await store.add_message(s.id, "user", "build this", blocks=[block])
+        return p.id, m.id
+
+    pid, mid = asyncio.run(go())
+    r = client.get(f"/projects/{pid}/messages/{mid}/attachments/0")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/octet-stream")
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_attachment_route_marks_even_an_allowed_type_nosniff(client, store):
+    import base64
+
+    from cadless.llm.types import ContentBlock
+
+    async def go():
+        p = await store.create_project("P")
+        s = await store.get_or_create_session(p.id)
+        block = ContentBlock.of_image(
+            data=base64.b64encode(b"\x89PNG").decode(), media_type="image/png"
+        )
+        m = await store.add_message(s.id, "user", "build this", blocks=[block])
+        return p.id, m.id
+
+    pid, mid = asyncio.run(go())
+    r = client.get(f"/projects/{pid}/messages/{mid}/attachments/0")
+
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
 def test_attachment_route_404s_past_the_last_image(client, store):
     import base64
 
