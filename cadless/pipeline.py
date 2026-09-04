@@ -29,7 +29,7 @@ Consumers must ignore unknown event types and fields for forward compatibility.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -139,6 +139,7 @@ class Pipeline:
         temperature: float | None = None,
         export_scale: float = 1.0,
         images: Sequence[ContentBlock] = (),
+        on_reading: Callable[[str], None] | None = None,
     ) -> GenerationResult:
         """Generate (or, when ``prior_code`` is given, refine) then validate/execute.
 
@@ -183,7 +184,7 @@ class Pipeline:
         _emit_stage(on_progress, mode, "begin", 1)
         if prior_code:
             # Refine is out of streaming scope: keep the one-shot call.
-            code = self._gen.refine(intent, prior_code, images=images)
+            code = self._gen.refine(intent, prior_code, images=images, on_reading=on_reading)
         else:
             # Fresh generation streams its tokens as a ``codegen`` progress event so
             # the chat layer can show the code being written live. The
@@ -193,7 +194,12 @@ class Pipeline:
             on_token = _codegen_on_token(on_progress)
             extra = {"on_token": on_token} if on_token is not None else {}
             code = self._gen.generate(
-                intent, grounding, temperature=temperature, images=images, **extra
+                intent,
+                grounding,
+                temperature=temperature,
+                images=images,
+                on_reading=on_reading,
+                **extra,
             )
         _emit_stage(on_progress, mode, "ok", 1)
         last_error = "no attempts ran"
@@ -312,6 +318,7 @@ class Pipeline:
         grounding: str | None = None,
         temperature: float | None = None,
         images: Sequence[ContentBlock] = (),
+        on_reading: Callable[[str], None] | None = None,
     ) -> list[GenerationResult]:
         """Best-of-N fan-out (C1): run N *fresh* generations in parallel.
 
@@ -350,6 +357,7 @@ class Pipeline:
                     assertions=assertions,
                     grounding=grounding,
                     images=images,
+                    on_reading=on_reading,
                 )
             ]
 
@@ -365,6 +373,7 @@ class Pipeline:
                     grounding=grounding,
                     temperature=temp,
                     images=images,
+                    on_reading=on_reading,
                 )
             except Exception as exc:  # isolate: one bad candidate must not sink others
                 return GenerationResult(

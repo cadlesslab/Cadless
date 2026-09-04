@@ -238,6 +238,85 @@ def test_the_image_is_placed_before_the_words():
     assert blocks[-1].text.rstrip().endswith("Response:")
 
 
+def test_extract_reading_pulls_the_marked_paragraph():
+    from cadless.prompts import extract_reading
+
+    reply = (
+        "REFERENCE: an L-bracket with two bolt holes on the short leg,\n"
+        "roughly twice as long as it is tall.\n"
+        "\n"
+        "```python\nresult = Box(1,1,1)\n```"
+    )
+    assert extract_reading(reply) == (
+        "an L-bracket with two bolt holes on the short leg, roughly twice as long as it is tall."
+    )
+
+
+def test_extract_reading_is_none_when_the_model_did_not_write_one():
+    from cadless.prompts import extract_reading
+
+    assert extract_reading("```python\nresult = Box(1,1,1)\n```") is None
+
+
+def test_the_reading_marker_never_confuses_the_code_extractor():
+    from cadless.prompts import extract_reading
+
+    reply = "REFERENCE: a cube.\n\n```python\nresult = Box(1,1,1)\n```"
+    assert "REFERENCE" not in extract_code(reply)
+    assert extract_reading(reply) == "a cube."
+
+
+def test_a_text_only_prompt_does_not_ask_for_a_reading():
+    """The codegen contract is unchanged for every turn that carries no picture."""
+    provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+    CodeGenerator(provider=provider).generate("a cube", on_token=lambda _t: None)
+
+    sent = _sent_blocks(provider)[-1].text
+    assert sent == build_user_message("a cube")
+
+
+def test_an_image_turn_asks_the_model_to_write_down_what_it_sees():
+    provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+    CodeGenerator(provider=provider).generate("a bracket", images=[_image_block()])
+
+    sent = _sent_blocks(provider)[-1].text
+    assert "REFERENCE:" in sent
+    assert build_user_message("a bracket") in sent  # the legacy prompt is still there
+
+
+def test_the_reading_is_handed_to_the_sink():
+    provider = _recording_stream_provider(
+        "REFERENCE: an L-bracket.\n\n```python\nresult = Box(1,1,1)\n```"
+    )
+    seen: list[str] = []
+    CodeGenerator(provider=provider).generate(
+        "a bracket", images=[_image_block()], on_reading=seen.append
+    )
+    assert seen == ["an L-bracket."]
+
+
+def test_a_reply_with_no_reading_still_builds():
+    """The cache is a convenience. It must never be able to fail a build."""
+    provider = _recording_stream_provider("```python\nresult = Box(2,2,2)\n```")
+    seen: list[str] = []
+    code = CodeGenerator(provider=provider).generate(
+        "a bracket", images=[_image_block()], on_reading=seen.append
+    )
+    assert "Box(2,2,2)" in code
+    assert seen == []
+
+
+def test_an_edit_turn_also_produces_a_reading():
+    provider = _recording_stream_provider(
+        "REFERENCE: a taller bracket.\n\n```python\nresult = Box(1,1,1)\n```"
+    )
+    seen: list[str] = []
+    CodeGenerator(provider=provider).refine(
+        "taller", "result = Box(1,1,1)", images=[_image_block()], on_reading=seen.append
+    )
+    assert seen == ["a taller bracket."]
+
+
 def test_generator_repair_uses_repair_message():
     fake = _FakeProvider("result = Box(4,4,4)\nfrom build123d import *")
     gen = CodeGenerator(provider=fake)

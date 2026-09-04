@@ -257,6 +257,10 @@ class ToolContext:
     # (the chat layer wires it to the SSE queue), instead of being collected into
     # the post-tool progress burst. ``None`` => codegen is not surfaced live.
     on_codegen: Callable[[str], None] | None = None
+    # Where the model's written reading of an attached picture is handed back, so
+    # the chat layer can keep it beside the image and give it to later turns in
+    # place of the pixels. ``None`` => nobody is collecting one.
+    on_reading: Callable[[str], None] | None = None
 
     def __post_init__(self) -> None:
         if self.pipeline is None:
@@ -1148,6 +1152,7 @@ class Agent:
                         on_progress=_route_codegen(on_progress, context.on_codegen),
                         grounding=context.grounding,
                         images=context.images,
+                        on_reading=context.on_reading,
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
@@ -1158,6 +1163,7 @@ class Agent:
                     prior_code=context.current_code,
                     on_progress=on_progress,
                     images=context.images,
+                    on_reading=context.on_reading,
                 )
                 payload = _result_summary(res)
                 self._adopt(context, res.code, res.parameters)
@@ -1214,6 +1220,7 @@ class Agent:
             export_dir=context.export_dir,
             grounding=context.grounding,
             images=context.images,
+            on_reading=context.on_reading,
         )
         judged = select_winner(candidates, intent=spec)
         win = judged.winner

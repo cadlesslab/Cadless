@@ -137,6 +137,8 @@ class StubPipeline:
         self.error = error
         self.groundings: list[str | None] = []
         self.images: list[list] = []
+        # What the codegen model "wrote down" about the picture, when a test wants one.
+        self.reading: str | None = None
         # The real pipeline exposes the settings snapshot its turn runs under, and
         # the chat route hands it to grounding retrieval so both halves of a turn
         # read the same configuration. Modelled here so the stub keeps the same
@@ -152,9 +154,12 @@ class StubPipeline:
         prior_code=None,
         grounding=None,
         images=(),
+        on_reading=None,
     ):
         self.groundings.append(grounding)
         self.images.append(list(images))
+        if on_reading is not None and self.reading is not None:
+            on_reading(self.reading)
         if on_progress:
             on_progress(
                 {
@@ -988,6 +993,7 @@ class ForgePipeline(StubPipeline):
         grounding=None,
         temperature=None,
         images=(),
+        on_reading=None,
     ):
         self.run_count += 1
         return super().run(
@@ -997,6 +1003,7 @@ class ForgePipeline(StubPipeline):
             prior_code=prior_code,
             grounding=grounding,
             images=images,
+            on_reading=on_reading,
         )
 
     def run_candidates(
@@ -1008,9 +1015,16 @@ class ForgePipeline(StubPipeline):
         grounding=None,
         temperature=None,
         images=(),
+        on_reading=None,
     ):
         self.candidate_ns.append(n)
-        winner = super().run(intent, export_dir=export_dir, grounding=grounding, images=images)
+        winner = super().run(
+            intent,
+            export_dir=export_dir,
+            grounding=grounding,
+            images=images,
+            on_reading=on_reading,
+        )
         losers = [
             GenerationResult(ok=False, intent=intent, code=f"broken-{i}", error="execution: boom")
             for i in range(max(0, (n or 1) - 1))
@@ -1164,6 +1178,7 @@ class SequencedPipeline:
         prior_code=None,
         grounding=None,
         images=(),
+        on_reading=None,
     ):
         ok, error = self._results[min(self._i, len(self._results) - 1)]
         self._i += 1
@@ -1387,6 +1402,7 @@ def test_generate_streams_codegen_delta_frames(client, store, monkeypatch):
             prior_code=None,
             grounding=None,
             images=(),
+            on_reading=None,
         ):
             if on_progress:  # emit codegen tokens the way the real pipeline now does
                 on_progress({"event": "codegen", "text": "from build123d import *\n"})
@@ -1696,6 +1712,44 @@ def test_the_words_are_kept_beside_the_picture_in_the_transcript(client, store, 
     user = _messages(store, pid)[0]
     assert [b.kind for b in user.blocks] == ["image", "text"]
     assert user.blocks[1].text == "build this"
+
+
+def test_the_reading_is_stored_beside_the_picture_it_describes(client, store, monkeypatch):
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    pipeline.reading = "an L-bracket with two bolt holes"
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    image_block = _messages(store, pid)[0].blocks[0]
+    assert image_block.kind == "image"
+    assert image_block.reading == "an L-bracket with two bolt holes"
+
+
+def test_a_turn_whose_model_wrote_no_reading_still_settles(client, store, monkeypatch):
+    # The cache is a convenience. A model that ignored the instruction must leave a
+    # working turn behind, with the image simply carrying no reading.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()  # reading stays None
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _chat_with_images(client, pid, [_image()], text="build this")
+
+    assert _errors(events) == []
+    assert _messages(store, pid)[0].blocks[0].reading is None
 
 
 def test_a_text_only_turn_persists_exactly_as_before(client, store, monkeypatch):

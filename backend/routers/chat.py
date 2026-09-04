@@ -325,7 +325,18 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     user_blocks = list(image_blocks)
     if user_blocks and body.message.strip():
         user_blocks.append(ContentBlock.of_text(body.message))
-    await store.add_message(session.id, "user", body.message, blocks=user_blocks or None)
+    user_message = await store.add_message(
+        session.id, "user", body.message, blocks=user_blocks or None
+    )
+    # The first reading the turn produces wins. Repair rounds see the same picture
+    # and would each write another, and a later one is a reading of a build that
+    # went wrong rather than of the reference.
+    readings: list[str] = []
+
+    def _keep_first_reading(reading: str) -> None:
+        if not readings:
+            readings.append(reading)
+
     assistant = await store.add_message(session.id, "assistant", None, status="pending")
 
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
@@ -362,6 +373,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         current_params=params,
         export_dir=str(staging),
         images=image_blocks,
+        on_reading=_keep_first_reading if image_blocks else None,
         forge=forge_active,
         forge_n=forge_n,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
@@ -547,6 +559,27 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             if not settled:
                 # Defensive: never leave a dangling pending assistant turn.
                 await store.update_message(assistant.id, status="error", error="turn aborted")
+            # Keep the reading beside the picture it describes. In ``finally``
+            # because a turn that aborted after codegen still read the reference,
+            # and best-effort because a cache that could fail a turn would be a
+            # worse trade than no cache at all.
+            if readings:
+                try:
+                    await store.update_message(
+                        user_message.id,
+                        blocks=[
+                            b.model_copy(update={"reading": readings[0]})
+                            if b.kind == "image"
+                            else b
+                            for b in user_blocks
+                        ],
+                    )
+                except Exception:  # noqa: BLE001  (the cache is never worth a turn)
+                    logger.warning(
+                        "could not store the reference reading for project %s",
+                        project_id,
+                        exc_info=True,
+                    )
             shutil.rmtree(staging, ignore_errors=True)
             loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
 

@@ -27,11 +27,22 @@ class FakeGen:
     def __init__(self, outputs):
         self._outputs = list(outputs)
         self.repairs = 0
+        self.reading = None  # what the model "read" off the picture, when a test wants one
 
-    def generate(self, intent, grounding=None, temperature=None, on_token=None, images=()):
+    def generate(
+        self,
+        intent,
+        grounding=None,
+        temperature=None,
+        on_token=None,
+        images=(),
+        on_reading=None,
+    ):
         self.last_grounding = grounding
         self.last_temperature = temperature
         self.last_images = list(images)
+        if on_reading is not None and self.reading is not None:
+            on_reading(self.reading)
         out = self._outputs[0]
         if on_token is not None:  # simulate streaming: emit the code in two chunks
             mid = len(out) // 2
@@ -40,10 +51,12 @@ class FakeGen:
                     on_token(piece)
         return out
 
-    def refine(self, intent, prior_code, images=()):
+    def refine(self, intent, prior_code, images=(), on_reading=None):
         self.refine_calls = getattr(self, "refine_calls", 0) + 1
         self.last_refine = (intent, prior_code)
         self.last_images = list(images)
+        if on_reading is not None and self.reading is not None:
+            on_reading(self.reading)
         return self._outputs[0]
 
     def repair(self, intent, code, error, context=None, images=()):
@@ -320,6 +333,7 @@ def test_generate_cad_forwards_export_scale(monkeypatch):
             assertions=None,
             export_scale=1.0,
             images=(),
+            on_reading=None,
         ):
             seen["export_scale"] = export_scale
             return "res"
