@@ -748,3 +748,81 @@ def test_a_clear_still_clears_when_another_process_holds_the_ledger(tmp_path, mo
     assert still_marked is None, "and it did go"
     assert led.get("h1") is not None, "the entry is the half that was left"
     assert "held by another process; left a stale entry" in caplog.text, caplog.text
+
+
+def test_load_refuses_an_item_whose_code_escapes_the_directory(tmp_path):
+    """The loader never reads a file the manifest points at outside the item."""
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        led = Ledger(tmp_path / "ledger.json")
+        house = _write_house(tmp_path / "cat", "h1", 1)
+        (tmp_path / "cat" / "outside.py").write_text("result = 'outside'\n")
+        manifest = json.loads((house / "manifest.json").read_text())
+        manifest["steps"][0]["code"] = "../outside.py"
+        (house / "manifest.json").write_text(json.dumps(manifest))
+
+        with pytest.raises(ValueError, match="inside the item directory"):
+            await load_house(s, led, house)
+        assert await s.list_projects() == []
+
+    run(go())
+
+
+def test_load_refuses_at_the_read_and_leaves_no_half_built_item(tmp_path, monkeypatch):
+    """A file that passed the manifest check can be swapped before the loader reads it.
+
+    Standing in for the swap: a manifest object whose artifact path escapes,
+    handed to the loader as if the check had passed. The refusal comes from the
+    copy, after the project row exists, and takes that row with it — left
+    behind, the item would read as loaded and never be rebuilt.
+    """
+    from cadless.catalog import loader as loader_module
+    from cadless.catalog.manifest import CatalogManifest
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        led = Ledger(tmp_path / "ledger.json")
+        house = _write_house(tmp_path / "cat", "h1", 1)
+        tampered = json.loads((house / "manifest.json").read_text())
+        tampered["steps"][0]["artifacts"]["step"] = "../outside.step"
+        monkeypatch.setattr(
+            loader_module, "load_manifest", lambda _dir: CatalogManifest.model_validate(tampered)
+        )
+
+        with pytest.raises(ValueError, match="inside the item directory"):
+            await load_house(s, led, house)
+        assert await s.list_projects() == []
+        assert await s.project_id_for_catalog_item("h1") is None
+
+    run(go())
+
+
+def test_a_file_swapped_for_a_link_after_the_check_is_refused_at_the_read(tmp_path, monkeypatch):
+    """The check is repeated where a file is opened, not only when the manifest is read."""
+    outside = tmp_path / "outside.step"
+    outside.write_text("not for serving")
+    real_add_version = Store.add_version
+
+    async def swap_then_add(self, *args, **kwargs):
+        target = tmp_path / "cat" / "h1" / "artifacts" / "01" / "model.step"
+        target.unlink()
+        target.symlink_to(outside)
+        return await real_add_version(self, *args, **kwargs)
+
+    monkeypatch.setattr(Store, "add_version", swap_then_add)
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        led = Ledger(tmp_path / "ledger.json")
+        house = _write_house(tmp_path / "cat", "h1", 1)
+
+        with pytest.raises(ValueError, match="inside the item directory"):
+            await load_house(s, led, house)
+        assert await s.list_projects() == []
+        assert not list((tmp_path / "arts").rglob("model.step"))
+
+    run(go())

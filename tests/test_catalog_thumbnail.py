@@ -291,3 +291,39 @@ def test_renderer_chain_all_fail_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(thumb, "RENDERERS", [broken])
     with pytest.raises(RuntimeError):
         thumb.render_thumbnail(_write_binary_stl(tmp_path / "tet.stl"), tmp_path / "thumbnail.png")
+
+
+def test_render_item_thumbnail_refuses_a_mesh_outside_the_item(tmp_path):
+    """The refusal comes before the existence check, so no mesh is needed."""
+    from cadless.catalog.manifest import CatalogManifest
+
+    step = {"index": 1, "instruction": "s", "code": "steps/01.py", "artifacts": {"stl": "../a.stl"}}
+    manifest = CatalogManifest.model_validate({"id": "h", "name": "H", "steps": [step]})
+    with pytest.raises(ValueError, match="inside the item directory"):
+        thumb.render_item_thumbnail(tmp_path, manifest)
+
+
+def _item_with(tmp_path: Path, artifacts: dict[str, str]):
+    from cadless.catalog.manifest import CatalogManifest
+
+    step = {"index": 1, "instruction": "s", "code": "steps/01.py", "artifacts": artifacts}
+    return CatalogManifest.model_validate({"id": "h", "name": "H", "steps": [step]})
+
+
+def test_render_item_thumbnail_reads_the_final_step_mesh(tmp_path):
+    (tmp_path / "artifacts" / "01").mkdir(parents=True)
+    _write_binary_stl(tmp_path / "artifacts" / "01" / "model.stl")
+    manifest = _item_with(tmp_path, {"stl": "artifacts/01/model.stl"})
+    assert thumb.render_item_thumbnail(tmp_path, manifest) == "artifacts/thumbnail.png"
+    assert (tmp_path / "artifacts" / "thumbnail.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_item_thumbnail_falls_through_to_the_next_mesh_kind(tmp_path):
+    """An stl the manifest names but the item lacks is skipped in favour of the obj."""
+    (tmp_path / "artifacts" / "01").mkdir(parents=True)
+    _write_obj(tmp_path / "artifacts" / "01" / "model.obj")
+    manifest = _item_with(
+        tmp_path, {"stl": "artifacts/01/model.stl", "obj": "artifacts/01/model.obj"}
+    )
+    assert thumb.render_item_thumbnail(tmp_path, manifest) == "artifacts/thumbnail.png"
+    assert (tmp_path / "artifacts" / "thumbnail.png").exists()

@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from cadless.catalog.manifest import CatalogManifest
+from cadless.catalog.manifest import CatalogManifest, step_artifact_path
 
 # A renderer takes (triangles (n,3,3) float64, out_path, size) and writes a PNG.
 Renderer = Callable[[np.ndarray, Path, int], None]
@@ -194,14 +194,19 @@ def render_item_thumbnail(item_dir: Path, manifest: CatalogManifest) -> str | No
 
     The renderer chain is headless-safe (software rasterizer primary), so this
     works in containers with no GL context. Returns the manifest-relative PNG
-    path, or ``None`` when the final step exported no readable mesh.
+    path, or ``None`` when the final step exported no readable mesh; raises
+    ``ValueError`` before reading anything when the mesh path the manifest
+    names does not stay inside the item.
     """
     if not manifest.steps:
         return None
     final = manifest.steps[-1]
+    item = Path(item_dir).resolve()
     for kind in _THUMBNAIL_SOURCES:
-        rel = final.artifacts.get(kind)
-        if rel and (item_dir / rel).exists():
-            render_thumbnail(item_dir / rel, item_dir / _THUMBNAIL_REL)
+        if kind not in final.artifacts:
+            continue
+        mesh = step_artifact_path(item, final, kind)
+        if mesh.exists():
+            render_thumbnail(mesh, item_dir / _THUMBNAIL_REL)
             return _THUMBNAIL_REL
     return None

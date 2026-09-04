@@ -8,7 +8,7 @@ point `CADLESS_CATALOG_ROOT` elsewhere to read your own content.
 
 | Command | What it does |
 |---|---|
-| `load`, `reload` | Read item directories and write them into the live database |
+| `load`, `reload` | Read item directories and write them into the live database; a manifest naming a path outside its item is refused |
 | `clear` | Remove loaded items from that database |
 | `list` | Show which discovered items are loaded |
 
