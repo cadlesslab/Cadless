@@ -10,7 +10,10 @@ needed; real rows take over once any new turn is written.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import base64
+import binascii
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from backend.deps import get_store
 from backend.schemas import MessageOut
@@ -76,3 +79,36 @@ async def list_messages(project_id: int, store: ScopedStore = Depends(get_store)
     if messages:
         return [MessageOut.of(m) for m in messages]
     return _legacy_transcript(await store.list_versions(project_id))
+
+
+@router.get("/projects/{project_id}/messages/{message_id}/attachments/{index}")
+async def get_attachment(
+    project_id: int,
+    message_id: int,
+    index: int,
+    store: ScopedStore = Depends(get_store),
+):
+    """The bytes of the ``index``-th image attached to one message.
+
+    The transcript payload carries the block without its data (see
+    ``MessageOut.of``), so this is where an ``<img>`` gets the picture. The path
+    is project-scoped and the lookup is checked against that project's session:
+    naming someone else's project alongside a message id must not read it.
+    """
+    if not await store.get_project(project_id):
+        raise HTTPException(status_code=404, detail="project not found")
+    session = await store.get_or_create_session(project_id)
+    message = next((m for m in await store.list_messages(session.id) if m.id == message_id), None)
+    if message is None:
+        raise HTTPException(status_code=404, detail="message not found")
+
+    images = [b for b in message.blocks if b.kind == "image" and b.data]
+    if index < 0 or index >= len(images):
+        raise HTTPException(status_code=404, detail="attachment not found")
+    block = images[index]
+    try:
+        raw = base64.b64decode(block.data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        # Stored data that will not decode is a corrupt row, not a missing one.
+        raise HTTPException(status_code=500, detail="attachment is unreadable") from exc
+    return Response(content=raw, media_type=block.media_type or "application/octet-stream")

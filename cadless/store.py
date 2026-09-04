@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+from pydantic import ValidationError
 
 from cadless.config import Settings, settings
 from cadless.identity import (
@@ -283,11 +284,28 @@ def _blocks_to_json(blocks: list[ContentBlock] | None) -> str | None:
     return json.dumps([b.model_dump() for b in blocks])
 
 
+#: Stands in for a stored block this build cannot construct.
+UNREADABLE_BLOCK = "[a part of this message cannot be shown by this version]"
+
+
 def _blocks_from_json(raw: str | None) -> list[ContentBlock]:
-    """Parse a stored ``blocks_json`` payload back into content blocks."""
+    """Parse a stored ``blocks_json`` payload back into content blocks.
+
+    Degrades per block rather than per message. Rows are written by whichever
+    engine was running, so an older build reading a newer row can meet a ``kind``
+    that is not in its literal. Rebuilding the list strictly would raise for the
+    whole message — and since this runs on every ``list_messages``, one such block
+    would make the entire session's transcript unreadable rather than just itself.
+    """
     if not raw:
         return []
-    return [ContentBlock(**b) for b in json.loads(raw)]
+    blocks: list[ContentBlock] = []
+    for payload in json.loads(raw):
+        try:
+            blocks.append(ContentBlock(**payload))
+        except ValidationError:
+            blocks.append(ContentBlock.of_text(UNREADABLE_BLOCK))
+    return blocks
 
 
 #: How old an unreferenced file must be before a sweep will consider it.

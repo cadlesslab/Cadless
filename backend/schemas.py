@@ -92,6 +92,15 @@ class MessageOut(BaseModel):
         blocks = list(m.blocks)
         if not blocks and m.content:
             blocks = [ContentBlock.of_text(m.content)]
+        # An attached image keeps its shape but sheds its payload: the transcript
+        # is re-fetched on every reload, and inlining the base64 would grow that
+        # response by every picture in the session. ``kind`` and ``media_type``
+        # are all the UI needs to know it should ask for the bytes, which it does
+        # against the message's attachment endpoint.
+        blocks = [
+            b.model_copy(update={"data": None}) if b.kind == "image" and b.data else b
+            for b in blocks
+        ]
         return cls(
             id=m.id,
             seq=m.seq,
