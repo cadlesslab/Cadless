@@ -200,6 +200,25 @@ async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | Non
     return version.code, version.parameters or extract_params(version.code)
 
 
+def _replayed_block(block: ContentBlock) -> str:
+    """What one stored block contributes to the replayed conversation, as text.
+
+    An image replays as words, never as pixels. This function only ever sees past
+    turns — the current turn's attachments are handed to the agent directly — so
+    an image reaching here is by definition one the model has already looked at,
+    and the cached reading is what it wrote down at the time. Sending the picture
+    again would charge for every turn that follows it.
+
+    Everything else that is not conversational text contributes nothing, as before:
+    replaying past tool and thinking plumbing builds an invalid transcript.
+    """
+    if block.kind == "text":
+        return (block.text or "").strip()
+    if block.kind == "image":
+        return f"[reference image: {block.reading}]" if block.reading else "[a reference image]"
+    return ""
+
+
 async def _replay_history(store: ScopedStore, session_id: int) -> list:
     """Replay the persisted transcript as neutral agent ``Message``s — text only.
 
@@ -213,16 +232,12 @@ async def _replay_history(store: ScopedStore, session_id: int) -> list:
     replay only the conversational text. Consecutive same-role messages are merged
     so a dropped tool-only/clarification turn can't leave an invalid role sequence.
     """
-    from cadless.llm.types import ContentBlock, Message
+    from cadless.llm.types import Message
 
     messages: list[Message] = []
     for m in await store.list_messages(session_id):
-        text = (
-            "\n\n".join(
-                b.text.strip() for b in m.blocks if b.kind == "text" and (b.text or "").strip()
-            )
-            or (m.content or "").strip()
-        )
+        parts = [_replayed_block(b) for b in m.blocks]
+        text = "\n\n".join(p for p in parts if p) or (m.content or "").strip()
         if not text:
             continue
         if messages and messages[-1].role == m.role:  # keep roles alternating

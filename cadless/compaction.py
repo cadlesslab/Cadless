@@ -74,6 +74,11 @@ def _message_text(message: Message) -> str:
             parts.append(f"[tool {block.name} {block.input or {}}]")
         elif block.kind == "tool_result" and block.content:
             parts.append(f"[tool result {block.content}]")
+        elif block.kind == "image":
+            # An image has no ``text``, so without this it flattens to nothing and
+            # ``render_transcript`` skips the whole message — the synopsis would
+            # lose "the user showed a photograph of a bracket" entirely.
+            parts.append(f"[reference image: {block.reading}]" if block.reading else "[an image]")
     return " ".join(parts).strip()
 
 

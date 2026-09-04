@@ -40,10 +40,12 @@ def test_vlmcritic_renders_and_parses():
 
 
 class AlwaysGood:
-    def generate(self, intent, grounding=None, temperature=None, on_token=None):
+    def generate(
+        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+    ):
         return GOOD
 
-    def repair(self, intent, code, error, context=None):
+    def repair(self, intent, code, error, context=None, images=()):
         self.last_error = error
         return GOOD
 

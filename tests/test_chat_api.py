@@ -1654,6 +1654,64 @@ def test_steer_refuses_an_attached_image(client, store, monkeypatch):
     assert r.status_code == 422
 
 
+def _replay(store, pid, blocks, content="", role="user"):
+    async def go():
+        sess = await store.get_or_create_session(pid)
+        await store.add_message(sess.id, role, content, blocks=blocks)
+        return await chat._replay_history(store, sess.id)
+
+    return asyncio.run(go())
+
+
+def test_replay_carries_the_reading_rather_than_the_bytes(client, store):
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    block = ContentBlock.of_image(
+        data="aGVsbG8=", media_type="image/png", reading="an L-bracket with two holes"
+    )
+
+    msgs = _replay(store, pid, [block, ContentBlock.of_text("build this")], content="build this")
+
+    assert {b.kind for m in msgs for b in m.content} == {"text"}  # no pixels replayed
+    replayed = msgs[0].content[0].text
+    assert "an L-bracket with two holes" in replayed
+    assert "build this" in replayed
+    assert "aGVsbG8=" not in replayed
+
+
+def test_replay_falls_back_to_a_placeholder_with_no_reading(client, store):
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    block = ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")
+
+    msgs = _replay(store, pid, [block, ContentBlock.of_text("build this")], content="build this")
+
+    assert "image" in msgs[0].content[0].text.lower()
+
+
+def test_an_image_only_turn_is_not_dropped_from_the_replayed_history(client, store):
+    # The whole message used to vanish, not just the image: an image-only turn
+    # flattened to an empty string and the empty check skipped it entirely, so the
+    # next turn's model never learned the conversation had a picture in it.
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    block = ContentBlock.of_image(data="aGVsbG8=", media_type="image/png", reading="a cube")
+
+    msgs = _replay(store, pid, [block], content="")
+
+    assert len(msgs) == 1
+    assert "a cube" in msgs[0].content[0].text
+
+
+def test_a_second_turn_sends_the_reading_and_never_the_picture(client, store, monkeypatch):
+    provider = ScriptedProvider([_text_turn("A bracket."), _text_turn("Taller, then.")])
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+    _stream_chat(client, pid, "now make it twice as tall")
+
+    replayed = provider.calls[-1]["messages"]
+    assert "image" not in [b.kind for m in replayed for b in m.content]
+
+
 def test_an_attached_image_reaches_the_orchestrator(client, store, monkeypatch):
     provider = ScriptedProvider([_text_turn("A bracket.")])
     _install(monkeypatch, provider)
