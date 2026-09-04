@@ -172,7 +172,12 @@ export function refine(store: Store, priorVersionId: number, deltaPrompt: string
 /** Drive a `POST /chat` SSE turn: stream UI events into the store and
  * refresh the transcript + versions once the turn settles. A Stop handle is held
  * in `abortChat` so the composer can abort the in-flight turn. */
-export function chat(store: Store, message: string, forge = false): void {
+export function chat(
+  store: Store,
+  message: string,
+  forge = false,
+  images: api.ImageAttachment[] = [],
+): void {
   const pid = store.get().activeProjectId;
   if (pid == null || store.get().generating) return;
   const controller = new AbortController();
@@ -201,6 +206,7 @@ export function chat(store: Store, message: string, forge = false): void {
       (e) => store.set({ chatEvents: [...store.get().chatEvents, e] }),
       controller.signal,
       forge,
+      images,
     )
     .catch((e: unknown) => {
       const detail = e instanceof Error ? e.message : "chat failed";

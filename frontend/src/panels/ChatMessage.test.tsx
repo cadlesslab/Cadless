@@ -2,6 +2,7 @@ import { fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../api";
+import type { AppState } from "../store";
 import { renderWithProviders } from "../test/utils";
 import { ChatMessage } from "./ChatMessage";
 import type { LiveTurn, ChatMessage as Msg } from "./chatModel";
@@ -17,10 +18,23 @@ function okVersion(): Version {
 // The component only invokes `app` inside event handlers we never trigger here.
 const app = {} as Parameters<typeof ChatMessage>[0]["app"];
 
-function renderMsg(msg: Msg) {
+function renderMsg(msg: Msg, state: Partial<AppState> = {}) {
   return renderWithProviders(
     <ChatMessage msg={msg} app={app} onRetry={() => {}} onEdit={() => {}} />,
+    state,
   );
+}
+
+function imageMsg(over: Partial<Extract<Msg, { kind: "image" }>> = {}): Msg {
+  return {
+    kind: "image",
+    id: "m12-i0",
+    messageId: 12,
+    index: 0,
+    mediaType: "image/png",
+    reading: null,
+    ...over,
+  };
 }
 
 function liveTurn(over: Partial<LiveTurn> = {}): LiveTurn {
@@ -227,6 +241,39 @@ describe("ChatMessage", () => {
     // Re-expandable: clicking the summary shows the code again.
     fireEvent.click(done.getByText(/Wrote 2 lines/));
     expect(done.container.querySelector(".codegen-code")?.textContent).toContain("Box(1, 1, 1)");
+  });
+
+  it("fetches an attached picture from the attachment route, not from the block", () => {
+    // The transcript hands back an image block with its `data` emptied, so a
+    // renderer that inlined the payload would show nothing on every reload.
+    const { container } = renderMsg(imageMsg({ index: 1 }), { activeProjectId: 3 });
+    const img = container.querySelector("img");
+    expect(img?.getAttribute("src")).toMatch(/\/projects\/3\/messages\/12\/attachments\/1$/);
+    expect(img?.getAttribute("src")).not.toContain("base64");
+  });
+
+  it("puts the attached picture on the user's side of the thread", () => {
+    // Under the assistant avatar it would read as something the model produced.
+    const { container } = renderMsg(imageMsg(), { activeProjectId: 3 });
+    expect(container.querySelector(".msg-user img")).not.toBeNull();
+    expect(container.querySelector(".msg-assistant")).toBeNull();
+  });
+
+  it("uses the model's reading of the picture as its alt text", () => {
+    const { container } = renderMsg(
+      imageMsg({ reading: "a hand-drawn L-bracket with two holes" }),
+      { activeProjectId: 3 },
+    );
+    expect(container.querySelector("img")?.getAttribute("alt")).toBe(
+      "a hand-drawn L-bracket with two holes",
+    );
+  });
+
+  it("names the kind of file in the alt text when no reading was written", () => {
+    const { container } = renderMsg(imageMsg(), { activeProjectId: 3 });
+    expect(container.querySelector("img")?.getAttribute("alt")).toBe(
+      "Attached image (image/png)",
+    );
   });
 
   it("shows a Thinking placeholder before any content arrives", () => {

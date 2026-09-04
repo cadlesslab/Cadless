@@ -20,6 +20,17 @@ export type ChatMessage =
   | { kind: "clarification"; id: string; questions: ClarificationQuestion[] }
   // An ordered plan, rendered as a numbered list ahead of the action card.
   | { kind: "plan"; id: string; steps: string[] }
+  // A reference picture the user attached. It carries where to ask for the bytes
+  // rather than the bytes: the transcript hands back an image block with its
+  // `data` emptied, and `index` is which of this message's images to fetch.
+  | {
+      kind: "image";
+      id: string;
+      messageId: number;
+      index: number;
+      mediaType: string | null;
+      reading: string | null;
+    }
   // The in-flight `POST /chat` turn, rendered incrementally from its SSE events.
   | { kind: "live-chat"; id: "live-chat"; turn: LiveTurn };
 
@@ -73,13 +84,29 @@ function stepsFromInput(input: Record<string, unknown> | null | undefined): stri
 }
 
 /** Map a block-based transcript (`GET /projects/{id}/messages`) to chat messages.
- * `text` blocks become markdown turns; an assistant message that produced a
- * version becomes a result card. `tool_use`/`tool_result` blocks are internal and
- * not surfaced. */
+ * `text` blocks become markdown turns; an `image` block becomes a picture to
+ * fetch; an assistant message that produced a version becomes a result card.
+ * `tool_use`/`tool_result` blocks are internal and not surfaced. */
 export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (const m of messages) {
     const id = `m${m.id}`;
+    // Attachments lead the turn, ahead of its words. This function orders a turn
+    // by kind rather than by block position, and a turn that came with pictures
+    // was sent as pictures plus a caption — so leading with them is the order it
+    // was written in, not a preference.
+    m.blocks
+      .filter((b) => b.kind === "image")
+      .forEach((b, index) =>
+        out.push({
+          kind: "image",
+          id: `${id}-i${index}`,
+          messageId: m.id,
+          index,
+          mediaType: b.media_type ?? null,
+          reading: b.reading ?? null,
+        }),
+      );
     // Reasoning, if present, leads the turn (collapsible "Thought" pane).
     const thinking = m.blocks
       .filter((b) => b.kind === "thinking" && b.text)

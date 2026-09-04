@@ -3,6 +3,7 @@
  * thumbnail cache, CodePanel, and the version actions from the History panel. */
 import { useEffect, useRef, useState } from "react";
 
+import { attachmentUrl } from "../api";
 import type { ClarificationQuestion, Version } from "../api";
 import { Button, IconButton, CadlessIcon } from "../components";
 import { useStoreSelector } from "../state";
@@ -245,6 +246,39 @@ function Clarification({ questions, app }: { questions: ClarificationQuestion[];
   );
 }
 
+/** A reference picture the user attached, as it comes back on a reload.
+ *
+ * The `src` is a fetch rather than an inlined payload: the transcript hands back
+ * an image block with its `data` emptied, so the only place the bytes exist is
+ * behind the attachment route — and a session with four pictures in it would
+ * otherwise re-download all of them inside every transcript response. */
+function Attachment({
+  messageId,
+  index,
+  mediaType,
+  reading,
+}: {
+  messageId: number;
+  index: number;
+  mediaType: string | null;
+  reading: string | null;
+}) {
+  const projectId = useStoreSelector((s) => s.activeProjectId);
+  if (projectId == null) return null;
+  return (
+    <img
+      className="msg-image"
+      src={attachmentUrl(projectId, messageId, index)}
+      /* The reading is a model's written account of the picture, which makes it
+         the only alt text anybody actually wrote. Without one the media type is
+         all the transcript still knows, and saying which kind of file was handed
+         over beats an empty alt on an image that carries the whole request. */
+      alt={reading ?? `Attached image${mediaType ? ` (${mediaType})` : ""}`}
+      title={reading ?? undefined}
+    />
+  );
+}
+
 /** An ordered plan: the steps the assistant intends to take for a
  * non-trivial part, rendered as a numbered list ahead of the action card. */
 function PlanList({ steps }: { steps: string[] }) {
@@ -333,6 +367,25 @@ export function ChatMessage({
   onRetry: () => void;
   onEdit: () => void;
 }) {
+  // An attachment goes on the user's side of the thread, ahead of the fallthrough
+  // below — which takes any unbranched kind to be an assistant result and reads
+  // `version` off it. Under the assistant avatar the picture would also read as
+  // something the model produced rather than something it was handed.
+  if (msg.kind === "image") {
+    return (
+      <div className="msg msg-user">
+        <div className="msg-bubble msg-bubble-image">
+          <Attachment
+            messageId={msg.messageId}
+            index={msg.index}
+            mediaType={msg.mediaType}
+            reading={msg.reading}
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (msg.kind === "user" || (msg.kind === "text" && msg.role === "user")) {
     return (
       <div className="msg msg-user">

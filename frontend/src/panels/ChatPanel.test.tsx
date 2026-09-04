@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatEvent, MessageOut, Version } from "../api";
@@ -44,6 +44,31 @@ function blockMessages(): MessageOut[] {
     { id: 1, seq: 1, role: "user", content: null, status: "ok", error: null, version_id: null, created_at: "", blocks: [{ kind: "text", text: "a cube" }] },
     { id: 2, seq: 2, role: "assistant", content: null, status: "ok", error: null, version_id: 7, created_at: "", blocks: [{ kind: "text", text: "Done — **here** it is" }] },
   ];
+}
+
+/** A turn as the transcript hands it back after a reload: the image block keeps
+ * its shape but has shed its payload, so the picture has to be fetched. */
+function turnWithImage(): MessageOut[] {
+  return [
+    {
+      id: 20, seq: 1, role: "user", content: "make this", status: "ok", error: null,
+      version_id: null, created_at: "",
+      blocks: [
+        { kind: "image", media_type: "image/png", data: null, reading: "a hand-drawn bracket" },
+        { kind: "text", text: "make this" },
+      ],
+    },
+  ];
+}
+
+function pngFile(name: string): File {
+  return new File([new Uint8Array(4)], name, { type: "image/png" });
+}
+
+function attachIn(container: HTMLElement, file: File) {
+  fireEvent.change(container.querySelector("input[type=file]") as HTMLInputElement, {
+    target: { files: [file] },
+  });
 }
 
 afterEach(() => vi.clearAllMocks());
@@ -124,13 +149,13 @@ describe("ChatPanel", () => {
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
     // Forge is off by default => the turn does not opt in.
-    expect(api.streamChat).toHaveBeenCalledWith(1, "a 10mm cube", expect.any(Function), expect.any(Object), false);
+    expect(api.streamChat).toHaveBeenCalledWith(1, "a 10mm cube", expect.any(Function), expect.any(Object), false, []);
   });
 
   it("runs an example prompt from the empty state", () => {
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
     fireEvent.click(screen.getByRole("button", { name: "Plate with hole" }));
-    expect(api.streamChat).toHaveBeenCalledWith(1, expect.stringContaining("plate"), expect.any(Function), expect.any(Object), false);
+    expect(api.streamChat).toHaveBeenCalledWith(1, expect.stringContaining("plate"), expect.any(Function), expect.any(Object), false, []);
   });
 
   it("opts the turn into forge mode when the Forge toggle is on", () => {
@@ -138,7 +163,7 @@ describe("ChatPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Forge/i }));
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect(api.streamChat).toHaveBeenCalledWith(1, "a cube", expect.any(Function), expect.any(Object), true);
+    expect(api.streamChat).toHaveBeenCalledWith(1, "a cube", expect.any(Function), expect.any(Object), true, []);
   });
 
   it("renders the block-based transcript with markdown and a result card", () => {
@@ -218,6 +243,71 @@ describe("ChatPanel", () => {
     expect(await screen.findByText("boom")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(api.streamChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a turn that is a picture and nothing else, then clears the chips", async () => {
+    const { container } = renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+    });
+    attachIn(container, pngFile("bracket.png"));
+
+    // The chip is the acknowledgement that the file was taken.
+    expect(await screen.findByText("bracket.png")).toBeInTheDocument();
+    // ...and an empty field no longer means there is nothing to send.
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(api.streamChat).toHaveBeenCalledWith(
+      1, "", expect.any(Function), expect.any(Object), false,
+      [expect.objectContaining({ media_type: "image/png", name: "bracket.png" })],
+    );
+    // Cleared with the field: an attachment left behind would ride along with
+    // the next turn, which is not what anybody meant by sending it.
+    await waitFor(() => expect(screen.queryByText("bracket.png")).toBeNull());
+  });
+
+  it("carries the attachments of the turn being retried, not the emptied composer", async () => {
+    const { container } = renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+    });
+    attachIn(container, pngFile("bracket.png"));
+    await screen.findByText("bracket.png");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    // The default mock fails the turn, so Retry is on offer.
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    expect(api.streamChat).toHaveBeenCalledTimes(2);
+    const [, , , , , images] = vi.mocked(api.streamChat).mock.calls[1];
+    expect(images).toEqual([expect.objectContaining({ name: "bracket.png" })]);
+  });
+
+  it("renders a reloaded turn's picture and its caption, in that order", () => {
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: turnWithImage(),
+    });
+    const bubbles = Array.from(document.querySelectorAll(".msg-user .msg-bubble"));
+    expect(bubbles).toHaveLength(2);
+    expect(bubbles[0].querySelector("img")).not.toBeNull();
+    expect(bubbles[1].textContent).toBe("make this");
+  });
+
+  it("fetches that picture from the attachment route rather than from the block", () => {
+    // The transcript sheds the bytes, so an `<img>` reading `data` off the block
+    // would render nothing at all after a reload.
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: turnWithImage(),
+    });
+    const src = document.querySelector(".chat-thread img")?.getAttribute("src");
+    expect(src).toMatch(/\/projects\/1\/messages\/20\/attachments\/0$/);
+    expect(src).not.toContain("base64");
   });
 
   it("shows a Stop button that aborts the in-flight turn", () => {

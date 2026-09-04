@@ -243,7 +243,7 @@ describe("chat SSE client", () => {
     const [url, init] = fetchFn.mock.calls[0];
     expect(url).toMatch(/\/projects\/7\/chat$/);
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({ message: "a cube", forge: false });
+    expect(JSON.parse(init.body)).toEqual({ message: "a cube", images: [], forge: false });
     expect(seen.map((e) => e.event)).toEqual(["turn_start", "text_delta", "turn_end"]);
   });
 
@@ -256,7 +256,88 @@ describe("chat SSE client", () => {
     await api.streamChat(7, "a cube", () => {}, undefined, true);
 
     const init = fetchFn.mock.calls[0][1];
-    expect(JSON.parse(init.body)).toEqual({ message: "a cube", forge: true });
+    expect(JSON.parse(init.body)).toEqual({ message: "a cube", images: [], forge: true });
+  });
+
+  it("puts the turn's attachments in the body as `images`", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      sseResponse(['data: {"event":"turn_end","stop_reason":"end_turn"}\n\n']),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+
+    await api.streamChat(7, "like this", () => {}, undefined, false, [
+      { media_type: "image/png", data: "AAAA" },
+      { media_type: "image/jpeg", data: "BBBB" },
+    ]);
+
+    expect(JSON.parse(fetchFn.mock.calls[0][1].body)).toEqual({
+      message: "like this",
+      images: [
+        { media_type: "image/png", data: "AAAA" },
+        { media_type: "image/jpeg", data: "BBBB" },
+      ],
+      forge: false,
+    });
+  });
+
+  it("sends a turn that is nothing but an attachment", async () => {
+    // The server takes an empty message when a picture came with it, so the
+    // client must not quietly drop the turn or the attachment on the way.
+    const fetchFn = vi.fn().mockResolvedValue(
+      sseResponse(['data: {"event":"turn_end","stop_reason":"end_turn"}\n\n']),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+
+    await api.streamChat(7, "", () => {}, undefined, false, [
+      { media_type: "image/webp", data: "CCCC" },
+    ]);
+
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body);
+    expect(body.message).toBe("");
+    expect(body.images).toEqual([{ media_type: "image/webp", data: "CCCC" }]);
+  });
+
+  it("posts only the two wire fields of an attachment", async () => {
+    // The composer keeps a file name and a byte count on its own copies. Posting
+    // them would send the user's filenames along with a body already carrying
+    // megabytes of base64.
+    const fetchFn = vi.fn().mockResolvedValue(
+      sseResponse(['data: {"event":"turn_end","stop_reason":"end_turn"}\n\n']),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+
+    // Bound first so it goes in as the composer's wider shape rather than as a
+    // fresh literal, which TypeScript would reject before the call was made.
+    const fromComposer = {
+      media_type: "image/png",
+      data: "AAAA",
+      name: "secret-project.png",
+      bytes: 3,
+    };
+    await api.streamChat(7, "a cube", () => {}, undefined, false, [fromComposer]);
+
+    const [image] = JSON.parse(fetchFn.mock.calls[0][1].body).images;
+    expect(Object.keys(image).sort()).toEqual(["data", "media_type"]);
+  });
+
+  it("builds an attachment URL from the project, message and image index", () => {
+    // `index` counts the message's images, so the second picture of a turn is 1
+    // however many text blocks sit between them.
+    expect(api.attachmentUrl(7, 42, 1)).toMatch(/\/projects\/7\/messages\/42\/attachments\/1$/);
+  });
+
+  it("mirrors the server's attachment limits", () => {
+    // A client-side copy of a server limit that drifts is worse than none: it
+    // refuses turns the server would take, or waves through ones it will not.
+    expect(api.IMAGE_LIMITS.maxBytes).toBe(3_750_000);
+    expect(api.IMAGE_LIMITS.maxTurnBytes).toBe(7_500_000);
+    expect(api.IMAGE_LIMITS.maxCount).toBe(4);
+    expect(api.IMAGE_LIMITS.mediaTypes).toEqual([
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+    ]);
   });
 
   it("Stop aborts the in-flight turn via the AbortController signal", async () => {
