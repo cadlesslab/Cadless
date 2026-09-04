@@ -50,6 +50,7 @@ from cadless.distill import auto_distill
 from cadless.exporters import EXPORTERS
 from cadless.forge import persist_losers
 from cadless.llm.registry import build_provider  # monkeypatched in tests
+from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
 from cadless.pipeline import Pipeline
 from cadless.rag import retrieve_grounding
@@ -298,6 +299,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         return _refusal(user_settings.credentials_hint())
 
     provider = build_provider()
+    image_blocks: list[ContentBlock] = []
     if body.images:
         try:
             _decoded_images(body.images)
@@ -309,12 +311,21 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                 f"the configured model {blind!r} cannot read images. Remove the "
                 "attachment, or pick a vision-capable model in Settings."
             )
+        image_blocks = [
+            ContentBlock.of_image(data=i.data, media_type=i.media_type) for i in body.images
+        ]
 
     session = await store.get_or_create_session(project_id)
     history = await _replay_history(store, session.id)
     code, params = await _current_model(store, project_id)
 
-    await store.add_message(session.id, "user", body.message)
+    # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
+    # ``content``, so once there is a picture the words have to be carried beside it
+    # explicitly or they disappear from the transcript.
+    user_blocks = list(image_blocks)
+    if user_blocks and body.message.strip():
+        user_blocks.append(ContentBlock.of_text(body.message))
+    await store.add_message(session.id, "user", body.message, blocks=user_blocks or None)
     assistant = await store.add_message(session.id, "assistant", None, status="pending")
 
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
@@ -350,6 +361,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         current_code=code,
         current_params=params,
         export_dir=str(staging),
+        images=image_blocks,
         forge=forge_active,
         forge_n=forge_n,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),

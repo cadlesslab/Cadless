@@ -1,5 +1,7 @@
 """Prompt assembly + code extraction tests. No Bedrock."""
 
+import pytest
+
 from cadless.prompts import (
     CodeGenerator,
     build_refinement_message,
@@ -145,6 +147,95 @@ def test_generator_without_on_token_does_not_stream():
     gen = CodeGenerator(provider=fake)
     gen.generate("a cube")  # _FakeProvider has no stream_turn; must use complete()
     assert fake.calls == 1
+
+
+def _image_block():
+    from cadless.llm.types import ContentBlock
+
+    return ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")
+
+
+def _recording_stream_provider(reply: str):
+    """A provider that records the messages it was handed and replays ``reply``."""
+    from cadless.llm.providers import StreamChunk
+    from cadless.llm.providers.fake import FakeChatProvider
+    from cadless.llm.types import StreamEvent
+
+    return FakeChatProvider(script=[StreamChunk(StreamEvent.TEXT_DELTA, {"text": reply})])
+
+
+def _sent_blocks(provider):
+    """The content blocks of the user message the provider was called with."""
+    return provider.calls[-1]["messages"][-1].content
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda gen, images: gen.generate("a bracket", images=images), id="generate"),
+        pytest.param(
+            lambda gen, images: gen.refine("taller", "result = Box(1,1,1)", images=images),
+            id="refine",
+        ),
+        pytest.param(
+            lambda gen, images: gen.repair("a bracket", "bad", "boom", images=images),
+            id="repair",
+        ),
+    ],
+)
+def test_every_codegen_path_carries_the_image_to_the_model(call):
+    """Fresh generation, an edit and a repair all put the picture in front of the model.
+
+    Only the streaming fresh-generation path could carry a message graph before
+    this; the other two went through the text-only ``complete()``. An image that
+    reached one of the three would have vanished on the next edit or repair round.
+    """
+    provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=provider)
+
+    call(gen, [_image_block()])
+
+    blocks = _sent_blocks(provider)
+    assert [b.kind for b in blocks] == ["image", "text"]
+    assert blocks[0].data == "aGVsbG8="
+
+
+def test_a_forge_candidate_carries_the_image_too():
+    """A candidate runs with no progress listener, so it has no ``on_token``."""
+    provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=provider)
+
+    gen.generate("a bracket", temperature=0.9, images=[_image_block()])
+
+    assert [b.kind for b in _sent_blocks(provider)] == ["image", "text"]
+
+
+def test_a_text_only_call_still_goes_through_complete_untouched():
+    """The seam's one-shot signature must stay the path for every text-only call.
+
+    ``complete()`` cannot carry an image and is deliberately not widened: adapters
+    installed outside this tree implement that exact signature (ADR-0008). What
+    proves the change is additive is that a call with no image never leaves it.
+    """
+    for call in (
+        lambda gen: gen.generate("a cube"),
+        lambda gen: gen.refine("taller", "result = Box(1,1,1)"),
+        lambda gen: gen.repair("a cube", "bad", "boom"),
+    ):
+        fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+        call(CodeGenerator(provider=fake))  # _FakeProvider has no stream_turn at all
+        assert fake.calls == 1
+
+
+def test_the_image_is_placed_before_the_words():
+    # The prompt ends on "Response:", which is the model's cue to start writing.
+    # Putting the picture after that would sit between the cue and the answer.
+    provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+    CodeGenerator(provider=provider).generate("a bracket", images=[_image_block()])
+
+    blocks = _sent_blocks(provider)
+    assert blocks[0].kind == "image"
+    assert blocks[-1].text.rstrip().endswith("Response:")
 
 
 def test_generator_repair_uses_repair_message():

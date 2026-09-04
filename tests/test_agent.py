@@ -148,7 +148,15 @@ class SpyPipeline:
         self.calls: list[tuple[str, str | None]] = []
         self.groundings: list[str | None] = []
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+    ):
         from cadless.pipeline import GenerationResult
 
         self.calls.append((intent, prior_code))
@@ -875,7 +883,15 @@ class FailingPipeline:
         self._attempts = attempts
         self.calls: list[tuple[str, str | None]] = []
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+    ):
         from cadless.pipeline import Attempt, GenerationResult
 
         self.calls.append((intent, prior_code))
@@ -985,7 +1001,15 @@ def test_distinct_failing_stages_do_not_escalate():
         def __init__(self) -> None:
             self.calls: list[tuple[str, str | None]] = []
 
-        def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+        def run(
+            self,
+            intent,
+            export_dir=None,
+            on_progress=None,
+            prior_code=None,
+            grounding=None,
+            images=(),
+        ):
             self.calls.append((intent, prior_code))
             return next(pipelines).run(
                 intent, export_dir, on_progress, prior_code, grounding=grounding

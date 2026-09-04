@@ -9,7 +9,7 @@ the *repair* message used by the pipeline's repair loop.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
@@ -173,6 +173,7 @@ class CodeGenerator:
         grounding: str | None = None,
         temperature: float | None = None,
         on_token: Callable[[str], None] | None = None,
+        images: Sequence[ContentBlock] = (),
     ) -> str:
         """Generate build123d code from ``intent``.
 
@@ -188,9 +189,13 @@ class CodeGenerator:
         it as the model writes the code, so the chat layer can show the codegen
         live. ``None`` (the default) keeps the one-shot ``complete()`` path byte-
         for-byte — used by refine/repair and the non-chat callers (eval, distill).
+
+        ``images`` are the turn's reference pictures. They force the message path
+        whatever ``on_token`` is, because ``complete()`` takes a bare string; an
+        empty sequence (the default) leaves the routing above exactly as it was.
         """
         user = build_user_message(intent, grounding)
-        if on_token is None:
+        if on_token is None and not images:
             text = self._provider.complete(
                 model=self._model,
                 system=SYSTEM_PROMPT,
@@ -198,21 +203,33 @@ class CodeGenerator:
                 temperature=temperature,
             )
         else:
-            text = self._stream_complete(user, temperature, on_token)
+            text = self._stream_complete(user, temperature, on_token, images)
         return extract_code(text)
 
     def _stream_complete(
         self,
         user: str,
         temperature: float | None,
-        on_token: Callable[[str], None],
+        on_token: Callable[[str], None] | None,
+        images: Sequence[ContentBlock] = (),
     ) -> str:
-        """Mirror ``complete()`` but surface each text delta through ``on_token``."""
+        """Mirror ``complete()`` over the message path, optionally streaming.
+
+        This is the only shape on the seam that can carry anything but a string,
+        so it is where an image has to go. ``on_token`` is optional here (unlike
+        in ``generate``): a call routed through this path only because it carries
+        a picture still has no listener for the deltas.
+
+        The pictures go **before** the words. ``user`` ends on ``Response:``, the
+        model's cue to start writing, so anything appended after it lands between
+        the cue and the answer.
+        """
         parts: list[str] = []
+        content = [*images, ContentBlock.of_text(user)]
         for chunk in self._provider.stream_turn(
             model=self._model,
             system=SYSTEM_PROMPT,
-            messages=[Message(role="user", content=[ContentBlock.of_text(user)])],
+            messages=[Message(role="user", content=content)],
             tools=[],
             params=TurnParams(temperature=temperature),
         ):
@@ -220,16 +237,25 @@ class CodeGenerator:
                 token = chunk.payload.get("text", "")
                 if token:
                     parts.append(token)
-                    on_token(token)
+                    if on_token is not None:
+                        on_token(token)
         return "".join(parts)
 
-    def refine(self, intent: str, prior_code: str) -> str:
-        """Edit existing code to satisfy a change request (the delta ``intent``)."""
-        text = self._provider.complete(
-            model=self._model,
-            system=SYSTEM_PROMPT,
-            user=build_refinement_message(intent, prior_code),
-        )
+    def refine(self, intent: str, prior_code: str, images: Sequence[ContentBlock] = ()) -> str:
+        """Edit existing code to satisfy a change request (the delta ``intent``).
+
+        ``images`` route the call through the message path — without them it stays
+        on the one-shot ``complete()`` exactly as before.
+        """
+        user = build_refinement_message(intent, prior_code)
+        if images:
+            text = self._stream_complete(user, None, None, images)
+        else:
+            text = self._provider.complete(
+                model=self._model,
+                system=SYSTEM_PROMPT,
+                user=user,
+            )
         return extract_code(text)
 
     def repair(
@@ -238,10 +264,21 @@ class CodeGenerator:
         previous_code: str,
         error: str,
         context: RepairContext | None = None,
+        images: Sequence[ContentBlock] = (),
     ) -> str:
-        text = self._provider.complete(
-            model=self._model,
-            system=SYSTEM_PROMPT,
-            user=build_repair_message(intent, previous_code, error, context),
-        )
+        """Fix code that failed, with the turn's reference pictures still in view.
+
+        A repair round that lost the picture would be trying to fix the shape
+        against the words alone, which is the half of the request that was least
+        able to describe it in the first place.
+        """
+        user = build_repair_message(intent, previous_code, error, context)
+        if images:
+            text = self._stream_complete(user, None, None, images)
+        else:
+            text = self._provider.complete(
+                model=self._model,
+                system=SYSTEM_PROMPT,
+                user=user,
+            )
         return extract_code(text)

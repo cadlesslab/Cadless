@@ -246,6 +246,10 @@ class ToolContext:
     current_params: dict = field(default_factory=dict)
     export_dir: str | None = None
     grounding: str | None = None
+    # The turn's attached reference images. Unlike ``grounding`` these reach every
+    # build path — fresh, edit, and each forge candidate — because the picture is
+    # the request rather than an extra hint about it.
+    images: list[ContentBlock] = field(default_factory=list)
     forge: bool = False
     forge_n: int = 1
     # Live token sink for streaming codegen: when set, fresh
@@ -726,7 +730,13 @@ class Agent:
         user_content: list[ContentBlock] = []
         if ctx_block is not None:
             user_content.append(ctx_block)
-        user_content.append(ContentBlock.of_text(user_text))
+        # Pictures before words, and a turn may be nothing but a picture. An empty
+        # text block is not something a provider will accept, so it is added only
+        # when it says something — or when it would otherwise be the whole message,
+        # which keeps every existing caller's shape unchanged.
+        user_content.extend(context.images)
+        if user_text.strip() or not user_content:
+            user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
 
         produced: list[ContentBlock] = []  # new blocks for persistence
@@ -840,7 +850,13 @@ class Agent:
         user_content: list[ContentBlock] = []
         if ctx_block is not None:
             user_content.append(ctx_block)
-        user_content.append(ContentBlock.of_text(user_text))
+        # Pictures before words, and a turn may be nothing but a picture. An empty
+        # text block is not something a provider will accept, so it is added only
+        # when it says something — or when it would otherwise be the whole message,
+        # which keeps every existing caller's shape unchanged.
+        user_content.extend(context.images)
+        if user_text.strip() or not user_content:
+            user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
 
         produced: list[ContentBlock] = []
@@ -1131,6 +1147,7 @@ class Agent:
                         export_dir=context.export_dir,
                         on_progress=_route_codegen(on_progress, context.on_codegen),
                         grounding=context.grounding,
+                        images=context.images,
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
@@ -1140,6 +1157,7 @@ class Agent:
                     export_dir=context.export_dir,
                     prior_code=context.current_code,
                     on_progress=on_progress,
+                    images=context.images,
                 )
                 payload = _result_summary(res)
                 self._adopt(context, res.code, res.parameters)
@@ -1195,6 +1213,7 @@ class Agent:
             n=context.forge_n,
             export_dir=context.export_dir,
             grounding=context.grounding,
+            images=context.images,
         )
         judged = select_winner(candidates, intent=spec)
         win = judged.winner

@@ -136,6 +136,7 @@ class StubPipeline:
         self.ok = ok
         self.error = error
         self.groundings: list[str | None] = []
+        self.images: list[list] = []
         # The real pipeline exposes the settings snapshot its turn runs under, and
         # the chat route hands it to grounding retrieval so both halves of a turn
         # read the same configuration. Modelled here so the stub keeps the same
@@ -143,8 +144,17 @@ class StubPipeline:
         # branch and the turn silently loses grounding.
         self.config = settings
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+    ):
         self.groundings.append(grounding)
+        self.images.append(list(images))
         if on_progress:
             on_progress(
                 {
@@ -977,6 +987,7 @@ class ForgePipeline(StubPipeline):
         prior_code=None,
         grounding=None,
         temperature=None,
+        images=(),
     ):
         self.run_count += 1
         return super().run(
@@ -985,13 +996,21 @@ class ForgePipeline(StubPipeline):
             on_progress=on_progress,
             prior_code=prior_code,
             grounding=grounding,
+            images=images,
         )
 
     def run_candidates(
-        self, intent, n=None, export_dir=None, assertions=None, grounding=None, temperature=None
+        self,
+        intent,
+        n=None,
+        export_dir=None,
+        assertions=None,
+        grounding=None,
+        temperature=None,
+        images=(),
     ):
         self.candidate_ns.append(n)
-        winner = super().run(intent, export_dir=export_dir, grounding=grounding)
+        winner = super().run(intent, export_dir=export_dir, grounding=grounding, images=images)
         losers = [
             GenerationResult(ok=False, intent=intent, code=f"broken-{i}", error="execution: boom")
             for i in range(max(0, (n or 1) - 1))
@@ -1137,7 +1156,15 @@ class SequencedPipeline:
         self._i = 0
         self.run_count = 0
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+    ):
         ok, error = self._results[min(self._i, len(self._results) - 1)]
         self._i += 1
         self.run_count += 1
@@ -1352,7 +1379,15 @@ def test_generate_streams_codegen_delta_frames(client, store, monkeypatch):
     frames, before that tool's tool_result (/3530)."""
 
     class CodegenPipeline(StubPipeline):
-        def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+        def run(
+            self,
+            intent,
+            export_dir=None,
+            on_progress=None,
+            prior_code=None,
+            grounding=None,
+            images=(),
+        ):
             if on_progress:  # emit codegen tokens the way the real pipeline now does
                 on_progress({"event": "codegen", "text": "from build123d import *\n"})
                 on_progress({"event": "codegen", "text": "result = Box(1, 1, 1)\n"})
@@ -1601,6 +1636,77 @@ def test_steer_refuses_an_attached_image(client, store, monkeypatch):
     )
 
     assert r.status_code == 422
+
+
+def test_an_attached_image_reaches_the_orchestrator(client, store, monkeypatch):
+    provider = ScriptedProvider([_text_turn("A bracket.")])
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    sent = provider.calls[-1]["messages"][-1].content
+    assert "image" in [b.kind for b in sent]
+
+
+def test_an_attached_image_reaches_the_model_that_writes_the_script(client, store, monkeypatch):
+    # The orchestrator seeing it is not enough — the acceptance criterion is that
+    # the picture reaches the codegen call, which only happens if the tool layer
+    # forwards it into the pipeline.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    assert pipeline.images  # the tool actually ran
+    assert [b.kind for b in pipeline.images[-1]] == ["image"]
+
+
+def test_an_edit_turn_carries_the_image_into_the_pipeline_too(client, store, monkeypatch):
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="edit_model", tool_input={"change": "taller"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="like this, but taller")
+
+    assert [b.kind for b in pipeline.images[-1]] == ["image"]
+
+
+def test_the_words_are_kept_beside_the_picture_in_the_transcript(client, store, monkeypatch):
+    # Persisting blocks stops MessageOut synthesizing one from ``content``, so the
+    # message text has to be carried explicitly or it vanishes from the UI.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    user = _messages(store, pid)[0]
+    assert [b.kind for b in user.blocks] == ["image", "text"]
+    assert user.blocks[1].text == "build this"
+
+
+def test_a_text_only_turn_persists_exactly_as_before(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid, "make a cube")
+
+    user = _messages(store, pid)[0]
+    assert user.blocks == []  # no synthesized blocks; content still carries it
+    assert user.content == "make a cube"
 
 
 def test_steer_still_accepts_a_plain_message(client, store, monkeypatch):
