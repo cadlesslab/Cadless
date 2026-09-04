@@ -25,7 +25,12 @@ Role = Literal["user", "assistant"]
 # neutral, vendor-free block: it persists the assistant's quick-reply questions so
 # a reload can restore the chips. It is never replayed to a provider as a tool
 # block — it is a terminal UI artifact of a turn that ended awaiting the user.
-BlockKind = Literal["text", "thinking", "tool_use", "tool_result", "clarification", "plan"]
+#
+# ``image`` carries a picture the user attached. Every vendor spells an image
+# differently, so what is neutral here is the payload plus its media type; each
+# adapter shapes those into its own wire form. A model that cannot see is a
+# capability gap rather than an encoding problem — see ``Capabilities`` below.
+BlockKind = Literal["text", "thinking", "tool_use", "tool_result", "clarification", "plan", "image"]
 
 
 class ContentBlock(BaseModel):
@@ -50,6 +55,15 @@ class ContentBlock(BaseModel):
     tool_use_id: str | None = None
     content: str | None = None
     is_error: bool = False
+
+    # image
+    media_type: str | None = None
+    data: str | None = None  # base64; each adapter decodes or forwards as its API wants
+    # A written reading of the picture, filled in after a model has looked at it.
+    # It is engine-side only — like ``provider_raw`` below, no adapter puts it on
+    # the wire. It exists so a later turn can be told what the reference was
+    # without the pixels being sent again.
+    reading: str | None = None
 
     # Provenance: which provider emitted this block, plus the verbatim block for
     # lossless replay back to that provider.
@@ -92,6 +106,18 @@ class ContentBlock(BaseModel):
         replayed to a provider as a tool block.
         """
         return cls(kind="plan", input={"steps": steps}, **kw)
+
+    @classmethod
+    def of_image(
+        cls, *, data: str, media_type: str, reading: str | None = None, **kw: Any
+    ) -> ContentBlock:
+        """A neutral image block: base64 ``data`` plus its ``media_type``.
+
+        ``reading`` is a written account of what the picture shows. It is not part
+        of any vendor's image encoding and is never sent as one; it is what a
+        later turn is given in place of the bytes.
+        """
+        return cls(kind="image", data=data, media_type=media_type, reading=reading, **kw)
 
     @classmethod
     def of_tool_result(
@@ -162,12 +188,19 @@ class Capabilities(BaseModel):
     """What a given model supports, so the app can adapt requests.
 
     Reports at least: extended-thinking support, whether ``tool_choice`` can be
-    constrained, and the model's max output-token budget.
+    constrained, the model's max output-token budget, and whether it can read an
+    image.
+
+    ``supports_images`` defaults to ``False`` on purpose. An adapter installed
+    beside the engine names the fields it knows about, so one written before this
+    field existed reports "cannot see" rather than claiming a capability nobody
+    checked — and the caller refuses the attachment instead of dropping it.
     """
 
     supports_thinking: bool = False
     supports_tool_choice: bool = False
     max_output_tokens: int = 4096
+    supports_images: bool = False
 
 
 class TurnParams(BaseModel):

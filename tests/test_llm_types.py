@@ -59,6 +59,36 @@ def test_content_block_provider_defaults_none():
     assert block.provider_raw is None
 
 
+def test_image_block_constructs_with_payload_and_media_type():
+    block = ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")
+    assert block.kind == "image"
+    assert block.data == "aGVsbG8="
+    assert block.media_type == "image/png"
+    # The reading is written back after codegen has looked at the picture, so a
+    # freshly attached image carries none.
+    assert block.reading is None
+
+
+def test_image_block_round_trips_through_model_dump():
+    # blocks_json persists ``model_dump()`` and rebuilds with ``ContentBlock(**b)``,
+    # so anything that does not survive this round trip is lost on reload.
+    block = ContentBlock.of_image(
+        data="aGVsbG8=", media_type="image/jpeg", reading="a bracket with two holes"
+    )
+    again = ContentBlock(**block.model_dump())
+    assert again.kind == "image"
+    assert again.data == "aGVsbG8="
+    assert again.media_type == "image/jpeg"
+    assert again.reading == "a bracket with two holes"
+
+
+def test_non_image_blocks_leave_the_image_fields_none():
+    block = ContentBlock.of_text("hi")
+    assert block.data is None
+    assert block.media_type is None
+    assert block.reading is None
+
+
 def test_message_holds_role_and_blocks():
     msg = Message(role="user", content=[ContentBlock.of_text("hello")])
     assert msg.role == "user"
@@ -125,6 +155,28 @@ def test_capabilities_reports_thinking_toolchoice_maxtokens():
     assert cap.supports_thinking is True
     assert cap.supports_tool_choice is True
     assert cap.max_output_tokens == 8192
+
+
+def test_capabilities_defaults_supports_images_false():
+    # An adapter installed beside the engine (ADR-0008) names every field it knows
+    # about and nothing else. It predates vision, so the default is what decides
+    # how it reads — and "cannot see" is the only safe answer, because the
+    # alternative silently drops a picture the user attached.
+    cap = Capabilities(
+        supports_thinking=True,
+        supports_tool_choice=True,
+        max_output_tokens=8192,
+    )
+    assert cap.supports_images is False
+
+
+def test_images_unsupported_is_typed_and_names_the_provider():
+    from cadless.llm.provider import ImagesUnsupported
+
+    err = ImagesUnsupported("openai")
+    assert isinstance(err, RuntimeError)
+    assert err.provider == "openai"
+    assert "openai" in str(err)
 
 
 def test_turn_params_defaults_and_override():
