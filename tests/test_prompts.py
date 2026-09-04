@@ -210,6 +210,37 @@ def test_a_forge_candidate_carries_the_image_too():
     assert [b.kind for b in _sent_blocks(provider)] == ["image", "text"]
 
 
+def test_codegen_refuses_an_image_when_the_provider_reports_it_cannot_see():
+    """The typed error has to actually fire, or the documents claiming it lie.
+
+    The request boundary refuses first for a chat turn, but eval, distillation and
+    anything composed beside the engine call the generator directly. Without this
+    the picture reaches the vendor and comes back as whatever that API calls a
+    malformed request.
+    """
+    from cadless.llm.provider import ImagesUnsupported
+    from cadless.llm.types import Capabilities
+
+    class _Blind(_FakeProvider):
+        def capabilities(self, model):
+            return Capabilities(supports_images=False)
+
+    gen = CodeGenerator(provider=_Blind("```python\nresult = Box(1,1,1)\n```"))
+    with pytest.raises(ImagesUnsupported):
+        gen.generate("a bracket", images=[_image_block()])
+
+
+def test_a_blind_provider_still_serves_a_text_only_call():
+    from cadless.llm.types import Capabilities
+
+    class _Blind(_FakeProvider):
+        def capabilities(self, model):
+            return Capabilities(supports_images=False)
+
+    fake = _Blind("```python\nresult = Box(1,1,1)\n```")
+    assert "Box(1,1,1)" in CodeGenerator(provider=fake).generate("a cube")
+
+
 def test_a_text_only_call_still_goes_through_complete_untouched():
     """The seam's one-shot signature must stay the path for every text-only call.
 
@@ -250,6 +281,44 @@ def test_extract_reading_pulls_the_marked_paragraph():
     assert extract_reading(reply) == (
         "an L-bracket with two bolt holes on the short leg, roughly twice as long as it is tall."
     )
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        pytest.param(
+            "REFERENCE: an L-bracket.\n```python\nresult = Box(1,1,1)\n```",
+            "an L-bracket.",
+            id="fence-on-the-next-line",
+        ),
+        pytest.param(
+            "REFERENCE: an L-bracket.\n\n```python\nresult = Box(1,1,1)\n```",
+            "an L-bracket.",
+            id="blank-line-then-fence",
+        ),
+        pytest.param(
+            "REFERENCE: an L-bracket,\ntwice as long as it is tall.\n```python\nx = 1\n```",
+            "an L-bracket, twice as long as it is tall.",
+            id="wrapped-paragraph-then-fence",
+        ),
+        pytest.param("REFERENCE: an L-bracket.", "an L-bracket.", id="no-code-at-all"),
+    ],
+)
+def test_extract_reading_stops_at_the_code_however_the_model_spaces_it(reply, expected):
+    """The fence may follow immediately — the few-shot format teaches exactly that.
+
+    ``render_few_shot`` renders every exemplar as "Response:" followed by a fence on
+    the next line, so a reading that only ended at a blank line would swallow the
+    script on the shape the prompt itself conditions for. It fails silently when it
+    does: the code still extracts, the build still succeeds, and the flattened
+    program lands in the stored reading and in every later turn that replays it.
+    """
+    from cadless.prompts import extract_reading
+
+    reading = extract_reading(reply)
+    assert reading == expected
+    assert "```" not in reading
+    assert "Box" not in reading
 
 
 def test_extract_reading_is_none_when_the_model_did_not_write_one():

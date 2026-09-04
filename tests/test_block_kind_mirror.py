@@ -75,6 +75,45 @@ def test_content_block_fields_match_the_typescript_interface():
     )
 
 
+def _ts_image_limits(src: str) -> dict[str, object]:
+    """The values of the ``IMAGE_LIMITS`` object literal."""
+    match = re.search(r"export\s+const\s+IMAGE_LIMITS\s*=\s*\{(.*?)\n\}", src, re.DOTALL)
+    assert match, "frontend/src/api.ts declares no `export const IMAGE_LIMITS`"
+    body = re.sub(r"//[^\n]*", "", match.group(1))
+
+    def number(key: str) -> int:
+        m = re.search(rf"\b{key}\s*:\s*([\d_]+)", body)
+        assert m, f"IMAGE_LIMITS has no numeric `{key}`"
+        return int(m.group(1).replace("_", ""))
+
+    types = re.search(r"\bmediaTypes\s*:\s*\[(.*?)\]", body, re.DOTALL)
+    assert types, "IMAGE_LIMITS has no `mediaTypes` array"
+    return {
+        "maxBytes": number("maxBytes"),
+        "maxTurnBytes": number("maxTurnBytes"),
+        "maxCount": number("maxCount"),
+        "mediaTypes": re.findall(r"[\"']([^\"']+)[\"']", types.group(1)),
+    }
+
+
+def test_the_composers_limits_are_the_servers_limits():
+    """The client copy of each limit must be the server's, or it is worse than none.
+
+    The composer refuses an attachment before uploading it, which is only a
+    kindness while the two agree. Let them drift and the browser starts refusing
+    turns the server would have taken, or waving through ones it will not — and
+    both suites stay green, because each side asserts its own copy.
+    """
+    from cadless.config import settings
+
+    limits = _ts_image_limits(_ts_source())
+
+    assert limits["maxBytes"] == settings.chat_image_max_bytes
+    assert limits["maxTurnBytes"] == settings.chat_image_max_turn_bytes
+    assert limits["maxCount"] == settings.chat_image_max_count
+    assert limits["mediaTypes"] == list(settings.chat_image_media_types)
+
+
 def test_the_image_kind_is_present_on_both_sides():
     """A named case, so a wholesale rewrite of either file cannot pass by emptying both.
 

@@ -116,6 +116,13 @@ export function ChatComposer({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
+  // What was last handed up, which is not the same thing as the prop. Reading a
+  // file is async, so a second paste can start before the first one's result has
+  // come back down — and merging onto the captured prop would make the second
+  // write drop the first. A silently lost attachment is the one outcome this
+  // feature exists to refuse, so the merge reads this instead.
+  const handedUp = useRef<ComposerAttachment[]>(attachments);
+  handedUp.current = attachments;
   const canAttach = Boolean(onAttachmentsChange) && !disabled && !generating;
 
   const hasText = value.trim().length > 0;
@@ -128,7 +135,9 @@ export function ChatComposer({
 
   async function attach(files: File[]) {
     if (!onAttachmentsChange || files.length === 0) return;
-    const why = refusal(attachments, files);
+    // Refused once here so an obviously-too-big file is not read at all, and once
+    // again after the read against whatever else landed meanwhile.
+    const why = refusal(handedUp.current, files);
     if (why) {
       setAttachError(why);
       return;
@@ -143,7 +152,14 @@ export function ChatComposer({
           bytes: file.size,
         })),
       );
-      onAttachmentsChange([...attachments, ...read]);
+      const late = refusal(handedUp.current, files);
+      if (late) {
+        setAttachError(late);
+        return;
+      }
+      const next = [...handedUp.current, ...read];
+      handedUp.current = next;
+      onAttachmentsChange(next);
     } catch {
       // Said rather than swallowed: a file that will not read leaves no chip, and
       // silence there looks exactly like an attachment that worked.
@@ -164,7 +180,9 @@ export function ChatComposer({
 
   function remove(index: number) {
     setAttachError(null);
-    onAttachmentsChange?.(attachments.filter((_, i) => i !== index));
+    const next = handedUp.current.filter((_, i) => i !== index);
+    handedUp.current = next;
+    onAttachmentsChange?.(next);
   }
 
   return (

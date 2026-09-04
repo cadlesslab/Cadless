@@ -99,7 +99,10 @@ async def get_attachment(
     if not await store.get_project(project_id):
         raise HTTPException(status_code=404, detail="project not found")
     session = await store.get_or_create_session(project_id)
-    message = next((m for m in await store.list_messages(session.id) if m.id == message_id), None)
+    # One row, selected by both ids. Scanning the session instead would parse every
+    # block of every message — including the payload of every other picture in it —
+    # to find one, on every image the transcript renders.
+    message = await store.get_message(session.id, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
 
@@ -126,4 +129,15 @@ async def get_attachment(
         if block.media_type in settings.chat_image_media_types
         else "application/octet-stream"
     )
-    return Response(content=raw, media_type=ctype, headers={"X-Content-Type-Options": "nosniff"})
+    return Response(
+        content=raw,
+        media_type=ctype,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            # The bytes at this address never change — an attachment is written once
+            # with its turn — so without this the browser asks again for every
+            # picture on every reload of the transcript. Private: it is one
+            # person's upload behind an owner-scoped lookup.
+            "Cache-Control": "private, max-age=3600",
+        },
+    )

@@ -1554,6 +1554,31 @@ def test_chat_refuses_an_image_over_the_per_image_limit(client, store, monkeypat
     assert "64" in errors[0]
 
 
+def test_an_image_at_the_limit_is_not_refused_by_the_encoded_pre_check(client, store, monkeypatch):
+    # The pre-check refuses on the base64 length so an oversize payload is not
+    # decoded before being told no. Its bound therefore has to be loose enough that
+    # a picture exactly at the ceiling still gets through — a pre-check that
+    # over-refuses would reject valid images and no size test would notice.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_bytes", 1024)
+    monkeypatch.setattr(chat.settings, "chat_image_max_turn_bytes", 4096)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    exactly_at_limit = {
+        "media_type": "image/png",
+        "data": base64.b64encode(b"x" * 1024).decode(),
+    }
+    assert _errors(_chat_with_images(client, pid, [exactly_at_limit])) == []
+
+
+def test_the_encoded_ceiling_never_refuses_a_payload_within_the_decoded_limit():
+    # Checked across the three base64 padding cases, since the encoded length of a
+    # given byte count is not a single formula but rounds up to a multiple of four.
+    for size in range(0, 200):
+        encoded = len(base64.b64encode(b"x" * size))
+        assert encoded <= chat._encoded_ceiling(size)
+
+
 def test_chat_refuses_more_images_than_the_count_limit(client, store, monkeypatch):
     _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
     monkeypatch.setattr(chat.settings, "chat_image_max_count", 2)
@@ -1826,5 +1851,19 @@ def test_steer_still_accepts_a_plain_message(client, store, monkeypatch):
     pid = client.post("/projects", json={"name": "P"}).json()["id"]
 
     r = client.post(f"/projects/{pid}/chat/steer", json={"message": "make it taller"})
+
+    assert r.status_code == 202
+
+
+def test_steer_still_accepts_the_body_it_always_did(client, store, monkeypatch):
+    # This route shared ChatRequest, so a client sending `forge` was accepted and
+    # the value ignored. Narrowing the model to refuse images must not turn that
+    # into a 422 as a side effect — it is a public HTTP contract.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(
+        f"/projects/{pid}/chat/steer", json={"message": "make it taller", "forge": False}
+    )
 
     assert r.status_code == 202

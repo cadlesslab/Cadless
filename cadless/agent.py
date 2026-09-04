@@ -735,11 +735,13 @@ class Agent:
         if ctx_block is not None:
             user_content.append(ctx_block)
         # Pictures before words, and a turn may be nothing but a picture. An empty
-        # text block is not something a provider will accept, so it is added only
-        # when it says something — or when it would otherwise be the whole message,
-        # which keeps every existing caller's shape unchanged.
+        # text block is not something a provider will accept, so it is dropped only
+        # when a picture is standing in for it. The condition is on the images
+        # rather than on whether anything else happens to be in the list: a context
+        # block is also non-empty, and keying off that would silently change the
+        # shape a caller passing blank text with no attachment has always got.
         user_content.extend(context.images)
-        if user_text.strip() or not user_content:
+        if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
 
@@ -855,11 +857,13 @@ class Agent:
         if ctx_block is not None:
             user_content.append(ctx_block)
         # Pictures before words, and a turn may be nothing but a picture. An empty
-        # text block is not something a provider will accept, so it is added only
-        # when it says something — or when it would otherwise be the whole message,
-        # which keeps every existing caller's shape unchanged.
+        # text block is not something a provider will accept, so it is dropped only
+        # when a picture is standing in for it. The condition is on the images
+        # rather than on whether anything else happens to be in the list: a context
+        # block is also non-empty, and keying off that would silently change the
+        # shape a caller passing blank text with no attachment has always got.
         user_content.extend(context.images)
-        if user_text.strip() or not user_content:
+        if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
 

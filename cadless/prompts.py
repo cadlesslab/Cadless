@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from cadless.config import settings
 from cadless.few_shot import render_few_shot
-from cadless.llm.provider import ChatProvider
+from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.registry import build_provider
 from cadless.llm.types import (
     ContentBlock,
@@ -60,7 +60,17 @@ REFERENCE_IMAGE_INSTRUCTION = (
     "alone, without the picture. Then write the code as usual."
 )
 
-_READING = re.compile(r"^REFERENCE:[ \t]*(.*?)(?:\n[ \t]*\n|\Z)", re.MULTILINE | re.DOTALL)
+# Ends at a blank line, at a fence, or at the end of the reply — all three matter.
+# The fence terminator is not defensive: every few-shot exemplar is rendered as
+# "Response:" then a fence on the next line with no blank line between them, so the
+# model is conditioned into exactly the shape that would otherwise make the reading
+# swallow the whole script. It would fail silently when it did — the code still
+# extracts and the build still succeeds — and the flattened program would land in
+# the stored reading, in every later turn's replay, in the synopsis, and in the
+# alt text of the picture.
+_READING = re.compile(
+    r"^REFERENCE:[ \t]*(.*?)(?:\n[ \t]*\n|\n[ \t]*```|\Z)", re.MULTILINE | re.DOTALL
+)
 
 
 def extract_reading(text: str) -> str | None:
@@ -287,6 +297,14 @@ class CodeGenerator:
         model's cue to start writing, so anything appended after it lands between
         the cue and the answer.
         """
+        if images and not self._provider.capabilities(self._model).supports_images:
+            # The backstop the request boundary makes unnecessary — for the callers
+            # that are not it. Eval, distillation and anything composed beside the
+            # engine reach this directly, and without the check the picture goes to
+            # the vendor and comes back as whatever that API calls a malformed
+            # request. Refuse in the seam's own vocabulary instead.
+            raise ImagesUnsupported(settings.llm_provider)
+
         parts: list[str] = []
         content = [*images, ContentBlock.of_text(user)]
         for chunk in self._provider.stream_turn(

@@ -107,6 +107,11 @@ class SteerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1)
+    # Accepted and ignored, exactly as it was while this route shared ``ChatRequest``.
+    # ``extra="forbid"`` is aimed at ``images``; leaving ``forge`` off it would turn
+    # a body that has always been accepted into a 422 for a reason that has nothing
+    # to do with why the model was narrowed.
+    forge: bool = False
 
 
 def build_pipeline() -> Pipeline:
@@ -131,8 +136,18 @@ def _refusal(detail: str) -> EventSourceResponse:
     return EventSourceResponse(_one(), headers=SSE_HEADERS)
 
 
-def _decoded_images(images: list[ImageAttachment]) -> list[tuple[ImageAttachment, bytes]]:
-    """Decode and gate the turn's attachments, or raise ``ValueError`` saying why.
+def _encoded_ceiling(decoded_limit: int) -> int:
+    """The largest base64 string that could still decode within ``decoded_limit``."""
+    return (decoded_limit + 2) // 3 * 4 + 4
+
+
+def _check_images(images: list[ImageAttachment]) -> None:
+    """Gate the turn's attachments, or raise ``ValueError`` saying which limit broke.
+
+    Returns nothing: the decoded bytes are not the product here, only the verdict.
+    The blocks the turn goes on to carry are built from the base64 the request
+    already holds, so keeping every decoded image alive to hand back would double
+    the peak for no reader.
 
     Every limit names itself and the value that broke it, so the message is
     something the user can act on rather than a bare refusal.
@@ -144,13 +159,22 @@ def _decoded_images(images: list[ImageAttachment]) -> list[tuple[ImageAttachment
         )
 
     allowed = settings.chat_image_media_types
-    decoded: list[tuple[ImageAttachment, bytes]] = []
     total = 0
     for n, image in enumerate(images, start=1):
         if image.media_type not in allowed:
             raise ValueError(
                 f"attachment {n}: {image.media_type} is not a format this can send; "
                 f"supported formats are {', '.join(allowed)}"
+            )
+        # Refuse on the encoded length first. Decoding is where the cost is, and a
+        # ceiling checked afterwards is a ceiling the caller has already spent.
+        # base64 is four characters per three bytes, so the encoded form is never
+        # shorter than this bound — a string past it cannot decode to something
+        # within the limit, whatever its padding.
+        if len(image.data) > _encoded_ceiling(settings.chat_image_max_bytes):
+            raise ValueError(
+                f"attachment {n} is too large, over the "
+                f"{settings.chat_image_max_bytes}-byte limit for one image"
             )
         try:
             raw = base64.b64decode(image.data, validate=True)
@@ -164,14 +188,13 @@ def _decoded_images(images: list[ImageAttachment]) -> list[tuple[ImageAttachment
                 f"{settings.chat_image_max_bytes}-byte limit for one image"
             )
         total += len(raw)
-        decoded.append((image, raw))
-
-    if total > settings.chat_image_max_turn_bytes:
-        raise ValueError(
-            f"the attachments total {total} bytes, over the "
-            f"{settings.chat_image_max_turn_bytes}-byte limit for one turn"
-        )
-    return decoded
+        if total > settings.chat_image_max_turn_bytes:
+            # Checked inside the loop so a turn already over its ceiling stops
+            # decoding rather than finishing the batch to say so.
+            raise ValueError(
+                f"the attachments total {total} bytes, over the "
+                f"{settings.chat_image_max_turn_bytes}-byte limit for one turn"
+            )
 
 
 def _blind_role(provider) -> str | None:
@@ -317,7 +340,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     image_blocks: list[ContentBlock] = []
     if body.images:
         try:
-            _decoded_images(body.images)
+            _check_images(body.images)
         except ValueError as exc:
             return _refusal(str(exc))
         blind = _blind_role(provider)

@@ -118,6 +118,22 @@ describe("ChatComposer queue/steer", () => {
 });
 
 describe("ChatComposer attachments", () => {
+  it("keeps both pictures when a second paste lands before the first has finished reading", async () => {
+    // Reading a file is async and the parent's state has not come back down yet,
+    // so merging onto the captured prop makes the second write drop the first —
+    // an attachment silently lost, which is the failure this feature is about.
+    const onAttachmentsChange = vi.fn();
+    const { getByPlaceholderText } = renderComposer({ onAttachmentsChange });
+    const field = getByPlaceholderText(/Describe or refine/);
+
+    paste(field, [imageFile("first.png")]);
+    paste(field, [imageFile("second.png")]);
+
+    await waitFor(() => expect(onAttachmentsChange).toHaveBeenCalledTimes(2));
+    const last = onAttachmentsChange.mock.calls[1][0] as ComposerAttachment[];
+    expect(last.map((a) => a.name)).toEqual(["first.png", "second.png"]);
+  });
+
   it("takes a pasted image as an attachment", async () => {
     const onAttachmentsChange = vi.fn();
     const { getByPlaceholderText } = renderComposer({ onAttachmentsChange });
