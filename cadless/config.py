@@ -294,6 +294,27 @@ class Settings(BaseSettings):
     # same failure. Layered above the identical-tool-call debounce.
     agent_same_stage_escalation: int = 2
 
+    # Reference images attached to a chat turn. Enforced at the request boundary
+    # so an attachment that cannot work is refused before a turn starts — once the
+    # turn is running, an error aborts it and reverts the project's version, which
+    # is a destructive way to say "that file was too big".
+    #
+    # The per-image ceiling is the tightest of the vendors we translate to, not the
+    # most generous: Bedrock Converse caps an image at 3.75 MB, while Anthropic
+    # allows 5 MB and OpenAI more still. Accepting a 5 MB image would mean taking a
+    # file that fails for whoever is on Bedrock.
+    chat_image_max_bytes: int = 3_750_000  # per image, decoded
+    chat_image_max_turn_bytes: int = 7_500_000  # all images in one turn, decoded
+    chat_image_max_count: int = 4  # per turn
+    # The intersection of what the four adapters can encode. A format outside this
+    # list is refused by name rather than guessed at.
+    chat_image_media_types: list[str] = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    ]
+
     # Optional VLM render-critique repair signal — OFF by default
     vlm_critique_enabled: bool = False
     vlm_model_slug: str = "sonnet-4-6"  # vision-capable

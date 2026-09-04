@@ -11,6 +11,7 @@ nesting of pipeline `stage` events inside `tool_progress`, and turn persistence
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -1451,3 +1452,161 @@ def test_replay_history_drops_invalid_assistant_blocks(store):
     assert [m.role for m in msgs] == ["user", "assistant"]  # valid alternation
     assert "Done! I've added a roof_width param." in msgs[1].content[0].text
     assert "the user wants" not in msgs[1].content[0].text  # past thinking dropped
+
+
+# --- attached reference images ----------------------------------------------
+
+
+def _image(*, size: int = 32, media_type: str = "image/png") -> dict:
+    """One attachment payload of ``size`` decoded bytes."""
+    return {"media_type": media_type, "data": base64.b64encode(b"\x89PNG" * size).decode()}
+
+
+def _chat_with_images(client, pid, images, text="build this"):
+    """POST a turn carrying attachments and return its decoded SSE events."""
+    with client.stream(
+        "POST", f"/projects/{pid}/chat", json={"message": text, "images": images}
+    ) as r:
+        assert r.status_code == 200
+        return _events("".join(r.iter_text()))
+
+
+def _errors(events: list[dict]) -> list[str]:
+    return [e.get("detail", "") for e in events if e.get("event") == "error"]
+
+
+def _current_version_id(store, pid):
+    async def _go():
+        return (await store.get_project(pid)).current_version_id
+
+    return asyncio.run(_go())
+
+
+class _BlindProvider(ScriptedProvider):
+    """A provider whose model cannot read an image."""
+
+    def capabilities(self, model: str):
+        caps = super().capabilities(model)
+        return caps.model_copy(update={"supports_images": False})
+
+
+def test_chat_refuses_an_image_over_the_per_image_limit(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_bytes", 64)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image(size=64)]))
+
+    assert len(errors) == 1
+    # The refusal has to say which limit was hit, not merely that one was.
+    assert "size" in errors[0].lower() or "large" in errors[0].lower()
+    assert "64" in errors[0]
+
+
+def test_chat_refuses_more_images_than_the_count_limit(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_count", 2)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image(), _image(), _image()]))
+
+    assert len(errors) == 1
+    assert "2" in errors[0]
+    assert "3" in errors[0]  # says how many arrived, so the user can act on it
+
+
+def test_chat_refuses_images_over_the_whole_turn_limit(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_bytes", 1_000_000)
+    monkeypatch.setattr(chat.settings, "chat_image_max_turn_bytes", 300)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    # Each image is under the per-image ceiling; together they are over the turn's.
+    errors = _errors(_chat_with_images(client, pid, [_image(size=50), _image(size=50)]))
+
+    assert len(errors) == 1
+    assert "300" in errors[0]
+
+
+def test_chat_refuses_an_unsupported_media_type(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image(media_type="image/tiff")]))
+
+    assert len(errors) == 1
+    assert "image/tiff" in errors[0]  # names the format that was refused
+
+
+def test_chat_refuses_an_image_when_the_model_cannot_see(client, store, monkeypatch):
+    _install(monkeypatch, _BlindProvider([_text_turn("should not be reached")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image()]))
+
+    assert len(errors) == 1
+    assert "image" in errors[0].lower()
+
+
+def test_a_refused_attachment_leaves_the_project_version_alone(client, store, monkeypatch):
+    # An error raised *inside* a turn reverts the project to its last good version.
+    # A refused attachment must not: nothing was built, so nothing is rolled back.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("Done."),
+        ]
+    )
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    _stream_chat(client, pid)
+    before = _current_version_id(store, pid)
+    assert before is not None  # the turn really did produce a version
+
+    monkeypatch.setattr(chat.settings, "chat_image_max_count", 1)
+    _chat_with_images(client, pid, [_image(), _image()])
+
+    assert _current_version_id(store, pid) == before
+
+
+def test_chat_accepts_a_turn_that_is_only_an_image(client, store, monkeypatch):
+    # "here, build this" with the picture doing the talking. The message field is
+    # empty, which the request model used to reject outright.
+    _install(monkeypatch, ScriptedProvider([_text_turn("A bracket, then.")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _chat_with_images(client, pid, [_image()], text="")
+
+    assert _errors(events) == []
+
+
+def test_chat_still_refuses_a_turn_with_neither_text_nor_image(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(f"/projects/{pid}/chat", json={"message": "", "images": []})
+
+    assert r.status_code == 422
+
+
+def test_steer_refuses_an_attached_image(client, store, monkeypatch):
+    # Steer forwards a bare string into the running loop, so an image on this
+    # route would be accepted and then silently dropped. Refuse it instead.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(
+        f"/projects/{pid}/chat/steer",
+        json={"message": "actually make it taller", "images": [_image()]},
+    )
+
+    assert r.status_code == 422
+
+
+def test_steer_still_accepts_a_plain_message(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(f"/projects/{pid}/chat/steer", json={"message": "make it taller"})
+
+    assert r.status_code == 202

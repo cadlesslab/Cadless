@@ -26,6 +26,8 @@ does not reinvent it.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import shutil
@@ -33,7 +35,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -62,18 +64,128 @@ router = APIRouter(tags=["chat"])
 _steer_registry = SessionSteerRegistry()
 
 
+class ImageAttachment(BaseModel):
+    """One reference image the user attached to a turn."""
+
+    media_type: str
+    data: str  # base64; decoded once at the boundary to measure and to validate
+
+
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1)
+    message: str = ""
+    # Reference images for this turn. They reach the model that writes the script
+    # and are not carried into later turns — see ``_replay_history``.
+    images: list[ImageAttachment] = Field(default_factory=list)
     # Per-turn forge opt-in (C4): a fresh generation races best-of-N when
     # this is True AND the global ``forge_enabled`` kill-switch is on (both-true
     # gate). Default False => today's single-generation behavior. Forge is per-turn,
     # not a persistent project setting: each turn opts in explicitly.
     forge: bool = False
 
+    @model_validator(mode="after")
+    def _needs_something_to_act_on(self) -> ChatRequest:
+        """A turn must say something, in words or in pictures.
+
+        ``message`` used to be non-empty by construction. It cannot be any more:
+        handing over a photograph with no caption is a real way to ask for a part,
+        and rejecting it would make the attachment useless on its own.
+        """
+        if not self.message.strip() and not self.images:
+            raise ValueError("a turn needs a message or at least one image")
+        return self
+
+
+class SteerRequest(BaseModel):
+    """The steer body — deliberately narrower than :class:`ChatRequest`.
+
+    Steering injects a bare string into a running loop, so there is nowhere for an
+    image to go. Sharing ``ChatRequest`` would make this route accept one and drop
+    it without a word, which is worse than refusing it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1)
+
 
 def build_pipeline() -> Pipeline:
     """Build the CAD pipeline the agent's tools run against (monkeypatched in tests)."""
     return Pipeline()
+
+
+def _refusal(detail: str) -> EventSourceResponse:
+    """Answer a turn that cannot run with one error event and nothing else.
+
+    Refusals on this route are delivered in the stream rather than as a status
+    code, because the reason is for the person typing — "that image is too large"
+    belongs in the conversation, where the frontend already renders an ``error``
+    event. It also has to happen *before* the turn starts: once running, an
+    exception settles the turn and reverts the project to its last good version
+    (see ``run``), which is a destructive way to report a rejected attachment.
+    """
+
+    async def _one():
+        yield {"data": json.dumps({"event": "error", "detail": detail})}
+
+    return EventSourceResponse(_one(), headers=SSE_HEADERS)
+
+
+def _decoded_images(images: list[ImageAttachment]) -> list[tuple[ImageAttachment, bytes]]:
+    """Decode and gate the turn's attachments, or raise ``ValueError`` saying why.
+
+    Every limit names itself and the value that broke it, so the message is
+    something the user can act on rather than a bare refusal.
+    """
+    if len(images) > settings.chat_image_max_count:
+        raise ValueError(
+            f"at most {settings.chat_image_max_count} images per turn; "
+            f"this turn carried {len(images)}"
+        )
+
+    allowed = settings.chat_image_media_types
+    decoded: list[tuple[ImageAttachment, bytes]] = []
+    total = 0
+    for n, image in enumerate(images, start=1):
+        if image.media_type not in allowed:
+            raise ValueError(
+                f"attachment {n}: {image.media_type} is not a format this can send; "
+                f"supported formats are {', '.join(allowed)}"
+            )
+        try:
+            raw = base64.b64decode(image.data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            # Unreadable rather than oversized: refuse instead of forwarding bytes
+            # no adapter could encode.
+            raise ValueError(f"attachment {n} is not valid base64 data") from exc
+        if len(raw) > settings.chat_image_max_bytes:
+            raise ValueError(
+                f"attachment {n} is too large: {len(raw)} bytes, over the "
+                f"{settings.chat_image_max_bytes}-byte limit for one image"
+            )
+        total += len(raw)
+        decoded.append((image, raw))
+
+    if total > settings.chat_image_max_turn_bytes:
+        raise ValueError(
+            f"the attachments total {total} bytes, over the "
+            f"{settings.chat_image_max_turn_bytes}-byte limit for one turn"
+        )
+    return decoded
+
+
+def _blind_role(provider) -> str | None:
+    """The name of a model in this turn's path that cannot read an image.
+
+    Two models see the picture: the orchestrator reads it to decide what to build,
+    and the codegen model gets it again when it writes the script. An image that
+    only reaches the first would leave the part built from a description of the
+    picture rather than the picture. ``bedrock_model_slug`` is the codegen slug
+    despite its name — it is what :class:`~cadless.prompts.CodeGenerator` resolves.
+    """
+    for slug in dict.fromkeys((settings.orchestrator_model, settings.bedrock_model_slug)):
+        if not provider.capabilities(slug).supports_images:
+            return slug
+    return None
 
 
 async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | None, dict]:
@@ -183,12 +295,20 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # guide the user to Settings instead of running a doomed LLM call that fails
     # with a cryptic vendor error (or silently no-ops on ambient creds).
     if not user_settings.has_credentials():
-        hint = user_settings.credentials_hint()
+        return _refusal(user_settings.credentials_hint())
 
-        async def _need_credentials():
-            yield {"data": json.dumps({"event": "error", "detail": hint})}
-
-        return EventSourceResponse(_need_credentials(), headers=SSE_HEADERS)
+    provider = build_provider()
+    if body.images:
+        try:
+            _decoded_images(body.images)
+        except ValueError as exc:
+            return _refusal(str(exc))
+        blind = _blind_role(provider)
+        if blind is not None:
+            return _refusal(
+                f"the configured model {blind!r} cannot read images. Remove the "
+                "attachment, or pick a vision-capable model in Settings."
+            )
 
     session = await store.get_or_create_session(project_id)
     history = await _replay_history(store, session.id)
@@ -200,7 +320,6 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
     staging.mkdir(parents=True, exist_ok=True)
 
-    provider = build_provider()
     # Session hygiene: fold older turns of a long transcript into a
     # rolling synopsis so the agent's context stays bounded. The durable code
     # source of truth stays the persisted script_versions chain — this only
@@ -435,7 +554,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
 
 
 @router.post("/projects/{project_id}/chat/steer", status_code=202)
-async def steer(project_id: int, body: ChatRequest, store: ScopedStore = Depends(get_store)):
+async def steer(project_id: int, body: SteerRequest, store: ScopedStore = Depends(get_store)):
     """Queue a steer message for the project's in-flight `/chat` turn.
 
     The message is enqueued into the session's steer queue; the running agent loop
