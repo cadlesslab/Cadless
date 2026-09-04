@@ -119,16 +119,34 @@ port, bound to loopback.
    never *how*: identity is supplied by a registered resolver, and a missing or
    failing one is a refusal rather than a fall back to the local user.
 
+8. An image the user attached MUST reach the model that writes the script, or
+   the turn MUST be refused before it starts. It is never dropped in between.
+   `Capabilities.supports_images` decides, and a provider that does not report
+   the field at all is treated as unable to see, so an adapter written before
+   vision existed refuses attachments rather than silently discarding one. The
+   refusal happens at the request boundary because an exception raised inside a
+   running turn settles it as failed and reverts the project to its last good
+   version. `ChatProvider.complete()` stays text-only — code outside this tree
+   implements that exact signature — so an image-carrying call takes the
+   message-based path instead, on every codegen call of the turn rather than
+   only the first. The bytes are scoped to the turn that carried them; later
+   turns are given the written reading stored beside the block. Recorded in
+   ADR-0009 and enforced by the seam, chat and prompt tests.
+
 The provider seam, sandbox layers, local-first posture, embeddings behavior,
-candidate judging, and the identity seam decisions are recorded under
+candidate judging, the identity seam and the image decisions are recorded under
 `docs/adr/` and guarded by the corresponding tests.
 
 ## Data & Execution Flow
 
 1. The client submits an intent to the FastAPI API and receives progress over
-   SSE.
+   SSE. A chat turn may carry reference images alongside its text, or instead of
+   it; they are gated at the request boundary — format, size, count, and whether
+   the configured models can read one — and refused there when they cannot work.
 2. The engine assembles the prompt and asks the selected provider for build123d
-   source through the provider-neutral interface.
+   source through the provider-neutral interface. An attached image travels with
+   that prompt to every code-generating call of the turn: the fresh run, a
+   refinement, each repair round, and each best-of-N candidate.
 3. Static validation rejects disallowed syntax and imports before any execution.
 4. `cadless.worker.run_code` sends the program to the worker service when
    `CADLESS_WORKER_URL` is configured; local development and tests use a
