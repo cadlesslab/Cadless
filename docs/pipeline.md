@@ -147,6 +147,16 @@ The agent exposes five tools to the model (`build_tools()`):
 | `ask_clarification(questions)` | Ends the turn and asks the user (max 3 questions). |
 | `submit_plan(steps)` | Streams a brief plan (max 8 steps); does **not** end the turn. |
 
+A turn may carry **reference images** alongside (or instead of) its text. They
+are gated at the request boundary — format, per-image and per-turn size, count,
+and whether the configured models can read one at all — because a refusal raised
+inside a running turn would revert the project's version. Past that gate they
+ride the neutral seam to *every* codegen call of the turn: the fresh run, a
+refinement, each repair round, and each best-of-N candidate. The bytes are scoped
+to that turn; what later turns are given instead is a written reading of the
+picture, extracted from the codegen reply and stored beside the block
+([ADR-0009](adr/0009-images-are-additive.md)).
+
 Turn hard caps (all in `config.py`): `agent_max_tool_iters=6` tool
 round-trips, `agent_token_budget=200_000` cumulative tokens,
 `agent_time_budget_secs=120` wall clock, plus a duplicate-tool-call debounce

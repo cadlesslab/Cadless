@@ -237,4 +237,4 @@ catalog content read-only.
 
 ## Known Unknowns
 
-- TODO: Decide whether VLM critique remains an explicit Bedrock exception or moves behind a provider-neutral vision protocol / Current basis: `cadless.vlm_critique.VlmCritic` lazy-imports `boto3` and `Pipeline` invokes the injected critic, while ADR-0001 says vendor SDKs live only in provider adapters / Resolved when: the exception is recorded in an ADR, or a neutral vision-provider seam is implemented and tested and ADR-0001 is aligned with it
+- TODO: Move `vlm_critique` onto the neutral vision seam / Current basis: the seam now exists and is tested — [ADR-0009](adr/0009-images-are-additive.md) records an `image` block, `Capabilities.supports_images` and a typed refusal, and all four bundled adapters encode it — but `cadless.vlm_critique.VlmCritic` still lazy-imports `boto3` and calls Converse directly, so it remains the one place a vendor SDK lives outside a provider adapter, and selecting a non-Bedrock provider does not change what the critic calls / Resolved when: `VlmCritic` sends its image through `ChatProvider` and a run on a non-Bedrock provider is observed using that provider's model
