@@ -27,10 +27,22 @@ class FakeGen:
     def __init__(self, outputs):
         self._outputs = list(outputs)
         self.repairs = 0
+        self.reading = None  # what the model "read" off the picture, when a test wants one
 
-    def generate(self, intent, grounding=None, temperature=None, on_token=None):
+    def generate(
+        self,
+        intent,
+        grounding=None,
+        temperature=None,
+        on_token=None,
+        images=(),
+        on_reading=None,
+    ):
         self.last_grounding = grounding
         self.last_temperature = temperature
+        self.last_images = list(images)
+        if on_reading is not None and self.reading is not None:
+            on_reading(self.reading)
         out = self._outputs[0]
         if on_token is not None:  # simulate streaming: emit the code in two chunks
             mid = len(out) // 2
@@ -39,15 +51,19 @@ class FakeGen:
                     on_token(piece)
         return out
 
-    def refine(self, intent, prior_code):
+    def refine(self, intent, prior_code, images=(), on_reading=None):
         self.refine_calls = getattr(self, "refine_calls", 0) + 1
         self.last_refine = (intent, prior_code)
+        self.last_images = list(images)
+        if on_reading is not None and self.reading is not None:
+            on_reading(self.reading)
         return self._outputs[0]
 
-    def repair(self, intent, code, error, context=None):
+    def repair(self, intent, code, error, context=None, images=()):
         self.repairs += 1
         self.last_repair_context = context
         self.last_repair_error = error
+        self.last_repair_images = list(images)
         return self._outputs[self.repairs]
 
 
@@ -120,6 +136,47 @@ def test_run_threads_grounding_into_fresh_generation():
         "a bracket", grounding="SOME GROUNDING"
     )
     assert gen.last_grounding == "SOME GROUNDING"
+
+
+def _one_image():
+    from cadless.llm.types import ContentBlock
+
+    return ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")
+
+
+def test_run_threads_images_into_fresh_generation():
+    gen = FakeGen([BANNED])  # fails validation -> no execution needed
+    images = [_one_image()]
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=1)).run("a bracket", images=images)
+    assert gen.last_images == images
+
+
+def test_run_threads_images_into_the_refine_branch():
+    gen = FakeGen([BANNED])
+    images = [_one_image()]
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=1)).run(
+        "make it taller", prior_code="result = Box(1,1,1)", images=images
+    )
+    assert gen.last_images == images
+
+
+def test_a_repair_round_still_has_the_picture():
+    # The first output fails validation, so the pipeline asks for a repair. That
+    # round is fixing the shape, which is the thing the picture describes.
+    gen = FakeGen([BANNED, BANNED])
+    images = [_one_image()]
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run("a bracket", images=images)
+    assert gen.repairs >= 1
+    assert gen.last_repair_images == images
+
+
+def test_every_forge_candidate_carries_the_picture():
+    gen = FakeGen([BANNED])
+    images = [_one_image()]
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=1)).run_candidates(
+        "a bracket", n=3, images=images
+    )
+    assert gen.last_images == images
 
 
 def test_grounding_reaches_provider_prompt():
@@ -275,6 +332,8 @@ def test_generate_cad_forwards_export_scale(monkeypatch):
             prior_code=None,
             assertions=None,
             export_scale=1.0,
+            images=(),
+            on_reading=None,
         ):
             seen["export_scale"] = export_scale
             return "res"

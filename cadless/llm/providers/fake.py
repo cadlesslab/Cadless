@@ -68,10 +68,15 @@ class FakeChatProvider:
         yield from self._script
 
     def capabilities(self, model: str) -> Capabilities:
-        # Permissive on purpose: tests exercising thinking/tool_choice paths
-        # shouldn't be gated out by the fake.
+        # Permissive on purpose: tests exercising thinking/tool_choice/image paths
+        # shouldn't be gated out by the fake. It has to be able to stand in for a
+        # vision model, since an attached picture is refused before the turn
+        # starts when the provider reports it cannot see.
         return Capabilities(
-            supports_thinking=True, supports_tool_choice=True, max_output_tokens=4096
+            supports_thinking=True,
+            supports_tool_choice=True,
+            max_output_tokens=4096,
+            supports_images=True,
         )
 
     def complete(

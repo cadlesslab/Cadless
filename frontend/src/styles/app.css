@@ -190,6 +190,12 @@ body.resizing { cursor: col-resize; user-select: none; }
   padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
   max-width: 85%; white-space: pre-wrap; word-break: break-word;
 }
+/* A reference picture the user attached. The bubble loses its padding and its
+   accent fill so the image is the bubble rather than sitting on a coloured slab,
+   and the picture is capped in height — a portrait photograph would otherwise
+   take the whole thread. */
+.msg-user .msg-bubble-image { padding: 0; background: none; overflow: hidden; }
+.msg-image { display: block; max-width: 100%; max-height: 220px; object-fit: contain; border-radius: var(--radius-lg); }
 .msg-assistant { align-items: flex-start; }
 .msg-avatar { flex: 0 0 auto; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--accent); font-size: var(--text-md); }
 .msg-body { flex: 1; min-width: 0; }
@@ -249,10 +255,29 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Mid-stream the Queue/steer control sits just left of Stop. */
 .composer-queue { right: calc(var(--space-1) + 36px); }
 
-/* Per-turn Forge toggle: a small opt-in chip above the field. */
+/* Per-turn Forge toggle and the attach control: small opt-in chips above the field. */
 .composer-tools { display: flex; gap: var(--space-2); }
-.composer-forge { font-size: 0.8rem; padding: 2px var(--space-2); height: auto; opacity: 0.7; }
+.composer-forge, .composer-attach { font-size: 0.8rem; padding: 2px var(--space-2); height: auto; opacity: 0.7; }
 .composer-forge[data-active="true"] { opacity: 1; color: var(--accent); border-color: var(--accent); }
+
+/* Reference images attached to the next turn. The picker itself is out of the
+   layout rather than merely transparent: a file input cannot be restyled to sit
+   in this row in any browser, so the visible control is the button beside Forge
+   and this only carries the dialog it opens. */
+.composer-file { display: none; }
+.composer-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.composer-chip {
+  display: flex; align-items: center; gap: var(--space-1); max-width: 180px;
+  padding: 2px var(--space-2); font-size: var(--text-xs); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+/* The name is what tells two screenshots apart, so it takes the space and the
+   remove control keeps its own — a long filename would otherwise push the × off
+   the end of a panel that resizes down to 240px. */
+.composer-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip-remove { flex: none; background: none; border: 0; padding: 0; cursor: pointer; color: var(--muted); font-size: var(--text-sm); line-height: 1; }
+.composer-chip-remove:hover { color: var(--fg); }
+.composer-attach-error { margin: 0; font-size: var(--text-xs); color: var(--bad); }
 
 /* onboarding tip */
 .onboarding { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); background: var(--accent-weak); border: 1px solid var(--accent); border-radius: var(--radius-md); }

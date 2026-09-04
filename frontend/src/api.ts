@@ -78,8 +78,17 @@ export type BlockKind =
   | "tool_use"
   | "tool_result"
   | "clarification"
-  | "plan";
+  | "plan"
+  | "image";
 
+/** One block of a persisted turn — the whole neutral block model rather than the
+ * subset this app renders today.
+ *
+ * Every field but `kind` is optional and nullable, because which of them a block
+ * carries is settled by its `kind`. Mirroring the model in full is the deliberate
+ * choice: a type narrowed to what the UI happened to read omits fields that were
+ * on the wire all along, and the omission is invisible — nothing fails, the field
+ * simply cannot be reached. */
 export interface ContentBlock {
   kind: BlockKind;
   text?: string | null;
@@ -87,6 +96,16 @@ export interface ContentBlock {
   name?: string | null;
   input?: Record<string, unknown> | null;
   tool_use_id?: string | null;
+  content?: string | null;
+  is_error?: boolean | null;
+  media_type?: string | null;
+  /** Base64 bytes, and `null` on everything the transcript hands back — the
+   * pictures are fetched one at a time from `attachmentUrl` instead, so a reload
+   * does not re-download every image in the session inline. */
+  data?: string | null;
+  reading?: string | null;
+  provider?: string | null;
+  provider_raw?: Record<string, unknown> | null;
 }
 
 export interface MessageOut {
@@ -100,6 +119,29 @@ export interface MessageOut {
   created_at: string;
   blocks: ContentBlock[];
 }
+
+/** One reference image going up with a chat turn: base64 `data` carrying **no**
+ * `data:` URL prefix, plus the media type it was read under. */
+export interface ImageAttachment {
+  media_type: string;
+  data: string;
+}
+
+/** What the server will accept from one turn's attachments.
+ *
+ * A copy of the server's own limits, and the server still enforces them — this
+ * side exists so nobody spends a minute uploading four megabytes to be told no
+ * at the end of it. Sizes are of the decoded bytes, which is what a `File`
+ * already reports, so nothing has to be base64-encoded to be measured. */
+export const IMAGE_LIMITS = {
+  maxBytes: 3_750_000, // per image
+  maxTurnBytes: 7_500_000, // all images in one turn
+  maxCount: 4, // per turn
+  // Left widened to `string[]` rather than frozen with `as const`: the values
+  // are compared against a `File.type`, and a literal tuple refuses that
+  // comparison outright.
+  mediaTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+};
 
 // ---- chat turn SSE events (/) ----
 /** UI events emitted by `POST /projects/{id}/chat`. Pipeline `stage` events nest
@@ -909,6 +951,15 @@ export function streamGenerate(
 export const getMessages = (projectId: number) =>
   req<MessageOut[]>(`/projects/${projectId}/messages`);
 
+/** Where one attached picture's bytes are served from.
+ *
+ * `index` numbers the message's **image blocks**, not its blocks — a turn that
+ * came in as `[image, text, image]` serves them at 0 and 1. Exported so a
+ * renderer asks for a picture by which one it is rather than assembling a path
+ * out of three ids. */
+export const attachmentUrl = (projectId: number, messageId: number, index: number) =>
+  `${BASE}/projects/${projectId}/messages/${messageId}/attachments/${index}`;
+
 /** Drive a `POST /projects/{id}/chat` SSE turn, calling `onEvent` per parsed UI
  * event. Resolves when the stream ends or is aborted via `signal` (Stop). Unlike
  * the legacy generation streams this is a POST with a JSON body, so it uses fetch
@@ -919,6 +970,7 @@ export async function streamChat(
   onEvent: (e: ChatEvent) => void,
   signal?: AbortSignal,
   forge = false,
+  images: ImageAttachment[] = [],
 ): Promise<void> {
   let res: Response;
   try {
@@ -940,7 +992,15 @@ export async function streamChat(
       headers: outgoingHeaders({ headers: { "Content-Type": "application/json" } }),
       // `forge` opts this turn into best-of-N racing. It only takes
       // effect if the server's global forge kill-switch is also on (both-true gate).
-      body: JSON.stringify({ message, forge }),
+      // Each attachment is narrowed to the two fields the turn needs rather than
+      // posted whole: the composer keeps a file name on its own copies for the
+      // chips, and a body already carrying megabytes of base64 is no place to
+      // send someone's filenames along for the ride.
+      body: JSON.stringify({
+        message,
+        images: images.map((i) => ({ media_type: i.media_type, data: i.data })),
+        forge,
+      }),
       signal,
     });
   } catch (err) {

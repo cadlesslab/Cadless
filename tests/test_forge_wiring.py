@@ -34,12 +34,22 @@ class RacePipeline:
         prior_code=None,
         grounding=None,
         temperature=None,
+        images=(),
+        on_reading=None,
     ):
         self.run_calls.append((intent, prior_code))
         return self._candidates[0]
 
     def run_candidates(
-        self, intent, n=None, export_dir=None, assertions=None, grounding=None, temperature=None
+        self,
+        intent,
+        n=None,
+        export_dir=None,
+        assertions=None,
+        grounding=None,
+        temperature=None,
+        images=(),
+        on_reading=None,
     ):
         self.candidate_calls.append(n)
         return self._candidates

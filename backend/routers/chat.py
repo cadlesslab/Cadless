@@ -26,6 +26,8 @@ does not reinvent it.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import shutil
@@ -33,7 +35,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -48,6 +50,7 @@ from cadless.distill import auto_distill
 from cadless.exporters import EXPORTERS
 from cadless.forge import persist_losers
 from cadless.llm.registry import build_provider  # monkeypatched in tests
+from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
 from cadless.pipeline import Pipeline
 from cadless.rag import retrieve_grounding
@@ -62,18 +65,153 @@ router = APIRouter(tags=["chat"])
 _steer_registry = SessionSteerRegistry()
 
 
+class ImageAttachment(BaseModel):
+    """One reference image the user attached to a turn."""
+
+    media_type: str
+    data: str  # base64; decoded once at the boundary to measure and to validate
+
+
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1)
+    message: str = ""
+    # Reference images for this turn. They reach the model that writes the script
+    # and are not carried into later turns — see ``_replay_history``.
+    images: list[ImageAttachment] = Field(default_factory=list)
     # Per-turn forge opt-in (C4): a fresh generation races best-of-N when
     # this is True AND the global ``forge_enabled`` kill-switch is on (both-true
     # gate). Default False => today's single-generation behavior. Forge is per-turn,
     # not a persistent project setting: each turn opts in explicitly.
     forge: bool = False
 
+    @model_validator(mode="after")
+    def _needs_something_to_act_on(self) -> ChatRequest:
+        """A turn must say something, in words or in pictures.
+
+        ``message`` used to be non-empty by construction. It cannot be any more:
+        handing over a photograph with no caption is a real way to ask for a part,
+        and rejecting it would make the attachment useless on its own.
+        """
+        if not self.message.strip() and not self.images:
+            raise ValueError("a turn needs a message or at least one image")
+        return self
+
+
+class SteerRequest(BaseModel):
+    """The steer body — deliberately narrower than :class:`ChatRequest`.
+
+    Steering injects a bare string into a running loop, so there is nowhere for an
+    image to go. Sharing ``ChatRequest`` would make this route accept one and drop
+    it without a word, which is worse than refusing it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1)
+    # Accepted and ignored, exactly as it was while this route shared ``ChatRequest``.
+    # ``extra="forbid"`` is aimed at ``images``; leaving ``forge`` off it would turn
+    # a body that has always been accepted into a 422 for a reason that has nothing
+    # to do with why the model was narrowed.
+    forge: bool = False
+
 
 def build_pipeline() -> Pipeline:
     """Build the CAD pipeline the agent's tools run against (monkeypatched in tests)."""
     return Pipeline()
+
+
+def _refusal(detail: str) -> EventSourceResponse:
+    """Answer a turn that cannot run with one error event and nothing else.
+
+    Refusals on this route are delivered in the stream rather than as a status
+    code, because the reason is for the person typing — "that image is too large"
+    belongs in the conversation, where the frontend already renders an ``error``
+    event. It also has to happen *before* the turn starts: once running, an
+    exception settles the turn and reverts the project to its last good version
+    (see ``run``), which is a destructive way to report a rejected attachment.
+    """
+
+    async def _one():
+        yield {"data": json.dumps({"event": "error", "detail": detail})}
+
+    return EventSourceResponse(_one(), headers=SSE_HEADERS)
+
+
+def _encoded_ceiling(decoded_limit: int) -> int:
+    """The largest base64 string that could still decode within ``decoded_limit``."""
+    return (decoded_limit + 2) // 3 * 4 + 4
+
+
+def _check_images(images: list[ImageAttachment]) -> None:
+    """Gate the turn's attachments, or raise ``ValueError`` saying which limit broke.
+
+    Returns nothing: the decoded bytes are not the product here, only the verdict.
+    The blocks the turn goes on to carry are built from the base64 the request
+    already holds, so keeping every decoded image alive to hand back would double
+    the peak for no reader.
+
+    Every limit names itself and the value that broke it, so the message is
+    something the user can act on rather than a bare refusal.
+    """
+    if len(images) > settings.chat_image_max_count:
+        raise ValueError(
+            f"at most {settings.chat_image_max_count} images per turn; "
+            f"this turn carried {len(images)}"
+        )
+
+    allowed = settings.chat_image_media_types
+    total = 0
+    for n, image in enumerate(images, start=1):
+        if image.media_type not in allowed:
+            raise ValueError(
+                f"attachment {n}: {image.media_type} is not a format this can send; "
+                f"supported formats are {', '.join(allowed)}"
+            )
+        # Refuse on the encoded length first. Decoding is where the cost is, and a
+        # ceiling checked afterwards is a ceiling the caller has already spent.
+        # base64 is four characters per three bytes, so the encoded form is never
+        # shorter than this bound — a string past it cannot decode to something
+        # within the limit, whatever its padding.
+        if len(image.data) > _encoded_ceiling(settings.chat_image_max_bytes):
+            raise ValueError(
+                f"attachment {n} is too large, over the "
+                f"{settings.chat_image_max_bytes}-byte limit for one image"
+            )
+        try:
+            raw = base64.b64decode(image.data, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            # Unreadable rather than oversized: refuse instead of forwarding bytes
+            # no adapter could encode.
+            raise ValueError(f"attachment {n} is not valid base64 data") from exc
+        if len(raw) > settings.chat_image_max_bytes:
+            raise ValueError(
+                f"attachment {n} is too large: {len(raw)} bytes, over the "
+                f"{settings.chat_image_max_bytes}-byte limit for one image"
+            )
+        total += len(raw)
+        if total > settings.chat_image_max_turn_bytes:
+            # Checked inside the loop so a turn already over its ceiling stops
+            # decoding rather than finishing the batch to say so — which is also
+            # why the message says "already more than" rather than quoting a
+            # running total the user would read as everything they sent.
+            raise ValueError(
+                "the attachments already come to more than the "
+                f"{settings.chat_image_max_turn_bytes}-byte limit for one turn"
+            )
+
+
+def _blind_role(provider) -> str | None:
+    """The name of a model in this turn's path that cannot read an image.
+
+    Two models see the picture: the orchestrator reads it to decide what to build,
+    and the codegen model gets it again when it writes the script. An image that
+    only reaches the first would leave the part built from a description of the
+    picture rather than the picture. ``bedrock_model_slug`` is the codegen slug
+    despite its name — it is what :class:`~cadless.prompts.CodeGenerator` resolves.
+    """
+    for slug in dict.fromkeys((settings.orchestrator_model, settings.bedrock_model_slug)):
+        if not provider.capabilities(slug).supports_images:
+            return slug
+    return None
 
 
 async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | None, dict]:
@@ -85,6 +223,25 @@ async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | Non
     if not version or not version.code:
         return None, {}
     return version.code, version.parameters or extract_params(version.code)
+
+
+def _replayed_block(block: ContentBlock) -> str:
+    """What one stored block contributes to the replayed conversation, as text.
+
+    An image replays as words, never as pixels. This function only ever sees past
+    turns — the current turn's attachments are handed to the agent directly — so
+    an image reaching here is by definition one the model has already looked at,
+    and the cached reading is what it wrote down at the time. Sending the picture
+    again would charge for every turn that follows it.
+
+    Everything else that is not conversational text contributes nothing, as before:
+    replaying past tool and thinking plumbing builds an invalid transcript.
+    """
+    if block.kind == "text":
+        return (block.text or "").strip()
+    if block.kind == "image":
+        return f"[reference image: {block.reading}]" if block.reading else "[a reference image]"
+    return ""
 
 
 async def _replay_history(store: ScopedStore, session_id: int) -> list:
@@ -100,16 +257,12 @@ async def _replay_history(store: ScopedStore, session_id: int) -> list:
     replay only the conversational text. Consecutive same-role messages are merged
     so a dropped tool-only/clarification turn can't leave an invalid role sequence.
     """
-    from cadless.llm.types import ContentBlock, Message
+    from cadless.llm.types import Message
 
     messages: list[Message] = []
     for m in await store.list_messages(session_id):
-        text = (
-            "\n\n".join(
-                b.text.strip() for b in m.blocks if b.kind == "text" and (b.text or "").strip()
-            )
-            or (m.content or "").strip()
-        )
+        parts = [_replayed_block(b) for b in m.blocks]
+        text = "\n\n".join(p for p in parts if p) or (m.content or "").strip()
         if not text:
             continue
         if messages and messages[-1].role == m.role:  # keep roles alternating
@@ -183,24 +336,52 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # guide the user to Settings instead of running a doomed LLM call that fails
     # with a cryptic vendor error (or silently no-ops on ambient creds).
     if not user_settings.has_credentials():
-        hint = user_settings.credentials_hint()
+        return _refusal(user_settings.credentials_hint())
 
-        async def _need_credentials():
-            yield {"data": json.dumps({"event": "error", "detail": hint})}
-
-        return EventSourceResponse(_need_credentials(), headers=SSE_HEADERS)
+    provider = build_provider()
+    image_blocks: list[ContentBlock] = []
+    if body.images:
+        try:
+            _check_images(body.images)
+        except ValueError as exc:
+            return _refusal(str(exc))
+        blind = _blind_role(provider)
+        if blind is not None:
+            return _refusal(
+                f"the configured model {blind!r} cannot read images. Remove the "
+                "attachment, or pick a vision-capable model in Settings."
+            )
+        image_blocks = [
+            ContentBlock.of_image(data=i.data, media_type=i.media_type) for i in body.images
+        ]
 
     session = await store.get_or_create_session(project_id)
     history = await _replay_history(store, session.id)
     code, params = await _current_model(store, project_id)
 
-    await store.add_message(session.id, "user", body.message)
+    # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
+    # ``content``, so once there is a picture the words have to be carried beside it
+    # explicitly or they disappear from the transcript.
+    user_blocks = list(image_blocks)
+    if user_blocks and body.message.strip():
+        user_blocks.append(ContentBlock.of_text(body.message))
+    user_message = await store.add_message(
+        session.id, "user", body.message, blocks=user_blocks or None
+    )
+    # The first reading the turn produces wins. Repair rounds see the same picture
+    # and would each write another, and a later one is a reading of a build that
+    # went wrong rather than of the reference.
+    readings: list[str] = []
+
+    def _keep_first_reading(reading: str) -> None:
+        if not readings:
+            readings.append(reading)
+
     assistant = await store.add_message(session.id, "assistant", None, status="pending")
 
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
     staging.mkdir(parents=True, exist_ok=True)
 
-    provider = build_provider()
     # Session hygiene: fold older turns of a long transcript into a
     # rolling synopsis so the agent's context stays bounded. The durable code
     # source of truth stays the persisted script_versions chain — this only
@@ -231,6 +412,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         current_code=code,
         current_params=params,
         export_dir=str(staging),
+        images=image_blocks,
+        on_reading=_keep_first_reading if image_blocks else None,
         forge=forge_active,
         forge_n=forge_n,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
@@ -416,6 +599,27 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             if not settled:
                 # Defensive: never leave a dangling pending assistant turn.
                 await store.update_message(assistant.id, status="error", error="turn aborted")
+            # Keep the reading beside the picture it describes. In ``finally``
+            # because a turn that aborted after codegen still read the reference,
+            # and best-effort because a cache that could fail a turn would be a
+            # worse trade than no cache at all.
+            if readings:
+                try:
+                    await store.update_message(
+                        user_message.id,
+                        blocks=[
+                            b.model_copy(update={"reading": readings[0]})
+                            if b.kind == "image"
+                            else b
+                            for b in user_blocks
+                        ],
+                    )
+                except Exception:  # noqa: BLE001  (the cache is never worth a turn)
+                    logger.warning(
+                        "could not store the reference reading for project %s",
+                        project_id,
+                        exc_info=True,
+                    )
             shutil.rmtree(staging, ignore_errors=True)
             loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
 
@@ -435,7 +639,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
 
 
 @router.post("/projects/{project_id}/chat/steer", status_code=202)
-async def steer(project_id: int, body: ChatRequest, store: ScopedStore = Depends(get_store)):
+async def steer(project_id: int, body: SteerRequest, store: ScopedStore = Depends(get_store)):
     """Queue a steer message for the project's in-flight `/chat` turn.
 
     The message is enqueued into the session's steer queue; the running agent loop

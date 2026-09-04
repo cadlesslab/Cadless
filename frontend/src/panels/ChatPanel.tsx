@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, IconButton } from "../components";
 import { useActiveProject, useStoreSelector } from "../state";
 import { useApp } from "../useApp";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, type ComposerAttachment } from "./ChatComposer";
 import { ChatMessage } from "./ChatMessage";
 import { chatTranscript } from "./chatModel";
 import { EXAMPLE_PROMPTS } from "./examples";
@@ -65,6 +65,10 @@ export function ChatPanel({
   // Per-turn forge opt-in: when on, the next turn races best-of-N for a
   // fresh generation (server gates it behind the global forge kill-switch too).
   const [forge, setForge] = useState(false);
+  // Reference pictures for the next turn. Per-turn like forge, and held here
+  // rather than in the composer so that clearing them is part of the same step
+  // that clears the field once a turn has gone out.
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const lastText = useRef("");
   const replay = useRef<() => void>(() => {});
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -107,21 +111,27 @@ export function ChatPanel({
   // way out — the same place the user hits the wall, not up in the header.
   const readOnly = activeProject?.is_catalog === true;
 
-  function runChat(message: string) {
+  function runChat(message: string, images: ComposerAttachment[] = []) {
     if (generating || activeProjectId == null || readOnly) return;
     lastText.current = message;
     const opted = forge;
+    // Captured, not read from state on replay: Retry re-sends the turn that
+    // failed, and by then the composer has been emptied of the very pictures
+    // that turn was about.
     replay.current = () => {
       if (generating || activeProjectId == null) return;
-      app.chat(message, opted);
+      app.chat(message, opted, images);
     };
-    app.chat(message, opted);
+    app.chat(message, opted, images);
   }
   function submit() {
     const text = value.trim();
-    if (!text || generating || activeProjectId == null) return;
-    runChat(text);
+    // A picture on its own is a request the server accepts, so an empty field
+    // with something attached still sends.
+    if ((!text && attachments.length === 0) || generating || activeProjectId == null) return;
+    runChat(text, attachments);
     setValue("");
+    setAttachments([]);
   }
   // Queue a steer message mid-stream: distinct from submit/Stop. The
   // running turn injects it at its next agent-loop boundary.
@@ -221,6 +231,8 @@ export function ChatPanel({
         disabled={activeProjectId == null || readOnly}
         forge={forge}
         onToggleForge={() => setForge((f) => !f)}
+        attachments={attachments}
+        onAttachmentsChange={setAttachments}
       />
     </section>
   );

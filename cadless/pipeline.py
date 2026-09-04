@@ -29,6 +29,7 @@ Consumers must ignore unknown event types and fields for forward compatibility.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -38,6 +39,7 @@ from cadless.assertions import (
     evaluate_assertions,
 )
 from cadless.config import Settings, settings
+from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
 from cadless.prompts import CodeGenerator
 from cadless.validation import validate_code
@@ -136,6 +138,8 @@ class Pipeline:
         grounding: str | None = None,
         temperature: float | None = None,
         export_scale: float = 1.0,
+        images: Sequence[ContentBlock] = (),
+        on_reading: Callable[[str], None] | None = None,
     ) -> GenerationResult:
         """Generate (or, when ``prior_code`` is given, refine) then validate/execute.
 
@@ -158,6 +162,12 @@ class Pipeline:
         ``None`` (the default) keeps the legacy single-run temperature, so the
         normal path is unchanged. It is ignored on the refine path.
 
+        ``images`` are the turn's reference pictures. Unlike ``grounding``, they
+        reach BOTH branches and the repair rounds: a picture is what the request
+        actually is, so an edit or a repair that lost it would be working from the
+        half of the request least able to describe the shape. ``()`` (the default)
+        leaves every call on the path it took before.
+
         ``export_scale`` (issue #30) is the authoring-units -> millimetre factor
         applied to exported artifacts only (never the volume/bbox geometry
         summary), matching how catalog goldens bake at the domain registry's
@@ -174,7 +184,7 @@ class Pipeline:
         _emit_stage(on_progress, mode, "begin", 1)
         if prior_code:
             # Refine is out of streaming scope: keep the one-shot call.
-            code = self._gen.refine(intent, prior_code)
+            code = self._gen.refine(intent, prior_code, images=images, on_reading=on_reading)
         else:
             # Fresh generation streams its tokens as a ``codegen`` progress event so
             # the chat layer can show the code being written live. The
@@ -183,7 +193,14 @@ class Pipeline:
             # keep the exact one-shot call shape (no ``on_token`` kwarg at all).
             on_token = _codegen_on_token(on_progress)
             extra = {"on_token": on_token} if on_token is not None else {}
-            code = self._gen.generate(intent, grounding, temperature=temperature, **extra)
+            code = self._gen.generate(
+                intent,
+                grounding,
+                temperature=temperature,
+                images=images,
+                on_reading=on_reading,
+                **extra,
+            )
         _emit_stage(on_progress, mode, "ok", 1)
         last_error = "no attempts ran"
 
@@ -194,7 +211,9 @@ class Pipeline:
                 last_error = "validation: " + "; ".join(verdict.reasons)
                 _emit_stage(on_progress, "validate", "error", n, last_error)
                 self._record(attempts, on_progress, Attempt(n, code, "validate", last_error))
-                code = self._repair(on_progress, intent, code, last_error, n, max_tries)
+                code = self._repair(
+                    on_progress, intent, code, last_error, n, max_tries, images=images
+                )
                 if code is None:
                     break
                 continue
@@ -214,7 +233,14 @@ class Pipeline:
                             attempts, on_progress, Attempt(n, code, "critique", last_error)
                         )
                         code = self._repair(
-                            on_progress, intent, code, last_error, n, max_tries, forced=True
+                            on_progress,
+                            intent,
+                            code,
+                            last_error,
+                            n,
+                            max_tries,
+                            forced=True,
+                            images=images,
                         )
                         continue
                     _emit_stage(on_progress, "critique", "ok", n)
@@ -231,7 +257,14 @@ class Pipeline:
                         _emit_stage(on_progress, "assert", "error", n, last_error)
                         self._record(attempts, on_progress, Attempt(n, code, "assert", last_error))
                         code = self._repair(
-                            on_progress, intent, code, last_error, n, max_tries, forced=True
+                            on_progress,
+                            intent,
+                            code,
+                            last_error,
+                            n,
+                            max_tries,
+                            forced=True,
+                            images=images,
                         )
                         continue
                     _emit_stage(on_progress, "assert", "ok", n)
@@ -256,7 +289,14 @@ class Pipeline:
             _emit_stage(on_progress, "build", "error", n, last_error)
             self._record(attempts, on_progress, Attempt(n, code, "execute", last_error))
             code = self._repair(
-                on_progress, intent, code, last_error, n, max_tries, context=res.repair_context
+                on_progress,
+                intent,
+                code,
+                last_error,
+                n,
+                max_tries,
+                context=res.repair_context,
+                images=images,
             )
             if code is None:
                 break
@@ -277,6 +317,8 @@ class Pipeline:
         assertions: GeometryAssertions | None = None,
         grounding: str | None = None,
         temperature: float | None = None,
+        images: Sequence[ContentBlock] = (),
+        on_reading: Callable[[str], None] | None = None,
     ) -> list[GenerationResult]:
         """Best-of-N fan-out (C1): run N *fresh* generations in parallel.
 
@@ -309,7 +351,14 @@ class Pipeline:
             # No fan-out: a plain single run at the default temperature so behavior
             # matches the legacy path exactly (no forge temperature applied).
             return [
-                self.run(intent, export_dir=export_dir, assertions=assertions, grounding=grounding)
+                self.run(
+                    intent,
+                    export_dir=export_dir,
+                    assertions=assertions,
+                    grounding=grounding,
+                    images=images,
+                    on_reading=on_reading,
+                )
             ]
 
         temp = self._cfg.forge_temperature if temperature is None else temperature
@@ -323,6 +372,8 @@ class Pipeline:
                     assertions=assertions,
                     grounding=grounding,
                     temperature=temp,
+                    images=images,
+                    on_reading=on_reading,
                 )
             except Exception as exc:  # isolate: one bad candidate must not sink others
                 return GenerationResult(
@@ -352,7 +403,17 @@ class Pipeline:
         return bool(self._critic and self._cfg.vlm_critique_enabled and res.glb_path)
 
     def _repair(
-        self, on_progress, intent, code, error, n, max_tries, *, forced: bool = False, context=None
+        self,
+        on_progress,
+        intent,
+        code,
+        error,
+        n,
+        max_tries,
+        *,
+        forced: bool = False,
+        context=None,
+        images: Sequence[ContentBlock] = (),
     ) -> str | None:
         """Ask the model to fix ``code``; return None if the budget is exhausted.
 
@@ -363,7 +424,7 @@ class Pipeline:
         if not forced and n >= max_tries:
             return None
         _emit_stage(on_progress, "repair", "begin", n, error)
-        repaired = self._gen.repair(intent, code, error, context)
+        repaired = self._gen.repair(intent, code, error, context, images=images)
         _emit_stage(on_progress, "repair", "ok", n)
         return repaired
 

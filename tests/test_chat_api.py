@@ -11,6 +11,7 @@ nesting of pipeline `stage` events inside `tool_progress`, and turn persistence
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -135,6 +136,9 @@ class StubPipeline:
         self.ok = ok
         self.error = error
         self.groundings: list[str | None] = []
+        self.images: list[list] = []
+        # What the codegen model "wrote down" about the picture, when a test wants one.
+        self.reading: str | None = None
         # The real pipeline exposes the settings snapshot its turn runs under, and
         # the chat route hands it to grounding retrieval so both halves of a turn
         # read the same configuration. Modelled here so the stub keeps the same
@@ -142,8 +146,20 @@ class StubPipeline:
         # branch and the turn silently loses grounding.
         self.config = settings
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+        on_reading=None,
+    ):
         self.groundings.append(grounding)
+        self.images.append(list(images))
+        if on_reading is not None and self.reading is not None:
+            on_reading(self.reading)
         if on_progress:
             on_progress(
                 {
@@ -976,6 +992,8 @@ class ForgePipeline(StubPipeline):
         prior_code=None,
         grounding=None,
         temperature=None,
+        images=(),
+        on_reading=None,
     ):
         self.run_count += 1
         return super().run(
@@ -984,13 +1002,29 @@ class ForgePipeline(StubPipeline):
             on_progress=on_progress,
             prior_code=prior_code,
             grounding=grounding,
+            images=images,
+            on_reading=on_reading,
         )
 
     def run_candidates(
-        self, intent, n=None, export_dir=None, assertions=None, grounding=None, temperature=None
+        self,
+        intent,
+        n=None,
+        export_dir=None,
+        assertions=None,
+        grounding=None,
+        temperature=None,
+        images=(),
+        on_reading=None,
     ):
         self.candidate_ns.append(n)
-        winner = super().run(intent, export_dir=export_dir, grounding=grounding)
+        winner = super().run(
+            intent,
+            export_dir=export_dir,
+            grounding=grounding,
+            images=images,
+            on_reading=on_reading,
+        )
         losers = [
             GenerationResult(ok=False, intent=intent, code=f"broken-{i}", error="execution: boom")
             for i in range(max(0, (n or 1) - 1))
@@ -1136,7 +1170,16 @@ class SequencedPipeline:
         self._i = 0
         self.run_count = 0
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+        on_reading=None,
+    ):
         ok, error = self._results[min(self._i, len(self._results) - 1)]
         self._i += 1
         self.run_count += 1
@@ -1351,7 +1394,16 @@ def test_generate_streams_codegen_delta_frames(client, store, monkeypatch):
     frames, before that tool's tool_result (/3530)."""
 
     class CodegenPipeline(StubPipeline):
-        def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+        def run(
+            self,
+            intent,
+            export_dir=None,
+            on_progress=None,
+            prior_code=None,
+            grounding=None,
+            images=(),
+            on_reading=None,
+        ):
             if on_progress:  # emit codegen tokens the way the real pipeline now does
                 on_progress({"event": "codegen", "text": "from build123d import *\n"})
                 on_progress({"event": "codegen", "text": "result = Box(1, 1, 1)\n"})
@@ -1451,3 +1503,367 @@ def test_replay_history_drops_invalid_assistant_blocks(store):
     assert [m.role for m in msgs] == ["user", "assistant"]  # valid alternation
     assert "Done! I've added a roof_width param." in msgs[1].content[0].text
     assert "the user wants" not in msgs[1].content[0].text  # past thinking dropped
+
+
+# --- attached reference images ----------------------------------------------
+
+
+def _image(*, size: int = 32, media_type: str = "image/png") -> dict:
+    """One attachment payload of ``size`` decoded bytes."""
+    return {"media_type": media_type, "data": base64.b64encode(b"\x89PNG" * size).decode()}
+
+
+def _chat_with_images(client, pid, images, text="build this"):
+    """POST a turn carrying attachments and return its decoded SSE events."""
+    with client.stream(
+        "POST", f"/projects/{pid}/chat", json={"message": text, "images": images}
+    ) as r:
+        assert r.status_code == 200
+        return _events("".join(r.iter_text()))
+
+
+def _errors(events: list[dict]) -> list[str]:
+    return [e.get("detail", "") for e in events if e.get("event") == "error"]
+
+
+def _current_version_id(store, pid):
+    async def _go():
+        return (await store.get_project(pid)).current_version_id
+
+    return asyncio.run(_go())
+
+
+class _BlindProvider(ScriptedProvider):
+    """A provider whose model cannot read an image."""
+
+    def capabilities(self, model: str):
+        caps = super().capabilities(model)
+        return caps.model_copy(update={"supports_images": False})
+
+
+def test_chat_refuses_an_image_over_the_per_image_limit(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_bytes", 64)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image(size=64)]))
+
+    assert len(errors) == 1
+    # The refusal has to say which limit was hit, not merely that one was.
+    assert "size" in errors[0].lower() or "large" in errors[0].lower()
+    assert "64" in errors[0]
+
+
+def test_an_image_at_the_limit_is_not_refused_by_the_encoded_pre_check(client, store, monkeypatch):
+    # The pre-check refuses on the base64 length so an oversize payload is not
+    # decoded before being told no. Its bound therefore has to be loose enough that
+    # a picture exactly at the ceiling still gets through — a pre-check that
+    # over-refuses would reject valid images and no size test would notice.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_bytes", 1024)
+    monkeypatch.setattr(chat.settings, "chat_image_max_turn_bytes", 4096)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    exactly_at_limit = {
+        "media_type": "image/png",
+        "data": base64.b64encode(b"x" * 1024).decode(),
+    }
+    assert _errors(_chat_with_images(client, pid, [exactly_at_limit])) == []
+
+
+def test_the_encoded_ceiling_never_refuses_a_payload_within_the_decoded_limit():
+    # Checked across the three base64 padding cases, since the encoded length of a
+    # given byte count is not a single formula but rounds up to a multiple of four.
+    for size in range(0, 200):
+        encoded = len(base64.b64encode(b"x" * size))
+        assert encoded <= chat._encoded_ceiling(size)
+
+
+def test_chat_refuses_more_images_than_the_count_limit(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_count", 2)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image(), _image(), _image()]))
+
+    assert len(errors) == 1
+    assert "2" in errors[0]
+    assert "3" in errors[0]  # says how many arrived, so the user can act on it
+
+
+def test_chat_refuses_images_over_the_whole_turn_limit(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    monkeypatch.setattr(chat.settings, "chat_image_max_bytes", 1_000_000)
+    monkeypatch.setattr(chat.settings, "chat_image_max_turn_bytes", 300)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    # Each image is under the per-image ceiling; together they are over the turn's.
+    errors = _errors(_chat_with_images(client, pid, [_image(size=50), _image(size=50)]))
+
+    assert len(errors) == 1
+    assert "300" in errors[0]
+
+
+def test_chat_refuses_an_unsupported_media_type(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image(media_type="image/tiff")]))
+
+    assert len(errors) == 1
+    assert "image/tiff" in errors[0]  # names the format that was refused
+
+
+def test_chat_refuses_an_image_when_the_model_cannot_see(client, store, monkeypatch):
+    _install(monkeypatch, _BlindProvider([_text_turn("should not be reached")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    errors = _errors(_chat_with_images(client, pid, [_image()]))
+
+    assert len(errors) == 1
+    assert "image" in errors[0].lower()
+
+
+def test_a_refused_attachment_leaves_the_project_version_alone(client, store, monkeypatch):
+    # An error raised *inside* a turn reverts the project to its last good version.
+    # A refused attachment must not: nothing was built, so nothing is rolled back.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("Done."),
+        ]
+    )
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    _stream_chat(client, pid)
+    before = _current_version_id(store, pid)
+    assert before is not None  # the turn really did produce a version
+
+    monkeypatch.setattr(chat.settings, "chat_image_max_count", 1)
+    _chat_with_images(client, pid, [_image(), _image()])
+
+    assert _current_version_id(store, pid) == before
+
+
+def test_chat_accepts_a_turn_that_is_only_an_image(client, store, monkeypatch):
+    # "here, build this" with the picture doing the talking. The message field is
+    # empty, which the request model used to reject outright.
+    _install(monkeypatch, ScriptedProvider([_text_turn("A bracket, then.")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _chat_with_images(client, pid, [_image()], text="")
+
+    assert _errors(events) == []
+
+
+def test_chat_still_refuses_a_turn_with_neither_text_nor_image(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("should not be reached")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(f"/projects/{pid}/chat", json={"message": "", "images": []})
+
+    assert r.status_code == 422
+
+
+def test_steer_refuses_an_attached_image(client, store, monkeypatch):
+    # Steer forwards a bare string into the running loop, so an image on this
+    # route would be accepted and then silently dropped. Refuse it instead.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(
+        f"/projects/{pid}/chat/steer",
+        json={"message": "actually make it taller", "images": [_image()]},
+    )
+
+    assert r.status_code == 422
+
+
+def _replay(store, pid, blocks, content="", role="user"):
+    async def go():
+        sess = await store.get_or_create_session(pid)
+        await store.add_message(sess.id, role, content, blocks=blocks)
+        return await chat._replay_history(store, sess.id)
+
+    return asyncio.run(go())
+
+
+def test_replay_carries_the_reading_rather_than_the_bytes(client, store):
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    block = ContentBlock.of_image(
+        data="aGVsbG8=", media_type="image/png", reading="an L-bracket with two holes"
+    )
+
+    msgs = _replay(store, pid, [block, ContentBlock.of_text("build this")], content="build this")
+
+    assert {b.kind for m in msgs for b in m.content} == {"text"}  # no pixels replayed
+    replayed = msgs[0].content[0].text
+    assert "an L-bracket with two holes" in replayed
+    assert "build this" in replayed
+    assert "aGVsbG8=" not in replayed
+
+
+def test_replay_falls_back_to_a_placeholder_with_no_reading(client, store):
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    block = ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")
+
+    msgs = _replay(store, pid, [block, ContentBlock.of_text("build this")], content="build this")
+
+    assert "image" in msgs[0].content[0].text.lower()
+
+
+def test_an_image_only_turn_is_not_dropped_from_the_replayed_history(client, store):
+    # The whole message used to vanish, not just the image: an image-only turn
+    # flattened to an empty string and the empty check skipped it entirely, so the
+    # next turn's model never learned the conversation had a picture in it.
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    block = ContentBlock.of_image(data="aGVsbG8=", media_type="image/png", reading="a cube")
+
+    msgs = _replay(store, pid, [block], content="")
+
+    assert len(msgs) == 1
+    assert "a cube" in msgs[0].content[0].text
+
+
+def test_a_second_turn_sends_the_reading_and_never_the_picture(client, store, monkeypatch):
+    provider = ScriptedProvider([_text_turn("A bracket."), _text_turn("Taller, then.")])
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+    _stream_chat(client, pid, "now make it twice as tall")
+
+    replayed = provider.calls[-1]["messages"]
+    assert "image" not in [b.kind for m in replayed for b in m.content]
+
+
+def test_an_attached_image_reaches_the_orchestrator(client, store, monkeypatch):
+    provider = ScriptedProvider([_text_turn("A bracket.")])
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    sent = provider.calls[-1]["messages"][-1].content
+    assert "image" in [b.kind for b in sent]
+
+
+def test_an_attached_image_reaches_the_model_that_writes_the_script(client, store, monkeypatch):
+    # The orchestrator seeing it is not enough — the acceptance criterion is that
+    # the picture reaches the codegen call, which only happens if the tool layer
+    # forwards it into the pipeline.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    assert pipeline.images  # the tool actually ran
+    assert [b.kind for b in pipeline.images[-1]] == ["image"]
+
+
+def test_an_edit_turn_carries_the_image_into_the_pipeline_too(client, store, monkeypatch):
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="edit_model", tool_input={"change": "taller"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="like this, but taller")
+
+    assert [b.kind for b in pipeline.images[-1]] == ["image"]
+
+
+def test_the_words_are_kept_beside_the_picture_in_the_transcript(client, store, monkeypatch):
+    # Persisting blocks stops MessageOut synthesizing one from ``content``, so the
+    # message text has to be carried explicitly or it vanishes from the UI.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    user = _messages(store, pid)[0]
+    assert [b.kind for b in user.blocks] == ["image", "text"]
+    assert user.blocks[1].text == "build this"
+
+
+def test_the_reading_is_stored_beside_the_picture_it_describes(client, store, monkeypatch):
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    pipeline.reading = "an L-bracket with two bolt holes"
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _chat_with_images(client, pid, [_image()], text="build this")
+
+    image_block = _messages(store, pid)[0].blocks[0]
+    assert image_block.kind == "image"
+    assert image_block.reading == "an L-bracket with two bolt holes"
+
+
+def test_a_turn_whose_model_wrote_no_reading_still_settles(client, store, monkeypatch):
+    # The cache is a convenience. A model that ignored the instruction must leave a
+    # working turn behind, with the image simply carrying no reading.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()  # reading stays None
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _chat_with_images(client, pid, [_image()], text="build this")
+
+    assert _errors(events) == []
+    assert _messages(store, pid)[0].blocks[0].reading is None
+
+
+def test_a_text_only_turn_persists_exactly_as_before(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid, "make a cube")
+
+    user = _messages(store, pid)[0]
+    assert user.blocks == []  # no synthesized blocks; content still carries it
+    assert user.content == "make a cube"
+
+
+def test_steer_still_accepts_a_plain_message(client, store, monkeypatch):
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(f"/projects/{pid}/chat/steer", json={"message": "make it taller"})
+
+    assert r.status_code == 202
+
+
+def test_steer_still_accepts_the_body_it_always_did(client, store, monkeypatch):
+    # This route shared ChatRequest, so a client sending `forge` was accepted and
+    # the value ignored. Narrowing the model to refuse images must not turn that
+    # into a 422 as a side effect — it is a public HTTP contract.
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(
+        f"/projects/{pid}/chat/steer", json={"message": "make it taller", "forge": False}
+    )
+
+    assert r.status_code == 202

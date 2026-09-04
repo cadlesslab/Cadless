@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+from pydantic import ValidationError
 
 from cadless.config import Settings, settings
 from cadless.identity import (
@@ -283,11 +284,36 @@ def _blocks_to_json(blocks: list[ContentBlock] | None) -> str | None:
     return json.dumps([b.model_dump() for b in blocks])
 
 
+#: Stands in for a stored block this build cannot construct.
+UNREADABLE_BLOCK = "[a part of this message cannot be shown by this version]"
+
+
 def _blocks_from_json(raw: str | None) -> list[ContentBlock]:
-    """Parse a stored ``blocks_json`` payload back into content blocks."""
+    """Parse a stored ``blocks_json`` payload back into content blocks.
+
+    Degrades per block rather than per message. Rows are written by whichever
+    engine was running, so an older build reading a newer row can meet a ``kind``
+    that is not in its literal. Rebuilding the list strictly would raise for the
+    whole message — and since this runs on every ``list_messages``, one such block
+    would make the entire session's transcript unreadable rather than just itself.
+
+    The degradation covers a block this build cannot construct. A column that is
+    not valid JSON still raises: that is a corrupt row rather than a newer one, and
+    substituting a placeholder for it would hide a real fault behind a transcript
+    that looks merely abridged.
+    """
     if not raw:
         return []
-    return [ContentBlock(**b) for b in json.loads(raw)]
+    blocks: list[ContentBlock] = []
+    for payload in json.loads(raw):
+        try:
+            blocks.append(ContentBlock(**payload))
+        except (ValidationError, TypeError):
+            # TypeError as well as ValidationError: an entry that is not a mapping
+            # never reaches pydantic, and letting that one shape through would take
+            # the message down by the route this guard exists to close.
+            blocks.append(ContentBlock.of_text(UNREADABLE_BLOCK))
+    return blocks
 
 
 #: How old an unreferenced file must be before a sweep will consider it.
@@ -1398,6 +1424,31 @@ class Store:
                 )
             ).fetchall()
         return [_message(r) for r in rows]
+
+    async def get_message(
+        self, session_id: int, message_id: int, *, owner: Owner = UNSCOPED
+    ) -> ChatMessage | None:
+        """One message of a session, or ``None``.
+
+        Both ids are required and both are in the WHERE clause, so a message that
+        belongs to another session is not found rather than returned — the scoping
+        is the same join ``list_messages`` uses, not a filter applied afterwards.
+        It exists because a caller wanting one row should not have to parse every
+        block of every message in the session to find it, which is what reading a
+        single attachment did before.
+        """
+        pred, params = _owner_sql(owner)
+        async with self._connect() as db:
+            row = await (
+                await db.execute(
+                    "SELECT chat_messages.* FROM chat_messages"
+                    " JOIN chat_sessions ON chat_sessions.id = chat_messages.session_id"
+                    " JOIN projects ON projects.id = chat_sessions.project_id"
+                    f" WHERE chat_messages.session_id=? AND chat_messages.id=? AND {pred}",
+                    (session_id, message_id, *params),
+                )
+            ).fetchone()
+        return _message(row) if row else None
 
     # ---- knowledge base + vector index ----------------------
     async def add_kb_entry(

@@ -36,6 +36,9 @@ Vendor quirks kept INSIDE this module:
 * Tool results are top-level ``role="tool"`` messages, not content blocks; an
   ``is_error`` result is prefixed ``[tool error] `` because the API has no
   error-status field on tool messages.
+* A user message carrying an image switches to the *array* content form
+  (``[{"type": "text", ...}, {"type": "image_url", ...}]``); text alone keeps the
+  flat joined string, so a request with no picture is unchanged.
 """
 
 from __future__ import annotations
@@ -70,6 +73,26 @@ _STOP_REASONS: dict[str, StopReason] = {
 
 # Reasoning-model families that reject sampling params (temperature/stop).
 _REASONING_MODEL = re.compile(r"^(o\d|gpt-5)")
+
+# Model ids whose model can read an image. Matched exactly rather than by prefix,
+# so a dated snapshot (``gpt-4o-2024-08-06``) reports "cannot see" until it is
+# listed here — refusing an attachment is recoverable, silently dropping the
+# picture the user attached is not.
+_VISION_MODELS: frozenset[str] = frozenset(
+    {
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "o3",
+        "o4-mini",
+    }
+)
 
 
 def _check_model(model: str) -> str:
@@ -163,10 +186,12 @@ class OpenAIChatProvider:
     def capabilities(self, model: str) -> Capabilities:
         # Chat Completions exposes no extended-thinking stream (reasoning models
         # keep their reasoning server-side), so the loop must not enable it.
+        # Vision varies by model here, so it is reported per id and fails closed.
         return Capabilities(
             supports_thinking=False,
             supports_tool_choice=True,
             max_output_tokens=self._cfg.bedrock_max_tokens,
+            supports_images=model in _VISION_MODELS,
         )
 
     def complete(
@@ -229,9 +254,10 @@ def _messages_to_openai(system: str, messages: Sequence[Message]) -> list[dict]:
 
 def _user_to_openai(message: Message) -> list[dict]:
     """One neutral user turn: tool results become top-level ``role="tool"``
-    messages (in block order); the remaining text folds into one user message."""
+    messages (in block order); the remaining blocks fold into one user message."""
     out: list[dict] = []
-    texts: list[str] = []
+    parts: list[dict] = []
+    has_image = False
     for block in message.content:
         if block.kind == "tool_result":
             content = block.content or ""
@@ -245,11 +271,25 @@ def _user_to_openai(message: Message) -> list[dict]:
                 }
             )
         elif block.kind == "text":
-            texts.append(block.text or "")
+            parts.append({"type": "text", "text": block.text or ""})
+        elif block.kind == "image":
+            has_image = True
+            # Chat Completions takes an image as a data URL, base64 payload and
+            # all, which is how the neutral block already carries it.
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{block.media_type};base64,{block.data or ''}"},
+                }
+            )
         else:
             raise ValueError(f"unsupported block kind in user message: {block.kind!r}")
-    if texts:
-        out.append({"role": "user", "content": "\n\n".join(texts)})
+    if parts:
+        # Only a picture needs the array content form; text alone keeps the flat
+        # joined string, so every request that carried no image is byte-identical
+        # to what this adapter sent before images existed.
+        user_content = parts if has_image else "\n\n".join(p["text"] for p in parts)
+        out.append({"role": "user", "content": user_content})
     return out
 
 

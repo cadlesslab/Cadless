@@ -232,6 +232,9 @@ class ScopedStore:
     async def list_messages(self, session_id: int) -> list[ChatMessage]:
         return await self._store.list_messages(session_id, owner=self._owner)
 
+    async def get_message(self, session_id: int, message_id: int) -> ChatMessage | None:
+        return await self._store.get_message(session_id, message_id, owner=self._owner)
+
     # ---- knowledge base -------------------------------------------------
     async def add_kb_entry(
         self,

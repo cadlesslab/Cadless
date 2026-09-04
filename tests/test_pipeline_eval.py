@@ -16,10 +16,14 @@ GOOD = "from build123d import *\nresult = Box(10, 10, 10)\n"
 
 
 class AlwaysGood:
-    def generate(self, intent, grounding=None, temperature=None, on_token=None):
+    def generate(
+        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+    ):
         return GOOD
 
-    def repair(self, intent, code, error, context=None):  # pragma: no cover - not reached
+    def repair(
+        self, intent, code, error, context=None, images=()
+    ):  # pragma: no cover - not reached
         return GOOD
 
 

@@ -31,6 +31,7 @@ and ``tool_use`` blocks are tagged ``provider="bedrock"`` and carry a
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from collections.abc import Iterator, Sequence
@@ -58,6 +59,30 @@ _STOP_REASONS: dict[str, StopReason] = {
     "max_tokens": StopReason.MAX_TOKENS,
     "stop_sequence": StopReason.STOP_SEQUENCE,
 }
+
+# Media type -> the Converse ``image.format`` token, which names the subtype
+# only. An unmapped type raises rather than defaulting: a wrong token comes back
+# as a ValidationException with nothing in it pointing at the attachment.
+_IMAGE_FORMATS: dict[str, str] = {
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
+# Slugs whose model can read an image. Listed rather than derived from the slug
+# map so one added later reports "cannot see" until someone confirms vision —
+# refusing an attachment is recoverable, silently dropping it is not.
+_VISION_MODELS: frozenset[str] = frozenset(
+    {
+        "sonnet-4-6",
+        "sonnet-4-5",
+        "haiku-4-5",
+        "opus-4-8",
+        "opus-4-7",
+        "opus-4-6",
+    }
+)
 
 _RETRYABLE = {
     "ThrottlingException",
@@ -165,11 +190,13 @@ class BedrockChatProvider:
 
     def capabilities(self, model: str) -> Capabilities:
         # All currently-mapped slugs are Claude models on Bedrock: extended
-        # thinking and constrained tool_choice are both supported.
+        # thinking and constrained tool_choice are both supported. Vision is
+        # reported per slug instead, so an unrecognized one fails closed.
         return Capabilities(
             supports_thinking=True,
             supports_tool_choice=True,
             max_output_tokens=self._cfg.bedrock_max_tokens,
+            supports_images=model in _VISION_MODELS,
         )
 
     def complete(
@@ -253,7 +280,27 @@ def _block_to_bedrock(block: ContentBlock) -> dict:
                 "status": "error" if block.is_error else "success",
             }
         }
+    if block.kind == "image":
+        return {
+            "image": {
+                "format": _image_format(block.media_type),
+                # boto3 base64-encodes a ``bytes`` member itself, so the raw bytes
+                # go on the wire — handing it our base64 string double-encodes it.
+                "source": {"bytes": base64.b64decode(block.data or "")},
+            }
+        }
     raise ValueError(f"unsupported block kind: {block.kind!r}")
+
+
+def _image_format(media_type: str | None) -> str:
+    """Converse ``format`` token for ``media_type``; raises on an unmapped type."""
+    token = _IMAGE_FORMATS.get(media_type or "")
+    if token is None:
+        raise ValueError(
+            f"unsupported image media type {media_type!r} for bedrock; "
+            f"use one of {sorted(_IMAGE_FORMATS)}"
+        )
+    return token
 
 
 def _tool_to_bedrock(tool: ToolDef) -> dict:

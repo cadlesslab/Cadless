@@ -174,6 +174,66 @@ describe("messagesFromBlocks", () => {
     expect(msgs).toEqual([]);
   });
 
+  it("keeps an image block instead of discarding it as internal plumbing", () => {
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 12,
+        role: "user",
+        blocks: [{ kind: "image", media_type: "image/png", data: null, reading: "a bracket" }],
+      }),
+    ]);
+    expect(msgs).toEqual([
+      {
+        kind: "image",
+        id: "m12-i0",
+        messageId: 12,
+        index: 0,
+        mediaType: "image/png",
+        reading: "a bracket",
+      },
+    ]);
+  });
+
+  it("renders both halves of an [image, text] turn, in that order", () => {
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 13,
+        role: "user",
+        blocks: [
+          { kind: "image", media_type: "image/jpeg" },
+          { kind: "text", text: "make this 40mm tall" },
+        ],
+      }),
+    ]);
+    expect(msgs.map((m) => m.kind)).toEqual(["image", "text"]);
+    expect(msgs[1]).toMatchObject({ text: "make this 40mm tall" });
+  });
+
+  it("numbers a turn's images among themselves, skipping its other blocks", () => {
+    // The attachment route serves by which image it is, so a text block sitting
+    // between two pictures must not push the second one's index along.
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 14,
+        role: "user",
+        blocks: [
+          { kind: "image", media_type: "image/png" },
+          { kind: "text", text: "these two" },
+          { kind: "image", media_type: "image/webp" },
+        ],
+      }),
+    ]);
+    expect(msgs.filter((m) => m.kind === "image")).toMatchObject([
+      { index: 0, mediaType: "image/png" },
+      { index: 1, mediaType: "image/webp" },
+    ]);
+  });
+
+  it("leaves the media type and reading null when the block carries neither", () => {
+    const msgs = messagesFromBlocks([msg({ id: 15, role: "user", blocks: [{ kind: "image" }] })]);
+    expect(msgs[0]).toMatchObject({ kind: "image", mediaType: null, reading: null });
+  });
+
   it("maps a thinking block to a collapsed thinking message before the text", () => {
     const msgs = messagesFromBlocks([
       msg({

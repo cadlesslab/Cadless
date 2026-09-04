@@ -63,6 +63,22 @@ _API_MODEL_IDS: dict[str, str] = {
     "opus-4-6": "claude-opus-4-6",
 }
 
+# API model ids whose model can read an image. Keyed by API id rather than slug
+# so a caller passing the raw ``claude-*`` id — which ``_resolve_api_model`` lets
+# through — is judged by the same list. Listed rather than derived from the map
+# above so a model added later reports "cannot see" until someone confirms
+# vision: refusing an attachment is recoverable, silently dropping it is not.
+_VISION_MODELS: frozenset[str] = frozenset(
+    {
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+    }
+)
+
 # Messages API stop_reason strings -> neutral StopReason (unknown -> END_TURN).
 _STOP_REASONS: dict[str, StopReason] = {
     "end_turn": StopReason.END_TURN,
@@ -165,11 +181,13 @@ class AnthropicChatProvider:
 
     def capabilities(self, model: str) -> Capabilities:
         # All mapped slugs are Claude models: extended thinking and constrained
-        # tool_choice are both supported (mirrors the Bedrock adapter).
+        # tool_choice are both supported (mirrors the Bedrock adapter). Vision is
+        # reported per model instead, so an unrecognized id fails closed.
         return Capabilities(
             supports_thinking=True,
             supports_tool_choice=True,
             max_output_tokens=self._cfg.bedrock_max_tokens,
+            supports_images=_API_MODEL_IDS.get(model, model) in _VISION_MODELS,
         )
 
     def complete(
@@ -241,6 +259,17 @@ def _block_to_anthropic(block: ContentBlock) -> dict | None:
             "tool_use_id": block.tool_use_id,
             "content": block.content or "",
             "is_error": block.is_error,
+        }
+    if block.kind == "image":
+        # The Messages API takes the payload base64-encoded, which is how the
+        # neutral block already carries it — nothing to decode on this path.
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": block.media_type,
+                "data": block.data or "",
+            },
         }
     raise ValueError(f"unsupported block kind: {block.kind!r}")
 

@@ -618,6 +618,103 @@ def test_update_message_sets_blocks(tmp_path):
     run(go())
 
 
+def test_a_block_kind_this_engine_cannot_read_does_not_break_the_transcript(tmp_path):
+    """One unreadable block must not take the whole session's transcript with it.
+
+    Rows are written by whichever engine was running. Downgrade — or open an older
+    build against the same database — and a kind added since is no longer in the
+    literal, so rebuilding the list strictly raises for the entire message. The
+    reader degrades that one block instead, and the rest of the turn still shows.
+    """
+    import json
+    import sqlite3
+
+    from cadless.llm.types import ContentBlock
+
+    db = tmp_path / "db.sqlite"
+
+    async def go():
+        s = Store(db_path=db, artifacts_dir=tmp_path / "artifacts")
+        await s.init()
+        p = await s.create_project("P")
+        sess = await s.get_or_create_session(p.id)
+        m = await s.add_message(sess.id, "assistant", "hi", blocks=[ContentBlock.of_text("hello")])
+        return sess.id, m.id
+
+    sess_id, message_id = run(go())
+
+    # Stand in for a row a newer engine wrote: a kind this build has never heard of,
+    # sitting beside a block it reads perfectly well.
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE chat_messages SET blocks_json = ? WHERE id = ?",
+        (
+            json.dumps(
+                [
+                    {"kind": "from_the_future", "text": "???"},
+                    {"kind": "text", "text": "hello"},
+                ]
+            ),
+            message_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    async def read():
+        s = Store(db_path=db, artifacts_dir=tmp_path / "artifacts")
+        await s.init()
+        return await s.list_messages(sess_id)
+
+    messages = run(read())
+    assert len(messages) == 1
+    kinds = [b.kind for b in messages[0].blocks]
+    assert kinds == ["text", "text"]  # the unknown one degraded rather than raised
+    assert messages[0].blocks[1].text == "hello"  # the readable block is untouched
+
+
+def test_a_block_entry_that_is_not_a_mapping_degrades_too(tmp_path):
+    """A non-mapping entry never reaches pydantic, so it needs its own catch.
+
+    Without it the one shape that raises ``TypeError`` instead of a validation
+    error would take the message down by exactly the route the guard exists to
+    close.
+    """
+    import json
+    import sqlite3
+
+    from cadless.llm.types import ContentBlock
+
+    db = tmp_path / "db.sqlite"
+
+    async def go():
+        s = Store(db_path=db, artifacts_dir=tmp_path / "artifacts")
+        await s.init()
+        p = await s.create_project("P")
+        sess = await s.get_or_create_session(p.id)
+        m = await s.add_message(sess.id, "assistant", "hi", blocks=[ContentBlock.of_text("hello")])
+        return sess.id, m.id
+
+    sess_id, message_id = run(go())
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE chat_messages SET blocks_json = ? WHERE id = ?",
+        (json.dumps(["a bare string", {"kind": "text", "text": "hello"}]), message_id),
+    )
+    conn.commit()
+    conn.close()
+
+    async def read():
+        s = Store(db_path=db, artifacts_dir=tmp_path / "artifacts")
+        await s.init()
+        return await s.list_messages(sess_id)
+
+    messages = run(read())
+    assert [b.kind for b in messages[0].blocks] == ["text", "text"]
+    assert messages[0].blocks[1].text == "hello"
+
+
 def test_migration_adds_blocks_json_column_to_legacy_db(tmp_path):
     """A chat_messages table created without blocks_json gains the column on init()."""
     import sqlite3

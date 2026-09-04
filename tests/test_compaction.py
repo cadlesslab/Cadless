@@ -49,6 +49,39 @@ def _synopsis_provider(
 # -- policy: when to compact -------------------------------------------------
 
 
+def test_an_image_block_is_represented_rather_than_dropped():
+    """A block with no ``text`` contributes nothing unless the flattener names it.
+
+    An image flattening to the empty string takes the whole message with it —
+    ``render_transcript`` skips a message whose text is empty — so the synopsis
+    would lose the fact that a reference picture was ever shown.
+    """
+    from cadless.compaction import render_transcript
+    from cadless.llm.types import ContentBlock, Message
+
+    message = Message(
+        role="user",
+        content=[
+            ContentBlock.of_image(data="aGVsbG8=", media_type="image/png", reading="an L-bracket"),
+            ContentBlock.of_text("build this"),
+        ],
+    )
+    rendered = render_transcript([message])
+    assert "an L-bracket" in rendered
+    assert "build this" in rendered
+
+
+def test_an_image_with_no_reading_is_still_named_in_the_transcript():
+    from cadless.compaction import render_transcript
+    from cadless.llm.types import ContentBlock, Message
+
+    message = Message(
+        role="user",
+        content=[ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")],
+    )
+    assert render_transcript([message]).strip() != ""
+
+
 def test_needs_compaction_false_below_threshold():
     cfg = base_settings.model_copy(
         update={"transcript_compact_threshold": 10, "transcript_keep_recent": 4}
