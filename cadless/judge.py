@@ -18,7 +18,9 @@ The ladder, in priority order, short-circuiting upward::
                       the candidates the vision model says match the request.
   (d) CHEAP LLM JUDGE only when a tie still remains AND a ``provider`` is given:
                       score each remaining candidate against the spec via
-                      ``provider.complete`` and keep the highest.
+                      ``provider.complete`` and keep the highest. A provider that
+                      cannot be reached for any candidate does not count as having
+                      decided, and falls through rather than claiming the rung.
 
 If a tie survives every rung (or the deciding dependency for a rung is absent), the
 judge falls back to deterministic input order — it never crashes and always names a
@@ -137,11 +139,16 @@ def select_winner(
     # --- Rung (d): CHEAP LLM JUDGE ---------------------------------------------
     if provider is not None and len(contenders) > 1:
         model_id = resolve_model_id(cfg.bedrock_fast_model_slug)
-        scored = sorted(
-            contenders,
-            key=lambda c: -_llm_score(provider, model_id, intent, c),
-        )
-        return JudgeResult(winner=scored[0], rung=Rung.LLM, ranking=scored)
+        # Scored once per candidate and kept, so that "did this rung contribute
+        # anything" can be asked afterwards without paying for a second pass.
+        scores = {id(c): _llm_score(provider, model_id, intent, c) for c in contenders}
+        if any(s is not None for s in scores.values()):
+            scored = sorted(contenders, key=lambda c: -(scores[id(c)] or 0))
+            return JudgeResult(winner=scored[0], rung=Rung.LLM, ranking=scored)
+        # Every call failed, so this rung decided nothing. Reporting LLM here would
+        # be worse than falling through: the rung a selection is attributed to is
+        # read as evidence that the rung is alive, and an unreachable provider
+        # would then look exactly like a working one that scored everything equal.
 
     # --- Fallback: deterministic input order -----------------------------------
     return JudgeResult(winner=contenders[0], rung=rung, ranking=contenders)
@@ -167,13 +174,22 @@ def _assertion_failures(
     return len(report.failures)
 
 
-def _llm_score(provider, model_id: str, intent: str, c: GenerationResult) -> int:
-    """Cheap LLM score of a candidate against the spec; 0 on any parse/IO failure."""
+def _llm_score(provider, model_id: str, intent: str, c: GenerationResult) -> int | None:
+    """Cheap LLM score of a candidate against the spec.
+
+    ``None`` means the provider could not be reached at all, which is deliberately
+    distinct from a score of 0: a model that answers "0" has judged the candidate
+    worthless, while an unreachable one has judged nothing. Collapsing the two would
+    let a dead provider report itself as a working rung — see the caller.
+
+    An unparseable reply is still a 0 rather than ``None``: the provider answered,
+    so the rung did run; it just said nothing usable about this candidate.
+    """
     user = f"Request:\n{intent}\n\nCandidate code:\n{c.code or ''}"
     try:
         text = provider.complete(model=model_id, system=_JUDGE_SYSTEM, user=user)
     except Exception:
-        return 0
+        return None
     return _parse_score(text)
 
 

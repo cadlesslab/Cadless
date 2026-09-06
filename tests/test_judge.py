@@ -210,6 +210,63 @@ def test_llm_judge_not_called_when_no_provider():
     assert result.no_winner is False
 
 
+def test_an_unreachable_provider_does_not_claim_the_llm_rung():
+    """A rung that decided nothing must not be reported as having decided.
+
+    The rung a selection carries is read as evidence that the rung is alive, so a
+    provider that raises on every candidate has to fall through rather than
+    reporting LLM — otherwise a dead provider is indistinguishable from a working
+    one that happened to score every candidate equally.
+    """
+
+    class DeadProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, **kw):
+            self.calls += 1
+            raise RuntimeError("judge model unreachable")
+
+    a, b = _ok(code="A"), _ok(code="B")
+    provider = DeadProvider()
+
+    result = select_winner([a, b], intent="a bracket", provider=provider)
+
+    assert provider.calls == 2  # it was genuinely tried, once per candidate
+    assert result.rung is Rung.FILTER  # ...and did not get to claim the decision
+    assert result.winner is a  # deterministic fallback, as with no provider at all
+
+
+def test_a_provider_that_answers_keeps_the_llm_rung_even_when_it_scores_zero():
+    """Answering "0" is a judgement; failing to answer is not. Only the second falls
+    through, so a model that genuinely rates everything worthless still counts."""
+    a, b = _ok(code="A"), _ok(code="B")
+    provider = _SpyProvider({"A": "0", "B": "0"})
+
+    result = select_winner([a, b], intent="a bracket", provider=provider)
+
+    assert result.rung is Rung.LLM
+    assert len(provider.calls) == 2
+
+
+def test_one_reachable_score_is_enough_to_decide():
+    """A partial outage still yields a real comparison: the candidates that scored
+    are ranked above the ones the provider could not answer for."""
+
+    class FlakyProvider:
+        def complete(self, *, model, system, user, temperature=None) -> str:
+            if "B" in user:
+                return "9"
+            raise RuntimeError("transient")
+
+    a, b = _ok(code="A"), _ok(code="B")
+
+    result = select_winner([a, b], intent="a bracket", provider=FlakyProvider())
+
+    assert result.rung is Rung.LLM
+    assert result.winner is b
+
+
 def test_ranking_is_returned_for_inspection():
     winner = _ok(code="W")
     result = select_winner([_bad(), winner], intent="a bracket")
