@@ -204,11 +204,21 @@ Both paths rely on the bundled Caddy proxy passing SSE through unbuffered
   copy, and the copy is the thing that drifts.
 - **A race is judged, so what the judge can see decides what the numbers mean.**
   The report carries a `rung_distribution` saying which rung settled each
-  selection. A distribution that is entirely `filter` means only the hard filter
-  was live and the "winner" was whichever candidate came back first — N times the
-  spend for an arbitrary pick. `assertions` and `vlm` appear once the geometry
-  and render rungs have something to work with; until then `llm` is the only rung
-  that can break a tie, and it ranks code rather than geometry.
+  selection. `input-order` means no rung settled it at all and the "winner" was
+  whichever candidate came back first — N times the spend for an arbitrary pick,
+  and a run to discard rather than quote. A rung that merely narrowed the field
+  is not counted as having decided, so the distribution answers "how much of the
+  ladder is alive" rather than "how far down it did we get". `assertions` and
+  `vlm` appear once the geometry and render rungs have something to work with;
+  until then `llm` is the only rung that can break a tie, and it ranks code
+  rather than geometry.
+- **A judge that cannot be reached does not fail the run**, by design: one dead
+  judge must not sink a turn that generated fine. It logs a warning per failed
+  scoring and the selection falls through to `input-order`, so an all
+  `input-order` distribution on a run you expected to be judged is the signal to
+  check the provider and its credentials. Constructing the provider validates
+  only its *name* — the adapters build their client lazily, so a missing key
+  surfaces on the first scoring call rather than before the first paid prompt.
 - **Weigh a lift against `candidate_attempts`, not against the prompt count.**
   The rate metrics stay winner-based so they compare directly with a single-run
   baseline, which means the race's cost is deliberately *not* folded into them —

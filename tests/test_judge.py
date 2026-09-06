@@ -210,6 +210,39 @@ def test_llm_judge_not_called_when_no_provider():
     assert result.no_winner is False
 
 
+def test_the_rung_hands_the_adapter_a_slug_it_can_resolve():
+    """The contract every stub in this suite hides.
+
+    Each other rung-(d) test replaces ``complete()`` wholesale and never looks at
+    ``model``, so the ladder stayed green while production could not run the rung
+    at all: the judge was resolving the slug to a vendor id and handing the adapter
+    a value it resolves itself, which raises for an unknown model. This drives a
+    REAL adapter and stops at its model-resolution step, so a regression here fails
+    the suite rather than the next paid eval run.
+    """
+    from cadless.config import settings as live_settings
+    from cadless.llm.providers import anthropic as anthropic_adapter
+
+    seen: list[str] = []
+
+    class TransportlessAnthropic(anthropic_adapter.AnthropicChatProvider):
+        """The real adapter, stopped just before the network."""
+
+        def complete(self, *, model, system, user, temperature=None) -> str:
+            # Raises exactly as the adapter would on a model it cannot map.
+            anthropic_adapter._resolve_api_model(model)
+            seen.append(model)
+            return "5"
+
+    a, b = _ok(code="A"), _ok(code="B")
+
+    result = select_winner([a, b], intent="a bracket", provider=TransportlessAnthropic())
+
+    assert seen == [live_settings.bedrock_fast_model_slug] * 2
+    assert result.rung is Rung.LLM
+    assert result.decided is True
+
+
 def test_an_unreachable_provider_does_not_claim_the_llm_rung():
     """A rung that decided nothing must not be reported as having decided.
 
@@ -233,7 +266,7 @@ def test_an_unreachable_provider_does_not_claim_the_llm_rung():
     result = select_winner([a, b], intent="a bracket", provider=provider)
 
     assert provider.calls == 2  # it was genuinely tried, once per candidate
-    assert result.rung is Rung.FILTER  # ...and did not get to claim the decision
+    assert result.decided is False  # ...and did not get to claim the decision
     assert result.winner is a  # deterministic fallback, as with no provider at all
 
 
@@ -265,6 +298,53 @@ def test_one_reachable_score_is_enough_to_decide():
 
     assert result.rung is Rung.LLM
     assert result.winner is b
+
+
+def test_a_scored_zero_still_beats_a_candidate_that_could_not_be_scored():
+    """The boundary the previous test's score of 9 never reaches.
+
+    "The model rated this worthless" and "the model never saw this" are different
+    judgements, so they must not share a sort key — otherwise the unscorable
+    candidate wins any tie against a genuine 0, which is the opposite of what the
+    ladder claims to do.
+    """
+
+    class HalfDeadProvider:
+        def complete(self, *, model, system, user, temperature=None) -> str:
+            if "A" in user:
+                raise RuntimeError("unreachable for this one")
+            return "0"
+
+    a, b = _ok(code="A"), _ok(code="B")  # a is unscorable, b genuinely scores 0
+
+    result = select_winner([a, b], intent="a bracket", provider=HalfDeadProvider())
+
+    assert result.rung is Rung.LLM
+    assert result.winner is b
+    assert result.ranking == [b, a]
+
+
+def test_a_rung_that_only_narrowed_is_not_reported_as_having_decided():
+    """The same dishonesty rung (d) refuses, one rung up.
+
+    An assertions tie narrows the field without settling it, so input order picks
+    the winner. Attributing that selection to the assertions rung would inflate a
+    reported distribution with choices no rung actually made.
+    """
+    a, b = _ok(code="A"), _ok(code="B")
+    # Both candidates fail the same assertion, so the rung narrows to two and ties.
+    same_signature = GeometrySignature(volume=1.0, bbox=(1, 1, 1), part_count=9)
+
+    result = select_winner(
+        [a, b],
+        intent="a bracket",
+        assertions=GeometryAssertions(expected_part_count=1),
+        signature_of=lambda c: same_signature,
+    )
+
+    assert result.rung is Rung.ASSERTIONS  # it did narrow, and that stays inspectable
+    assert result.decided is False  # ...but it did not choose
+    assert result.winner is a
 
 
 def test_ranking_is_returned_for_inspection():

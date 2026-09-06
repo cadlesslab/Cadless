@@ -35,6 +35,7 @@ each rung deterministically.
 from __future__ import annotations
 
 import enum
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -44,8 +45,9 @@ from cadless.assertions import (
     evaluate_assertions,
 )
 from cadless.config import Settings, settings
-from cadless.model_profiles import resolve_model_id
 from cadless.pipeline import GenerationResult
+
+logger = logging.getLogger(__name__)
 
 # Maps an ok candidate to the cheap geometry metrics measured at build time, so the
 # judge can reuse Phase A ``evaluate_assertions``. Injected (the live caller builds
@@ -83,6 +85,11 @@ class JudgeResult:
     rung: Rung
     ranking: list[GenerationResult] = field(default_factory=list)
     no_winner: bool = False
+    # Whether a rung actually chose the winner, as opposed to input order choosing
+    # it after every rung declined. ``rung`` alone cannot carry this: a rung that
+    # narrows the field without settling it still sets ``rung``, so treating that
+    # as "this rung decided" overstates how much of the ladder is alive.
+    decided: bool = True
 
 
 def select_winner(
@@ -138,12 +145,21 @@ def select_winner(
 
     # --- Rung (d): CHEAP LLM JUDGE ---------------------------------------------
     if provider is not None and len(contenders) > 1:
-        model_id = resolve_model_id(cfg.bedrock_fast_model_slug)
+        # The SLUG, not a resolved vendor id. Every adapter resolves the slug
+        # itself (that is what makes the seam provider-neutral), so handing one a
+        # value it has already resolved raises for an unknown model and takes the
+        # whole rung down with it.
+        model_id = cfg.bedrock_fast_model_slug
         # Scored once per candidate and kept, so that "did this rung contribute
         # anything" can be asked afterwards without paying for a second pass.
         scores = {id(c): _llm_score(provider, model_id, intent, c) for c in contenders}
         if any(s is not None for s in scores.values()):
-            scored = sorted(contenders, key=lambda c: -(scores[id(c)] or 0))
+            # Unscorable candidates sort strictly last rather than tying with a
+            # genuine 0: the model rated one of them worthless and could not see
+            # the other at all, which is not the same judgement.
+            scored = sorted(
+                contenders, key=lambda c: (scores[id(c)] is None, -(scores[id(c)] or 0))
+            )
             return JudgeResult(winner=scored[0], rung=Rung.LLM, ranking=scored)
         # Every call failed, so this rung decided nothing. Reporting LLM here would
         # be worse than falling through: the rung a selection is attributed to is
@@ -151,7 +167,11 @@ def select_winner(
         # would then look exactly like a working one that scored everything equal.
 
     # --- Fallback: deterministic input order -----------------------------------
-    return JudgeResult(winner=contenders[0], rung=rung, ranking=contenders)
+    # Nothing picked a unique winner, so input order did. ``rung`` still names the
+    # last rung that narrowed the field (useful for inspection), but ``decided`` is
+    # what says whether any rung actually chose — reporting a narrowing rung as the
+    # decider is the same dishonesty rung (d) refuses above, one rung up.
+    return JudgeResult(winner=contenders[0], rung=rung, ranking=contenders, decided=False)
 
 
 def _repair_attempts(c: GenerationResult) -> int:
@@ -189,6 +209,12 @@ def _llm_score(provider, model_id: str, intent: str, c: GenerationResult) -> int
     try:
         text = provider.complete(model=model_id, system=_JUDGE_SYSTEM, user=user)
     except Exception:
+        # Logged rather than swallowed outright. The failure is deliberately not
+        # fatal — one unreachable judge must not sink a turn that generated fine —
+        # but an operator reading a race that decided nothing needs to be able to
+        # tell a missing provider from a misconfigured one, and silence made a
+        # model-id mistake here indistinguishable from having no provider at all.
+        logger.warning("cheap-LLM judge could not score a candidate", exc_info=True)
         return None
     return _parse_score(text)
 

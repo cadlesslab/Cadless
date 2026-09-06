@@ -162,6 +162,31 @@ def test_summarize_messages_uses_provider_and_preserves_facts_prompt():
     assert "user message 0" in provider.last_complete_user
 
 
+def test_summarisation_hands_the_adapter_a_slug_it_can_resolve():
+    """The seam takes a slug; the adapter resolves it.
+
+    Resolving before dispatch hands the adapter a value it does not recognise, and
+    the caller treats a summarisation failure as a cue to truncate instead — so
+    this mistake degrades the rolling synopsis with nothing raised and nothing
+    logged. A stub that ignores ``model`` cannot see that, so this drives the real
+    adapter's model resolution and stops before the network.
+    """
+    from cadless.llm.providers import anthropic as anthropic_adapter
+
+    seen: list[str] = []
+
+    class TransportlessAnthropic(anthropic_adapter.AnthropicChatProvider):
+        def complete(self, *, model, system, user, temperature=None) -> str:
+            anthropic_adapter._resolve_api_model(model)  # raises on an unknown model
+            seen.append(model)
+            return "a summary"
+
+    text = summarize_messages(_turns(3), TransportlessAnthropic(), config=base_settings)
+
+    assert text == "a summary"
+    assert seen == [base_settings.orchestrator_model]
+
+
 # -- script_versions chain untouched -----------------------------------------
 
 

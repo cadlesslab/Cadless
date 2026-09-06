@@ -110,9 +110,13 @@ class PipelineEvalReport:
         return json.dumps(self.to_dict(), indent=2)
 
     def to_csv(self) -> str:
+        # The race columns are APPENDED, never inserted. A recorded baseline is
+        # read positionally as often as by name — `awk -F, '{print $6}'`, a
+        # spreadsheet column, a plotting script — so moving `error` rightwards
+        # would silently turn every row's empty `rung` into its error text.
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["id", "ok", "attempts", "repaired", "volume", "rung", "candidates", "error"])
+        w.writerow(["id", "ok", "attempts", "repaired", "volume", "error", "rung", "candidates"])
         for r in self.records:
             w.writerow(
                 [
@@ -121,9 +125,9 @@ class PipelineEvalReport:
                     r.attempts,
                     r.repaired,
                     r.volume,
+                    (r.error or "").replace("\n", " "),
                     r.rung or "",
                     r.candidates,
-                    (r.error or "").replace("\n", " "),
                 ]
             )
         return buf.getvalue()
@@ -138,10 +142,14 @@ def run_pipeline_eval(
 ) -> PipelineEvalReport:
     """Run every prompt and report the aggregate.
 
-    ``forge_n`` at its default of 1 is the single-run path, byte for byte — that is
-    what keeps a previously recorded baseline comparable. Above 1 each prompt races
-    that many candidates through the same primitive the live agent turn uses, so the
-    A/B measures the shipped forge rather than a copy of it.
+    ``forge_n`` at its default of 1 takes the single-run path and every
+    pre-existing metric and record field is unchanged, which is what keeps a
+    previously recorded baseline comparable. The **schema** is not unchanged: the
+    report gains race fields, empty on this path, and the CSV gains two trailing
+    columns. They are appended rather than inserted so existing column positions
+    hold. Above 1 each prompt races that many candidates through the same
+    primitive the live agent turn uses, so the A/B measures the shipped forge
+    rather than a copy of it.
 
     ``provider`` is the judge's cheap-LLM rung. Leaving it out while racing does not
     fail; it silently removes the only rung that can break a tie once nothing else is
@@ -196,10 +204,25 @@ def _race_record(
         bp.id,
         win,
         ok=win.ok and not judged.no_winner,
-        rung=judged.rung.value,
+        # A rung that only narrowed the field did not choose the winner; input
+        # order did. Recording the narrowing rung here would inflate the
+        # distribution with selections no rung actually made, which is the exact
+        # question the distribution exists to answer.
+        rung=judged.rung.value if judged.decided else "input-order",
         candidates=len(candidates),
-        candidate_attempts=sum(c.attempt_count for c in candidates),
+        candidate_attempts=sum(_billable_attempts(c) for c in candidates),
     )
+
+
+def _billable_attempts(c) -> int:
+    """Attempts to charge a candidate with, floored at 1 once it has an error.
+
+    A candidate whose generation raised is surfaced with an empty ``attempts``
+    list, so counting the list alone bills it zero — under-reporting precisely the
+    failures a race produces most, in the field whose job is to say what the race
+    cost.
+    """
+    return max(1, c.attempt_count) if c.error else c.attempt_count
 
 
 def _record(

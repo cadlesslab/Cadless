@@ -95,18 +95,19 @@ def test_racing_goes_through_run_candidates_and_reports_the_deciding_rung():
     assert report.records[0].volume == 8.0  # the judged winner, not the first
 
 
-def test_a_race_with_no_provider_reports_an_all_filter_distribution():
+def test_a_race_with_no_provider_reports_that_nothing_decided():
     """The degraded read-out this field exists to make visible.
 
-    Nothing injected means only the hard filter can decide, so every selection is
-    ``filter`` — which is how a reader can tell a race that chose on merit from one
-    that merely paid N times and kept whichever candidate came back first.
+    Nothing injected means no rung can settle a tie, so the winner is whichever
+    candidate came back first. That is reported as ``input-order`` rather than as
+    the name of a rung, because naming a rung here is what would let a race that
+    merely paid N times pass for one that chose on merit.
     """
     pipe = StubPipeline(field=[_res("a"), _res("b")])
 
     report = run_pipeline_eval(prompts=_prompts(3), pipeline=pipe, forge_n=2)
 
-    assert report.rung_distribution == {"filter": 3}
+    assert report.rung_distribution == {"input-order": 3}
 
 
 def test_metrics_stay_winner_based_while_cost_is_reported_separately():
@@ -152,6 +153,23 @@ def test_the_report_serialises_the_race_fields():
     report = run_pipeline_eval(prompts=_prompts(1), pipeline=pipe, forge_n=2)
     as_dict = report.to_dict()
 
-    assert as_dict["rung_distribution"] == {"filter": 1}
+    assert as_dict["rung_distribution"] == {"input-order": 1}
     assert as_dict["candidate_attempts"] == 2
-    assert "rung" in report.to_csv().splitlines()[0]
+    header = report.to_csv().splitlines()[0].split(",")
+    # Appended, not inserted: the pre-existing columns keep their positions so a
+    # baseline read positionally does not shift under a reader's feet.
+    assert header[:6] == ["id", "ok", "attempts", "repaired", "volume", "error"]
+    assert header[6:] == ["rung", "candidates"]
+
+
+def test_a_candidate_that_raised_is_still_billed():
+    """The fan-out surfaces a raised candidate with no attempts recorded. Counting
+    the list alone would bill it zero, under-reporting exactly the failures a race
+    produces most — in the field whose whole job is to say what the race cost."""
+    winner = _res("ok", volume=1.0, attempts=1)
+    raised = _res("boom", ok=False, volume=None, attempts=0, error="candidate 1 raised")
+    pipe = StubPipeline(field=[winner, raised])
+
+    report = run_pipeline_eval(prompts=_prompts(1), pipeline=pipe, forge_n=2)
+
+    assert report.candidate_attempts == 2  # 1 for the winner, floored 1 for the raiser

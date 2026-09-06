@@ -168,8 +168,8 @@ def test_forge_winner_is_judged_rather_than_first_in_input_order():
 def test_forge_race_survives_a_judge_provider_failure():
     """A raising provider must not sink the turn — the ladder still names a winner.
 
-    ``_llm_score`` scores a failed call 0, so a provider that is down degrades the
-    race to input order rather than turning a working generation into an error.
+    A provider that is down degrades the race to input order rather than turning a
+    working generation into an error.
     """
 
     class BrokenProvider(FakeChatProvider):

@@ -171,6 +171,7 @@ def test_without_judging_dependencies_the_ladder_falls_through_to_input_order():
     judged, _ = race_and_judge(StubPipeline([first, better]), "a bracket", n=2)
 
     assert judged.rung is Rung.FILTER
+    assert judged.decided is False  # no rung chose; input order did
     assert judged.winner is first
 
 

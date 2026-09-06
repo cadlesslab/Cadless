@@ -63,7 +63,7 @@ def test_csv_format_is_available(capsys):
     assert main(["--tier", "hard", "--format", "csv"], pipeline=StubPipeline()) == 0
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == "id,ok,attempts,repaired,volume,rung,candidates,error"
+    assert lines[0] == "id,ok,attempts,repaired,volume,error,rung,candidates"
     assert len(lines) == _hard_size() + 1  # header + one row per prompt
 
 
@@ -220,8 +220,9 @@ def test_an_injected_provider_stops_a_real_one_being_built(monkeypatch):
 def test_forge_off_builds_no_provider(monkeypatch):
     """The single-run path must not touch the provider registry at all.
 
-    Building one is the step that reads credentials and can fail on a machine that
-    has none; a default run has no judge and so has no reason to.
+    A default run has no judge, so it has no reason to resolve a provider name.
+    (Building one does not validate credentials — the adapters construct their
+    client lazily — so this guards the registry lookup, not the key.)
     """
 
     def explode(*args, **kwargs):
@@ -230,6 +231,20 @@ def test_forge_off_builds_no_provider(monkeypatch):
     monkeypatch.setattr("cadless.llm.registry.build_provider", explode)
 
     assert main(["--tier", "easy"], pipeline=StubPipeline()) == 0
+
+
+def test_a_forge_n_above_the_live_ceiling_is_refused(capsys):
+    """`--forge-n` is the only cost multiplier on this command line, and the live
+    path is clamped to `forge_max_n` precisely to cap one turn's blast radius. A
+    duplicated digit here is the same class of typo as a bad `--out`, which is
+    already refused before anything is generated, but with a far larger bill."""
+    stub = RacingStub()
+
+    rc = main(["--tier", "hard", "--forge-n", str(settings.forge_max_n + 1)], pipeline=stub)
+
+    assert rc == 2
+    assert "forge_max_n" in capsys.readouterr().err
+    assert stub.seen == []  # refused before the first paid prompt
 
 
 def test_a_non_positive_forge_n_is_refused_before_anything_runs(capsys):

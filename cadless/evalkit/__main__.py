@@ -108,8 +108,23 @@ def main(argv: list[str] | None = None, pipeline=None, provider=None) -> int:
 
     # 0 or a negative N would silently mean "single run" rather than what was asked
     # for, and the report would look like a race that decided nothing.
+    #
+    # The ceiling matters more. `--forge-n` is the only cost multiplier on this
+    # command line, and the live path never exceeds `forge_max_n` — `forge_scaled_n`
+    # clamps to it precisely to "cap the cost blast-radius of one turn". A dropped
+    # or duplicated digit here is the same class of typo as a bad `--out`, which is
+    # already refused before anything is generated, but with a far larger bill and
+    # a `ThreadPoolExecutor` sized to match.
     if args.forge_n < 1:
         print(f"--forge-n must be at least 1, got {args.forge_n}", file=sys.stderr)
+        return 2
+    if args.forge_n > settings.forge_max_n:
+        print(
+            f"--forge-n {args.forge_n} exceeds forge_max_n ({settings.forge_max_n}), "
+            f"the ceiling the live path is clamped to. Raise CADLESS_FORGE_MAX_N if a "
+            f"wider sweep is genuinely wanted.",
+            file=sys.stderr,
+        )
         return 2
 
     out = Path(args.out) if args.out else None
@@ -127,9 +142,12 @@ def main(argv: list[str] | None = None, pipeline=None, provider=None) -> int:
             print(refusal, file=sys.stderr)
             return 2
 
-    # The judge's cheap-LLM rung needs a provider, and only a race has a judge.
-    # Built here rather than inside the loop so a misconfigured provider fails
-    # before the first paid prompt, and never built at all on the single-run path.
+    # The judge's cheap-LLM rung needs a provider, and only a race has a judge, so
+    # nothing is built on the single-run path. Constructing it here catches an
+    # unknown provider *name* before the first paid prompt — and nothing more than
+    # that: the adapters build their client lazily, so absent or invalid
+    # credentials still surface only on the first scoring call. A race on a box
+    # with no key therefore runs to completion and reports that no rung decided.
     if args.forge_n > 1 and provider is None:
         from cadless.llm.registry import build_provider
 

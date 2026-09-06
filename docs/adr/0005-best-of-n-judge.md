@@ -25,9 +25,14 @@ call per candidate would erase the benefit.
   4. **llm** — a cheap-model comparison as the last resort.
   Ties fall back to input order, keeping the outcome deterministic. A rung whose
   dependency is absent is skipped, and a provider that cannot be reached for any
-  candidate is skipped too rather than recorded as the decider — the recorded
-  rung is read as evidence that a rung is alive, so a dead provider must not be
-  able to look like a working one that scored every candidate equally.
+  candidate is skipped too rather than recorded as the decider. `JudgeResult`
+  carries `decided` for exactly this: the recorded rung is read as evidence that
+  a rung is alive, so neither a dead provider nor a rung that merely narrowed the
+  field may look like one that chose the winner.
+- The ladder dispatches through the provider seam with a **model slug**, never a
+  resolved vendor id. Each adapter resolves the slug itself, which is what keeps
+  the seam provider-neutral; resolving before dispatch hands an adapter a value
+  it will not recognise and takes the whole rung down silently.
 - `cadless/forge.py:race_and_judge` is the one composition of fan-out and
   selection. The live agent turn and the evaluation harness both call it, so a
   measurement of best-of-N is a measurement of the shipped path rather than of a
