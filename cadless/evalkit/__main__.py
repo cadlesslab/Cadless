@@ -8,6 +8,13 @@ can take up to ``repair_max_attempts`` model calls per prompt, so a tier costs
 roughly (prompts x attempts) requests against whichever provider
 ``CADLESS_LLM_PROVIDER`` selects. Nothing here is part of ``make test``.
 
+``--forge-n N`` **multiplies that already-paid cost by N**, because a race generates
+and executes N candidates per prompt and keeps one. It also adds one cheap-model call
+per surviving candidate for the judge's tie-break. Size the spend before the run, not
+after it::
+
+    python -m cadless.evalkit --tier hard --forge-n 3 --out runs/hard-forge.json
+
 Generation is not deterministic, so a single run is one sample rather than a
 measurement. Repeat a tier and look at the spread before quoting a number.
 """
@@ -34,6 +41,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--export-dir",
         help="where the pipeline writes STEP/STL/GLB artifacts (off by default)",
+    )
+    parser.add_argument(
+        "--forge-n",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "race N candidates per prompt and judge them (default 1 = off, the "
+            "single-run path). N multiplies the tier's cost by N."
+        ),
     )
     return parser
 
@@ -72,7 +89,13 @@ def _reject_if_under_catalog_root(target: Path, what: str) -> str | None:
     return None
 
 
-def main(argv: list[str] | None = None, pipeline=None) -> int:
+def main(argv: list[str] | None = None, pipeline=None, provider=None) -> int:
+    """Run one tier and emit the report; return a process exit code.
+
+    ``pipeline`` and ``provider`` exist so tests can drive the whole path without a
+    live call — every run is billed, so nothing here may reach a real provider by
+    default in a test.
+    """
     args = _build_parser().parse_args(argv)
 
     # Validate before running: a tier costs real requests, so a typo in --out
@@ -81,6 +104,12 @@ def main(argv: list[str] | None = None, pipeline=None) -> int:
         prompts = load_tier(args.tier)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+
+    # 0 or a negative N would silently mean "single run" rather than what was asked
+    # for, and the report would look like a race that decided nothing.
+    if args.forge_n < 1:
+        print(f"--forge-n must be at least 1, got {args.forge_n}", file=sys.stderr)
         return 2
 
     out = Path(args.out) if args.out else None
@@ -98,7 +127,21 @@ def main(argv: list[str] | None = None, pipeline=None) -> int:
             print(refusal, file=sys.stderr)
             return 2
 
-    report = run_pipeline_eval(prompts=prompts, pipeline=pipeline, export_dir=args.export_dir)
+    # The judge's cheap-LLM rung needs a provider, and only a race has a judge.
+    # Built here rather than inside the loop so a misconfigured provider fails
+    # before the first paid prompt, and never built at all on the single-run path.
+    if args.forge_n > 1 and provider is None:
+        from cadless.llm.registry import build_provider
+
+        provider = build_provider()
+
+    report = run_pipeline_eval(
+        prompts=prompts,
+        pipeline=pipeline,
+        export_dir=args.export_dir,
+        forge_n=args.forge_n,
+        provider=provider,
+    )
     text = report.to_json() if args.format == "json" else report.to_csv()
     # to_csv already ends in a newline and to_json does not, so normalise to
     # exactly one rather than emitting a blank last line for one of the two.

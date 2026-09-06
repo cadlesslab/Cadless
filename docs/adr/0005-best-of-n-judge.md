@@ -23,7 +23,15 @@ call per candidate would erase the benefit.
   2. **assertions** — deterministic geometry post-conditions, when given.
   3. **vlm** — render critique, when enabled.
   4. **llm** — a cheap-model comparison as the last resort.
-  Ties fall back to input order, keeping the outcome deterministic.
+  Ties fall back to input order, keeping the outcome deterministic. A rung whose
+  dependency is absent is skipped, and a provider that cannot be reached for any
+  candidate is skipped too rather than recorded as the decider — the recorded
+  rung is read as evidence that a rung is alive, so a dead provider must not be
+  able to look like a working one that scored every candidate equally.
+- `cadless/forge.py:race_and_judge` is the one composition of fan-out and
+  selection. The live agent turn and the evaluation harness both call it, so a
+  measurement of best-of-N is a measurement of the shipped path rather than of a
+  second implementation that would drift away from it.
 - Losing candidates are not discarded silently: when the feature is on,
   `cadless/forge.py` persists them alongside the winner for later
   inspection.

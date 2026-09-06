@@ -47,7 +47,18 @@ def test_report_serialises():
     report = PipelineEvalReport(records=[PipelineEvalRecord("a", ok=True, attempts=1)])
     parsed = json.loads(report.to_json())
     assert parsed["success_rate"] == 1.0
-    assert report.to_csv().splitlines()[0] == "id,ok,attempts,repaired,volume,error"
+    assert report.to_csv().splitlines()[0] == "id,ok,attempts,repaired,volume,rung,candidates,error"
+
+
+def test_a_single_run_report_carries_no_race_fields():
+    """The racing columns exist for every report but stay empty without a race, so
+    a single-run report reads exactly as it did before racing was measurable."""
+    report = PipelineEvalReport(records=[PipelineEvalRecord("a", ok=True, attempts=2)])
+
+    parsed = json.loads(report.to_json())
+    assert parsed["rung_distribution"] == {}
+    assert parsed["candidate_attempts"] == 2  # falls back to the run's own attempts
+    assert parsed["records"][0]["rung"] is None
 
 
 @pytest.mark.build123d

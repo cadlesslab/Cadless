@@ -198,3 +198,19 @@ Both paths rely on the bundled Caddy proxy passing SSE through unbuffered
   provider with your key and are never part of `make test`. Generation is not
   deterministic, so a single run is one sample — repeat and read the spread
   before quoting a number.
+- `--forge-n N` races N candidates per prompt instead of generating one, through
+  the same `forge.race_and_judge` the live agent turn uses. Sharing that one
+  function is deliberate: an A/B against a second implementation measures the
+  copy, and the copy is the thing that drifts.
+- **A race is judged, so what the judge can see decides what the numbers mean.**
+  The report carries a `rung_distribution` saying which rung settled each
+  selection. A distribution that is entirely `filter` means only the hard filter
+  was live and the "winner" was whichever candidate came back first — N times the
+  spend for an arbitrary pick. `assertions` and `vlm` appear once the geometry
+  and render rungs have something to work with; until then `llm` is the only rung
+  that can break a tie, and it ranks code rather than geometry.
+- **Weigh a lift against `candidate_attempts`, not against the prompt count.**
+  The rate metrics stay winner-based so they compare directly with a single-run
+  baseline, which means the race's cost is deliberately *not* folded into them —
+  it is reported beside them instead. A lift that does not clear N times the
+  spend is not a win.
