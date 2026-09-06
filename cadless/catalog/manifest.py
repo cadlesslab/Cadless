@@ -14,6 +14,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from cadless.catalog.domains import find_domain
+from cadless.catalog.pack import PackError, safe_entry_name
 
 
 class StepGeometry(BaseModel):
@@ -40,9 +41,9 @@ class CatalogStep(BaseModel):
 
     index: int  # 1-based position in the ladder
     instruction: str  # the natural-language instruction for this step
-    code: str  # path to the step's build123d script, relative to the house dir
+    code: str  # path to the step's build123d script, relative to and inside the item dir
     geometry: StepGeometry = Field(default_factory=StepGeometry)
-    artifacts: dict[str, str] = Field(default_factory=dict)  # kind -> relative path
+    artifacts: dict[str, str] = Field(default_factory=dict)  # kind -> relative path, inside it
     assertions: dict = Field(default_factory=dict)  # e.g. {"volume_tol": 0.05}
     # Multi-body convention (#40): the number of disjoint solids this step's
     # ``result`` deliberately produces (a build123d Compound of positioned
@@ -75,8 +76,8 @@ class CatalogManifest(BaseModel):
     category: str | None = None
     tags: list[str] = Field(default_factory=list)
     description: str | None = None
-    # Path (relative to the item dir) of the baked item thumbnail PNG, filled by
-    # the bake helper from the final step's mesh; ``None`` until (re)baked.
+    # Path (relative to and inside the item dir) of the baked item thumbnail PNG,
+    # filled by the bake helper from the final step's mesh; ``None`` until (re)baked.
     thumbnail: str | None = None
     # The content version this item was last published under. Recorded here
     # because a publisher cannot be asked what the last one was, and without it
@@ -87,14 +88,64 @@ class CatalogManifest(BaseModel):
     steps: list[CatalogStep]
 
 
+def _inside_item(item: Path, rel: str, what: str) -> Path:
+    """The file ``rel`` names, once it is known to sit inside ``item``.
+
+    A manifest is data from whichever root the loader was pointed at, and the
+    loader reads, copies and later serves what these paths name. The spelling
+    is held to the package format's rule — relative, POSIX, no empty or ``..``
+    segment — so no name a package would refuse gets through here; then the
+    resolved path has to sit inside the resolved item, because a link
+    inside the item can leave it with no ``..`` in sight.
+    """
+    refusal = f"{what} path {rel!r} does not stay inside the item directory"
+    try:
+        safe_entry_name(rel)
+    except PackError as exc:
+        raise ValueError(f"{refusal}: {exc}") from exc
+    item = Path(item).resolve()
+    resolved = (item / rel).resolve()
+    if not resolved.is_relative_to(item):
+        raise ValueError(f"{refusal}: it resolves outside it")
+    return resolved
+
+
+def step_code_path(item: Path, step: CatalogStep) -> Path:
+    """Where ``step``'s code sits, checked to be inside ``item``.
+
+    This and the two accessors after it are what a reader calls at the moment
+    it opens a file, not only what ``load_manifest`` calls once: a path that
+    passed the check earlier can have been swapped for a link since, so the
+    check is repeated in the same thread as the read, and the window closes to
+    the open itself.
+    """
+    return _inside_item(item, step.code, f"step {step.index} code")
+
+
+def step_artifact_path(item: Path, step: CatalogStep, kind: str) -> Path:
+    """Where ``step``'s ``kind`` artifact sits, checked to be inside ``item``."""
+    return _inside_item(item, step.artifacts[kind], f"step {step.index} {kind} artifact")
+
+
+def thumbnail_path(item: Path, manifest: CatalogManifest) -> Path:
+    """Where the item thumbnail sits, checked to be inside ``item``."""
+    if manifest.thumbnail is None:
+        raise ValueError("manifest names no thumbnail")
+    return _inside_item(item, manifest.thumbnail, "thumbnail")
+
+
 def load_manifest(house_dir: Path) -> CatalogManifest:
     """Read + validate ``<house_dir>/manifest.json``.
 
     Steps are sorted by ``index`` and validated to be contiguous from 1; the
     ``domain`` must be registered in the domain registry; every referenced
-    ``code`` file must exist. Raises ``ValueError`` otherwise.
+    ``code`` file must exist; every ``code``, artifact and ``thumbnail`` path
+    must stay inside ``house_dir``, which itself must not be a symlink. Raises
+    ``ValueError`` otherwise.
     """
     house_dir = Path(house_dir)
+    if house_dir.is_symlink():
+        raise ValueError(f"item directory must not be a symlink: {house_dir}")
     manifest_path = house_dir / "manifest.json"
     if not manifest_path.exists():
         raise ValueError(f"no manifest.json in {house_dir}")
@@ -110,8 +161,13 @@ def load_manifest(house_dir: Path) -> CatalogManifest:
     if actual != expected:
         raise ValueError(f"step indices must be contiguous from 1, got {actual}")
     for step in manifest.steps:
-        if not (house_dir / step.code).exists():
+        if not step_code_path(house_dir, step).exists():
             raise ValueError(f"step {step.index} code file missing: {house_dir / step.code}")
+        # Artifacts and the thumbnail may be missing; here they only have to stay inside.
+        for kind in step.artifacts:
+            step_artifact_path(house_dir, step, kind)
+    if manifest.thumbnail is not None:
+        thumbnail_path(house_dir, manifest)
     return manifest
 
 
