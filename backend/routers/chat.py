@@ -225,7 +225,7 @@ async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | Non
     return version.code, version.parameters or extract_params(version.code)
 
 
-def _replayed_block(block: ContentBlock) -> str:
+def _replayed_block(block: ContentBlock, role: str = "user") -> str:
     """What one stored block contributes to the replayed conversation, as text.
 
     An image replays as words, never as pixels. This function only ever sees past
@@ -234,12 +234,18 @@ def _replayed_block(block: ContentBlock) -> str:
     and the cached reading is what it wrote down at the time. Sending the picture
     again would charge for every turn that follows it.
 
+    An image on an **assistant** turn contributes nothing. Those are the render
+    critique's own captures, kept so the transcript can show them again on a
+    reload; they were never something the model said, and replaying four of them
+    per turn as "[reference image: …]" would both misdescribe where they came
+    from and grow without bound down a long session.
+
     Everything else that is not conversational text contributes nothing, as before:
     replaying past tool and thinking plumbing builds an invalid transcript.
     """
     if block.kind == "text":
         return (block.text or "").strip()
-    if block.kind == "image":
+    if block.kind == "image" and role != "assistant":
         return f"[reference image: {block.reading}]" if block.reading else "[a reference image]"
     return ""
 
@@ -261,7 +267,7 @@ async def _replay_history(store: ScopedStore, session_id: int) -> list:
 
     messages: list[Message] = []
     for m in await store.list_messages(session_id):
-        parts = [_replayed_block(b) for b in m.blocks]
+        parts = [_replayed_block(b, m.role) for b in m.blocks]
         text = "\n\n".join(p for p in parts if p) or (m.content or "").strip()
         if not text:
             continue
@@ -404,6 +410,27 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     def emit(event: dict) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
+    # The reviewer's rounds, going two ways at once. Every round streams to the
+    # client verbatim — the payload is already the shape it reads, and
+    # re-wrapping it here would put the field names in two places. Only the
+    # newest round is kept for the transcript: the stream is what shows the work
+    # as it happens, while a reload wants the state the turn ended in, and
+    # keeping every round would multiply a turn's stored bytes by however many
+    # it took to settle.
+    critique_blocks: list[ContentBlock] = []
+
+    def _relay_critique(event: dict) -> None:
+        nonlocal critique_blocks
+        critique_blocks = [
+            ContentBlock.of_image(
+                data=view["png_b64"],
+                media_type="image/png",
+                reading=f"a render of the part this turn built, seen from the {view['name']}",
+            )
+            for view in event.get("views", ())
+        ]
+        emit(event)
+
     # Stream fresh-generation codegen tokens to the client live as the model writes
     # the build123d code: the agent pushes each delta here, and we map it
     # to a ``codegen_delta`` SSE event onto the same queue the UI events use.
@@ -417,10 +444,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         forge=forge_active,
         forge_n=forge_n,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
-        # The reviewer's captures and verdict, forwarded verbatim: the payload is
-        # already the shape the client reads, and re-wrapping it here would put
-        # the event's field names in two places.
-        on_critique=emit,
+        on_critique=_relay_critique,
     )
     agent = Agent(provider=provider)
 
@@ -567,7 +591,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             await store.update_message(
                 assistant.id,
                 status=status,
-                blocks=produced_blocks,
+                blocks=[*produced_blocks, *critique_blocks],
                 version_id=version_id,
                 error="a tool call failed" if any_failure else None,
             )
@@ -594,7 +618,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                 assistant.id,
                 status="error",
                 error=str(exc),
-                blocks=produced_blocks,
+                blocks=[*produced_blocks, *critique_blocks],
                 version_id=fallback_id,
             )
             settled = True

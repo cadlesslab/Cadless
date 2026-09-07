@@ -1867,3 +1867,136 @@ def test_steer_still_accepts_the_body_it_always_did(client, store, monkeypatch):
     )
 
     assert r.status_code == 202
+
+
+# --- the render critique's captures -----------------------------------------
+
+_CRITIQUE_VIEWS = ("front", "right", "top", "iso")
+
+
+class _CritiquingPipeline(StubPipeline):
+    """Reports two critique rounds after building, as the real loop does."""
+
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+        on_reading=None,
+    ):
+        result = super().run(
+            intent,
+            export_dir=export_dir,
+            on_progress=on_progress,
+            prior_code=prior_code,
+            grounding=grounding,
+            images=images,
+            on_reading=on_reading,
+        )
+        for attempt, (matches, feedback) in enumerate(((False, "too tall"), (True, "")), start=1):
+            on_progress(
+                {
+                    "event": "critique",
+                    "attempt": attempt,
+                    "matches": matches,
+                    "feedback": feedback,
+                    "views": [
+                        {
+                            "name": name,
+                            "png_b64": base64.standard_b64encode(
+                                f"PNG:{name}:{attempt}".encode()
+                            ).decode("ascii"),
+                        }
+                        for name in _CRITIQUE_VIEWS
+                    ],
+                }
+            )
+        return result
+
+
+def _generate_turn(provider_text="Done."):
+    return [
+        _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+        _text_turn(provider_text),
+    ]
+
+
+def test_every_critique_round_streams_live(client, store, monkeypatch):
+    """Both rounds reach the client, and not inside the post-tool burst.
+
+    Collected progress events arrive as one ``tool_progress`` once the tool has
+    settled — after the loop these describe is over — so a capture delivered
+    that way is no longer news. Asserting the absence from that burst is what
+    keeps them on the live channel.
+    """
+    _install(monkeypatch, ScriptedProvider(_generate_turn()), pipeline=_CritiquingPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _stream_chat(client, pid)
+
+    rounds = [e for e in events if e["event"] == "critique"]
+    assert [r["attempt"] for r in rounds] == [1, 2]
+    assert [r["matches"] for r in rounds] == [False, True]
+    assert rounds[0]["feedback"] == "too tall"
+    assert [v["name"] for v in rounds[0]["views"]] == list(_CRITIQUE_VIEWS)
+    assert base64.standard_b64decode(rounds[0]["views"][0]["png_b64"]) == b"PNG:front:1"
+
+    nested = [e["stage"] for e in events if e["event"] == "tool_progress" and "stage" in e]
+    assert not [s for s in nested if s.get("event") == "critique"], "delivered twice"
+
+
+def test_the_last_round_of_captures_survives_a_reload(client, store, monkeypatch):
+    """The transcript keeps the round the turn ended on, not every round.
+
+    The stream is what shows the work as it happens; a reload wants the state
+    the turn finished in. Keeping every round would multiply a turn's stored
+    bytes by however many it took to settle.
+    """
+    _install(monkeypatch, ScriptedProvider(_generate_turn()), pipeline=_CritiquingPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid)
+
+    assistant = [m for m in _messages(store, pid) if m.role == "assistant"][-1]
+    captures = [b for b in assistant.blocks if b.kind == "image"]
+    assert len(captures) == len(_CRITIQUE_VIEWS)
+    assert base64.standard_b64decode(captures[0].data) == b"PNG:front:2"  # the last round
+    assert [c.reading for c in captures] == [
+        f"a render of the part this turn built, seen from the {name}" for name in _CRITIQUE_VIEWS
+    ]
+
+    # The transcript the browser reads carries the shape without the bytes, and
+    # the attachment route — untouched, and role-agnostic — serves each one.
+    out = client.get(f"/projects/{pid}/messages").json()
+    served = next(m for m in out if m["role"] == "assistant" and m["blocks"])
+    assert [b["data"] for b in served["blocks"] if b["kind"] == "image"] == [None] * 4
+    r = client.get(f"/projects/{pid}/messages/{assistant.id}/attachments/0")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.content == b"PNG:front:2"
+
+
+def test_captures_are_not_replayed_into_a_later_turn(client, store, monkeypatch):
+    """They are the engine's own renders, not something the model said.
+
+    Replayed through the reference-image path they would both misdescribe where
+    they came from and add four lines to every turn that follows, for the rest
+    of the session.
+    """
+    provider = ScriptedProvider(_generate_turn() + [_text_turn("And again.")])
+    _install(monkeypatch, provider, pipeline=_CritiquingPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid)
+    _stream_chat(client, pid, "and again")
+
+    replayed = "\n".join(
+        block.text or ""
+        for call in provider.calls
+        for message in call["messages"]
+        for block in message.content
+    )
+    assert "reference image" not in replayed
