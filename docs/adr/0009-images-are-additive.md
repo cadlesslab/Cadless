@@ -72,5 +72,7 @@ answer here would have been the obvious move.
   self-contained wherever a conversation is carried to someone else — cloning a
   catalog item carries its transcript across — and that is a distribution's
   concern rather than the engine's.
-- `vlm_critique.py` still calls Bedrock directly. This ADR gives it somewhere to
-  move to; moving it is separate work.
+- `vlm_critique.py` has since moved onto this seam. It was the one vendor SDK
+  outside a provider adapter, and it sends its renders as `image` blocks through
+  `stream_turn` — the shape this ADR added, used by the half of the product it
+  was not written for.

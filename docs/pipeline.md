@@ -34,7 +34,7 @@ Pipeline.run(intent, export_dir=None, on_progress=None, prior_code=None,
 | generate / refine | `prompts.py` `CodeGenerator.generate` / `.refine` | Prompt assembly (system prompt + few-shot from `few_shot.py` + optional retrieval `grounding`) and the provider call; `extract_code` pulls the fenced code out of the reply. |
 | validate | `validation.py` `validate_code` | The AST static gate — sandbox layer 1 ([ADR-0003](./adr/0003-three-layer-sandbox.md)). No execution happens for code that fails here. |
 | build + mesh | `worker.py` `run_code` | Sandboxed execution and artifact export. Meshing happens inside the worker alongside the build; `mesh` is reported ok once artifacts exist. |
-| critique *(optional)* | `vlm_critique.py` | Renders the GLB and asks a vision model whether it matches the intent; a mismatch forces a repair. Off by default. |
+| critique *(optional)* | `vlm_critique.py` | Renders the exported STL from several named views at one shared scale and asks a vision model, through the `ChatProvider` seam, whether the shape matches the intent; a mismatch forces a repair. Off by default. |
 | assert *(optional)* | `assertions.py` | Deterministic geometry post-conditions (`GeometryAssertions`); a failure forces a repair. |
 | repair | `prompts.py` `CodeGenerator.repair` | The error (as a structured `RepairContext` for build failures) goes back to the model with the failing code; the loop retries with the repaired code. |
 

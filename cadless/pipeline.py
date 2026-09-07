@@ -225,7 +225,7 @@ class Pipeline:
                 # Optional VLM critique: a valid solid may still be the wrong shape.
                 if self._should_critique(res) and n < max_tries:
                     _emit_stage(on_progress, "critique", "begin", n)
-                    crit = self._critic.critique(intent, res.glb_path)
+                    crit = self._critic.critique(intent, res.stl_path)
                     if not crit.matches:
                         last_error = "critique: " + crit.feedback
                         _emit_stage(on_progress, "critique", "error", n, last_error)
@@ -400,7 +400,10 @@ class Pipeline:
         )
 
     def _should_critique(self, res) -> bool:
-        return bool(self._critic and self._cfg.vlm_critique_enabled and res.glb_path)
+        # ``stl_path`` rather than ``glb_path``: it is the artifact the critic's
+        # renderer can load, so gating on any other one lets a call through to a
+        # file it cannot read.
+        return bool(self._critic and self._cfg.vlm_critique_enabled and res.stl_path)
 
     def _repair(
         self,

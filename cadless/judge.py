@@ -126,8 +126,12 @@ def select_winner(
 
     # --- Rung (c): VLM CRITIQUE tie-breaker ------------------------------------
     if critic is not None and len(contenders) > 1:
+        # The STL, not the GLB: the critic's renderer reads tessellated
+        # triangles and has no GLB loader, so a candidate is only judgeable
+        # here when it exported one. The guard and the call name the same
+        # artifact on purpose — split, this rung stops firing with no error.
         matched = [
-            c for c in contenders if c.glb_path and critic.critique(intent, c.glb_path).matches
+            c for c in contenders if c.stl_path and critic.critique(intent, c.stl_path).matches
         ]
         if len(matched) == 1:
             return JudgeResult(winner=matched[0], rung=Rung.VLM, ranking=contenders)
