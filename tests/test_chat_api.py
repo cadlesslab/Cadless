@@ -1979,6 +1979,17 @@ def test_the_last_round_of_captures_survives_a_reload(client, store, monkeypatch
     assert r.content == b"PNG:front:2"
 
 
+def test_the_verdict_line_names_something_even_with_no_captures():
+    """A critic composed outside this tree can return a verdict and no pictures.
+
+    "Reviewed the build from : it matches the request." is what naming nothing
+    produces, and it reaches the transcript where a person reads it.
+    """
+    line = chat._critique_line({"matches": True, "feedback": "", "views": []})
+    assert line == "Reviewed the build from its render: it matches the request."
+    assert line.startswith(chat._CRITIQUE_PREFIX)
+
+
 def test_an_edit_turn_routes_its_critique_the_same_way(client, store, monkeypatch):
     """An edit can build the wrong shape just as readily as a fresh generation.
 
