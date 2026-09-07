@@ -28,6 +28,7 @@ Consumers must ignore unknown event types and fields for forward compatibility.
 
 from __future__ import annotations
 
+import base64
 import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -226,6 +227,9 @@ class Pipeline:
                 if self._should_critique(res) and n < max_tries:
                     _emit_stage(on_progress, "critique", "begin", n)
                     crit = self._critic.critique(intent, res.stl_path)
+                    # Published before the branch, so a round that settles the
+                    # part is shown as well as the rounds that did not.
+                    _emit_critique(on_progress, n, crit)
                     if not crit.matches:
                         last_error = "critique: " + crit.feedback
                         _emit_stage(on_progress, "critique", "error", n, last_error)
@@ -481,6 +485,33 @@ def _emit_stage(
     if error is not None:
         event["error"] = error
     _emit(on_progress, event)
+
+
+def _emit_critique(on_progress, attempt: int, crit) -> None:
+    """Emit what the reviewer saw and what it concluded, on a channel of its own.
+
+    Not a ``stage`` event. That shape is phase/status/attempt/error and every
+    stage emits it, so widening it to carry pictures would reach every emitter
+    and every consumer for the sake of one — and stage events are collected and
+    replayed after the tool settles, which is after this loop has finished. A
+    capture is only worth showing while the round it belongs to is running.
+
+    The bytes go out base64-encoded because every consumer of this stream ends
+    at ``json.dumps``.
+    """
+    _emit(
+        on_progress,
+        {
+            "event": "critique",
+            "attempt": attempt,
+            "matches": bool(crit.matches),
+            "feedback": crit.feedback,
+            "views": [
+                {"name": name, "png_b64": base64.standard_b64encode(png).decode("ascii")}
+                for name, png in getattr(crit, "captures", ())
+            ],
+        },
+    )
 
 
 def generate_cad(

@@ -417,6 +417,10 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         forge=forge_active,
         forge_n=forge_n,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
+        # The reviewer's captures and verdict, forwarded verbatim: the payload is
+        # already the shape the client reads, and re-wrapping it here would put
+        # the event's field names in two places.
+        on_critique=emit,
     )
     agent = Agent(provider=provider)
 

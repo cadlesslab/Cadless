@@ -1,9 +1,12 @@
 """VLM critique tests. No network: a scripted provider and a fake renderer."""
 
+import base64
+import json
 from pathlib import Path
 
 import pytest
 
+from cadless.agent import _route_live_events
 from cadless.catalog.thumbnail import VIEW_ORDER
 from cadless.config import Settings
 from cadless.llm.provider import ImagesUnsupported
@@ -178,3 +181,88 @@ def test_pipeline_critique_triggers_repair_when_enabled(tmp_path):
     # first attempt executes-but-mismatches -> critique attempt, then success
     assert any(a.stage == "critique" for a in result.attempts)
     assert "wrong size" in gen.last_error
+
+
+@pytest.mark.build123d
+def test_pipeline_gates_the_critique_on_the_mesh_the_renderer_reads(tmp_path):
+    """The gate and the call name the same artifact — see the judge's rung."""
+    critic = _ScriptedCritic()
+    cfg = Settings(vlm_critique_enabled=True, repair_max_attempts=3)
+    Pipeline(generator=AlwaysGood(), config=cfg, critic=critic).run(
+        "a cube", export_dir=str(tmp_path)
+    )
+    assert critic.paths and all(p.endswith(".stl") for p in critic.paths), critic.paths
+
+
+class _CapturingCritic:
+    """Returns pictures with its verdict, as the real critic does."""
+
+    def __init__(self, verdicts):
+        self._verdicts = iter(verdicts)
+
+    def critique(self, intent, mesh_path):
+        matches = next(self._verdicts)
+        return Critique(
+            matches=matches,
+            feedback="" if matches else "wrong size",
+            captures=[("front", b"PNG:front"), ("top", b"PNG:top")],
+        )
+
+
+@pytest.mark.build123d
+def test_pipeline_publishes_the_captures_on_every_round(tmp_path):
+    """The reviewer reports as it goes, whichever way each verdict falls.
+
+    Only publishing a mismatch would show the user the rounds that went wrong
+    and hide the one that settled it, which is the round that answers "is it
+    right now?".
+    """
+    events: list[dict] = []
+    cfg = Settings(vlm_critique_enabled=True, repair_max_attempts=3)
+    pipe = Pipeline(generator=AlwaysGood(), config=cfg, critic=_CapturingCritic([False, True]))
+
+    result = pipe.run("a cube", export_dir=str(tmp_path), on_progress=events.append)
+
+    assert result.ok
+    shots = [e for e in events if e.get("event") == "critique"]
+    assert len(shots) == 2
+    assert [v["name"] for v in shots[0]["views"]] == ["front", "top"]
+    assert base64.standard_b64decode(shots[0]["views"][0]["png_b64"]) == b"PNG:front"
+    assert (shots[0]["matches"], shots[0]["feedback"]) == (False, "wrong size")
+    assert shots[1]["matches"] is True
+    # The SSE layer hands every event to json.dumps; bytes would break there.
+    json.dumps(shots)
+
+
+def test_critique_events_go_live_and_are_not_replayed():
+    """The captures arrive while the loop runs, and exactly once.
+
+    Collected progress events burst as one ``tool_progress`` after the tool
+    settles — after the loop these belong to has finished — so a capture left
+    in that stream arrives when it is no longer news. Forwarded live *and* left
+    in the stream, it arrives twice.
+    """
+    live: list[dict] = []
+    collected: list[dict] = []
+    route = _route_live_events(collected.append, None, on_critique=live.append)
+
+    route({"event": "critique", "attempt": 1, "views": []})
+    route({"event": "stage", "phase": "build", "status": "ok", "attempt": 1})
+
+    assert [e["event"] for e in live] == ["critique"]
+    assert [e["event"] for e in collected] == ["stage"]
+
+
+def test_critique_events_are_dropped_with_no_live_sink():
+    """As with codegen: no sink, no payload in the burst.
+
+    A consumer that cannot show a picture has no use for several hundred
+    kilobytes of base64, and the verdict itself still reaches it on the stage
+    event that carries the repair signal.
+    """
+    collected: list[dict] = []
+    route = _route_live_events(collected.append, None)
+
+    route({"event": "critique", "attempt": 1, "views": [{"name": "front", "png_b64": "x"}]})
+
+    assert collected == []
