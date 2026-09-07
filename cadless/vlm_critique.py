@@ -1,9 +1,13 @@
-"""Optional VLM render-critique repair signal — OFF by default.
+"""VLM render-critique repair signal — on, wherever a critic is injected.
 
 After a model executes successfully, render the part from several sides and ask
 a vision model whether the shape matches the request. A "mismatch" verdict
 becomes an extra repair signal in the pipeline: error-only repair catches code
 that *crashes*, and this catches code that *runs but builds the wrong shape*.
+
+The setting alone does not start it. A pipeline built with no critic never
+reaches this module, which is what keeps callers that should not be paying for
+vision — an eval measuring a baseline, an offline generation — off it.
 
 One view is not enough to ask the question. An isometric render shows three
 faces and hides the rest, so a missing back cut-out or a far-side hole reads as

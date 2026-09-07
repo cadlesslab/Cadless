@@ -228,6 +228,53 @@ class _CapturingCritic:
         )
 
 
+class _BrokenCritic:
+    """Stands in for a model that cannot see, or a provider that cannot be reached."""
+
+    def __init__(self, exc):
+        self._exc = exc
+        self.calls = 0
+
+    def critique(self, intent, mesh_path):
+        self.calls += 1
+        raise self._exc
+
+
+@pytest.mark.build123d
+@pytest.mark.parametrize(
+    "exc",
+    [ImagesUnsupported("fake"), RuntimeError("the provider is unreachable")],
+    ids=["blind-model", "provider-down"],
+)
+def test_a_critique_that_cannot_be_taken_does_not_fail_the_build(tmp_path, exc):
+    """It is an extra signal on a build that already succeeded.
+
+    Letting it out turns every successful turn into a failed one wherever the
+    configured model is not vision-capable — which, now that this runs by
+    default, is the whole deployment rather than an unlucky turn.
+    """
+    events: list[dict] = []
+    critic = _BrokenCritic(exc)
+    cfg = Settings(vlm_critique_enabled=True, repair_max_attempts=3)
+
+    result = Pipeline(generator=AlwaysGood(), config=cfg, critic=critic).run(
+        "a cube", export_dir=str(tmp_path), on_progress=events.append
+    )
+
+    assert critic.calls == 1, "never reached the critic"
+    assert result.ok, "an unavailable reviewer failed a build that succeeded"
+    assert result.attempt_count == 1, "spent a repair attempt on an infrastructure failure"
+    assert all(a.stage != "critique" for a in result.attempts)
+    # Reported, not swallowed: a reviewer that never ran looks exactly like one
+    # that always agreed, and that is the version nobody notices.
+    said = [
+        e
+        for e in events
+        if e.get("phase") == "critique" and "unavailable" in (e.get("error") or "")
+    ]
+    assert len(said) == 1, events
+
+
 @pytest.mark.build123d
 def test_pipeline_publishes_the_captures_on_every_round(tmp_path):
     """The reviewer reports as it goes, whichever way each verdict falls.

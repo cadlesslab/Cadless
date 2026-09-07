@@ -29,6 +29,7 @@ Consumers must ignore unknown event types and fields for forward compatibility.
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -45,6 +46,8 @@ from cadless.params import extract_params
 from cadless.prompts import CodeGenerator
 from cadless.validation import validate_code
 from cadless.worker import run_code
+
+logger = logging.getLogger(__name__)
 
 # Lifecycle phases emitted as {"event": "stage", "phase": ..., "status": ...}.
 STAGE_PHASES = (
@@ -224,9 +227,12 @@ class Pipeline:
             res = run_code(code, export_dir=export_dir, export_scale=export_scale, config=self._cfg)
             if res.ok:
                 # Optional VLM critique: a valid solid may still be the wrong shape.
-                if self._should_critique(res) and n < max_tries:
-                    _emit_stage(on_progress, "critique", "begin", n)
-                    crit = self._critic.critique(intent, res.stl_path)
+                crit = (
+                    self._try_critique(on_progress, intent, res, n)
+                    if self._should_critique(res) and n < max_tries
+                    else None
+                )
+                if crit is not None:
                     # Published before the branch, so a round that settles the
                     # part is shown as well as the rounds that did not.
                     _emit_critique(on_progress, n, crit)
@@ -408,6 +414,28 @@ class Pipeline:
         # renderer can load, so gating on any other one lets a call through to a
         # file it cannot read.
         return bool(self._critic and self._cfg.vlm_critique_enabled and res.stl_path)
+
+    def _try_critique(self, on_progress, intent: str, res, n: int):
+        """The reviewer's verdict, or ``None`` where it could not be taken.
+
+        The critique is an extra signal on a build that has already succeeded,
+        so a model that cannot see — or a provider that cannot be reached — has
+        to leave that build alone. Letting the exception out instead turns every
+        successful turn into a failed one wherever the configured model is not
+        vision-capable, which is the whole deployment now that this runs by
+        default.
+
+        Reported rather than swallowed. A reviewer that never ran looks exactly
+        like one that always agreed, and that is the version of this failure
+        nobody would notice.
+        """
+        _emit_stage(on_progress, "critique", "begin", n)
+        try:
+            return self._critic.critique(intent, res.stl_path)
+        except Exception as exc:  # noqa: BLE001 — additive signal, never fatal
+            logger.warning("render critique unavailable, skipping: %s", exc, exc_info=True)
+            _emit_stage(on_progress, "critique", "error", n, f"critique unavailable: {exc}")
+            return None
 
     def _repair(
         self,

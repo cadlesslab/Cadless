@@ -1200,7 +1200,17 @@ class Agent:
                     args.get("change", ""),
                     export_dir=context.export_dir,
                     prior_code=context.current_code,
-                    on_progress=on_progress,
+                    # Routed exactly as a fresh generation is. An edit can build
+                    # the wrong shape just as readily, so its critique needs the
+                    # same live channel — left on the raw callback the captures
+                    # ride inside the collected burst instead, arriving after the
+                    # loop they describe and never reaching the transcript. The
+                    # codegen sink is a no-op on this path today (a refinement is
+                    # a one-shot call and streams no tokens) and is passed anyway,
+                    # so the two paths cannot drift if that ever changes.
+                    on_progress=_route_live_events(
+                        on_progress, context.on_codegen, context.on_critique
+                    ),
                     images=context.images,
                     on_reading=context.on_reading,
                 )

@@ -239,21 +239,28 @@ async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | Non
     return version.code, version.parameters or extract_params(version.code)
 
 
+# How the reviewer's stored sentence opens, so ``_replayed_block`` can know it
+# again. It is written here for the reader of a reloaded transcript and for
+# nobody else: the text after it is free prose a vision model wrote from a
+# prompt carrying the user's own words, and replayed as an assistant block it
+# would reach the orchestrator on every later turn as something the assistant
+# itself had established. The display need does not want that, so it does not
+# get it.
+_CRITIQUE_PREFIX = "Reviewed the build from "
+
+
 def _critique_line(event: dict) -> str:
     """The reviewer's own sentence, stored beside the captures it belongs to.
 
     An image on an assistant turn replays as nothing and carries no verdict of
     its own, so without this a reload would show four renders and no account of
-    what they were for — a reader would be left to guess what the reviewer
-    concluded. Unlike the pictures this one line does replay, which is right:
-    what the review found is exactly the sort of thing the next turn should
-    already know.
+    what they were for — a reader left to guess what the reviewer concluded.
     """
     seen = ", ".join(view["name"] for view in event.get("views", ()))
     if event.get("matches"):
-        return f"Reviewed the build from {seen}: it matches the request."
+        return f"{_CRITIQUE_PREFIX}{seen}: it matches the request."
     finding = event.get("feedback") or "it does not match the request"
-    return f"Reviewed the build from {seen}: {finding}."
+    return f"{_CRITIQUE_PREFIX}{seen}: {finding}."
 
 
 def _replayed_block(block: ContentBlock, role: str = "user") -> str:
@@ -265,17 +272,21 @@ def _replayed_block(block: ContentBlock, role: str = "user") -> str:
     and the cached reading is what it wrote down at the time. Sending the picture
     again would charge for every turn that follows it.
 
-    An image on an **assistant** turn contributes nothing. Those are the render
-    critique's own captures, kept so the transcript can show them again on a
-    reload; they were never something the model said, and replaying four of them
-    per turn as "[reference image: …]" would both misdescribe where they came
-    from and grow without bound down a long session.
+    **Nothing the render critique stored contributes anything.** Its captures
+    and its sentence are kept so a reload can show them again, and both are on
+    the assistant turn — but neither was something the model said. Replaying
+    four images per turn as "[reference image: …]" would misdescribe where they
+    came from and grow without bound down a long session, and replaying the
+    sentence would hand the orchestrator a vision model's free prose, written
+    from a prompt carrying the user's own words, as a fact the assistant had
+    itself established.
 
     Everything else that is not conversational text contributes nothing, as before:
     replaying past tool and thinking plumbing builds an invalid transcript.
     """
     if block.kind == "text":
-        return (block.text or "").strip()
+        text = (block.text or "").strip()
+        return "" if role == "assistant" and text.startswith(_CRITIQUE_PREFIX) else text
     if block.kind == "image" and role != "assistant":
         return f"[reference image: {block.reading}]" if block.reading else "[a reference image]"
     return ""

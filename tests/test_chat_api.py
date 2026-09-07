@@ -1979,6 +1979,33 @@ def test_the_last_round_of_captures_survives_a_reload(client, store, monkeypatch
     assert r.content == b"PNG:front:2"
 
 
+def test_an_edit_turn_routes_its_critique_the_same_way(client, store, monkeypatch):
+    """An edit can build the wrong shape just as readily as a fresh generation.
+
+    Left on the raw callback the captures ride inside the collected burst —
+    arriving after the loop they describe, and never reaching the transcript —
+    so a mismatch that forced a repair on an edit would leave no trace at all
+    while still being paid for.
+    """
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="edit_model", tool_input={"change": "taller"}),
+            _text_turn("Done."),
+        ]
+    )
+    _install(monkeypatch, provider, pipeline=_CritiquingPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _stream_chat(client, pid, "make it taller")
+
+    assert [e["attempt"] for e in events if e["event"] == "critique"] == [1, 2]
+    nested = [e["stage"] for e in events if e["event"] == "tool_progress" and "stage" in e]
+    assert not [s for s in nested if s.get("event") == "critique"], "rode the collected burst"
+
+    assistant = [m for m in _messages(store, pid) if m.role == "assistant"][-1]
+    assert len([b for b in assistant.blocks if b.kind == "image"]) == len(_CRITIQUE_VIEWS)
+
+
 def test_the_verdict_is_stored_beside_the_captures(client, store, monkeypatch):
     """Four renders with nothing said about them ask the reader to guess.
 
@@ -2023,12 +2050,15 @@ def test_a_mismatch_verdict_says_what_was_wrong(client, store, monkeypatch):
     assert "Reviewed the build from front: the bore is too small." in said, said
 
 
-def test_captures_are_not_replayed_into_a_later_turn(client, store, monkeypatch):
-    """They are the engine's own renders, not something the model said.
+def test_nothing_the_review_stored_is_replayed_into_a_later_turn(client, store, monkeypatch):
+    """Neither the renders nor the sentence was something the model said.
 
-    Replayed through the reference-image path they would both misdescribe where
-    they came from and add four lines to every turn that follows, for the rest
-    of the session.
+    The images replayed through the reference-image path would misdescribe
+    where they came from and add four lines to every turn that follows, for the
+    rest of the session. The sentence is worse: it is free prose a vision model
+    wrote from a prompt carrying the user's own words, and replaying it hands
+    the orchestrator that text as a fact the assistant had itself established.
+    Both are kept for a reader reloading the page and for nobody else.
     """
     provider = ScriptedProvider(_generate_turn() + [_text_turn("And again.")])
     _install(monkeypatch, provider, pipeline=_CritiquingPipeline())
@@ -2044,3 +2074,7 @@ def test_captures_are_not_replayed_into_a_later_turn(client, store, monkeypatch)
         for block in message.content
     )
     assert "reference image" not in replayed
+    assert "Reviewed the build from" not in replayed
+    # The model's own words still replay — this must narrow what reaches the
+    # orchestrator, not silence the assistant turn it is attached to.
+    assert "Done." in replayed
