@@ -1979,6 +1979,50 @@ def test_the_last_round_of_captures_survives_a_reload(client, store, monkeypatch
     assert r.content == b"PNG:front:2"
 
 
+def test_the_verdict_is_stored_beside_the_captures(client, store, monkeypatch):
+    """Four renders with nothing said about them ask the reader to guess.
+
+    An image on an assistant turn replays as nothing and carries no verdict of
+    its own, so the sentence has to be its own block for a reload to be worth
+    anything — and, unlike the pictures, it is worth replaying.
+    """
+    _install(monkeypatch, ScriptedProvider(_generate_turn()), pipeline=_CritiquingPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid)
+
+    assistant = [m for m in _messages(store, pid) if m.role == "assistant"][-1]
+    said = [b.text for b in assistant.blocks if b.kind == "text"]
+    assert any(
+        t == "Reviewed the build from front, right, top, iso: it matches the request." for t in said
+    ), said
+
+
+def test_a_mismatch_verdict_says_what_was_wrong(client, store, monkeypatch):
+    class _OneBadRound(_CritiquingPipeline):
+        def run(self, intent, export_dir=None, on_progress=None, **kw):
+            result = StubPipeline.run(self, intent, export_dir=export_dir, on_progress=on_progress)
+            on_progress(
+                {
+                    "event": "critique",
+                    "attempt": 1,
+                    "matches": False,
+                    "feedback": "the bore is too small",
+                    "views": [{"name": "front", "png_b64": "eA=="}],
+                }
+            )
+            return result
+
+    _install(monkeypatch, ScriptedProvider(_generate_turn()), pipeline=_OneBadRound())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid)
+
+    assistant = [m for m in _messages(store, pid) if m.role == "assistant"][-1]
+    said = [b.text for b in assistant.blocks if b.kind == "text"]
+    assert "Reviewed the build from front: the bore is too small." in said, said
+
+
 def test_captures_are_not_replayed_into_a_later_turn(client, store, monkeypatch):
     """They are the engine's own renders, not something the model said.
 

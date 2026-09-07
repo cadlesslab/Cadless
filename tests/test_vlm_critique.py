@@ -161,14 +161,33 @@ class _ScriptedCritic:
 
 
 @pytest.mark.build123d
-def test_pipeline_off_by_default_skips_critique(tmp_path):
-    gen = AlwaysGood()
-    # critic present but flag default-off -> not consulted
-    pipe = Pipeline(generator=gen, critic=_ScriptedCritic())
-    result = pipe.run("a cube", export_dir=str(tmp_path))
+def test_pipeline_skips_critique_when_the_setting_is_off(tmp_path):
+    """Switched off, a turn is what it was before any of this existed."""
+    critic = _ScriptedCritic()
+    cfg = Settings(vlm_critique_enabled=False)
+    result = Pipeline(generator=AlwaysGood(), config=cfg, critic=critic).run(
+        "a cube", export_dir=str(tmp_path)
+    )
     assert result.ok
     assert result.attempt_count == 1
     assert all(a.stage != "critique" for a in result.attempts)
+    assert critic.paths == [], "rendered and asked while switched off"
+
+
+@pytest.mark.build123d
+def test_a_pipeline_with_no_critic_never_critiques(tmp_path):
+    """The setting is necessary, not sufficient — the critic has to be injected.
+
+    This is what keeps the eval's baseline and the legacy generate route off
+    the vision path now that the setting ships on: they build a bare pipeline.
+    """
+    events: list[dict] = []
+    result = Pipeline(generator=AlwaysGood()).run(
+        "a cube", export_dir=str(tmp_path), on_progress=events.append
+    )
+    assert result.ok
+    assert all(a.stage != "critique" for a in result.attempts)
+    assert not [e for e in events if e.get("event") == "critique"]
 
 
 @pytest.mark.build123d
@@ -251,6 +270,30 @@ def test_critique_events_go_live_and_are_not_replayed():
 
     assert [e["event"] for e in live] == ["critique"]
     assert [e["event"] for e in collected] == ["stage"]
+
+
+def test_the_chat_route_is_the_one_place_a_critic_is_injected():
+    """Wiring, not configuration, is what makes the reviewer reachable.
+
+    The setting was live for as long as this feature has existed and did
+    nothing, because nothing ever passed a critic. Asserting the wiring here
+    means the reverse mistake — shipping the setting on with no critic behind
+    it — cannot pass either.
+    """
+    from backend.routers.chat import build_pipeline
+    from cadless.catalog.thumbnail import render_views
+
+    critic = build_pipeline()._critic
+
+    assert isinstance(critic, VlmCritic)
+    assert critic._render is render_views
+    assert critic._provider is None, "built a provider before anything asked for one"
+    assert Pipeline()._critic is None
+
+
+def test_the_setting_ships_on():
+    """The capability is not delivered while it is off for everyone."""
+    assert Settings().vlm_critique_enabled is True
 
 
 def test_critique_events_are_dropped_with_no_live_sink():

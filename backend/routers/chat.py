@@ -44,6 +44,7 @@ from backend.deps import get_store
 from backend.sse import SSE_HEADERS
 from cadless import user_settings
 from cadless.agent import Agent, SessionSteerRegistry, ToolContext
+from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
 from cadless.config import settings
 from cadless.distill import auto_distill
@@ -55,6 +56,7 @@ from cadless.params import extract_params
 from cadless.pipeline import Pipeline
 from cadless.rag import retrieve_grounding
 from cadless.scoped_store import ScopedStore
+from cadless.vlm_critique import VlmCritic
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +117,20 @@ class SteerRequest(BaseModel):
 
 
 def build_pipeline() -> Pipeline:
-    """Build the CAD pipeline the agent's tools run against (monkeypatched in tests)."""
-    return Pipeline()
+    """Build the CAD pipeline the agent's tools run against (monkeypatched in tests).
+
+    This is the one place a render critic is injected. Everywhere else builds a
+    bare ``Pipeline()`` and gets none — deliberately, because the eval measures
+    a baseline that must not start paying for vision without being asked, and
+    the legacy generate route has nowhere to show a capture. The setting is
+    therefore necessary but not sufficient: turning it on changes what happens
+    on a chat turn and nothing else.
+
+    The critic's provider is left unbuilt. It resolves on the first critique, so
+    a turn that never reaches one — a text-only reply, a build that fails —
+    costs nothing here and cannot fail for want of a credential it never used.
+    """
+    return Pipeline(critic=VlmCritic(renderer=render_views))
 
 
 def _refusal(detail: str) -> EventSourceResponse:
@@ -223,6 +237,23 @@ async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | Non
     if not version or not version.code:
         return None, {}
     return version.code, version.parameters or extract_params(version.code)
+
+
+def _critique_line(event: dict) -> str:
+    """The reviewer's own sentence, stored beside the captures it belongs to.
+
+    An image on an assistant turn replays as nothing and carries no verdict of
+    its own, so without this a reload would show four renders and no account of
+    what they were for — a reader would be left to guess what the reviewer
+    concluded. Unlike the pictures this one line does replay, which is right:
+    what the review found is exactly the sort of thing the next turn should
+    already know.
+    """
+    seen = ", ".join(view["name"] for view in event.get("views", ()))
+    if event.get("matches"):
+        return f"Reviewed the build from {seen}: it matches the request."
+    finding = event.get("feedback") or "it does not match the request"
+    return f"Reviewed the build from {seen}: {finding}."
 
 
 def _replayed_block(block: ContentBlock, role: str = "user") -> str:
@@ -422,12 +453,15 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     def _relay_critique(event: dict) -> None:
         nonlocal critique_blocks
         critique_blocks = [
-            ContentBlock.of_image(
-                data=view["png_b64"],
-                media_type="image/png",
-                reading=f"a render of the part this turn built, seen from the {view['name']}",
-            )
-            for view in event.get("views", ())
+            ContentBlock.of_text(_critique_line(event)),
+            *(
+                ContentBlock.of_image(
+                    data=view["png_b64"],
+                    media_type="image/png",
+                    reading=f"a render of the part this turn built, seen from the {view['name']}",
+                )
+                for view in event.get("views", ())
+            ),
         ]
         emit(event)
 
