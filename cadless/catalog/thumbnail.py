@@ -162,8 +162,9 @@ def _isometric_basis() -> np.ndarray:
 # every view is then lit identically relative to its own camera, which strips
 # the set of the one cue that tells two views apart when their silhouettes
 # agree. The value is the view-space vector the single isometric render used,
-# mapped back out through that view's own basis — so the thumbnail the publish
-# path renders is bit-for-bit what it was, and every other view gains a cue.
+# mapped back out through that view's own basis, so the isometric view keeps the
+# same light direction it always had while every other view gains a cue. The
+# mapping is exact in algebra and within a rounding step in floating point.
 _WORLD_LIGHT = np.array([-0.25, 0.45, 0.86]) @ _view_basis("iso")
 _WORLD_LIGHT /= np.linalg.norm(_WORLD_LIGHT)
 

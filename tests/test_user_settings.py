@@ -419,6 +419,25 @@ def test_view_count_is_gated_ranged_and_whole(monkeypatch):
     assert settings.vlm_critique_view_count == 6
 
 
+def test_returning_a_knob_to_the_shipped_default_is_never_a_raise():
+    """The gate must not become a one-way door for a knob shipped on.
+
+    Turning the reviewer off costs less, so an ungated caller may do it. Read
+    only as "off to on is a raise", turning it back on is then refused and the
+    behaviour the build ships with is unreachable for exactly the people the
+    gate is not aimed at.
+    """
+    user_settings.save({"vlm_critique_enabled": False})
+    assert settings.vlm_critique_enabled is False
+
+    user_settings.save({"vlm_critique_enabled": True})
+    assert settings.vlm_critique_enabled is True
+
+    # Past the default is still a raise, and still gated.
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({"vlm_critique_view_count": 6})
+
+
 def test_view_count_ceiling_is_the_renderer_vocabulary():
     """The upper bound is not a chosen number — it is how many views exist.
 

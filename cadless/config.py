@@ -317,9 +317,9 @@ class Settings(BaseSettings):
 
     # The VLM render-critique repair signal — ON. A turn that builds a valid
     # solid of the wrong shape is the failure this catches and nothing else
-    # does, so it is worth the extra vision round-trip it costs per round. It
-    # still needs a critic injected to do anything: a bare ``Pipeline()`` has
-    # none, which is what keeps the eval and the legacy generate path off it.
+    # does, so it is worth the extra vision round-trip it costs per round. On
+    # its own it still does nothing: a pipeline built with no critic never
+    # critiques whatever this says.
     vlm_critique_enabled: bool = True
     # How many of the renderer's views one critique carries. Every view is
     # another image on every turn, which is why the count is a setting rather

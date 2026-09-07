@@ -26,7 +26,7 @@ import math
 import os
 from typing import Any
 
-from cadless.config import settings
+from cadless.config import Settings, settings
 from cadless.model_profiles import PROFILES
 from cadless.printer_profile import PRINTER_PROFILE_LIMITS
 from cadless.printing import AddressRefused, refuse_public_literal
@@ -186,8 +186,9 @@ _RANGES.update(
         "forge_max_n": (2, 10),
         "repair_max_attempts": (1, 10),
         "bedrock_max_tokens": (1, 64_000),
-        # The renderer names seven views and the critic takes them in priority
-        # order, so the ceiling is the vocabulary rather than a chosen number.
+        # A literal rather than the renderer's own count, so that importing the
+        # settings layer does not drag numpy and Pillow in behind it. A test
+        # asserts the two agree, which is what keeps the number from drifting.
         "vlm_critique_view_count": (1, 7),
     }
 )
@@ -398,7 +399,16 @@ def _raises_spend(field: str, value: Any) -> bool:
     raising the bill. Anything this cannot compare is treated as a raise, so an
     unexpected type fails closed rather than slipping past the gate.
     """
-    current = getattr(settings, _SETTINGS_ATTR.get(field, field), None)
+    attr = _SETTINGS_ATTR.get(field, field)
+    current = getattr(settings, attr, None)
+    # Returning a knob to what the build ships with is never a raise, whatever
+    # the comparison says. Without this the gate is a one-way door for any knob
+    # whose default is the expensive side: an ungated caller may turn it down
+    # and can then never put it back, which leaves the shipped behaviour
+    # unreachable for the people the gate is not aimed at.
+    declared = Settings.model_fields.get(attr)
+    if declared is not None and value == declared.default:
+        return False
     if isinstance(value, bool) or isinstance(current, bool):
         return bool(value) and not bool(current)
     if isinstance(value, int | float) and isinstance(current, int | float):

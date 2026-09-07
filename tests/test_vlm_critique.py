@@ -52,6 +52,52 @@ def test_parse_verdict_mismatch_extracts_feedback():
     assert c.feedback == "the hole is missing"
 
 
+def test_the_verdict_is_read_from_the_end_of_a_reasoned_reply():
+    """The shape a real vision model actually answers in.
+
+    Asked for "exactly MATCH" it still walks the views first and reaches the
+    word several sentences in. Read only from the front, that reply is either
+    unparseable or — worse, before this was measured — counted as a mismatch,
+    which discards a part that was correct.
+    """
+    reasoned = (
+        "Looking at the renders:\n\n"
+        "- The top view shows a hexagonal outline with a circular hole ✓\n"
+        "- The front and right views show a prism of even thickness ✓\n\n"
+        "MATCH"
+    )
+    assert parse_verdict(reasoned).matches
+
+    disagreeing = (
+        "The top view shows a square, not a hexagon, and I see no hole.\n\n"
+        "MISMATCH: the profile is square and the through-hole is missing"
+    )
+    verdict = parse_verdict(disagreeing)
+    assert not verdict.matches
+    assert verdict.feedback == "the profile is square and the through-hole is missing"
+
+
+def test_mismatch_wins_over_the_word_it_contains():
+    """`MISMATCH` starts with `MATCH`, so the order the lines are tested matters."""
+    assert not parse_verdict("MISMATCH: too tall").matches
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["", "   ", "Sure! That looks like a good bracket to me.", "I can't see the image."],
+    ids=["empty", "blank", "chatty", "refusal"],
+)
+def test_an_unreadable_verdict_is_refused_rather_than_read_as_a_mismatch(reply):
+    """A mismatch discards code that built successfully; a parse failure must not.
+
+    An empty stream, a reply cut off at the token ceiling, or a preamble that
+    never reaches the word would otherwise throw away a working part and spend
+    a repair round regenerating it, on the strength of a sentence nobody read.
+    """
+    with pytest.raises(ValueError):
+        parse_verdict(reply)
+
+
 def test_critic_sends_every_view_in_one_call_pictures_first():
     """Four views, one turn, images ahead of the words.
 
@@ -276,6 +322,45 @@ def test_a_critique_that_cannot_be_taken_does_not_fail_the_build(tmp_path, exc):
 
 
 @pytest.mark.build123d
+def test_the_last_attempt_is_reviewed_too(tmp_path):
+    """Skip it and the build actually delivered is the one nobody looked at.
+
+    It also makes "ran out of budget" indistinguishable from "was never
+    checked", and leaves the newest verdict in the transcript describing a
+    build that was afterwards replaced. With no budget left the finding is
+    reported and the part is handed over with it attached.
+    """
+    events: list[dict] = []
+    cfg = Settings(vlm_critique_enabled=True, repair_max_attempts=2)
+    pipe = Pipeline(generator=AlwaysGood(), config=cfg, critic=_CapturingCritic([False, False]))
+
+    result = pipe.run("a cube", export_dir=str(tmp_path), on_progress=events.append)
+
+    rounds = [e for e in events if e.get("event") == "critique"]
+    assert [r["attempt"] for r in rounds] == [1, 2], "the delivered attempt went unreviewed"
+    assert result.ok, "a finding with no budget left must still deliver the build"
+    assert rounds[-1]["matches"] is False, "the transcript must say the budget ended it"
+
+
+@pytest.mark.build123d
+def test_a_forge_candidate_does_not_critique(tmp_path):
+    """N candidates would pay N times over for a signal the judge derives once.
+
+    The fan-out also runs with no progress sink, so every capture a candidate
+    produced is dropped before anyone could have seen it.
+    """
+    critic = _ScriptedCritic()
+    cfg = Settings(vlm_critique_enabled=True, forge_candidate_count=2)
+
+    results = Pipeline(generator=AlwaysGood(), config=cfg, critic=critic).run_candidates(
+        "a cube", n=2, export_dir=str(tmp_path)
+    )
+
+    assert len(results) == 2 and all(r.ok for r in results)
+    assert critic.paths == [], "a candidate paid for a critique nobody can see"
+
+
+@pytest.mark.build123d
 def test_pipeline_publishes_the_captures_on_every_round(tmp_path):
     """The reviewer reports as it goes, whichever way each verdict falls.
 
@@ -335,6 +420,10 @@ def test_the_chat_route_is_the_one_place_a_critic_is_injected():
     assert isinstance(critic, VlmCritic)
     assert critic._render is render_views
     assert critic._provider is None, "built a provider before anything asked for one"
+    # The default is what every other construction site gets, so this one
+    # assertion is what keeps a pipeline nobody is watching from paying for
+    # vision — the eval's baseline and the legacy generate route both build
+    # their pipeline with no arguments.
     assert Pipeline()._critic is None
 
 

@@ -144,6 +144,7 @@ class Pipeline:
         export_scale: float = 1.0,
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
+        critique: bool = True,
     ) -> GenerationResult:
         """Generate (or, when ``prior_code`` is given, refine) then validate/execute.
 
@@ -176,6 +177,11 @@ class Pipeline:
         applied to exported artifacts only (never the volume/bbox geometry
         summary), matching how catalog goldens bake at the domain registry's
         scale. The default ``1.0`` keeps every legacy caller byte-identical.
+
+        ``critique`` lets a caller opt this run out of the render review even
+        where one is configured. It exists for the best-of-N fan-out, where the
+        judge has a vision rung of its own and each candidate would otherwise
+        pay separately for a signal that rung derives once.
         """
         attempts: list[Attempt] = []
         max_tries = max(1, self._cfg.repair_max_attempts)
@@ -226,10 +232,18 @@ class Pipeline:
             _emit_stage(on_progress, "build", "begin", n)
             res = run_code(code, export_dir=export_dir, export_scale=export_scale, config=self._cfg)
             if res.ok:
-                # Optional VLM critique: a valid solid may still be the wrong shape.
+                # VLM critique: a valid solid may still be the wrong shape.
+                #
+                # Every attempt is reviewed, the last one included. Skipping the
+                # last — which is what a `n < max_tries` gate does — leaves the
+                # build actually delivered as the one build nobody looked at,
+                # and makes "ran out of budget" indistinguishable from "was
+                # never checked". On the last attempt there is no budget to
+                # repair with, so the finding is reported and the part is
+                # handed over with it attached.
                 crit = (
                     self._try_critique(on_progress, intent, res, n)
-                    if self._should_critique(res) and n < max_tries
+                    if critique and self._should_critique(res)
                     else None
                 )
                 if crit is not None:
@@ -239,21 +253,23 @@ class Pipeline:
                     if not crit.matches:
                         last_error = "critique: " + crit.feedback
                         _emit_stage(on_progress, "critique", "error", n, last_error)
-                        self._record(
-                            attempts, on_progress, Attempt(n, code, "critique", last_error)
-                        )
-                        code = self._repair(
-                            on_progress,
-                            intent,
-                            code,
-                            last_error,
-                            n,
-                            max_tries,
-                            forced=True,
-                            images=images,
-                        )
-                        continue
-                    _emit_stage(on_progress, "critique", "ok", n)
+                        if n < max_tries:
+                            self._record(
+                                attempts, on_progress, Attempt(n, code, "critique", last_error)
+                            )
+                            code = self._repair(
+                                on_progress,
+                                intent,
+                                code,
+                                last_error,
+                                n,
+                                max_tries,
+                                forced=True,
+                                images=images,
+                            )
+                            continue
+                    else:
+                        _emit_stage(on_progress, "critique", "ok", n)
                 # Deterministic geometry post-conditions: a failed
                 # assertion is a semantic repair signal via the same channel as the
                 # VLM critique. Optional and additive — only when budget remains and
@@ -384,6 +400,12 @@ class Pipeline:
                     temperature=temp,
                     images=images,
                     on_reading=on_reading,
+                    # A candidate does not critique. The judge has a vision rung
+                    # of its own for choosing between candidates, so reviewing
+                    # each separately pays N times over for a signal that rung
+                    # derives once — and the fan-out runs with no progress sink,
+                    # so every capture would be dropped before anyone saw it.
+                    critique=False,
                 )
             except Exception as exc:  # isolate: one bad candidate must not sink others
                 return GenerationResult(
@@ -536,7 +558,7 @@ def _emit_critique(on_progress, attempt: int, crit) -> None:
             "feedback": crit.feedback,
             "views": [
                 {"name": name, "png_b64": base64.standard_b64encode(png).decode("ascii")}
-                for name, png in getattr(crit, "captures", ())
+                for name, png in crit.captures
             ],
         },
     )

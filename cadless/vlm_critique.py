@@ -36,7 +36,12 @@ from cadless.llm.types import ContentBlock, Message, StreamEvent, TurnParams
 Renderer = Callable[[str, Sequence[str]], list[tuple[str, bytes]]]
 
 _MEDIA_TYPE = "image/png"
-_MAX_TOKENS = 300
+# Room to reach the verdict. Measured: at 300 — the ceiling from when the
+# question asked for the word and nothing else — a real model spent the whole
+# budget describing the four views and was cut off before it committed, in five
+# runs out of six. The reasoning is worth paying for; it is what makes the
+# feedback name the defect instead of restating the request.
+_MAX_TOKENS = 1000
 
 _SYSTEM = (
     "You are checking whether a CAD part matches what was asked for. "
@@ -57,12 +62,17 @@ class Critique:
 
 
 def _question(intent: str, views: Sequence[str]) -> str:
+    # The verdict is asked for on a line of its own, at the end. Observed
+    # against a real vision model: asked for "exactly MATCH" it still reasons
+    # through the views first and reaches the word several sentences in, so a
+    # reply is far more reliably *ended* with the token than *started* with it.
     return (
         f"These are renders of one CAD part, viewed from {', '.join(views)}, "
         f"generated for the request:\n"
         f'"{intent}"\n\n'
-        f"Does the geometry match the request? Reply with exactly 'MATCH' if it "
-        f"does, or 'MISMATCH: <what is wrong>' if it does not."
+        f"Does the geometry match the request? Think it through if you need to, "
+        f"then end your reply with the verdict on a line of its own: either "
+        f"MATCH, or MISMATCH: <what is wrong>."
     )
 
 
@@ -141,10 +151,26 @@ class VlmCritic:
 
 
 def parse_verdict(text: str) -> Critique:
-    stripped = text.strip()
-    if stripped.upper().startswith("MATCH"):
-        return Critique(matches=True, feedback="")
-    feedback = stripped
-    if ":" in stripped:
-        feedback = stripped.split(":", 1)[1].strip()
-    return Critique(matches=False, feedback=feedback or "model does not match the request")
+    """Read one of the two answers the question asked for, or refuse.
+
+    A reply that is neither raises rather than counting as a mismatch. Reading
+    it as one is not a cosmetic error: a mismatch discards code that built
+    successfully and spends a repair round regenerating it, so an empty stream,
+    a response cut off at the token ceiling, or a chatty preamble would throw
+    away a working part on the strength of a sentence nobody parsed. No verdict
+    has to mean no signal, and the caller already treats a critique it cannot
+    take as one it skips.
+    """
+    # Scanned by line, from the end. A real vision model reasons through the
+    # views before it commits, so the verdict is the last thing it writes rather
+    # than the first — and "MISMATCH" has to be tested before "MATCH", since one
+    # contains the other.
+    for line in reversed(text.strip().splitlines()):
+        line = line.strip().lstrip("*# ").strip()
+        upper = line.upper()
+        if upper.startswith("MISMATCH"):
+            feedback = line.split(":", 1)[1].strip() if ":" in line else line
+            return Critique(matches=False, feedback=feedback or "model does not match the request")
+        if upper.startswith("MATCH"):
+            return Critique(matches=True, feedback="")
+    raise ValueError(f"unreadable verdict: {text.strip()[:120]!r}")

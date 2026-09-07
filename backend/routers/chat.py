@@ -119,12 +119,10 @@ class SteerRequest(BaseModel):
 def build_pipeline() -> Pipeline:
     """Build the CAD pipeline the agent's tools run against (monkeypatched in tests).
 
-    This is the one place a render critic is injected. Everywhere else builds a
-    bare ``Pipeline()`` and gets none — deliberately, because the eval measures
-    a baseline that must not start paying for vision without being asked, and
-    the legacy generate route has nowhere to show a capture. The setting is
-    therefore necessary but not sufficient: turning it on changes what happens
-    on a chat turn and nothing else.
+    This is where a render critic is injected. A pipeline built with no critic
+    never critiques whatever the setting says, so the setting is necessary and
+    not sufficient — which is what keeps a caller that should not be paying for
+    vision, an eval measuring a baseline among them, off it by default.
 
     The critic's provider is left unbuilt. It resolves on the first critique, so
     a turn that never reaches one — a text-only reply, a build that fails —
@@ -256,7 +254,9 @@ def _critique_line(event: dict) -> str:
     its own, so without this a reload would show four renders and no account of
     what they were for — a reader left to guess what the reviewer concluded.
     """
-    seen = ", ".join(view["name"] for view in event.get("views", ()))
+    # A critic composed outside this tree can return a verdict with no captures,
+    # and "Reviewed the build from : …" is what naming nothing produces.
+    seen = ", ".join(view["name"] for view in event.get("views", ())) or "its render"
     if event.get("matches"):
         return f"{_CRITIQUE_PREFIX}{seen}: it matches the request."
     finding = event.get("feedback") or "it does not match the request"
