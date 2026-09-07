@@ -1231,18 +1231,25 @@ class Agent:
         When the judge finds no passing candidate, the least-bad result is summarized
         as the (failing) payload and no losers are surfaced — nothing should be
         promoted over the existing model, so a failed race never replaces a working one.
-        """
-        from cadless.judge import select_winner
 
-        candidates = context.pipeline.run_candidates(
+        The turn's own provider is handed to the judge so its cheap-LLM rung can
+        actually decide. Without it every rung below the hard filter is skipped and
+        the ladder falls through to input order, which buys arbitrary selection at N
+        times the tokens and N times the execution. The judge resolves its own (fast,
+        cheaper) model, so this shares the connection rather than the model choice.
+        """
+        from cadless.forge import race_and_judge
+
+        judged, candidates = race_and_judge(
+            context.pipeline,
             spec,
             n=context.forge_n,
+            provider=self._provider,
             export_dir=context.export_dir,
             grounding=context.grounding,
             images=context.images,
             on_reading=context.on_reading,
         )
-        judged = select_winner(candidates, intent=spec)
         win = judged.winner
         payload = (
             _result_summary(win)
