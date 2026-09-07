@@ -165,12 +165,29 @@ export type ChatEvent =
       error: string | null;
     }
   | { event: "clarification"; questions: ClarificationQuestion[] }
+  // One round of the render critique: what the reviewer was shown and what it
+  // concluded. Live like `codegen_delta` rather than nested in `tool_progress`,
+  // because that burst only arrives once the tool has settled — by which time
+  // the repair round these renders belong to is over.
+  | { event: "critique"; attempt: number; matches: boolean; feedback: string; views: CritiqueView[] }
   // An ordered plan emitted before the action card for a non-trivial part.
   | { event: "plan"; steps: string[] }
   // A queued/steer message injected mid-run at an iteration boundary.
   | { event: "steer"; text: string }
   | { event: "turn_end"; stop_reason: string | null }
   | { event: "error"; detail: string };
+
+/** One render the critique reviewer was shown: which way the camera was pointing,
+ * plus the picture as base64 PNG carrying **no** `data:` URL prefix.
+ *
+ * `name` is left as a plain string rather than the viewport's `ViewName` union,
+ * matching `ProgressEvent.phase` above: a wire field narrowed to today's spelling
+ * makes the type lie the moment the server names a viewpoint this build has not
+ * heard of, and nothing here does more with the name than print it. */
+export interface CritiqueView {
+  name: string;
+  png_b64: string;
+}
 
 /** One clarifying question with optional quick-reply chips. */
 export interface ClarificationQuestion {

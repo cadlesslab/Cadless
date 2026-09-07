@@ -186,6 +186,7 @@ describe("messagesFromBlocks", () => {
       {
         kind: "image",
         id: "m12-i0",
+        role: "user",
         messageId: 12,
         index: 0,
         mediaType: "image/png",
@@ -227,6 +228,32 @@ describe("messagesFromBlocks", () => {
       { index: 0, mediaType: "image/png" },
       { index: 1, mediaType: "image/webp" },
     ]);
+  });
+
+  it("tags each picture with the role of the turn it belongs to", () => {
+    // Both sides arrive as bare image blocks, so without the role a render the
+    // reviewer was shown is indistinguishable from a reference the user handed in.
+    const msgs = messagesFromBlocks([
+      msg({ id: 16, role: "user", blocks: [{ kind: "image", media_type: "image/png" }] }),
+      msg({ id: 17, role: "assistant", blocks: [{ kind: "image", media_type: "image/png" }] }),
+    ]);
+    expect(msgs.map((m) => m.kind === "image" && m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("puts the assistant's renders after its account of the turn, before the card", () => {
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 18,
+        role: "assistant",
+        version_id: 21,
+        blocks: [
+          { kind: "text", text: "Built the bracket." },
+          { kind: "image", media_type: "image/png", reading: "seen from the front" },
+          { kind: "image", media_type: "image/png", reading: "seen from the right" },
+        ],
+      }),
+    ]);
+    expect(msgs.map((m) => m.kind)).toEqual(["text", "image", "image", "result"]);
   });
 
   it("leaves the media type and reading null when the block carries neither", () => {
@@ -320,6 +347,59 @@ describe("liveTurnFromEvents", () => {
     ];
     const turn = liveTurnFromEvents(events);
     expect(turn.plan).toEqual(["sketch", "extrude", "fillet"]);
+  });
+
+  it("keeps a critique round's captures and the verdict written about them", () => {
+    const events: ChatEvent[] = [
+      { event: "tool_start", tool: "generate_model", label: "Modeling" },
+      {
+        event: "critique",
+        attempt: 1,
+        matches: false,
+        feedback: "The bore is on the wrong face.",
+        views: [
+          { name: "front", png_b64: "Zm9udA==" },
+          { name: "iso", png_b64: "aXNv" },
+        ],
+      },
+    ];
+    const turn = liveTurnFromEvents(events);
+    expect(turn.critique).toEqual({
+      attempt: 1,
+      matches: false,
+      feedback: "The bore is on the wrong face.",
+      views: [
+        { name: "front", png_b64: "Zm9udA==" },
+        { name: "iso", png_b64: "aXNv" },
+      ],
+    });
+  });
+
+  it("replaces an earlier critique round with the newest one", () => {
+    const events: ChatEvent[] = [
+      {
+        event: "critique",
+        attempt: 1,
+        matches: false,
+        feedback: "The bore is on the wrong face.",
+        views: [{ name: "front", png_b64: "b25l" }],
+      },
+      {
+        event: "critique",
+        attempt: 2,
+        matches: true,
+        feedback: "",
+        views: [{ name: "front", png_b64: "dHdv" }],
+      },
+    ];
+    const turn = liveTurnFromEvents(events);
+    expect(turn.critique).toMatchObject({ attempt: 2, matches: true, feedback: "" });
+    expect(turn.critique?.views).toEqual([{ name: "front", png_b64: "dHdv" }]);
+  });
+
+  it("leaves the critique null on a turn the reviewer never looked at", () => {
+    const turn = liveTurnFromEvents([{ event: "turn_end", stop_reason: "end_turn" }]);
+    expect(turn.critique).toBeNull();
   });
 
   it("reports an error event as a stopped/error state", () => {

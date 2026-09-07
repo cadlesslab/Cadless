@@ -8,7 +8,7 @@ import type { ClarificationQuestion, Version } from "../api";
 import { Button, IconButton, CadlessIcon } from "../components";
 import { useStoreSelector } from "../state";
 import type { useApp } from "../useApp";
-import type { LiveTurn, ChatMessage as Msg } from "./chatModel";
+import type { CritiqueRound, LiveTurn, ChatMessage as Msg } from "./chatModel";
 import { CodePanel } from "./CodePanel";
 import { Markdown } from "./markdown";
 import { StagedProgress } from "./StagedProgress";
@@ -246,7 +246,8 @@ function Clarification({ questions, app }: { questions: ClarificationQuestion[];
   );
 }
 
-/** A reference picture the user attached, as it comes back on a reload.
+/** A picture belonging to a turn, as it comes back on a reload — a reference the
+ * user attached, or a render the critique reviewer was shown.
  *
  * The `src` is a fetch rather than an inlined payload: the transcript hands back
  * an image block with its `data` emptied, so the only place the bytes exist is
@@ -257,11 +258,15 @@ function Attachment({
   index,
   mediaType,
   reading,
+  fallbackAlt,
 }: {
   messageId: number;
   index: number;
   mediaType: string | null;
   reading: string | null;
+  /** What to say about the picture when no reading was written. The caller
+   * supplies it because only the caller knows whose picture this is. */
+  fallbackAlt: string;
 }) {
   const projectId = useStoreSelector((s) => s.activeProjectId);
   if (projectId == null) return null;
@@ -273,9 +278,43 @@ function Attachment({
          the only alt text anybody actually wrote. Without one the media type is
          all the transcript still knows, and saying which kind of file was handed
          over beats an empty alt on an image that carries the whole request. */
-      alt={reading ?? `Attached image${mediaType ? ` (${mediaType})` : ""}`}
+      alt={reading ?? `${fallbackAlt}${mediaType ? ` (${mediaType})` : ""}`}
       title={reading ?? undefined}
     />
+  );
+}
+
+/** One round of the render critique: the views the reviewer was shown, and the
+ * verdict it wrote about them.
+ *
+ * The bytes are inlined here rather than fetched the way {@link Attachment} does
+ * it, because a round streams in while the turn that produced it is still
+ * running — there is no persisted message yet to ask the attachment route for,
+ * and showing the work as it happens is the whole reason this arrives live.
+ *
+ * The verdict is a sentence, and its colour repeats what the sentence already
+ * says: a reader who cannot tell the two colours apart still gets the verdict. */
+function RenderCritique({ round }: { round: CritiqueRound }) {
+  const verdict = round.matches
+    ? "The render matches the request."
+    : round.feedback || "The reviewer asked for another attempt.";
+  return (
+    <figure className="critique">
+      <div className="critique-views">
+        {round.views.map((v) => (
+          <img
+            key={v.name}
+            className="critique-view"
+            src={`data:image/png;base64,${v.png_b64}`}
+            alt={`The part as built, seen from the ${v.name}`}
+          />
+        ))}
+      </div>
+      <figcaption className="critique-verdict">
+        {`Review of attempt ${round.attempt}: `}
+        <span className={round.matches ? "ok" : "bad"}>{verdict}</span>
+      </figcaption>
+    </figure>
   );
 }
 
@@ -314,11 +353,17 @@ function LiveChat({
   const streaming = !turn.done;
   // Nothing surfaced yet but the turn is live → show a "thinking" placeholder so
   // the panel never looks frozen while the model reasons before its first token.
+  // A critique round counts as content here even though the stages it belongs to
+  // do not: stage events are collected and delivered in one burst once the tool
+  // settles, so a turn deep in the repair loop has captures on screen and an
+  // empty `stageEvents` — and would otherwise claim to be waiting on its first
+  // token while showing the reviewer's renders.
   const idle =
     streaming &&
     !turn.text &&
     !turn.thinking &&
     !turn.codegen &&
+    !turn.critique &&
     turn.stageEvents.length === 0 &&
     !(turn.plan && turn.plan.length > 0) &&
     !(turn.clarification && turn.clarification.length > 0);
@@ -341,6 +386,7 @@ function LiveChat({
       {stageEvents.length > 0 && (
         <StagedProgress events={stageEvents} onRetry={onRetry} onEdit={onEdit} />
       )}
+      {turn.critique && <RenderCritique round={turn.critique} />}
       {turn.result && turn.result.versionId != null && (
         <ResultByVersion
           versionId={turn.result.versionId}
@@ -367,19 +413,39 @@ export function ChatMessage({
   onRetry: () => void;
   onEdit: () => void;
 }) {
-  // An attachment goes on the user's side of the thread, ahead of the fallthrough
-  // below — which takes any unbranched kind to be an assistant result and reads
-  // `version` off it. Under the assistant avatar the picture would also read as
-  // something the model produced rather than something it was handed.
+  // A picture takes its side of the thread from its role, ahead of the
+  // fallthrough below — which takes any unbranched kind to be an assistant result
+  // and reads `version` off it. Which side is not decoration: an attachment shown
+  // under the assistant avatar reads as something the model produced rather than
+  // something it was handed, and a render the model made, shown in the user's
+  // bubble, reads as a reference the user supplied.
   if (msg.kind === "image") {
+    if (msg.role === "user") {
+      return (
+        <div className="msg msg-user">
+          <div className="msg-bubble msg-bubble-image">
+            <Attachment
+              messageId={msg.messageId}
+              index={msg.index}
+              mediaType={msg.mediaType}
+              reading={msg.reading}
+              fallbackAlt="Attached image"
+            />
+          </div>
+        </div>
+      );
+    }
+    // No avatar: a settled round comes back as one of these per view, and a
+    // column of avatars beside them reads as several things the model said.
     return (
-      <div className="msg msg-user">
-        <div className="msg-bubble msg-bubble-image">
+      <div className="msg msg-assistant msg-capture">
+        <div className="msg-body">
           <Attachment
             messageId={msg.messageId}
             index={msg.index}
             mediaType={msg.mediaType}
             reading={msg.reading}
+            fallbackAlt="A render of the part this turn built"
           />
         </div>
       </div>
