@@ -433,9 +433,31 @@ def test_returning_a_knob_to_the_shipped_default_is_never_a_raise():
     user_settings.save({"vlm_critique_enabled": True})
     assert settings.vlm_critique_enabled is True
 
-    # Past the default is still a raise, and still gated.
+    # Past the baseline is still a raise, and still gated.
     with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
         user_settings.save({"vlm_critique_view_count": 6})
+
+
+def test_the_baseline_is_where_this_installation_started(monkeypatch):
+    """An operator's lower ceiling is not raisable back up by a request.
+
+    The exemption above has to be measured against what this process launched
+    with, not against what the code ships with. Against the code default, an
+    ungated caller could lower a knob — always allowed, it spends less — and
+    then raise it back to the shipped value, undoing a deliberate reduction
+    through the gate that exists to stop exactly that.
+    """
+    monkeypatch.setitem(user_settings._LAUNCH_BASELINE, "bedrock_max_tokens", 200)
+    monkeypatch.setattr(settings, "bedrock_max_tokens", 200)
+
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({"bedrock_max_tokens": 2000})
+    assert settings.bedrock_max_tokens == 200
+
+    user_settings.save({"bedrock_max_tokens": 100})  # down is never a raise
+    assert settings.bedrock_max_tokens == 100
+    user_settings.save({"bedrock_max_tokens": 200})  # back to where it started
+    assert settings.bedrock_max_tokens == 200
 
 
 def test_view_count_ceiling_is_the_renderer_vocabulary():

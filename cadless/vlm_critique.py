@@ -23,6 +23,7 @@ renderer supplied it does nothing at all.
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
@@ -30,17 +31,24 @@ from cadless.catalog.thumbnail import VIEW_ORDER
 from cadless.config import Settings, settings
 from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.registry import build_provider
-from cadless.llm.types import ContentBlock, Message, StreamEvent, TurnParams
+from cadless.llm.types import ContentBlock, Message, StopReason, StreamEvent, TurnParams
 
 # A renderer maps (mesh path, view names) to one PNG per view, in that order.
 Renderer = Callable[[str, Sequence[str]], list[tuple[str, bytes]]]
 
 _MEDIA_TYPE = "image/png"
-# Room to reach the verdict. Measured: at 300 — the ceiling from when the
-# question asked for the word and nothing else — a real model spent the whole
-# budget describing the four views and was cut off before it committed, in five
-# runs out of six. The reasoning is worth paying for; it is what makes the
-# feedback name the defect instead of restating the request.
+
+# The verdict as the model is asked to write it: the token alone on its line,
+# or MISMATCH followed by what is wrong. Anchored so that a sentence merely
+# containing the word cannot pass for one.
+_MATCH_LINE = re.compile(r"MATCH[.!]?")
+_MISMATCH_LINE = re.compile(r"MISMATCH\b")
+_NO_REASON = "model does not match the request"
+# Room to reach the verdict. The question invites the model to work through the
+# views before it commits, so the ceiling has to cover that reasoning as well as
+# the answer — sized for the answer alone, replies were cut off mid-description
+# and never reached a verdict at all. The reasoning is worth paying for: it is
+# what makes the feedback name the defect instead of restating the request.
 _MAX_TOKENS = 1000
 
 _SYSTEM = (
@@ -135,6 +143,7 @@ class VlmCritic:
         content.append(ContentBlock.of_text(_question(intent, [name for name, _ in shots])))
 
         parts: list[str] = []
+        truncated = False
         for chunk in provider.stream_turn(
             model=model,
             system=_SYSTEM,
@@ -144,6 +153,14 @@ class VlmCritic:
         ):
             if chunk.event == StreamEvent.TEXT_DELTA:
                 parts.append(chunk.payload.get("text", ""))
+            elif chunk.event == StreamEvent.TURN_DELTA:
+                truncated = chunk.payload.get("stop_reason") == StopReason.MAX_TOKENS
+        if truncated:
+            # A reply cut off mid-reasoning has no verdict at its end, and the
+            # tail it does have is whatever sentence the ceiling landed in.
+            # Closing this here means the parser never has to guess from a
+            # fragment, which is where reading a pass out of nothing began.
+            raise ValueError("the reply hit the token ceiling before reaching a verdict")
 
         verdict = parse_verdict("".join(parts))
         verdict.captures = shots
@@ -165,12 +182,19 @@ def parse_verdict(text: str) -> Critique:
     # views before it commits, so the verdict is the last thing it writes rather
     # than the first — and "MISMATCH" has to be tested before "MATCH", since one
     # contains the other.
+    #
+    # A line has to *be* the verdict, not merely begin with one. Accepting a
+    # prefix reads "Matches: outer diameter" and "Matching this against the
+    # request, the profile is wrong" as a pass — and a pass is the dangerous
+    # direction, because it suppresses the repair and ships the wrong shape
+    # marked as reviewed. A verdict missed instead costs one skipped review,
+    # which the caller already knows how to handle.
     for line in reversed(text.strip().splitlines()):
-        line = line.strip().lstrip("*# ").strip()
+        line = line.strip().strip("*#").strip()
         upper = line.upper()
-        if upper.startswith("MISMATCH"):
-            feedback = line.split(":", 1)[1].strip() if ":" in line else line
-            return Critique(matches=False, feedback=feedback or "model does not match the request")
-        if upper.startswith("MATCH"):
+        if _MISMATCH_LINE.match(upper):
+            feedback = line.split(":", 1)[1].strip() if ":" in line else ""
+            return Critique(matches=False, feedback=feedback or _NO_REASON)
+        if _MATCH_LINE.fullmatch(upper):
             return Critique(matches=True, feedback="")
     raise ValueError(f"unreadable verdict: {text.strip()[:120]!r}")

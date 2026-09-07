@@ -85,6 +85,13 @@ class GenerationResult:
     obj_path: str | None = None
     parameters: dict = field(default_factory=dict)
     attempts: list[Attempt] = field(default_factory=list)
+    #: The last render review this run took, as ``{"matches": bool, "attempt": int}``.
+    #: Deliberately carries no text. The orchestrator needs to know the reviewer
+    #: disagreed — otherwise it announces a finished part beside a verdict saying
+    #: it is wrong — but the reviewer's own words are a vision model's free prose
+    #: written from a prompt holding the user's, and handing that to the
+    #: orchestrator as fact is the thing the transcript already refuses to do.
+    critique: dict | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -213,6 +220,7 @@ class Pipeline:
             )
         _emit_stage(on_progress, mode, "ok", 1)
         last_error = "no attempts ran"
+        last_critique: dict | None = None
 
         for n in range(1, max_tries + 1):
             _emit_stage(on_progress, "validate", "begin", n)
@@ -247,9 +255,7 @@ class Pipeline:
                     else None
                 )
                 if crit is not None:
-                    # Published before the branch, so a round that settles the
-                    # part is shown as well as the rounds that did not.
-                    _emit_critique(on_progress, n, crit)
+                    last_critique = {"matches": crit.matches, "attempt": n}
                     if not crit.matches:
                         last_error = "critique: " + crit.feedback
                         _emit_stage(on_progress, "critique", "error", n, last_error)
@@ -310,6 +316,7 @@ class Pipeline:
                     obj_path=res.obj_path,
                     parameters=extract_params(code),
                     attempts=attempts,
+                    critique=last_critique,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)
@@ -384,10 +391,23 @@ class Pipeline:
                     grounding=grounding,
                     images=images,
                     on_reading=on_reading,
+                    critique=False,
                 )
             ]
 
         temp = self._cfg.forge_temperature if temperature is None else temperature
+
+        # A candidate does not critique, and both branches of this method agree
+        # on that. The fan-out runs with no progress sink, so a candidate's
+        # captures and verdict are thrown away the moment they are produced,
+        # while the cost multiplies by the candidate count.
+        #
+        # **So a forge turn currently gets no render critique at all.** The
+        # judge has a rung for exactly this — comparing candidates by vision —
+        # but the live call site supplies it no critic, so that rung does not
+        # fire either. Wiring it is where this signal belongs; until then this
+        # is a deliberate absence rather than an oversight, and it is worth
+        # knowing that turning forge on turns the reviewer off with it.
 
         def _one(idx: int) -> GenerationResult:
             cand_dir = _candidate_dir(export_dir, idx)
@@ -400,11 +420,6 @@ class Pipeline:
                     temperature=temp,
                     images=images,
                     on_reading=on_reading,
-                    # A candidate does not critique. The judge has a vision rung
-                    # of its own for choosing between candidates, so reviewing
-                    # each separately pays N times over for a signal that rung
-                    # derives once — and the fan-out runs with no progress sink,
-                    # so every capture would be dropped before anyone saw it.
                     critique=False,
                 )
             except Exception as exc:  # isolate: one bad candidate must not sink others
@@ -453,7 +468,15 @@ class Pipeline:
         """
         _emit_stage(on_progress, "critique", "begin", n)
         try:
-            return self._critic.critique(intent, res.stl_path)
+            crit = self._critic.critique(intent, res.stl_path)
+            # Publishing sits inside the guard as well. It reads the verdict's
+            # captures, so a critic composed outside this tree that returns
+            # something shaped differently would otherwise raise here — past the
+            # catch, and straight through the successful build this exists to
+            # protect. Published before the caller branches, so the round that
+            # settles the part is shown as well as the rounds that did not.
+            _emit_critique(on_progress, n, crit)
+            return crit
         except Exception as exc:  # noqa: BLE001 — additive signal, never fatal
             logger.warning("render critique unavailable, skipping: %s", exc, exc_info=True)
             _emit_stage(on_progress, "critique", "error", n, f"critique unavailable: {exc}")

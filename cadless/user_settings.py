@@ -26,7 +26,7 @@ import math
 import os
 from typing import Any
 
-from cadless.config import Settings, settings
+from cadless.config import settings
 from cadless.model_profiles import PROFILES
 from cadless.printer_profile import PRINTER_PROFILE_LIMITS
 from cadless.printing import AddressRefused, refuse_public_literal
@@ -175,6 +175,14 @@ _TUNING_FIELDS.update(_TIER_B_FIELDS)
 _SETTINGS_ATTR.update({field: field for field in _TIER_B_FIELDS})
 _BOOL_FIELDS |= {"vlm_critique_enabled", "forge_enabled"}
 _INT_FIELDS |= {"vlm_critique_view_count"}
+# What each gated knob was set to when this process started — the environment's
+# value where one was pinned, the shipped default otherwise. Read once, here,
+# for the same reason the gate itself is: a saved value must not be able to move
+# the line it is measured against.
+_LAUNCH_BASELINE: dict[str, object] = {
+    _SETTINGS_ATTR.get(field, field): getattr(settings, _SETTINGS_ATTR.get(field, field), None)
+    for field in _TIER_B_FIELDS
+}
 # Upper bounds here are what the source already calls them: forge_max_n exists to
 # "cap the cost blast-radius of one turn", so these are that cap's own cap.
 # repair_max_attempts' floor is not invented either — pipeline.py runs
@@ -187,8 +195,7 @@ _RANGES.update(
         "repair_max_attempts": (1, 10),
         "bedrock_max_tokens": (1, 64_000),
         # A literal rather than the renderer's own count, so that importing the
-        # settings layer does not drag numpy and Pillow in behind it. A test
-        # asserts the two agree, which is what keeps the number from drifting.
+        # settings layer does not drag numpy and Pillow in behind it.
         "vlm_critique_view_count": (1, 7),
     }
 )
@@ -401,13 +408,16 @@ def _raises_spend(field: str, value: Any) -> bool:
     """
     attr = _SETTINGS_ATTR.get(field, field)
     current = getattr(settings, attr, None)
-    # Returning a knob to what the build ships with is never a raise, whatever
-    # the comparison says. Without this the gate is a one-way door for any knob
-    # whose default is the expensive side: an ungated caller may turn it down
-    # and can then never put it back, which leaves the shipped behaviour
-    # unreachable for the people the gate is not aimed at.
-    declared = Settings.model_fields.get(attr)
-    if declared is not None and value == declared.default:
+    # Returning a knob to the value this installation started on is never a
+    # raise, whatever the comparison says. Without it the gate is a one-way door
+    # for any knob whose default is the expensive side: an ungated caller may
+    # turn it down and can then never put it back, leaving the shipped behaviour
+    # unreachable for exactly the people the gate is not aimed at.
+    #
+    # The baseline is the launch value rather than the code default, because an
+    # operator who deliberately configured a lower ceiling has not asked for it
+    # to be raisable back to the shipped one by a request.
+    if attr in _LAUNCH_BASELINE and value == _LAUNCH_BASELINE[attr]:
         return False
     if isinstance(value, bool) or isinstance(current, bool):
         return bool(value) and not bool(current)

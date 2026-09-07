@@ -12,7 +12,7 @@ from cadless.config import Settings
 from cadless.llm.provider import ImagesUnsupported
 from cadless.llm.providers import StreamChunk
 from cadless.llm.providers.fake import FakeChatProvider
-from cadless.llm.types import Capabilities, StreamEvent
+from cadless.llm.types import Capabilities, StopReason, StreamEvent
 from cadless.pipeline import Pipeline
 from cadless.vlm_critique import Critique, VlmCritic, parse_verdict
 
@@ -43,7 +43,32 @@ def _renderer(views_seen: list | None = None):
 
 def test_parse_verdict_match():
     assert parse_verdict("MATCH").matches
-    assert parse_verdict("match, looks good").matches
+    assert parse_verdict("match").matches
+    assert parse_verdict("**MATCH**").matches
+    assert parse_verdict("MATCH.").matches
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The renders show a plate.\nMatches: outer diameter.\nDoes not match: the counterbore is gone",
+        "Matching this against the request, the profile is wrong and",
+        "Matched features: the outer profile only; the hole is",
+        "match, looks good",
+    ],
+    ids=["enumeration", "truncated-participle", "truncated-past", "trailing-prose"],
+)
+def test_a_line_that_merely_contains_the_word_is_not_a_pass(reply):
+    """A pass is the dangerous direction, so the line has to be the verdict.
+
+    Each of these was produced by, or is one edit away from, what a real vision
+    model writes. The first literally says the part is wrong on its last line;
+    read by prefix it came back as a match, which suppresses the repair and
+    ships the wrong shape marked reviewed. A verdict missed instead costs one
+    skipped review, and the caller already handles that.
+    """
+    with pytest.raises(ValueError):
+        parse_verdict(reply)
 
 
 def test_parse_verdict_mismatch_extracts_feedback():
@@ -80,6 +105,32 @@ def test_the_verdict_is_read_from_the_end_of_a_reasoned_reply():
 def test_mismatch_wins_over_the_word_it_contains():
     """`MISMATCH` starts with `MATCH`, so the order the lines are tested matters."""
     assert not parse_verdict("MISMATCH: too tall").matches
+
+
+def test_a_mismatch_says_something_whatever_shape_it_arrives_in():
+    """The feedback goes into the repair prompt and into what the user reads."""
+    assert parse_verdict("**MISMATCH: the hole is missing**").feedback == "the hole is missing"
+    # No reason given: the token itself is not a description of the defect.
+    assert parse_verdict("MISMATCH").feedback == "model does not match the request"
+
+
+def test_a_reply_cut_off_at_the_ceiling_is_refused():
+    """Truncation is closed where it happens, not guessed at from the fragment.
+
+    A reply the ceiling ended has no verdict at its end, and the tail it does
+    have is whatever sentence the cut landed in — which is exactly the material
+    a prefix read turns into a false pass.
+    """
+    provider = FakeChatProvider(
+        script=[
+            StreamChunk(StreamEvent.TEXT_DELTA, {"text": "Looking at the renders: the top view"}),
+            StreamChunk(StreamEvent.TURN_DELTA, {"stop_reason": StopReason.MAX_TOKENS}),
+        ]
+    )
+    critic = VlmCritic(renderer=_renderer(), provider=provider)
+
+    with pytest.raises(ValueError, match="token ceiling"):
+        critic.critique("a cube", "/tmp/x.stl")
 
 
 @pytest.mark.parametrize(

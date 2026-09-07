@@ -340,6 +340,13 @@ def _result_summary(result: GenerationResult) -> dict:
     loop's convergence state so the orchestrator can detect a repeated 'Nth
     failure at the same stage' cycle and escalate to ``ask_clarification`` instead
     of burning the repair budget on the same failure.
+
+    ``critique`` carries the render review's last verdict and nothing else — a
+    boolean and an attempt number, never the reviewer's words. Without it a
+    build that ran out of repair budget still reports a clean ``ok: True``, and
+    the model announces a finished part beside a review saying it is wrong. With
+    the words it would instead be handed a vision model's free prose, written
+    from a prompt carrying the user's own, as something to act on.
     """
     return {
         "ok": result.ok,
@@ -347,6 +354,7 @@ def _result_summary(result: GenerationResult) -> dict:
         "code": result.code,
         "attempt_count": result.attempt_count,
         "last_stage": result.last_stage,
+        "critique": result.critique,
         "metrics": {
             "volume": result.volume,
             "bbox": list(result.bbox) if result.bbox else None,
@@ -1204,10 +1212,9 @@ class Agent:
                     # the wrong shape just as readily, so its critique needs the
                     # same live channel — left on the raw callback the captures
                     # ride inside the collected burst instead, arriving after the
-                    # loop they describe and never reaching the transcript. The
-                    # codegen sink is a no-op on this path today (a refinement is
-                    # a one-shot call and streams no tokens) and is passed anyway,
-                    # so the two paths cannot drift if that ever changes.
+                    # loop they describe and never reaching the transcript. Both
+                    # sinks are passed rather than only the one this path uses
+                    # today, so the two branches cannot drift apart later.
                     on_progress=_route_live_events(
                         on_progress, context.on_codegen, context.on_critique
                     ),
