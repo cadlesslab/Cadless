@@ -317,6 +317,11 @@ class Settings(BaseSettings):
 
     # Optional VLM render-critique repair signal — OFF by default
     vlm_critique_enabled: bool = False
+    # How many of the renderer's views one critique carries. Every view is
+    # another image on every turn, which is why the count is a setting rather
+    # than a constant — and why raising it is gated like the other knobs that
+    # multiply per-turn spend.
+    vlm_critique_view_count: int = 4
     vlm_model_slug: str = "sonnet-4-6"  # vision-capable
 
     @property

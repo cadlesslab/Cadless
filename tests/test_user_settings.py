@@ -34,6 +34,7 @@ _MANAGED_ATTRS = (
     # The singleton is process-wide, so a gated knob set here leaks into every
     # later test in the run — including other files — unless it is restored.
     "vlm_critique_enabled",
+    "vlm_critique_view_count",
     "forge_enabled",
     "forge_candidate_count",
     "forge_min_n",
@@ -395,6 +396,38 @@ def test_gated_knob_still_range_checked(monkeypatch):
     monkeypatch.setattr(user_settings, "_ADVANCED_ENABLED", True)
     with pytest.raises(ValueError, match="forge_candidate_count"):
         user_settings.save({"forge_candidate_count": 99})
+
+
+def test_view_count_is_gated_ranged_and_whole(monkeypatch):
+    """Every extra view is another image on every turn, so the count is Tier B.
+
+    Whole-number too: a range check alone accepts 3.7 and the config layer
+    stores what it is handed, so a fractional count would reach the slice that
+    picks the views and be read as one fewer without anything saying so.
+    """
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({"vlm_critique_view_count": 6})
+    assert settings.vlm_critique_view_count == 4
+
+    monkeypatch.setattr(user_settings, "_ADVANCED_ENABLED", True)
+    with pytest.raises(ValueError, match="vlm_critique_view_count"):
+        user_settings.save({"vlm_critique_view_count": 3.7})
+    with pytest.raises(ValueError, match="vlm_critique_view_count"):
+        user_settings.save({"vlm_critique_view_count": 99})
+
+    user_settings.save({"vlm_critique_view_count": 6})
+    assert settings.vlm_critique_view_count == 6
+
+
+def test_view_count_ceiling_is_the_renderer_vocabulary():
+    """The upper bound is not a chosen number — it is how many views exist.
+
+    Left as a literal it would silently cap a widened vocabulary, or accept a
+    count that raises on the next turn when a view is removed.
+    """
+    from cadless.catalog import thumbnail
+
+    assert user_settings._RANGES["vlm_critique_view_count"] == (1, len(thumbnail.VIEW_ORDER))
 
 
 def test_env_pinned_tuning_knob_wins_over_saved_file():

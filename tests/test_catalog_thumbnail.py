@@ -355,6 +355,18 @@ def test_view_names_mirror_the_viewport():
     assert set(re.findall(r'"([a-z]+)"', declaration.group(1))) == set(thumb.VIEW_EYES)
 
 
+def test_view_order_covers_every_view_exactly_once():
+    """The order a count slices must reach every view and repeat none.
+
+    A name in the map but missing from the order is unreachable however high
+    the count goes; a name in the order but missing from the map raises only
+    once someone raises the count that far.
+    """
+    assert sorted(thumb.VIEW_ORDER) == sorted(thumb.VIEW_EYES)
+    assert len(set(thumb.VIEW_ORDER)) == len(thumb.VIEW_ORDER)
+    assert thumb.DEFAULT_VIEWS == thumb.VIEW_ORDER[: len(thumb.DEFAULT_VIEWS)]
+
+
 def test_render_views_returns_a_png_per_view(tmp_path):
     stl = _write_binary_stl(tmp_path / "tet.stl")
     shots = thumb.render_views(stl, ("front", "right", "top", "iso"), size=96)

@@ -47,10 +47,15 @@ VIEW_EYES: dict[str, tuple[float, float, float]] = {
     "bottom": (0.0, 0.0, -1.0),
 }
 
-# Front, right and top read a part's three principal faces, and the isometric
-# adds the corner that shows how they meet. Four is where this starts rather
-# than a measured optimum — the count is a setting.
-DEFAULT_VIEWS: tuple[str, ...] = ("front", "right", "top", "iso")
+# The order a caller takes views in as its count rises: the three principal
+# faces first, then the corner that shows how they meet, then the far sides,
+# which repeat a silhouette already seen and only earn their cost on a part
+# whose back differs from its front.
+VIEW_ORDER: tuple[str, ...] = ("front", "right", "top", "iso", "back", "left", "bottom")
+
+# Four is where this starts rather than a measured optimum — the count is a
+# setting, and this is the prefix it selects by default.
+DEFAULT_VIEWS: tuple[str, ...] = VIEW_ORDER[:4]
 
 # Mesh artifact kinds the renderer can read, in preference order, and where an
 # item's thumbnail lands relative to its own directory.

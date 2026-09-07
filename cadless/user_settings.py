@@ -162,6 +162,7 @@ _TIER_B_FIELDS: dict[str, str] = {
     field: f"CADLESS_{field.upper()}"
     for field in (
         "vlm_critique_enabled",
+        "vlm_critique_view_count",
         "forge_enabled",
         "forge_candidate_count",
         "forge_min_n",
@@ -173,6 +174,7 @@ _TIER_B_FIELDS: dict[str, str] = {
 _TUNING_FIELDS.update(_TIER_B_FIELDS)
 _SETTINGS_ATTR.update({field: field for field in _TIER_B_FIELDS})
 _BOOL_FIELDS |= {"vlm_critique_enabled", "forge_enabled"}
+_INT_FIELDS |= {"vlm_critique_view_count"}
 # Upper bounds here are what the source already calls them: forge_max_n exists to
 # "cap the cost blast-radius of one turn", so these are that cap's own cap.
 # repair_max_attempts' floor is not invented either — pipeline.py runs
@@ -184,6 +186,9 @@ _RANGES.update(
         "forge_max_n": (2, 10),
         "repair_max_attempts": (1, 10),
         "bedrock_max_tokens": (1, 64_000),
+        # The renderer names seven views and the critic takes them in priority
+        # order, so the ceiling is the vocabulary rather than a chosen number.
+        "vlm_critique_view_count": (1, 7),
     }
 )
 # Secret UI field -> environment variable the vendor SDK reads it from. A
