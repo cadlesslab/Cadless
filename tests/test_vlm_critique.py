@@ -151,12 +151,24 @@ def test_a_mismatch_keeps_its_reason_however_it_is_written(reply):
     ids=["bare", "colon", "dash", "stop", "bold-colon", "reason-on-the-next-line"],
 )
 def test_a_separator_is_not_a_description_of_the_defect(reply):
-    """With nothing after the token, the fallback has to be what comes out.
+    """With nothing after the token, the fallback has to be what comes out."""
+    assert parse_verdict(reply).feedback == "model does not match the request"
 
-    A lone ':' is truthy, so leaking it does not merely look untidy — it walks
-    straight past this fallback *and* past the backend's own, and arrives in the
-    repair prompt and in the sentence a person reads as the whole account of
-    what is wrong. The next-line case is the one a model actually produces.
+
+@pytest.mark.parametrize(
+    "reply",
+    ["MISMATCH!", "MISMATCH;", "MISMATCH?", "MISMATCH →", "MISMATCH ->", "MISMATCH |"],
+    ids=["bang", "semicolon", "question", "arrow", "ascii-arrow", "pipe"],
+)
+def test_punctuation_is_not_a_description_whatever_the_punctuation_is(reply):
+    """The property is about what survived, not about a list of separators.
+
+    A lone ':' is truthy, so leaking one does not merely look untidy — it walks
+    past this fallback *and* past the backend's own, and arrives in the repair
+    prompt and in the sentence a person reads as the whole account of what is
+    wrong. Closing that one character at a time leaves the next spelling open,
+    and this file already asserts elsewhere that a model writes '!' after the
+    verdict: the MATCH pattern accepts it.
     """
     assert parse_verdict(reply).feedback == "model does not match the request"
 
@@ -170,9 +182,21 @@ def test_a_separator_is_not_a_description_of_the_defect(reply):
         ("MISMATCH: #4 counterbore is missing", "#4 counterbore is missing"),
         ("MISMATCH: 'square' hole should be round", "'square' hole should be round"),
         ("MISMATCH: use `Cylinder`", "use `Cylinder`"),
+        ("MISMATCH > 5 mm too tall", "> 5 mm too tall"),
+        ("**MISMATCH:** the hole is missing", "the hole is missing"),
         ('MISMATCH: the label should read "TOP"', 'the label should read "TOP"'),
     ],
-    ids=["minus", "decimal", "greater-than", "hash", "quotes", "backticks", "double-quotes"],
+    ids=[
+        "minus",
+        "decimal",
+        "greater-than",
+        "hash",
+        "quotes",
+        "backticks",
+        "no-separator",
+        "bold-token-closed-after-the-colon",
+        "double-quotes",
+    ],
 )
 def test_a_reason_keeps_the_characters_it_starts_and_ends_with(reply, expected):
     """Only what joined the token to the reason comes off, never the reason's own edges.

@@ -62,6 +62,24 @@ _MISMATCH_LINE = re.compile(r"MISMATCH\b(?P<why>.*)")
 # own, into the repair prompt and into the sentence a person reads.
 _JOINER = re.compile(r"^(?:[:,]+|[.\-–—]+(?=\s|$))\s*")
 _NO_REASON = "model does not match the request"
+_HAS_WORD = re.compile(r"\w")
+
+
+def _described(why: str) -> str:
+    """The reason, or the fallback where nothing survived that describes anything.
+
+    Stated as a property of the result rather than as a list of separators the
+    joiner should have known about. Punctuation is punctuation whatever it is,
+    and the joiner can only remove characters it was given — so "MISMATCH!"
+    leaked a bare "!" as the entire account of the defect, exactly as a bare ":"
+    once did. A one-character string is truthy, so it walks past this fallback
+    and past the backend's own, into the repair prompt and into what a person
+    reads. Asking whether anything word-shaped is left closes every spelling at
+    once, including the ones nobody has written down yet.
+    """
+    return why if _HAS_WORD.search(why) else _NO_REASON
+
+
 # Wrappers a verdict arrives inside. Bold and headings were the obvious ones;
 # backticks, block quotes and list markers are just as common and cost a whole
 # review each when they are missed.
@@ -69,21 +87,27 @@ _WRAPPERS = "*#`\"'>"
 _LIST_MARKER = re.compile(r"^[-+*•]\s+")
 
 
-def _unwrap(line: str) -> str:
-    """Peel a wrapper off a line without eating the reason's own edge character.
+def _unwrap(line: str) -> tuple[str, str]:
+    """Peel wrappers off a line, and report which characters opened it.
 
-    A wrapper is balanced — ``**…**``, ``` `…` ``` — so a closing delimiter only
-    counts as one when the same character opened the line. Stripping both ends
-    unconditionally turns "use `Cylinder`" into "use `Cylinder", and it turns
-    "> 5 mm too tall" into "5 mm too tall": a defect description that now names
-    the opposite value, stated with the same confidence as the right one.
+    A wrapper is balanced, so a *closing* delimiter only counts as one when the
+    same character opened the line: stripping the end unconditionally turns
+    "use `Cylinder`" into "use `Cylinder".
+
+    The opening characters come back because the reason needs them. A wrapper
+    sitting between the token and its reason is the closing half of whatever
+    wrapped the token — ``**MISMATCH:** …`` — while the same character on a line
+    that opened bare belongs to the reason itself: stripping it turns
+    "> 5 mm too tall" into "5 mm too tall", a defect description naming the
+    opposite value with the same confidence as the right one.
     """
-    line = line.strip()
+    line, opened = line.strip(), ""
     while line and line[0] in _WRAPPERS:
         opener, line = line[0], line[1:].strip()
+        opened += opener
         if line.endswith(opener):
             line = line[:-1].strip()
-    return line
+    return line, opened
 
 
 # Room to reach the verdict. The question invites the model to work through the
@@ -229,22 +253,24 @@ def parse_verdict(text: str) -> Critique:
     # than the first — and "MISMATCH" has to be tested before "MATCH", since one
     # contains the other.
     #
-    # A line has to *be* the verdict, not merely begin with one. Accepting a
-    # prefix reads "Matches: outer diameter" and "Matching this against the
-    # request, the profile is wrong" as a pass — and a pass is the dangerous
+    # A MATCH line has to *be* the verdict, not merely begin with one. Accepting
+    # a prefix there reads "Matches: outer diameter" and "Matching this against
+    # the request, the profile is wrong" as a pass — and a pass is the dangerous
     # direction, because it suppresses the repair and ships the wrong shape
     # marked as reviewed. A verdict missed instead costs one skipped review,
-    # which the caller already knows how to handle.
+    # which the caller already knows how to handle. MISMATCH is read by prefix
+    # on purpose, because its reason follows it on the same line.
     for raw in reversed(text.strip().splitlines()):
-        line = _unwrap(_LIST_MARKER.sub("", _unwrap(raw)))
+        line, opened = _unwrap(raw)
+        line, more = _unwrap(_LIST_MARKER.sub("", line))
         if found := _MISMATCH_LINE.match(line.upper()):
             # Sliced out of the original rather than the upper-cased copy, so
-            # the reason keeps the case the model wrote it in. Wrappers come off
-            # the front only — a bolded token puts its closing ``**`` between the
-            # word and the punctuation that introduces the reason — and never
-            # off the end, where the character belongs to the reason itself.
-            why = line[found.start("why") :].strip().lstrip(_WRAPPERS).strip()
-            return Critique(matches=False, feedback=_JOINER.sub("", why).strip() or _NO_REASON)
+            # the reason keeps the case the model wrote it in. Only the
+            # characters that wrapped this line are peeled off the front of the
+            # reason — a wrapper the line never opened belongs to the reason.
+            why = line[found.start("why") :].strip().lstrip(opened + more).strip()
+            why = _JOINER.sub("", why).strip().lstrip(opened + more).strip()
+            return Critique(matches=False, feedback=_described(why))
         if _MATCH_LINE.fullmatch(line.upper()):
             return Critique(matches=True, feedback="")
     raise ValueError(f"unreadable verdict: {text.strip()[:120]!r}")
