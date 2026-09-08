@@ -31,7 +31,6 @@ import logging
 from cadless.config import Settings, settings
 from cadless.llm.provider import ChatProvider
 from cadless.llm.types import ContentBlock, Message
-from cadless.model_profiles import resolve_model_id
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +101,17 @@ def summarize_messages(
     """Summarise ``messages`` into a rolling synopsis via the provider seam.
 
     Uses the one-shot :meth:`ChatProvider.complete` helper with the key-fact
-    preserving :data:`_SUMMARY_SYSTEM` prompt. The model defaults to the configured
-    orchestrator slug (resolved to a provider id). Injectable provider => unit
-    testable offline with the fake.
+    preserving :data:`_SUMMARY_SYSTEM` prompt. Injectable provider => unit testable
+    offline with the fake.
+
+    The model is passed as a **slug**, not a resolved vendor id. Each adapter
+    resolves the slug itself, which is what keeps the seam provider-neutral;
+    resolving before dispatch hands an adapter a value it does not recognise, and
+    because the caller treats a summarisation failure as a cue to fall back to
+    truncation, that mistake degrades the synopsis silently instead of raising.
     """
     cfg = config or settings
-    model_id = model or resolve_model_id(cfg.orchestrator_model)
+    model_id = model or cfg.orchestrator_model
     user = (
         "Summarise the earlier conversation below into a rolling synopsis.\n\n"
         + render_transcript(messages)

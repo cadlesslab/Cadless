@@ -63,7 +63,7 @@ def test_csv_format_is_available(capsys):
     assert main(["--tier", "hard", "--format", "csv"], pipeline=StubPipeline()) == 0
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == "id,ok,attempts,repaired,volume,error"
+    assert lines[0] == "id,ok,attempts,repaired,volume,error,rung,candidates"
     assert len(lines) == _hard_size() + 1  # header + one row per prompt
 
 
@@ -156,6 +156,107 @@ def test_no_pipeline_is_constructed_when_one_is_injected(monkeypatch):
     monkeypatch.setattr("cadless.evalkit.pipeline_eval.Pipeline", explode)
 
     assert main(["--tier", "easy"], pipeline=StubPipeline()) == 0
+
+
+class RacingStub(StubPipeline):
+    """Adds the fan-out half of the pipeline surface, for the --forge-n path."""
+
+    def __init__(self, *, field_size: int = 2, **kw):
+        super().__init__(**kw)
+        self._field_size = field_size
+        self.raced: list[int | None] = []
+
+    def run_candidates(self, intent, n=None, export_dir=None, **kw):
+        self.raced.append(n)
+        return [self.run(intent) for _ in range(self._field_size)]
+
+
+class StubJudgeProvider:
+    """Answers the judge's one-integer prompt without a network call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, *, model, system, user, temperature=None) -> str:
+        self.calls += 1
+        return "7"
+
+
+def test_forge_n_reaches_the_race(capsys):
+    stub = RacingStub()
+    judge = StubJudgeProvider()
+
+    assert main(["--tier", "hard", "--forge-n", "3"], pipeline=stub, provider=judge) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert stub.raced == [3] * _hard_size()
+    assert report["rung_distribution"] == {"llm": _hard_size()}
+    assert report["candidate_attempts"] == _hard_size() * 2
+    assert judge.calls == _hard_size() * 2
+
+
+def test_an_injected_provider_stops_a_real_one_being_built(monkeypatch):
+    """Racing must not reach the provider registry when a provider was handed in.
+
+    Without this the racing tests above quietly construct the configured provider —
+    measured while writing them, and the reason every one of them injects.
+    """
+
+    def explode(*args, **kwargs):
+        raise AssertionError("a provider was injected; no real one may be built")
+
+    monkeypatch.setattr("cadless.llm.registry.build_provider", explode)
+
+    assert (
+        main(
+            ["--tier", "easy", "--forge-n", "2"],
+            pipeline=RacingStub(),
+            provider=StubJudgeProvider(),
+        )
+        == 0
+    )
+
+
+def test_forge_off_builds_no_provider(monkeypatch):
+    """The single-run path must not touch the provider registry at all.
+
+    A default run has no judge, so it has no reason to resolve a provider name.
+    (Building one does not validate credentials — the adapters construct their
+    client lazily — so this guards the registry lookup, not the key.)
+    """
+
+    def explode(*args, **kwargs):
+        raise AssertionError("no provider may be built when forge is off")
+
+    monkeypatch.setattr("cadless.llm.registry.build_provider", explode)
+
+    assert main(["--tier", "easy"], pipeline=StubPipeline()) == 0
+
+
+def test_a_forge_n_above_the_live_ceiling_is_refused(capsys):
+    """`--forge-n` is the only cost multiplier on this command line, and the live
+    path is clamped to `forge_max_n` precisely to cap one turn's blast radius. A
+    duplicated digit here is the same class of typo as a bad `--out`, which is
+    already refused before anything is generated, but with a far larger bill."""
+    stub = RacingStub()
+
+    rc = main(["--tier", "hard", "--forge-n", str(settings.forge_max_n + 1)], pipeline=stub)
+
+    assert rc == 2
+    assert "forge_max_n" in capsys.readouterr().err
+    assert stub.seen == []  # refused before the first paid prompt
+
+
+def test_a_non_positive_forge_n_is_refused_before_anything_runs(capsys):
+    """0 would quietly mean "single run" — a race that decided nothing, reported
+    as though it had raced."""
+    stub = RacingStub()
+
+    rc = main(["--tier", "hard", "--forge-n", "0"], pipeline=stub)
+
+    assert rc == 2
+    assert "--forge-n" in capsys.readouterr().err
+    assert stub.seen == []  # refused before the first paid prompt
 
 
 def test_a_falsy_pipeline_double_is_still_used(monkeypatch, capsys):
