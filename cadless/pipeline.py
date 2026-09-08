@@ -254,8 +254,16 @@ class Pipeline:
                     if critique and self._should_critique(res)
                     else None
                 )
+                # Reset every attempt, so this says "the review of the build
+                # about to be returned" rather than "the last review anyone
+                # took". Carried across, a verdict from an earlier attempt ends
+                # up attached to a later build nobody looked at — and a stale
+                # pass is the reviewer that never ran looking exactly like the
+                # one that always agreed.
+                last_critique = (
+                    {"matches": crit.matches, "attempt": n} if crit is not None else None
+                )
                 if crit is not None:
-                    last_critique = {"matches": crit.matches, "attempt": n}
                     if not crit.matches:
                         last_error = "critique: " + crit.feedback
                         _emit_stage(on_progress, "critique", "error", n, last_error)
@@ -340,6 +348,7 @@ class Pipeline:
             code=attempts[-1].code if attempts else None,
             error=last_error,
             attempts=attempts,
+            critique=last_critique,
         )
 
     def run_candidates(

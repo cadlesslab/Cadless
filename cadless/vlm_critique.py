@@ -42,8 +42,23 @@ _MEDIA_TYPE = "image/png"
 # or MISMATCH followed by what is wrong. Anchored so that a sentence merely
 # containing the word cannot pass for one.
 _MATCH_LINE = re.compile(r"MATCH[.!]?")
-_MISMATCH_LINE = re.compile(r"MISMATCH\b")
+# The token, then whatever separates it from the reason, then the reason. Split
+# on the separator rather than on a colon: a model writes "MISMATCH - the
+# counterbore is missing" as readily as it writes one with a colon, and taking
+# only the colon form throws the reason away on a dash. The reason is the whole
+# point of letting the model reason at all — it is what the repair round is
+# given, and what the person reading the transcript sees.
+_MISMATCH_LINE = re.compile(r"MISMATCH\b(?P<why>.*)")
+# Punctuation that joined the token to the reason, and only that: it has to be
+# followed by space to count, so the minus sign in "MISMATCH: -3mm too short"
+# survives while the colon and the dash that merely introduced it do not.
+_JOINER = re.compile(r"^[:,.\-–—]+(?=\s)\s*")
 _NO_REASON = "model does not match the request"
+# Wrappers a verdict arrives inside. Bold and headings were the obvious ones;
+# backticks, block quotes and list markers are just as common and cost a whole
+# review each when they are missed.
+_VERDICT_FENCE = "*#`\"'> \t"
+_LIST_MARKER = re.compile(r"^[-+*•]\s+")
 # Room to reach the verdict. The question invites the model to work through the
 # views before it commits, so the ceiling has to cover that reasoning as well as
 # the answer — sized for the answer alone, replies were cut off mid-description
@@ -154,7 +169,11 @@ class VlmCritic:
             if chunk.event == StreamEvent.TEXT_DELTA:
                 parts.append(chunk.payload.get("text", ""))
             elif chunk.event == StreamEvent.TURN_DELTA:
-                truncated = chunk.payload.get("stop_reason") == StopReason.MAX_TOKENS
+                # Accumulated, never assigned. An adapter is free to emit more
+                # than one terminal event — several of them do — and a later one
+                # carrying a different reason would otherwise clear the flag an
+                # earlier one set, handing the fragment back to the parser.
+                truncated = truncated or chunk.payload.get("stop_reason") == StopReason.MAX_TOKENS
         if truncated:
             # A reply cut off mid-reasoning has no verdict at its end, and the
             # tail it does have is whatever sentence the ceiling landed in.
@@ -189,12 +208,17 @@ def parse_verdict(text: str) -> Critique:
     # direction, because it suppresses the repair and ships the wrong shape
     # marked as reviewed. A verdict missed instead costs one skipped review,
     # which the caller already knows how to handle.
-    for line in reversed(text.strip().splitlines()):
-        line = line.strip().strip("*#").strip()
-        upper = line.upper()
-        if _MISMATCH_LINE.match(upper):
-            feedback = line.split(":", 1)[1].strip() if ":" in line else ""
-            return Critique(matches=False, feedback=feedback or _NO_REASON)
-        if _MATCH_LINE.fullmatch(upper):
+    for raw in reversed(text.strip().splitlines()):
+        line = _LIST_MARKER.sub("", raw.strip().strip(_VERDICT_FENCE).strip())
+        line = line.strip(_VERDICT_FENCE).strip()
+        if found := _MISMATCH_LINE.match(line.upper()):
+            # Sliced out of the original rather than the upper-cased copy, so
+            # the reason keeps the case the model wrote it in. The fence comes
+            # off first: a bolded token puts its closing `**` between the word
+            # and the punctuation that introduces the reason.
+            why = line[found.start("why") :].strip().strip(_VERDICT_FENCE).strip()
+            why = _JOINER.sub("", why).strip().strip(_VERDICT_FENCE).strip()
+            return Critique(matches=False, feedback=why or _NO_REASON)
+        if _MATCH_LINE.fullmatch(line.upper()):
             return Critique(matches=True, feedback="")
     raise ValueError(f"unreadable verdict: {text.strip()[:120]!r}")

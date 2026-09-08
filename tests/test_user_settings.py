@@ -439,7 +439,11 @@ def test_returning_a_knob_to_the_shipped_default_is_never_a_raise():
 
 
 def test_the_baseline_is_where_this_installation_started(monkeypatch):
-    """An operator's lower ceiling is not raisable back up by a request.
+    """A ceiling configured through the settings file is not raisable by a request.
+
+    This is the file route rather than the environment-variable one: a value
+    pinned in the environment is skipped on apply entirely, so the gate is not
+    what stands in its way. Here the gate is the only thing there.
 
     The exemption above has to be measured against what this process launched
     with, not against what the code ships with. Against the code default, an

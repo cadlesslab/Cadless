@@ -107,11 +107,75 @@ def test_mismatch_wins_over_the_word_it_contains():
     assert not parse_verdict("MISMATCH: too tall").matches
 
 
-def test_a_mismatch_says_something_whatever_shape_it_arrives_in():
-    """The feedback goes into the repair prompt and into what the user reads."""
-    assert parse_verdict("**MISMATCH: the hole is missing**").feedback == "the hole is missing"
-    # No reason given: the token itself is not a description of the defect.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "MISMATCH: the hole is missing",
+        "MISMATCH - the hole is missing",
+        "MISMATCH — the hole is missing",
+        "MISMATCH, the hole is missing",
+        "**MISMATCH**: the hole is missing",
+        "**MISMATCH** - the hole is missing",
+        "- MISMATCH: the hole is missing",
+        "> MISMATCH: the hole is missing",
+        "`MISMATCH: the hole is missing`",
+    ],
+    ids=[
+        "colon",
+        "dash",
+        "em-dash",
+        "comma",
+        "bold-colon",
+        "bold-dash",
+        "bullet",
+        "blockquote",
+        "code-span",
+    ],
+)
+def test_a_mismatch_keeps_its_reason_however_it_is_written(reply):
+    """The reason is what the reasoning was paid for; a separator must not lose it.
+
+    It becomes the repair round's whole signal and the sentence the person
+    reading the transcript sees, so a mismatch that arrives with a dash instead
+    of a colon — or inside a bullet, a quote or a code span — must not come back
+    as the generic wording.
+    """
+    verdict = parse_verdict(reply)
+    assert not verdict.matches
+    assert verdict.feedback == "the hole is missing"
+
+
+def test_the_token_alone_is_not_a_description_of_the_defect():
     assert parse_verdict("MISMATCH").feedback == "model does not match the request"
+
+
+def test_a_reason_that_opens_with_a_minus_sign_keeps_it():
+    """Only punctuation that joined the token to the reason is removed.
+
+    A dimension is a perfectly ordinary way to start a finding, and stripping
+    leading punctuation blindly would turn "-3 mm too short" into "3 mm too
+    short" — the opposite defect, reported confidently.
+    """
+    assert parse_verdict("MISMATCH: -3 mm too short").feedback == "-3 mm too short"
+
+
+def test_a_second_terminal_event_cannot_clear_the_truncation():
+    """Adapters emit a terminal event per delta, not once per turn.
+
+    Assigned rather than accumulated, a later event carrying an ordinary stop
+    reason wipes the flag the truncation set, and the fragment goes back to the
+    parser — which is the door this guard was added to close.
+    """
+    provider = FakeChatProvider(
+        script=[
+            StreamChunk(StreamEvent.TEXT_DELTA, {"text": "Looking at the renders: the top"}),
+            StreamChunk(StreamEvent.TURN_DELTA, {"stop_reason": StopReason.MAX_TOKENS}),
+            StreamChunk(StreamEvent.TURN_DELTA, {"stop_reason": StopReason.END_TURN}),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="token ceiling"):
+        VlmCritic(renderer=_renderer(), provider=provider).critique("a cube", "/tmp/x.stl")
 
 
 def test_a_reply_cut_off_at_the_ceiling_is_refused():
@@ -370,6 +434,56 @@ def test_a_critique_that_cannot_be_taken_does_not_fail_the_build(tmp_path, exc):
         if e.get("phase") == "critique" and "unavailable" in (e.get("error") or "")
     ]
     assert len(said) == 1, events
+
+
+@pytest.mark.build123d
+def test_the_orchestrator_is_told_the_verdict_and_never_the_words(tmp_path):
+    """A boolean and an attempt number reach the model. The prose never does.
+
+    The transcript goes to real trouble to keep a vision model's free text —
+    written from a prompt carrying the user's own — out of what the orchestrator
+    is told. The tool payload is a second door into the same place, and until
+    this assertion existed the only thing holding it shut was the shape of a
+    dict two files away.
+    """
+    from cadless.agent import _result_summary
+
+    cfg = Settings(vlm_critique_enabled=True, repair_max_attempts=1)
+    result = Pipeline(generator=AlwaysGood(), config=cfg, critic=_CapturingCritic([False])).run(
+        "a cube", export_dir=str(tmp_path)
+    )
+
+    payload = _result_summary(result)
+    assert payload["critique"] == {"matches": False, "attempt": 1}
+    assert set(payload["critique"]) == {"matches", "attempt"}, "prose reached the orchestrator"
+
+
+@pytest.mark.build123d
+def test_a_build_nobody_reviewed_reports_no_verdict(tmp_path):
+    """A verdict belongs to the build it looked at, not to the turn.
+
+    Carried across attempts, an earlier round's pass ends up attached to a later
+    build the reviewer never saw — the reviewer that never ran looking exactly
+    like the one that always agreed.
+    """
+
+    class _OnceThenBroken:
+        def __init__(self):
+            self.calls = 0
+
+        def critique(self, intent, mesh_path):
+            self.calls += 1
+            if self.calls == 1:
+                return Critique(matches=False, feedback="too tall", captures=[])
+            raise RuntimeError("the provider went away")
+
+    cfg = Settings(vlm_critique_enabled=True, repair_max_attempts=2)
+    result = Pipeline(generator=AlwaysGood(), config=cfg, critic=_OnceThenBroken()).run(
+        "a cube", export_dir=str(tmp_path)
+    )
+
+    assert result.ok
+    assert result.critique is None, "a verdict from an earlier build followed the delivered one"
 
 
 @pytest.mark.build123d
