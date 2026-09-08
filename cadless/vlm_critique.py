@@ -49,16 +49,43 @@ _MATCH_LINE = re.compile(r"MATCH[.!]?")
 # point of letting the model reason at all — it is what the repair round is
 # given, and what the person reading the transcript sees.
 _MISMATCH_LINE = re.compile(r"MISMATCH\b(?P<why>.*)")
-# Punctuation that joined the token to the reason, and only that: it has to be
-# followed by space to count, so the minus sign in "MISMATCH: -3mm too short"
-# survives while the colon and the dash that merely introduced it do not.
-_JOINER = re.compile(r"^[:,.\-–—]+(?=\s)\s*")
+# Punctuation that joined the token to the reason, and only that, split by
+# whether the character could instead be the start of a value. A colon or comma
+# never opens a number, so it goes unconditionally; a dash or a full stop can —
+# "-3 mm too short", ".5 mm off" — so those come off only where nothing follows
+# them but space or the end of the line. Removing them anyway would report the
+# opposite value with the same confidence as the right one.
+#
+# The end-of-line arm is what stops a bare separator becoming the defect
+# description when the reason is on the next line. A one-character string is
+# truthy, so a leaked ":" walks past the fallback below *and* past the backend's
+# own, into the repair prompt and into the sentence a person reads.
+_JOINER = re.compile(r"^(?:[:,]+|[.\-–—]+(?=\s|$))\s*")
 _NO_REASON = "model does not match the request"
 # Wrappers a verdict arrives inside. Bold and headings were the obvious ones;
 # backticks, block quotes and list markers are just as common and cost a whole
 # review each when they are missed.
-_VERDICT_FENCE = "*#`\"'> \t"
+_WRAPPERS = "*#`\"'>"
 _LIST_MARKER = re.compile(r"^[-+*•]\s+")
+
+
+def _unwrap(line: str) -> str:
+    """Peel a wrapper off a line without eating the reason's own edge character.
+
+    A wrapper is balanced — ``**…**``, ``` `…` ``` — so a closing delimiter only
+    counts as one when the same character opened the line. Stripping both ends
+    unconditionally turns "use `Cylinder`" into "use `Cylinder", and it turns
+    "> 5 mm too tall" into "5 mm too tall": a defect description that now names
+    the opposite value, stated with the same confidence as the right one.
+    """
+    line = line.strip()
+    while line and line[0] in _WRAPPERS:
+        opener, line = line[0], line[1:].strip()
+        if line.endswith(opener):
+            line = line[:-1].strip()
+    return line
+
+
 # Room to reach the verdict. The question invites the model to work through the
 # views before it commits, so the ceiling has to cover that reasoning as well as
 # the answer — sized for the answer alone, replies were cut off mid-description
@@ -209,16 +236,15 @@ def parse_verdict(text: str) -> Critique:
     # marked as reviewed. A verdict missed instead costs one skipped review,
     # which the caller already knows how to handle.
     for raw in reversed(text.strip().splitlines()):
-        line = _LIST_MARKER.sub("", raw.strip().strip(_VERDICT_FENCE).strip())
-        line = line.strip(_VERDICT_FENCE).strip()
+        line = _unwrap(_LIST_MARKER.sub("", _unwrap(raw)))
         if found := _MISMATCH_LINE.match(line.upper()):
             # Sliced out of the original rather than the upper-cased copy, so
-            # the reason keeps the case the model wrote it in. The fence comes
-            # off first: a bolded token puts its closing `**` between the word
-            # and the punctuation that introduces the reason.
-            why = line[found.start("why") :].strip().strip(_VERDICT_FENCE).strip()
-            why = _JOINER.sub("", why).strip().strip(_VERDICT_FENCE).strip()
-            return Critique(matches=False, feedback=why or _NO_REASON)
+            # the reason keeps the case the model wrote it in. Wrappers come off
+            # the front only — a bolded token puts its closing ``**`` between the
+            # word and the punctuation that introduces the reason — and never
+            # off the end, where the character belongs to the reason itself.
+            why = line[found.start("why") :].strip().lstrip(_WRAPPERS).strip()
+            return Critique(matches=False, feedback=_JOINER.sub("", why).strip() or _NO_REASON)
         if _MATCH_LINE.fullmatch(line.upper()):
             return Critique(matches=True, feedback="")
     raise ValueError(f"unreadable verdict: {text.strip()[:120]!r}")

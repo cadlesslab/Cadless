@@ -85,7 +85,9 @@ class GenerationResult:
     obj_path: str | None = None
     parameters: dict = field(default_factory=dict)
     attempts: list[Attempt] = field(default_factory=list)
-    #: The last render review this run took, as ``{"matches": bool, "attempt": int}``.
+    #: The render review of the build this result carries, as
+    #: ``{"matches": bool, "attempt": int}``, or ``None`` where that build was
+    #: not reviewed — a verdict never outlives the attempt it was taken for.
     #: Deliberately carries no text. The orchestrator needs to know the reviewer
     #: disagreed — otherwise it announces a finished part beside a verdict saying
     #: it is wrong — but the reviewer's own words are a vision model's free prose
@@ -223,6 +225,12 @@ class Pipeline:
         last_critique: dict | None = None
 
         for n in range(1, max_tries + 1):
+            # Cleared here rather than beside the critique, so that every way an
+            # attempt can end reaches it — a build that fails to execute never
+            # gets as far as a review, and carrying the previous attempt's
+            # verdict past it attaches a pass to a build that is not the one
+            # being returned.
+            last_critique = None
             _emit_stage(on_progress, "validate", "begin", n)
             verdict = validate_code(code)
             if not verdict.ok:
@@ -254,16 +262,8 @@ class Pipeline:
                     if critique and self._should_critique(res)
                     else None
                 )
-                # Reset every attempt, so this says "the review of the build
-                # about to be returned" rather than "the last review anyone
-                # took". Carried across, a verdict from an earlier attempt ends
-                # up attached to a later build nobody looked at — and a stale
-                # pass is the reviewer that never ran looking exactly like the
-                # one that always agreed.
-                last_critique = (
-                    {"matches": crit.matches, "attempt": n} if crit is not None else None
-                )
                 if crit is not None:
+                    last_critique = {"matches": crit.matches, "attempt": n}
                     if not crit.matches:
                         last_error = "critique: " + crit.feedback
                         _emit_stage(on_progress, "critique", "error", n, last_error)

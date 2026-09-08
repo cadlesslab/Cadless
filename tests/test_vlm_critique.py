@@ -145,18 +145,43 @@ def test_a_mismatch_keeps_its_reason_however_it_is_written(reply):
     assert verdict.feedback == "the hole is missing"
 
 
-def test_the_token_alone_is_not_a_description_of_the_defect():
-    assert parse_verdict("MISMATCH").feedback == "model does not match the request"
+@pytest.mark.parametrize(
+    "reply",
+    ["MISMATCH", "MISMATCH:", "MISMATCH -", "MISMATCH.", "**MISMATCH:**", "MISMATCH:\nthe hole"],
+    ids=["bare", "colon", "dash", "stop", "bold-colon", "reason-on-the-next-line"],
+)
+def test_a_separator_is_not_a_description_of_the_defect(reply):
+    """With nothing after the token, the fallback has to be what comes out.
 
-
-def test_a_reason_that_opens_with_a_minus_sign_keeps_it():
-    """Only punctuation that joined the token to the reason is removed.
-
-    A dimension is a perfectly ordinary way to start a finding, and stripping
-    leading punctuation blindly would turn "-3 mm too short" into "3 mm too
-    short" — the opposite defect, reported confidently.
+    A lone ':' is truthy, so leaking it does not merely look untidy — it walks
+    straight past this fallback *and* past the backend's own, and arrives in the
+    repair prompt and in the sentence a person reads as the whole account of
+    what is wrong. The next-line case is the one a model actually produces.
     """
-    assert parse_verdict("MISMATCH: -3 mm too short").feedback == "-3 mm too short"
+    assert parse_verdict(reply).feedback == "model does not match the request"
+
+
+@pytest.mark.parametrize(
+    "reply,expected",
+    [
+        ("MISMATCH:-3 mm too short", "-3 mm too short"),
+        ("MISMATCH:.5 mm off", ".5 mm off"),
+        ("MISMATCH: > 5 mm too tall", "> 5 mm too tall"),
+        ("MISMATCH: #4 counterbore is missing", "#4 counterbore is missing"),
+        ("MISMATCH: 'square' hole should be round", "'square' hole should be round"),
+        ("MISMATCH: use `Cylinder`", "use `Cylinder`"),
+        ('MISMATCH: the label should read "TOP"', 'the label should read "TOP"'),
+    ],
+    ids=["minus", "decimal", "greater-than", "hash", "quotes", "backticks", "double-quotes"],
+)
+def test_a_reason_keeps_the_characters_it_starts_and_ends_with(reply, expected):
+    """Only what joined the token to the reason comes off, never the reason's own edges.
+
+    The failure this guards is not cosmetic: turning "> 5 mm too tall" into
+    "5 mm too tall" reports the opposite value with the same confidence as the
+    right one, and the repair round then chases it.
+    """
+    assert parse_verdict(reply).feedback == expected
 
 
 def test_a_second_terminal_event_cannot_clear_the_truncation():
@@ -455,7 +480,6 @@ def test_the_orchestrator_is_told_the_verdict_and_never_the_words(tmp_path):
 
     payload = _result_summary(result)
     assert payload["critique"] == {"matches": False, "attempt": 1}
-    assert set(payload["critique"]) == {"matches", "attempt"}, "prose reached the orchestrator"
 
 
 @pytest.mark.build123d
@@ -484,6 +508,38 @@ def test_a_build_nobody_reviewed_reports_no_verdict(tmp_path):
 
     assert result.ok
     assert result.critique is None, "a verdict from an earlier build followed the delivered one"
+
+
+@pytest.mark.build123d
+def test_a_failed_run_carries_no_verdict_from_a_build_it_is_not_returning(tmp_path):
+    """A build that never executes never reaches a review, so it has none.
+
+    The first attempt is reviewed and passes; the code that follows does not
+    execute at all. Carried across, that pass would arrive beside `ok: False`
+    as the review of a build the result is not returning — the reviewer that
+    never ran, again looking exactly like the one that agreed.
+    """
+
+    class _BreaksAfterOne:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, intent, grounding=None, temperature=None, on_token=None, **kw):
+            return GOOD
+
+        def repair(self, intent, code, error, context=None, images=()):
+            self.calls += 1
+            return "from build123d import *\nresult = 1 / 0\n"
+
+    cfg = Settings(vlm_critique_enabled=True, repair_max_attempts=2)
+    result = Pipeline(
+        generator=_BreaksAfterOne(),
+        config=cfg,
+        critic=_CapturingCritic([False, True]),
+    ).run("a cube", export_dir=str(tmp_path))
+
+    assert not result.ok
+    assert result.critique is None, "a pass followed a build that never executed"
 
 
 @pytest.mark.build123d
