@@ -34,6 +34,7 @@ _MANAGED_ATTRS = (
     # The singleton is process-wide, so a gated knob set here leaks into every
     # later test in the run — including other files — unless it is restored.
     "vlm_critique_enabled",
+    "vlm_critique_view_count",
     "forge_enabled",
     "forge_candidate_count",
     "forge_min_n",
@@ -395,6 +396,83 @@ def test_gated_knob_still_range_checked(monkeypatch):
     monkeypatch.setattr(user_settings, "_ADVANCED_ENABLED", True)
     with pytest.raises(ValueError, match="forge_candidate_count"):
         user_settings.save({"forge_candidate_count": 99})
+
+
+def test_view_count_is_gated_ranged_and_whole(monkeypatch):
+    """Every extra view is another image on every turn, so the count is Tier B.
+
+    Whole-number too: a range check alone accepts 3.7 and the config layer
+    stores what it is handed, so a fractional count would reach the slice that
+    picks the views and be read as one fewer without anything saying so.
+    """
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({"vlm_critique_view_count": 6})
+    assert settings.vlm_critique_view_count == 4
+
+    monkeypatch.setattr(user_settings, "_ADVANCED_ENABLED", True)
+    with pytest.raises(ValueError, match="vlm_critique_view_count"):
+        user_settings.save({"vlm_critique_view_count": 3.7})
+    with pytest.raises(ValueError, match="vlm_critique_view_count"):
+        user_settings.save({"vlm_critique_view_count": 99})
+
+    user_settings.save({"vlm_critique_view_count": 6})
+    assert settings.vlm_critique_view_count == 6
+
+
+def test_returning_a_knob_to_the_shipped_default_is_never_a_raise():
+    """The gate must not become a one-way door for a knob shipped on.
+
+    Turning the reviewer off costs less, so an ungated caller may do it. Read
+    only as "off to on is a raise", turning it back on is then refused and the
+    behaviour the build ships with is unreachable for exactly the people the
+    gate is not aimed at.
+    """
+    user_settings.save({"vlm_critique_enabled": False})
+    assert settings.vlm_critique_enabled is False
+
+    user_settings.save({"vlm_critique_enabled": True})
+    assert settings.vlm_critique_enabled is True
+
+    # Past the baseline is still a raise, and still gated.
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({"vlm_critique_view_count": 6})
+
+
+def test_the_baseline_is_where_this_installation_started(monkeypatch):
+    """A ceiling configured through the settings file is not raisable by a request.
+
+    This is the file route rather than the environment-variable one: a value
+    pinned in the environment is skipped on apply entirely, so the gate is not
+    what stands in its way. Here the gate is the only thing there.
+
+    The exemption above has to be measured against what this process launched
+    with, not against what the code ships with. Against the code default, an
+    ungated caller could lower a knob — always allowed, it spends less — and
+    then raise it back to the shipped value, undoing a deliberate reduction
+    through the gate that exists to stop exactly that.
+    """
+    monkeypatch.setitem(user_settings._LAUNCH_BASELINE, "bedrock_max_tokens", 200)
+    monkeypatch.setattr(settings, "bedrock_max_tokens", 200)
+
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({"bedrock_max_tokens": 2000})
+    assert settings.bedrock_max_tokens == 200
+
+    user_settings.save({"bedrock_max_tokens": 100})  # down is never a raise
+    assert settings.bedrock_max_tokens == 100
+    user_settings.save({"bedrock_max_tokens": 200})  # back to where it started
+    assert settings.bedrock_max_tokens == 200
+
+
+def test_view_count_ceiling_is_the_renderer_vocabulary():
+    """The upper bound is not a chosen number — it is how many views exist.
+
+    Left as a literal it would silently cap a widened vocabulary, or accept a
+    count that raises on the next turn when a view is removed.
+    """
+    from cadless.catalog import thumbnail
+
+    assert user_settings._RANGES["vlm_critique_view_count"] == (1, len(thumbnail.VIEW_ORDER))
 
 
 def test_env_pinned_tuning_knob_wins_over_saved_file():

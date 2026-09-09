@@ -203,10 +203,10 @@ catalog content read-only.
   attributable to one configuration even though applying a setting mutates the
   shared singleton in place. Grounding retrieval runs outside the pipeline and
   is handed that same snapshot rather than re-reading the live values.
-- The optional `VlmCritic` is an existing exception to ADR-0001's broad vendor
-  SDK wording: it lazy-loads the Bedrock SDK directly instead of using the
-  `ChatProvider` seam. It is off by default and is not the reference pattern for
-  adding chat or embedding providers.
+- The optional `VlmCritic` is no longer an exception to ADR-0001's vendor SDK
+  wording: it sends its renders through the `ChatProvider` seam like every other
+  model call, so the selected provider is what it reaches. It is handed a slug
+  and lets the adapter resolve it, as every other caller of the seam does.
 - Routes, panels and model backends can arrive from outside this tree.
   `backend/app.py` includes any router advertised under the `cadless.routers`
   entry-point group, so an installed distribution adds API routes — and its own
@@ -255,4 +255,4 @@ catalog content read-only.
 
 ## Known Unknowns
 
-- TODO: Move `vlm_critique` onto the neutral vision seam / Current basis: the seam now exists and is tested — [ADR-0009](adr/0009-images-are-additive.md) records an `image` block, `Capabilities.supports_images` and a typed refusal, and all four bundled adapters encode it — but `cadless.vlm_critique.VlmCritic` still lazy-imports `boto3` and calls Converse directly, so it remains the one place a vendor SDK lives outside a provider adapter, and selecting a non-Bedrock provider does not change what the critic calls / Resolved when: `VlmCritic` sends its image through `ChatProvider` and a run on a non-Bedrock provider is observed using that provider's model
+- TODO(needs confirmation): a critique served by the selected provider rather than by one vendor / evidence so far: `VlmCritic` now builds `image` blocks and calls `stream_turn` on the `ChatProvider` it was given or the one the registry builds, with no vendor SDK left in the module and the model named by slug so the adapter resolves it; a scripted provider covers the request shape and the refusal for a model that cannot see / resolved when: a real turn on a non-default provider is observed answering the critique with that provider's own model

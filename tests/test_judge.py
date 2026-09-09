@@ -24,17 +24,17 @@ def _bad(intent="a bracket", attempts=None, **kw):
 
 
 class _SpyCritic:
-    """Stub VlmCritic: a canned matches verdict per glb_path, records calls."""
+    """Stub VlmCritic: a canned matches verdict per mesh path, records calls."""
 
     def __init__(self, verdicts: dict[str, bool]):
         self._verdicts = verdicts
         self.calls: list[str] = []
 
-    def critique(self, intent, glb_path):
-        self.calls.append(glb_path)
+    def critique(self, intent, mesh_path):
+        self.calls.append(mesh_path)
         from cadless.vlm_critique import Critique
 
-        return Critique(matches=self._verdicts.get(glb_path, False), feedback="x")
+        return Critique(matches=self._verdicts.get(mesh_path, False), feedback="x")
 
 
 class _SpyProvider:
@@ -59,7 +59,7 @@ class _NeverProvider:
 
 
 class _NeverCritic:
-    def critique(self, intent, glb_path):
+    def critique(self, intent, mesh_path):
         raise AssertionError("critic must not be called")
 
 
@@ -158,9 +158,9 @@ def test_assertions_skipped_when_no_assertions_given():
 def test_vlm_breaks_tie_only_when_critic_enabled_and_still_tied():
     """Two ok candidates with equal assertion results -> the critic breaks the
     tie. The LLM judge is never reached."""
-    a = _ok(code="A", glb_path="/a.glb")
-    b = _ok(code="B", glb_path="/b.glb")
-    critic = _SpyCritic({"/a.glb": True, "/b.glb": False})
+    a = _ok(code="A", glb_path="/a.glb", stl_path="/a.stl")
+    b = _ok(code="B", glb_path="/b.glb", stl_path="/b.stl")
+    critic = _SpyCritic({"/a.stl": True, "/b.stl": False})
     result = select_winner(
         [a, b],
         intent="a bracket",
@@ -169,7 +169,37 @@ def test_vlm_breaks_tie_only_when_critic_enabled_and_still_tied():
     )
     assert result.winner is a
     assert result.rung is Rung.VLM
-    assert critic.calls == ["/a.glb", "/b.glb"]
+    assert critic.calls == ["/a.stl", "/b.stl"]
+
+
+def test_vlm_rung_reads_the_artifact_the_renderer_can_load():
+    """The guard and the call must both name the mesh the renderer reads.
+
+    Both said ``glb_path`` while the renderer could only load STL and OBJ.
+    Leaving either behind raises nothing: the comprehension's guard simply goes
+    false, the rung stops firing, and the ladder falls through to whatever
+    comes next — a quietly weaker judge with no error anywhere. Both artifacts
+    are set here so the assertion pins *which* one is used rather than merely
+    that one exists.
+    """
+    a = _ok(code="A", glb_path="/a.glb", stl_path="/a.stl")
+    b = _ok(code="B", glb_path="/b.glb", stl_path="/b.stl")
+    critic = _SpyCritic({"/a.stl": True, "/b.stl": False})
+
+    select_winner([a, b], intent="a bracket", critic=critic, provider=_NeverProvider())
+
+    assert critic.calls == ["/a.stl", "/b.stl"]
+
+
+def test_vlm_rung_skips_a_candidate_with_no_loadable_mesh():
+    """A GLB alone is not something the critic's renderer can read."""
+    a = _ok(code="A", glb_path="/a.glb")  # no stl_path
+    b = _ok(code="B", glb_path="/b.glb")
+    critic = _SpyCritic({})
+
+    select_winner([a, b], intent="a bracket", critic=critic, provider=_SpyProvider({"A": "9"}))
+
+    assert critic.calls == []
 
 
 def test_vlm_skipped_when_no_critic_falls_through_to_llm():
@@ -189,9 +219,9 @@ def test_vlm_skipped_when_no_critic_falls_through_to_llm():
 def test_llm_judge_only_runs_when_still_tied_after_vlm():
     """Critic matches BOTH (still tied) -> LLM judge breaks it. The critic ran
     (it's enabled) and then the LLM ran exactly once per remaining candidate."""
-    a = _ok(code="A", glb_path="/a.glb")
-    b = _ok(code="B", glb_path="/b.glb")
-    critic = _SpyCritic({"/a.glb": True, "/b.glb": True})  # both match -> tie
+    a = _ok(code="A", glb_path="/a.glb", stl_path="/a.stl")
+    b = _ok(code="B", glb_path="/b.glb", stl_path="/b.stl")
+    critic = _SpyCritic({"/a.stl": True, "/b.stl": True})  # both match -> tie
     provider = _SpyProvider({"A": "3", "B": "7"})
     result = select_winner([a, b], intent="a bracket", critic=critic, provider=provider)
     assert result.winner is b

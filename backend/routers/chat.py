@@ -44,6 +44,7 @@ from backend.deps import get_store
 from backend.sse import SSE_HEADERS
 from cadless import user_settings
 from cadless.agent import Agent, SessionSteerRegistry, ToolContext
+from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
 from cadless.config import settings
 from cadless.distill import auto_distill
@@ -55,6 +56,7 @@ from cadless.params import extract_params
 from cadless.pipeline import Pipeline
 from cadless.rag import retrieve_grounding
 from cadless.scoped_store import ScopedStore
+from cadless.vlm_critique import VlmCritic
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +117,18 @@ class SteerRequest(BaseModel):
 
 
 def build_pipeline() -> Pipeline:
-    """Build the CAD pipeline the agent's tools run against (monkeypatched in tests)."""
-    return Pipeline()
+    """Build the CAD pipeline the agent's tools run against (monkeypatched in tests).
+
+    This is where a render critic is injected. A pipeline built with no critic
+    never critiques whatever the setting says, so the setting is necessary and
+    not sufficient — which is what keeps a caller that should not be paying for
+    vision, an eval measuring a baseline among them, off it by default.
+
+    The critic's provider is left unbuilt. It resolves on the first critique, so
+    a turn that never reaches one — a text-only reply, a build that fails —
+    costs nothing here and cannot fail for want of a credential it never used.
+    """
+    return Pipeline(critic=VlmCritic(renderer=render_views))
 
 
 def _refusal(detail: str) -> EventSourceResponse:
@@ -225,7 +237,33 @@ async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | Non
     return version.code, version.parameters or extract_params(version.code)
 
 
-def _replayed_block(block: ContentBlock) -> str:
+# How the reviewer's stored sentence opens, so ``_replayed_block`` can know it
+# again. It is written here for the reader of a reloaded transcript and for
+# nobody else: the text after it is free prose a vision model wrote from a
+# prompt carrying the user's own words, and replayed as an assistant block it
+# would reach the orchestrator on every later turn as something the assistant
+# itself had established. The display need does not want that, so it does not
+# get it.
+_CRITIQUE_PREFIX = "Reviewed the build from "
+
+
+def _critique_line(event: dict) -> str:
+    """The reviewer's own sentence, stored beside the captures it belongs to.
+
+    An image on an assistant turn replays as nothing and carries no verdict of
+    its own, so without this a reload would show four renders and no account of
+    what they were for — a reader left to guess what the reviewer concluded.
+    """
+    # A critic composed outside this tree can return a verdict with no captures,
+    # and "Reviewed the build from : …" is what naming nothing produces.
+    seen = ", ".join(view["name"] for view in event.get("views", ())) or "its render"
+    if event.get("matches"):
+        return f"{_CRITIQUE_PREFIX}{seen}: it matches the request."
+    finding = event.get("feedback") or "it does not match the request"
+    return f"{_CRITIQUE_PREFIX}{seen}: {finding}."
+
+
+def _replayed_block(block: ContentBlock, role: str = "user") -> str:
     """What one stored block contributes to the replayed conversation, as text.
 
     An image replays as words, never as pixels. This function only ever sees past
@@ -234,12 +272,22 @@ def _replayed_block(block: ContentBlock) -> str:
     and the cached reading is what it wrote down at the time. Sending the picture
     again would charge for every turn that follows it.
 
+    **Nothing the render critique stored contributes anything.** Its captures
+    and its sentence are kept so a reload can show them again, and both are on
+    the assistant turn — but neither was something the model said. Replaying
+    four images per turn as "[reference image: …]" would misdescribe where they
+    came from and grow without bound down a long session, and replaying the
+    sentence would hand the orchestrator a vision model's free prose, written
+    from a prompt carrying the user's own words, as a fact the assistant had
+    itself established.
+
     Everything else that is not conversational text contributes nothing, as before:
     replaying past tool and thinking plumbing builds an invalid transcript.
     """
     if block.kind == "text":
-        return (block.text or "").strip()
-    if block.kind == "image":
+        text = (block.text or "").strip()
+        return "" if role == "assistant" and text.startswith(_CRITIQUE_PREFIX) else text
+    if block.kind == "image" and role != "assistant":
         return f"[reference image: {block.reading}]" if block.reading else "[a reference image]"
     return ""
 
@@ -261,7 +309,7 @@ async def _replay_history(store: ScopedStore, session_id: int) -> list:
 
     messages: list[Message] = []
     for m in await store.list_messages(session_id):
-        parts = [_replayed_block(b) for b in m.blocks]
+        parts = [_replayed_block(b, m.role) for b in m.blocks]
         text = "\n\n".join(p for p in parts if p) or (m.content or "").strip()
         if not text:
             continue
@@ -404,6 +452,30 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     def emit(event: dict) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
+    # The reviewer's rounds, going two ways at once. Every round streams to the
+    # client verbatim — the payload is already the shape it reads, and
+    # re-wrapping it here would put the field names in two places. Only the
+    # newest round is kept for the transcript: the stream is what shows the work
+    # as it happens, while a reload wants the state the turn ended in, and
+    # keeping every round would multiply a turn's stored bytes by however many
+    # it took to settle.
+    critique_blocks: list[ContentBlock] = []
+
+    def _relay_critique(event: dict) -> None:
+        nonlocal critique_blocks
+        critique_blocks = [
+            ContentBlock.of_text(_critique_line(event)),
+            *(
+                ContentBlock.of_image(
+                    data=view["png_b64"],
+                    media_type="image/png",
+                    reading=f"a render of the part this turn built, seen from the {view['name']}",
+                )
+                for view in event.get("views", ())
+            ),
+        ]
+        emit(event)
+
     # Stream fresh-generation codegen tokens to the client live as the model writes
     # the build123d code: the agent pushes each delta here, and we map it
     # to a ``codegen_delta`` SSE event onto the same queue the UI events use.
@@ -417,6 +489,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         forge=forge_active,
         forge_n=forge_n,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
+        on_critique=_relay_critique,
     )
     agent = Agent(provider=provider)
 
@@ -563,7 +636,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             await store.update_message(
                 assistant.id,
                 status=status,
-                blocks=produced_blocks,
+                blocks=[*produced_blocks, *critique_blocks],
                 version_id=version_id,
                 error="a tool call failed" if any_failure else None,
             )
@@ -590,7 +663,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                 assistant.id,
                 status="error",
                 error=str(exc),
-                blocks=produced_blocks,
+                blocks=[*produced_blocks, *critique_blocks],
                 version_id=fallback_id,
             )
             settled = True

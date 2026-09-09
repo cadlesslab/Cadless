@@ -5,6 +5,7 @@ runs headless in containers with no GL context guarantee. These tests exercise
 mesh parsing (binary/ascii STL, OBJ), the PNG output, and the renderer chain.
 """
 
+import re
 import struct
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import numpy as np
 import pytest
 
 from cadless.catalog import thumbnail as thumb
+
+_MATH_TS = Path(__file__).resolve().parents[1] / "frontend" / "src" / "viewport" / "math.ts"
 
 # --------------------------------------------------------------------------- #
 # mesh fixtures
@@ -291,3 +294,151 @@ def test_renderer_chain_all_fail_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(thumb, "RENDERERS", [broken])
     with pytest.raises(RuntimeError):
         thumb.render_thumbnail(_write_binary_stl(tmp_path / "tet.stl"), tmp_path / "thumbnail.png")
+
+
+# --------------------------------------------------------------------------- #
+# named views
+# --------------------------------------------------------------------------- #
+#
+# One isometric view cannot show a back face or a far-side hole, so a reviewer
+# comparing a solid against a request needs several. A *set* of views is only
+# comparable when three things hold, and each is pinned below: one frame per
+# requested view, one shared scale across the set, and shading that stays with
+# the model instead of rotating with the camera.
+
+
+def _decode(png: bytes):
+    from io import BytesIO
+
+    from PIL import Image
+
+    with Image.open(BytesIO(png)) as im:
+        return np.asarray(im.convert("RGBA"))
+
+
+def _alpha_bbox(png: bytes) -> tuple[int, int]:
+    """(width, height) in pixels of a PNG blob's opaque region."""
+    opaque = _decode(png)[..., 3] > 0
+    rows, cols = np.flatnonzero(opaque.any(axis=1)), np.flatnonzero(opaque.any(axis=0))
+    if rows.size == 0:
+        return (0, 0)
+    return (int(cols[-1] - cols[0] + 1), int(rows[-1] - rows[0] + 1))
+
+
+def _interior_rgb(png: bytes) -> tuple[int, int, int]:
+    """The most common fully-opaque colour — edge pixels are antialiased."""
+    arr = _decode(png)
+    interior = arr[..., :3][arr[..., 3] == 255]
+    assert interior.size, "nothing was drawn"
+    vals, counts = np.unique(interior.reshape(-1, 3), axis=0, return_counts=True)
+    return tuple(int(v) for v in vals[counts.argmax()])
+
+
+def _box_tris(half):
+    """Axis-aligned box triangles with per-axis half-extents."""
+    return np.asarray(_cube_tris((0.0, 0.0, 0.0), 1.0), dtype=float) * np.asarray(half, dtype=float)
+
+
+def test_view_names_mirror_the_viewport():
+    """The renderer and the interactive viewport must name views alike.
+
+    They cannot share the direction vectors — one space is Z-up and the other
+    Y-up — so this assertion is the only thing holding the vocabulary together.
+    Drift is quiet in both directions: a capture labelled with a word the
+    viewport never uses, or a viewport button the renderer cannot answer, is a
+    mismatch that no type check on either side can see.
+    """
+    if not _MATH_TS.exists():  # pragma: no cover — frontend absent
+        pytest.skip(f"{_MATH_TS} not present")
+    declaration = re.search(r"export type ViewName\s*=\s*([^;]+);", _MATH_TS.read_text())
+    assert declaration, "ViewName declaration not found"
+    assert set(re.findall(r'"([a-z]+)"', declaration.group(1))) == set(thumb.VIEW_EYES)
+
+
+def test_view_order_covers_every_view_exactly_once():
+    """The order a count slices must reach every view and repeat none.
+
+    A name in the map but missing from the order is unreachable however high
+    the count goes; a name in the order but missing from the map raises only
+    once someone raises the count that far.
+    """
+    assert sorted(thumb.VIEW_ORDER) == sorted(thumb.VIEW_EYES)
+    assert len(set(thumb.VIEW_ORDER)) == len(thumb.VIEW_ORDER)
+    assert thumb.DEFAULT_VIEWS == thumb.VIEW_ORDER[: len(thumb.DEFAULT_VIEWS)]
+
+
+def test_render_views_returns_a_png_per_view(tmp_path):
+    stl = _write_binary_stl(tmp_path / "tet.stl")
+    shots = thumb.render_views(stl, ("front", "right", "top", "iso"), size=96)
+    assert [name for name, _ in shots] == ["front", "right", "top", "iso"]
+    for _, png in shots:
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    from io import BytesIO
+
+    from PIL import Image
+
+    for _, png in shots:
+        with Image.open(BytesIO(png)) as im:
+            assert im.size == (96, 96)
+
+
+def test_render_views_rejects_an_unknown_view(tmp_path):
+    stl = _write_binary_stl(tmp_path / "tet.stl")
+    with pytest.raises(ValueError):
+        thumb.render_views(stl, ("sideways",), size=64)
+
+
+def test_top_and_bottom_are_not_degenerate(tmp_path):
+    """A pure top view is where the naive basis divides by a zero cross product."""
+    stl = _write_binary_stl(tmp_path / "tet.stl")
+    for name, png in thumb.render_views(stl, ("top", "bottom"), size=96):
+        assert _alpha_bbox(png) != (0, 0), f"{name} drew nothing"
+
+
+def test_top_and_bottom_differ(tmp_path):
+    """They are mirror images, so an asymmetric model must not render alike."""
+    stl = _write_binary_stl(tmp_path / "tet.stl")
+    shots = dict(thumb.render_views(stl, ("top", "bottom"), size=96))
+    assert shots["top"] != shots["bottom"]
+
+
+def test_views_share_one_scale(tmp_path):
+    """A 40x10x10 box: front spans X, right spans Y, and both span the same Z.
+
+    Fitted per view the box would fill each frame and the two heights would
+    diverge by the aspect ratio; fitted once across the set they match, which
+    is what makes the four frames readable as one object.
+    """
+    stl = _write_binary_stl(tmp_path / "box.stl", _box_tris((20.0, 5.0, 5.0)))
+    shots = dict(thumb.render_views(stl, ("front", "right"), size=256))
+    w_front, h_front = _alpha_bbox(shots["front"])
+    w_right, h_right = _alpha_bbox(shots["right"])
+    assert abs(h_front - h_right) <= 2, (h_front, h_right)
+    assert w_front > 3 * w_right, (w_front, w_right)
+
+
+def test_shading_stays_with_the_model(tmp_path):
+    """One facet keeps its colour across views.
+
+    With the light in view space every view is lit identically relative to the
+    camera, so a facet changes shade as the camera moves and the set carries no
+    orientation cue. In world space the facet's colour is a property of the
+    facet.
+    """
+    facet = [((0.0, 0.0, 0.0), (1.0, 0.0, 0.3), (0.0, 1.0, 0.6))]
+    stl = _write_binary_stl(tmp_path / "facet.stl", facet)
+    shots = dict(thumb.render_views(stl, ("top", "iso"), size=128))
+    assert _interior_rgb(shots["top"]) == _interior_rgb(shots["iso"])
+
+
+def test_thumbnail_path_and_a_lone_iso_view_agree(tmp_path):
+    """One view fits its own extent, so the two paths must produce one image.
+
+    This is what keeps the generalisation from quietly moving the thumbnail
+    the publish path renders: the shared-extent code has to reduce to the
+    single-view case exactly.
+    """
+    stl = _write_binary_stl(tmp_path / "tet.stl")
+    out = thumb.render_thumbnail(stl, tmp_path / "thumbnail.png", size=128)
+    iso = dict(thumb.render_views(stl, ("iso",), size=128))["iso"]
+    assert out.read_bytes() == iso

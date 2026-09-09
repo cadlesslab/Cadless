@@ -77,17 +77,18 @@ class StubCritic:
         self._matching = matching
         self.calls: list[str] = []
 
-    def critique(self, intent, glb_path):
-        self.calls.append(glb_path)
-        return _Critique(matches=glb_path in self._matching)
+    def critique(self, intent, mesh_path):
+        self.calls.append(mesh_path)
+        return _Critique(matches=mesh_path in self._matching)
 
 
-def _cand(code, *, ok=True, attempts=1, glb_path=None) -> GenerationResult:
+def _cand(code, *, ok=True, attempts=1, glb_path=None, stl_path=None) -> GenerationResult:
     return GenerationResult(
         ok=ok,
         intent="a bracket",
         code=code,
         glb_path=glb_path,
+        stl_path=stl_path,
         attempts=[
             Attempt(n=i + 1, code=code, stage="execute", error=None) for i in range(attempts)
         ],
@@ -146,14 +147,18 @@ def test_provider_reaches_the_cheap_llm_rung():
 
 
 def test_critic_reaches_the_render_rung():
-    """With a critic the render rung decides before the LLM rung is reached."""
-    first = _cand("result = Box(1,1,1)", glb_path="/r/first.glb")
-    better = _cand("result = Box(2,2,2)", glb_path="/r/better.glb")
-    critic = StubCritic(matching={"/r/better.glb"})
+    """With a critic the render rung decides.
+
+    The rung is handed the STL, not the GLB, because the critic renders
+    tessellated triangles and has no GLB loader.
+    """
+    first = _cand("result = Box(1,1,1)", stl_path="/r/first.stl")
+    better = _cand("result = Box(2,2,2)", stl_path="/r/better.stl")
+    critic = StubCritic(matching={"/r/better.stl"})
 
     judged, _ = race_and_judge(StubPipeline([first, better]), "a bracket", n=2, critic=critic)
 
-    assert critic.calls == ["/r/first.glb", "/r/better.glb"]
+    assert critic.calls == ["/r/first.stl", "/r/better.stl"]
     assert judged.rung is Rung.VLM
     assert judged.winner is better
 

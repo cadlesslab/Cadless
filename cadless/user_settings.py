@@ -162,6 +162,7 @@ _TIER_B_FIELDS: dict[str, str] = {
     field: f"CADLESS_{field.upper()}"
     for field in (
         "vlm_critique_enabled",
+        "vlm_critique_view_count",
         "forge_enabled",
         "forge_candidate_count",
         "forge_min_n",
@@ -173,6 +174,15 @@ _TIER_B_FIELDS: dict[str, str] = {
 _TUNING_FIELDS.update(_TIER_B_FIELDS)
 _SETTINGS_ATTR.update({field: field for field in _TIER_B_FIELDS})
 _BOOL_FIELDS |= {"vlm_critique_enabled", "forge_enabled"}
+_INT_FIELDS |= {"vlm_critique_view_count"}
+# What each gated knob was set to when this process started — the environment's
+# value where one was pinned, the shipped default otherwise. Read once, here,
+# for the same reason the gate itself is: a saved value must not be able to move
+# the line it is measured against.
+_LAUNCH_BASELINE: dict[str, object] = {
+    _SETTINGS_ATTR.get(field, field): getattr(settings, _SETTINGS_ATTR.get(field, field), None)
+    for field in _TIER_B_FIELDS
+}
 # Upper bounds here are what the source already calls them: forge_max_n exists to
 # "cap the cost blast-radius of one turn", so these are that cap's own cap.
 # repair_max_attempts' floor is not invented either — pipeline.py runs
@@ -184,6 +194,9 @@ _RANGES.update(
         "forge_max_n": (2, 10),
         "repair_max_attempts": (1, 10),
         "bedrock_max_tokens": (1, 64_000),
+        # A literal rather than the renderer's own count, so that importing the
+        # settings layer does not drag numpy and Pillow in behind it.
+        "vlm_critique_view_count": (1, 7),
     }
 )
 # Secret UI field -> environment variable the vendor SDK reads it from. A
@@ -393,7 +406,19 @@ def _raises_spend(field: str, value: Any) -> bool:
     raising the bill. Anything this cannot compare is treated as a raise, so an
     unexpected type fails closed rather than slipping past the gate.
     """
-    current = getattr(settings, _SETTINGS_ATTR.get(field, field), None)
+    attr = _SETTINGS_ATTR.get(field, field)
+    current = getattr(settings, attr, None)
+    # Returning a knob to the value this installation started on is never a
+    # raise, whatever the comparison says. Without it the gate is a one-way door
+    # for any knob whose default is the expensive side: an ungated caller may
+    # turn it down and can then never put it back, leaving the shipped behaviour
+    # unreachable for exactly the people the gate is not aimed at.
+    #
+    # The baseline is the launch value rather than the code default, because an
+    # operator who deliberately configured a lower ceiling has not asked for it
+    # to be raisable back to the shipped one by a request.
+    if attr in _LAUNCH_BASELINE and value == _LAUNCH_BASELINE[attr]:
+        return False
     if isinstance(value, bool) or isinstance(current, bool):
         return bool(value) and not bool(current)
     if isinstance(value, int | float) and isinstance(current, int | float):

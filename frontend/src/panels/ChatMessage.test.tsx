@@ -5,7 +5,7 @@ import type { Version } from "../api";
 import type { AppState } from "../store";
 import { renderWithProviders } from "../test/utils";
 import { ChatMessage } from "./ChatMessage";
-import type { LiveTurn, ChatMessage as Msg } from "./chatModel";
+import type { CritiqueRound, LiveTurn, ChatMessage as Msg } from "./chatModel";
 
 function okVersion(): Version {
   return {
@@ -29,6 +29,7 @@ function imageMsg(over: Partial<Extract<Msg, { kind: "image" }>> = {}): Msg {
   return {
     kind: "image",
     id: "m12-i0",
+    role: "user",
     messageId: 12,
     index: 0,
     mediaType: "image/png",
@@ -40,7 +41,22 @@ function imageMsg(over: Partial<Extract<Msg, { kind: "image" }>> = {}): Msg {
 function liveTurn(over: Partial<LiveTurn> = {}): LiveTurn {
   return {
     text: "", thinking: "", codegen: "", plan: null, steers: [], stageEvents: [],
-    result: null, clarification: null, stopReason: null, error: null, done: false,
+    critique: null, result: null, clarification: null, stopReason: null, error: null, done: false,
+    ...over,
+  };
+}
+
+function critiqueRound(over: Partial<CritiqueRound> = {}): CritiqueRound {
+  return {
+    attempt: 1,
+    matches: false,
+    feedback: "The bore is on the wrong face.",
+    views: [
+      { name: "front", png_b64: "Zm9udA==" },
+      { name: "right", png_b64: "cmlnaHQ=" },
+      { name: "top", png_b64: "dG9w" },
+      { name: "iso", png_b64: "aXNv" },
+    ],
     ...over,
   };
 }
@@ -151,6 +167,7 @@ describe("ChatMessage", () => {
       plan: ["sketch", "extrude"],
       steers: [],
       stageEvents: [{ event: "start", intent: "a bracket", max_tries: 3 }],
+      critique: null,
       result: null,
       clarification: null,
       stopReason: null,
@@ -176,6 +193,7 @@ describe("ChatMessage", () => {
       plan: null,
       steers: [],
       stageEvents: [],
+      critique: null,
       result: null,
       clarification: null,
       stopReason: null,
@@ -196,6 +214,7 @@ describe("ChatMessage", () => {
       plan: null,
       steers: [],
       stageEvents: [],
+      critique: null,
       result: null,
       clarification: null,
       stopReason: "end_turn",
@@ -276,6 +295,68 @@ describe("ChatMessage", () => {
     );
   });
 
+  it("gives the critique its own step in the staged progress list", () => {
+    const { getByText } = renderMsg({
+      kind: "live-chat",
+      id: "live-chat",
+      turn: liveTurn({
+        stageEvents: [{ event: "stage", phase: "critique", status: "begin", attempt: 2 }],
+      }),
+    });
+    expect(getByText("Review")).not.toBeNull();
+  });
+
+  it("keeps a reviewer's render out of the user's bubble", () => {
+    // In the user bubble it reads as a reference the user supplied, which inverts
+    // who made the part — the one thing the picture is there to show.
+    const { container } = renderMsg(
+      imageMsg({ role: "assistant", reading: "seen from the front" }),
+      { activeProjectId: 3 },
+    );
+    expect(container.querySelector(".msg-user")).toBeNull();
+    expect(container.querySelector(".msg-assistant img")).not.toBeNull();
+  });
+
+  it("describes a reviewer's render without calling it an attachment", () => {
+    const { container } = renderMsg(imageMsg({ role: "assistant" }), { activeProjectId: 3 });
+    expect(container.querySelector("img")?.getAttribute("alt")).toBe(
+      "A render of the part this turn built (image/png)",
+    );
+  });
+
+  it("renders a live critique round's views inline, each named in its alt text", () => {
+    const { container } = renderMsg({
+      kind: "live-chat", id: "live-chat", turn: liveTurn({ critique: critiqueRound() }),
+    });
+    const imgs = [...container.querySelectorAll(".critique-view")];
+    expect(imgs.map((i) => i.getAttribute("alt"))).toEqual([
+      "The part as built, seen from the front",
+      "The part as built, seen from the right",
+      "The part as built, seen from the top",
+      "The part as built, seen from the iso",
+    ]);
+    // Live captures arrive as bytes, so there is no attachment route to ask.
+    expect(imgs[0].getAttribute("src")).toBe("data:image/png;base64,Zm9udA==");
+  });
+
+  it("writes the reviewer's verdict as text rather than leaving it to colour", () => {
+    const failed = renderMsg({
+      kind: "live-chat", id: "live-chat", turn: liveTurn({ critique: critiqueRound({ attempt: 2 }) }),
+    });
+    const caption = failed.container.querySelector(".critique-verdict");
+    expect(caption?.textContent).toBe("Review of attempt 2: The bore is on the wrong face.");
+    failed.unmount(); // avoid cross-render query bleed (RTL queries bind to document.body)
+
+    const matched = renderMsg({
+      kind: "live-chat",
+      id: "live-chat",
+      turn: liveTurn({ critique: critiqueRound({ attempt: 3, matches: true, feedback: "" }) }),
+    });
+    expect(matched.container.querySelector(".critique-verdict")?.textContent).toBe(
+      "Review of attempt 3: The render matches the request.",
+    );
+  });
+
   it("shows a Thinking placeholder before any content arrives", () => {
     const { container } = renderMsg({
       kind: "live-chat", id: "live-chat", turn: liveTurn(),  // streaming, nothing yet
@@ -289,5 +370,15 @@ describe("ChatMessage", () => {
     });
     expect(withText.container.querySelector(".chat-thinking")).toBeNull();
     expect(withText.container.querySelector(".stream-cursor")).not.toBeNull();
+  });
+
+  it("drops the Thinking placeholder once a critique round is on screen", () => {
+    // Stage events arrive in one burst after the tool settles, so mid-loop the
+    // reviewer's renders are the only thing the turn has to show for itself.
+    const { container } = renderMsg({
+      kind: "live-chat", id: "live-chat", turn: liveTurn({ critique: critiqueRound() }),
+    });
+    expect(container.querySelector(".critique")).not.toBeNull();
+    expect(container.querySelector(".chat-thinking")).toBeNull();
   });
 });

@@ -24,6 +24,11 @@ const STEP_DEFS: { key: string; label: string; phases: string[] }[] = [
   { key: "validate", label: "Validate", phases: ["validate"] },
   { key: "build", label: "Build", phases: ["build"] },
   { key: "mesh", label: "Mesh", phases: ["mesh"] },
+  // Last, because the reviewer looks at renders of the mesh. It only runs when
+  // the critique is configured on, so on a build without it the step sits
+  // pending until the run settles and the success sweep below marks it done —
+  // the same as any step a run never reached.
+  { key: "critique", label: "Review", phases: ["critique"] },
 ];
 
 function statusFromStage(status: string): StepStatus {

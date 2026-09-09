@@ -3,7 +3,14 @@
  * one turn: the user's prompt followed by the assistant's result. A generation
  * in flight appends a live turn, which is dropped once its version lands (the
  * `done` event's version_id appears in `versions`). Unit-tested. */
-import type { ChatEvent, ClarificationQuestion, MessageOut, ProgressEvent, Version } from "../api";
+import type {
+  ChatEvent,
+  ClarificationQuestion,
+  CritiqueView,
+  MessageOut,
+  ProgressEvent,
+  Version,
+} from "../api";
 
 export type ChatMessage =
   | { kind: "user"; id: string; text: string }
@@ -20,12 +27,15 @@ export type ChatMessage =
   | { kind: "clarification"; id: string; questions: ClarificationQuestion[] }
   // An ordered plan, rendered as a numbered list ahead of the action card.
   | { kind: "plan"; id: string; steps: string[] }
-  // A reference picture the user attached. It carries where to ask for the bytes
-  // rather than the bytes: the transcript hands back an image block with its
-  // `data` emptied, and `index` is which of this message's images to fetch.
+  // A picture belonging to one turn — a reference the user attached, or a render
+  // the critique reviewer was shown. It carries where to ask for the bytes rather
+  // than the bytes: the transcript hands back an image block with its `data`
+  // emptied, and `index` is which of this message's images to fetch. `role` is
+  // what tells the two apart, since by then both are just image blocks.
   | {
       kind: "image";
       id: string;
+      role: string;
       messageId: number;
       index: number;
       mediaType: string | null;
@@ -33,6 +43,15 @@ export type ChatMessage =
     }
   // The in-flight `POST /chat` turn, rendered incrementally from its SSE events.
   | { kind: "live-chat"; id: "live-chat"; turn: LiveTurn };
+
+/** One round of the render critique: the renders the reviewer was shown, and the
+ * verdict it wrote about them. `feedback` is empty when `matches` is true. */
+export interface CritiqueRound {
+  attempt: number;
+  matches: boolean;
+  feedback: string;
+  views: CritiqueView[];
+}
 
 /** A live turn assembled from the `POST /chat` SSE event stream. */
 export interface LiveTurn {
@@ -45,6 +64,8 @@ export interface LiveTurn {
   codegen: string;
   /** Stages lifted out of `tool_progress` events, fed to `StagedProgress`. */
   stageEvents: ProgressEvent[];
+  /** The newest render-critique round, or null if the turn had none. */
+  critique: CritiqueRound | null;
   /** The settled tool result, if one arrived. */
   result: { versionId: number | null; ok: boolean; error: string | null } | null;
   /** Clarification questions, if the turn ended asking for input. */
@@ -91,22 +112,23 @@ export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (const m of messages) {
     const id = `m${m.id}`;
-    // Attachments lead the turn, ahead of its words. This function orders a turn
-    // by kind rather than by block position, and a turn that came with pictures
-    // was sent as pictures plus a caption — so leading with them is the order it
-    // was written in, not a preference.
-    m.blocks
+    const images: ChatMessage[] = m.blocks
       .filter((b) => b.kind === "image")
-      .forEach((b, index) =>
-        out.push({
-          kind: "image",
-          id: `${id}-i${index}`,
-          messageId: m.id,
-          index,
-          mediaType: b.media_type ?? null,
-          reading: b.reading ?? null,
-        }),
-      );
+      .map((b, index) => ({
+        kind: "image",
+        id: `${id}-i${index}`,
+        role: m.role,
+        messageId: m.id,
+        index,
+        mediaType: b.media_type ?? null,
+        reading: b.reading ?? null,
+      }));
+    // This function orders a turn by kind rather than by block position, and the
+    // two roles were written in opposite orders. A user's attachments lead their
+    // words, because the turn was sent as pictures plus a caption. The assistant's
+    // are renders of what the turn built, taken while it was still working, so
+    // they follow its account of it and sit against the result card below.
+    if (m.role === "user") out.push(...images);
     // Reasoning, if present, leads the turn (collapsible "Thought" pane).
     const thinking = m.blocks
       .filter((b) => b.kind === "thinking" && b.text)
@@ -126,6 +148,7 @@ export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
       const steps = stepsFromInput(planBlock.input);
       if (steps.length) out.push({ kind: "plan", id: `${id}-p`, steps });
     }
+    if (m.role !== "user") out.push(...images);
     const clarBlock = m.blocks.find((b) => b.kind === "clarification");
     if (clarBlock) {
       const questions = questionsFromInput(clarBlock.input);
@@ -176,6 +199,7 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
   let thinking = "";
   let codegen = "";
   const stageEvents: ProgressEvent[] = [];
+  let critique: CritiqueRound | null = null;
   let result: LiveTurn["result"] = null;
   let clarification: ClarificationQuestion[] | null = null;
   let plan: string[] | null = null;
@@ -197,6 +221,12 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
         break;
       case "tool_progress":
         stageEvents.push(e.stage);
+        break;
+      case "critique":
+        // Each round replaces the last rather than stacking. Only the round a
+        // turn ended on is persisted, so a live turn that kept them all would
+        // shed everything but the final one the moment the transcript reloaded.
+        critique = { attempt: e.attempt, matches: e.matches, feedback: e.feedback, views: e.views };
         break;
       case "tool_result":
         result = { versionId: e.version_id, ok: e.ok, error: e.error };
@@ -220,7 +250,7 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
         break;
     }
   }
-  return { text, thinking, codegen, plan, steers, stageEvents, result, clarification, stopReason, error, done };
+  return { text, thinking, codegen, plan, steers, stageEvents, critique, result, clarification, stopReason, error, done };
 }
 
 export function toMessages(

@@ -28,6 +28,8 @@ Consumers must ignore unknown event types and fields for forward compatibility.
 
 from __future__ import annotations
 
+import base64
+import logging
 import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -44,6 +46,8 @@ from cadless.params import extract_params
 from cadless.prompts import CodeGenerator
 from cadless.validation import validate_code
 from cadless.worker import run_code
+
+logger = logging.getLogger(__name__)
 
 # Lifecycle phases emitted as {"event": "stage", "phase": ..., "status": ...}.
 STAGE_PHASES = (
@@ -81,6 +85,15 @@ class GenerationResult:
     obj_path: str | None = None
     parameters: dict = field(default_factory=dict)
     attempts: list[Attempt] = field(default_factory=list)
+    #: The render review of the build this result carries, as
+    #: ``{"matches": bool, "attempt": int}``, or ``None`` where that build was
+    #: not reviewed — a verdict never outlives the attempt it was taken for.
+    #: Deliberately carries no text. The orchestrator needs to know the reviewer
+    #: disagreed — otherwise it announces a finished part beside a verdict saying
+    #: it is wrong — but the reviewer's own words are a vision model's free prose
+    #: written from a prompt holding the user's, and handing that to the
+    #: orchestrator as fact is the thing the transcript already refuses to do.
+    critique: dict | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -140,6 +153,7 @@ class Pipeline:
         export_scale: float = 1.0,
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
+        critique: bool = True,
     ) -> GenerationResult:
         """Generate (or, when ``prior_code`` is given, refine) then validate/execute.
 
@@ -172,6 +186,11 @@ class Pipeline:
         applied to exported artifacts only (never the volume/bbox geometry
         summary), matching how catalog goldens bake at the domain registry's
         scale. The default ``1.0`` keeps every legacy caller byte-identical.
+
+        ``critique`` lets a caller opt this run out of the render review even
+        where one is configured. It exists for the best-of-N fan-out, where the
+        judge has a vision rung of its own and each candidate would otherwise
+        pay separately for a signal that rung derives once.
         """
         attempts: list[Attempt] = []
         max_tries = max(1, self._cfg.repair_max_attempts)
@@ -203,8 +222,15 @@ class Pipeline:
             )
         _emit_stage(on_progress, mode, "ok", 1)
         last_error = "no attempts ran"
+        last_critique: dict | None = None
 
         for n in range(1, max_tries + 1):
+            # Cleared here rather than beside the critique, so that every way an
+            # attempt can end reaches it — a build that fails to execute never
+            # gets as far as a review, and carrying the previous attempt's
+            # verdict past it attaches a pass to a build that is not the one
+            # being returned.
+            last_critique = None
             _emit_stage(on_progress, "validate", "begin", n)
             verdict = validate_code(code)
             if not verdict.ok:
@@ -222,28 +248,42 @@ class Pipeline:
             _emit_stage(on_progress, "build", "begin", n)
             res = run_code(code, export_dir=export_dir, export_scale=export_scale, config=self._cfg)
             if res.ok:
-                # Optional VLM critique: a valid solid may still be the wrong shape.
-                if self._should_critique(res) and n < max_tries:
-                    _emit_stage(on_progress, "critique", "begin", n)
-                    crit = self._critic.critique(intent, res.glb_path)
+                # VLM critique: a valid solid may still be the wrong shape.
+                #
+                # Every attempt is reviewed, the last one included. Skipping the
+                # last — which is what a `n < max_tries` gate does — leaves the
+                # build actually delivered as the one build nobody looked at,
+                # and makes "ran out of budget" indistinguishable from "was
+                # never checked". On the last attempt there is no budget to
+                # repair with, so the finding is reported and the part is
+                # handed over with it attached.
+                crit = (
+                    self._try_critique(on_progress, intent, res, n)
+                    if critique and self._should_critique(res)
+                    else None
+                )
+                if crit is not None:
+                    last_critique = {"matches": crit.matches, "attempt": n}
                     if not crit.matches:
                         last_error = "critique: " + crit.feedback
                         _emit_stage(on_progress, "critique", "error", n, last_error)
-                        self._record(
-                            attempts, on_progress, Attempt(n, code, "critique", last_error)
-                        )
-                        code = self._repair(
-                            on_progress,
-                            intent,
-                            code,
-                            last_error,
-                            n,
-                            max_tries,
-                            forced=True,
-                            images=images,
-                        )
-                        continue
-                    _emit_stage(on_progress, "critique", "ok", n)
+                        if n < max_tries:
+                            self._record(
+                                attempts, on_progress, Attempt(n, code, "critique", last_error)
+                            )
+                            code = self._repair(
+                                on_progress,
+                                intent,
+                                code,
+                                last_error,
+                                n,
+                                max_tries,
+                                forced=True,
+                                images=images,
+                            )
+                            continue
+                    else:
+                        _emit_stage(on_progress, "critique", "ok", n)
                 # Deterministic geometry post-conditions: a failed
                 # assertion is a semantic repair signal via the same channel as the
                 # VLM critique. Optional and additive — only when budget remains and
@@ -284,6 +324,7 @@ class Pipeline:
                     obj_path=res.obj_path,
                     parameters=extract_params(code),
                     attempts=attempts,
+                    critique=last_critique,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)
@@ -307,6 +348,7 @@ class Pipeline:
             code=attempts[-1].code if attempts else None,
             error=last_error,
             attempts=attempts,
+            critique=last_critique,
         )
 
     def run_candidates(
@@ -358,10 +400,23 @@ class Pipeline:
                     grounding=grounding,
                     images=images,
                     on_reading=on_reading,
+                    critique=False,
                 )
             ]
 
         temp = self._cfg.forge_temperature if temperature is None else temperature
+
+        # A candidate does not critique, and both branches of this method agree
+        # on that. The fan-out runs with no progress sink, so a candidate's
+        # captures and verdict are thrown away the moment they are produced,
+        # while the cost multiplies by the candidate count.
+        #
+        # **So a forge turn currently gets no render critique at all.** The
+        # judge has a rung for exactly this — comparing candidates by vision —
+        # but the live call site supplies it no critic, so that rung does not
+        # fire either. Wiring it is where this signal belongs; until then this
+        # is a deliberate absence rather than an oversight, and it is worth
+        # knowing that turning forge on turns the reviewer off with it.
 
         def _one(idx: int) -> GenerationResult:
             cand_dir = _candidate_dir(export_dir, idx)
@@ -374,6 +429,7 @@ class Pipeline:
                     temperature=temp,
                     images=images,
                     on_reading=on_reading,
+                    critique=False,
                 )
             except Exception as exc:  # isolate: one bad candidate must not sink others
                 return GenerationResult(
@@ -400,7 +456,40 @@ class Pipeline:
         )
 
     def _should_critique(self, res) -> bool:
-        return bool(self._critic and self._cfg.vlm_critique_enabled and res.glb_path)
+        # ``stl_path`` rather than ``glb_path``: it is the artifact the critic's
+        # renderer can load, so gating on any other one lets a call through to a
+        # file it cannot read.
+        return bool(self._critic and self._cfg.vlm_critique_enabled and res.stl_path)
+
+    def _try_critique(self, on_progress, intent: str, res, n: int):
+        """The reviewer's verdict, or ``None`` where it could not be taken.
+
+        The critique is an extra signal on a build that has already succeeded,
+        so a model that cannot see — or a provider that cannot be reached — has
+        to leave that build alone. Letting the exception out instead turns every
+        successful turn into a failed one wherever the configured model is not
+        vision-capable, which is the whole deployment now that this runs by
+        default.
+
+        Reported rather than swallowed. A reviewer that never ran looks exactly
+        like one that always agreed, and that is the version of this failure
+        nobody would notice.
+        """
+        _emit_stage(on_progress, "critique", "begin", n)
+        try:
+            crit = self._critic.critique(intent, res.stl_path)
+            # Publishing sits inside the guard as well. It reads the verdict's
+            # captures, so a critic composed outside this tree that returns
+            # something shaped differently would otherwise raise here — past the
+            # catch, and straight through the successful build this exists to
+            # protect. Published before the caller branches, so the round that
+            # settles the part is shown as well as the rounds that did not.
+            _emit_critique(on_progress, n, crit)
+            return crit
+        except Exception as exc:  # noqa: BLE001 — additive signal, never fatal
+            logger.warning("render critique unavailable, skipping: %s", exc, exc_info=True)
+            _emit_stage(on_progress, "critique", "error", n, f"critique unavailable: {exc}")
+            return None
 
     def _repair(
         self,
@@ -478,6 +567,33 @@ def _emit_stage(
     if error is not None:
         event["error"] = error
     _emit(on_progress, event)
+
+
+def _emit_critique(on_progress, attempt: int, crit) -> None:
+    """Emit what the reviewer saw and what it concluded, on a channel of its own.
+
+    Not a ``stage`` event. That shape is phase/status/attempt/error and every
+    stage emits it, so widening it to carry pictures would reach every emitter
+    and every consumer for the sake of one — and stage events are collected and
+    replayed after the tool settles, which is after this loop has finished. A
+    capture is only worth showing while the round it belongs to is running.
+
+    The bytes go out base64-encoded because every consumer of this stream ends
+    at ``json.dumps``.
+    """
+    _emit(
+        on_progress,
+        {
+            "event": "critique",
+            "attempt": attempt,
+            "matches": bool(crit.matches),
+            "feedback": crit.feedback,
+            "views": [
+                {"name": name, "png_b64": base64.standard_b64encode(png).decode("ascii")}
+                for name, png in crit.captures
+            ],
+        },
+    )
 
 
 def generate_cad(

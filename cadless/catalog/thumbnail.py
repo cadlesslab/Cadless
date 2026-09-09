@@ -15,8 +15,9 @@ path wherever a GL context is unavailable.
 
 from __future__ import annotations
 
+import io
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,33 @@ from cadless.catalog.manifest import CatalogManifest
 Renderer = Callable[[np.ndarray, Path, int], None]
 
 DEFAULT_SIZE = 384
+
+_Z_AXIS = np.array([0.0, 0.0, 1.0])
+_Y_AXIS = np.array([0.0, 1.0, 0.0])
+
+# Camera directions, Z-up, each pointing from the model toward the camera. The
+# names are shared with the interactive viewport's own view vocabulary so one
+# word means one orientation across the product; the vectors are not, because
+# that viewport works in a Y-up space. A mirror test holds the names together.
+VIEW_EYES: dict[str, tuple[float, float, float]] = {
+    "iso": (1.0, -1.0, 0.75),
+    "front": (0.0, -1.0, 0.0),
+    "back": (0.0, 1.0, 0.0),
+    "left": (-1.0, 0.0, 0.0),
+    "right": (1.0, 0.0, 0.0),
+    "top": (0.0, 0.0, 1.0),
+    "bottom": (0.0, 0.0, -1.0),
+}
+
+# The order a caller takes views in as its count rises: the three principal
+# faces first, then the corner that shows how they meet, then the far sides,
+# which repeat a silhouette already seen and only earn their cost on a part
+# whose back differs from its front.
+VIEW_ORDER: tuple[str, ...] = ("front", "right", "top", "iso", "back", "left", "bottom")
+
+# Four is where this starts rather than a measured optimum — the count is a
+# setting, and this is the prefix it selects by default.
+DEFAULT_VIEWS: tuple[str, ...] = VIEW_ORDER[:4]
 
 # Mesh artifact kinds the renderer can read, in preference order, and where an
 # item's thumbnail lands relative to its own directory.
@@ -106,42 +134,66 @@ def _load_obj(path: Path) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 
 
-def _isometric_basis() -> np.ndarray:
-    """Rows: right / up / toward-camera for a Z-up isometric view."""
-    eye = np.array([1.0, -1.0, 0.75])
+def _view_basis(view: str) -> np.ndarray:
+    """Rows: right / up / toward-camera for one named Z-up view."""
+    try:
+        eye = np.array(VIEW_EYES[view], dtype=np.float64)
+    except KeyError:
+        known = ", ".join(sorted(VIEW_EYES))
+        raise ValueError(f"unknown view {view!r} (known: {known})") from None
     eye /= np.linalg.norm(eye)
-    right = np.cross([0.0, 0.0, 1.0], eye)
+    # cross(Z, eye) collapses to the zero vector when the camera looks straight
+    # down the Z axis — precisely the top and bottom views. Swapping the
+    # reference axis for those keeps the basis defined instead of dividing by
+    # zero and rendering a frame of NaN.
+    reference = _Y_AXIS if abs(float(eye @ _Z_AXIS)) > 0.999 else _Z_AXIS
+    right = np.cross(reference, eye)
     right /= np.linalg.norm(right)
-    up = np.cross(eye, right)
-    return np.stack([right, up, eye])
+    return np.stack([right, np.cross(eye, right), eye])
 
 
-def render_software(tris: np.ndarray, out_path: Path, size: int) -> None:
-    """Orthographic bbox-fitted shaded render via numpy + Pillow (no GL)."""
-    if tris.size == 0:
-        raise ValueError("mesh has no triangles")
+def _isometric_basis() -> np.ndarray:
+    """The isometric basis — the camera a single-image render uses."""
+    return _view_basis("iso")
 
-    view = tris.reshape(-1, 3) @ _isometric_basis().T
-    view = view.reshape(-1, 3, 3)
+
+# The light is fixed in **world** space, so a facet's shade is a property of the
+# facet rather than of the camera. Held in view space it rotates with the eye:
+# every view is then lit identically relative to its own camera, which strips
+# the set of the one cue that tells two views apart when their silhouettes
+# agree. The value is the view-space vector the single isometric render used,
+# mapped back out through that view's own basis, so the isometric view keeps the
+# same light direction it always had while every other view gains a cue. The
+# mapping is exact in algebra and within a rounding step in floating point.
+_WORLD_LIGHT = np.array([-0.25, 0.45, 0.86]) @ _view_basis("iso")
+_WORLD_LIGHT /= np.linalg.norm(_WORLD_LIGHT)
+
+
+def _projected_extent(tris: np.ndarray, basis: np.ndarray) -> float:
+    """The larger screen-space side of the bbox this view projects onto."""
+    xy = (tris.reshape(-1, 3) @ basis.T)[:, :2]
+    lo, hi = xy.min(axis=0), xy.max(axis=0)
+    return float(max((hi - lo).max(), 1e-9))
+
+
+def _rasterize(tris: np.ndarray, size: int, basis: np.ndarray, extent: float) -> Image.Image:
+    """Project, shade and paint the triangles at a caller-chosen scale."""
+    view = (tris.reshape(-1, 3) @ basis.T).reshape(-1, 3, 3)
     xy, depth = view[..., :2], view[..., 2].mean(axis=1)
 
     lo, hi = xy.reshape(-1, 2).min(axis=0), xy.reshape(-1, 2).max(axis=0)
-    extent = float(max((hi - lo).max(), 1e-9))
     canvas = size * _SUPERSAMPLE
     scale = canvas * (1 - 2 * _MARGIN) / extent
-    center = (lo + hi) / 2
-    screen = (xy - center) * scale
+    screen = (xy - (lo + hi) / 2) * scale
     screen[..., 1] *= -1  # image y grows downward
     screen += canvas / 2
 
     # flat Lambert shading from the facet normals (abs: no backface culling)
-    a, b = view[:, 1] - view[:, 0], view[:, 2] - view[:, 0]
+    a, b = tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
     normals = np.cross(a, b)
     lengths = np.linalg.norm(normals, axis=1, keepdims=True)
     normals = np.divide(normals, lengths, out=np.zeros_like(normals), where=lengths > 0)
-    light = np.array([-0.25, 0.45, 0.86])
-    light /= np.linalg.norm(light)
-    shade = 0.35 + 0.65 * np.abs(normals @ light)
+    shade = 0.35 + 0.65 * np.abs(normals @ _WORLD_LIGHT)
     colors = np.clip(_BASE_RGB * shade[:, None], 0, 255).astype(np.uint8)
 
     img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
@@ -149,8 +201,56 @@ def render_software(tris: np.ndarray, out_path: Path, size: int) -> None:
     for i in np.argsort(depth):  # farthest first
         r, g, bl = colors[i]
         draw.polygon([tuple(p) for p in screen[i]], fill=(int(r), int(g), int(bl), 255))
-    img = img.resize((size, size), Image.LANCZOS)
-    img.save(out_path, format="PNG")
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def render_software(
+    tris: np.ndarray,
+    out_path: Path,
+    size: int,
+    *,
+    basis: np.ndarray | None = None,
+    extent: float | None = None,
+) -> None:
+    """Orthographic bbox-fitted shaded render via numpy + Pillow (no GL).
+
+    ``basis`` and ``extent`` are keyword-only with defaults so this keeps
+    satisfying the three-argument :data:`Renderer` contract. Passing an
+    ``extent`` measured across several views is what makes a set of frames
+    share one scale instead of each filling its own.
+    """
+    if tris.size == 0:
+        raise ValueError("mesh has no triangles")
+    basis = _isometric_basis() if basis is None else basis
+    extent = _projected_extent(tris, basis) if extent is None else extent
+    _rasterize(tris, size, basis, extent).save(out_path, format="PNG")
+
+
+def render_views(
+    mesh_path: Path,
+    views: Sequence[str] = DEFAULT_VIEWS,
+    size: int = DEFAULT_SIZE,
+) -> list[tuple[str, bytes]]:
+    """Render ``mesh_path`` once per named view, as ``(view, PNG bytes)``.
+
+    Every frame is fitted to one extent measured across the whole set, so a
+    reader can compare them as one object; fitted per view each would fill its
+    own frame and the same edge would appear at a different size in each.
+    Raises ``ValueError`` for an unknown view name or an unloadable mesh.
+    """
+    tris = load_mesh(Path(mesh_path))
+    if tris.size == 0:
+        raise ValueError(f"mesh has no triangles: {mesh_path}")
+    bases = [(name, _view_basis(name)) for name in views]
+    if not bases:
+        return []
+    extent = max(_projected_extent(tris, basis) for _, basis in bases)
+    shots: list[tuple[str, bytes]] = []
+    for name, basis in bases:
+        buf = io.BytesIO()
+        _rasterize(tris, size, basis, extent).save(buf, format="PNG")
+        shots.append((name, buf.getvalue()))
+    return shots
 
 
 # GL-capable renderers can be prepended here; the software one always works.
