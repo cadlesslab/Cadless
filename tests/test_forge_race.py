@@ -147,11 +147,10 @@ def test_provider_reaches_the_cheap_llm_rung():
 
 
 def test_critic_reaches_the_render_rung():
-    """With a critic the render rung decides before the LLM rung is reached.
+    """With a critic the render rung decides.
 
-    The rung is handed the STL, not the GLB: the critic renders tessellated
-    triangles and has no GLB loader, so a candidate that exported only a GLB is
-    not judgeable here at all.
+    The rung is handed the STL, not the GLB, because the critic renders
+    tessellated triangles and has no GLB loader.
     """
     first = _cand("result = Box(1,1,1)", stl_path="/r/first.stl")
     better = _cand("result = Box(2,2,2)", stl_path="/r/better.stl")
