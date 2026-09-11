@@ -95,6 +95,21 @@ async def rerun_version(version_id: int, store: ScopedStore = Depends(get_store)
     await reject_if_catalog(store, version.project_id, "re-run its code")
     if not version.code:
         raise HTTPException(status_code=400, detail="version has no code to re-run")
+    # A version held in several pieces is declined before anything executes. The
+    # runner exports one file per kind, so a fresh export matches none of the
+    # pieces already recorded: it would be filed as one more piece holding the
+    # whole model, or skipped while the recorded pieces stayed stale. Neither is
+    # an answer, and inventing one here would be guessing at a file layout that
+    # does not exist yet.
+    recorded = await store.list_artifacts(version_id)
+    if len(recorded) > len({a.kind for a in recorded}):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This model is in several pieces. Re-running one is not supported yet, "
+                "so nothing was re-exported."
+            ),
+        )
 
     dest = store.version_artifact_dir(version_id)
     res = await run_in_threadpool(run_code, version.code, export_dir=dest)

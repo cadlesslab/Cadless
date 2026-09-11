@@ -174,6 +174,35 @@ def test_rerun_rejects_catalog_item_403(client, store, tmp_path, monkeypatch):
     assert calls == []  # the baked artifacts were never re-exported
 
 
+def test_rerun_refuses_a_version_in_pieces(client, store, monkeypatch):
+    """Re-running a version held in pieces would leave it half-regenerated.
+
+    The runner exports one file per kind, so the fresh export matches none of the
+    pieces already recorded. It would either be filed as one more piece holding
+    the whole model, or skipped while the recorded pieces stayed stale — and
+    neither is an answer. Nothing writes pieces yet, so the route declines rather
+    than guessing at a layout that does not exist.
+    """
+
+    async def go():
+        project = await store.create_project("P")
+        version = await store.add_version(project.id, "x", "result=1", ok=True)
+        directory = Path(store.version_artifact_dir(version.id))
+        for n in range(2):
+            piece = directory / f"model_p{n}.stl"
+            piece.write_text("solid")
+            await store.add_artifact(version.id, "stl", str(piece))
+        return version.id
+
+    vid = asyncio.run(go())
+    calls: list = []
+    monkeypatch.setattr("backend.routers.versions.run_code", lambda *a, **k: calls.append((a, k)))
+
+    r = client.post(f"/versions/{vid}/rerun")
+    assert r.status_code == 409
+    assert calls == []  # nothing was executed
+
+
 @pytest.mark.build123d
 def test_rerun_executes_stored_code_and_creates_artifacts(client, store):
     pid, vid = _seed(store)  # version has no artifacts yet
