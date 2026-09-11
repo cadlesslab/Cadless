@@ -181,6 +181,9 @@ class ScopedStore:
     async def get_artifact(self, version_id: int, kind: str) -> Artifact | None:
         return await self._store.get_artifact(version_id, kind, owner=self._owner)
 
+    async def get_artifact_part(self, version_id: int, kind: str, part: int) -> Artifact | None:
+        return await self._store.get_artifact_part(version_id, kind, part, owner=self._owner)
+
     async def thumbnail_version_ids(self, project_ids: Sequence[int]) -> dict[int, int]:
         return await self._store.thumbnail_version_ids(project_ids, owner=self._owner)
 
