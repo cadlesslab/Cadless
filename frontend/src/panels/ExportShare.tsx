@@ -20,7 +20,14 @@ import { Button, Modal, Tooltip, useToast } from "../components";
 import { errMessage } from "../errors";
 import { BASE_URL } from "../routing";
 import { fetchAndSave } from "./download";
-import { availableFormats, downloadFilename, FORMAT_META, shareUrl } from "./exportFormats";
+import {
+  availableFormats,
+  chipLabel,
+  downloadFilename,
+  FORMAT_META,
+  partsOf,
+  shareUrl,
+} from "./exportFormats";
 import {
   DEFAULT_CLOSING,
   filamentNote,
@@ -138,8 +145,23 @@ export function ExportShare({ version }: { version: Version }) {
   async function download(kind: ArtifactKind) {
     setBusy(kind);
     try {
-      await fetchAndSave(artifactUrl(version.id, kind), downloadFilename(version.id, kind));
-      toast.success(`${FORMAT_META[kind].label} downloaded`);
+      const pieces = partsOf(version, kind);
+      if (pieces.length > 1) {
+        // One click, one model, every file of it. Saving only the first piece
+        // would hand back a third of a shelf and say it had succeeded, and the
+        // reader has no way to notice the rest never arrived. Sequential rather
+        // than parallel so the browser's own save prompts stay in order.
+        for (const piece of pieces) {
+          await fetchAndSave(
+            artifactUrl(version.id, kind, piece.part),
+            downloadFilename(version.id, kind, piece.part),
+          );
+        }
+        toast.success(`${FORMAT_META[kind].label} downloaded`, `${pieces.length} pieces`);
+      } else {
+        await fetchAndSave(artifactUrl(version.id, kind), downloadFilename(version.id, kind));
+        toast.success(`${FORMAT_META[kind].label} downloaded`);
+      }
     } catch {
       toast.error(`Couldn't download ${FORMAT_META[kind].label}`, "the artifact may be unavailable");
     } finally {
@@ -327,7 +349,7 @@ export function ExportShare({ version }: { version: Version }) {
               disabled={busy != null}
               onClick={() => download(kind)}
             >
-              {busy === kind ? "…" : FORMAT_META[kind].label}
+              {busy === kind ? "…" : chipLabel(version, kind)}
             </button>
           </Tooltip>
         ))}

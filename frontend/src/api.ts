@@ -27,6 +27,11 @@ export type ArtifactKind = "step" | "glb" | "stl" | "obj";
 export interface ArtifactRef {
   kind: ArtifactKind;
   bytes: number;
+  /** Which file of its kind this is, numbered from 0. A version can hold more
+   * than one — the pieces of a model too big to print whole — and without this
+   * the kind is the only name a client has for them, which is one name for
+   * several files. A model printed whole is always 0. */
+  part: number;
 }
 
 export type ParamValue = number | string | boolean;
@@ -913,8 +918,15 @@ export const setCurrent = (projectId: number, versionId: number) =>
   });
 
 // ---- artifact URLs ----
-export const artifactUrl = (versionId: number, kind: ArtifactKind) =>
-  `${BASE}/versions/${versionId}/artifacts/${kind}`;
+/** Where a version's artifact of a kind lives, or a named piece of it.
+ *
+ * With no part, the route that has always existed: it serves the first piece,
+ * which for a model printed whole is the only one. Naming a part is how the
+ * rest are reached. */
+export const artifactUrl = (versionId: number, kind: ArtifactKind, part?: number) =>
+  part === undefined
+    ? `${BASE}/versions/${versionId}/artifacts/${kind}`
+    : `${BASE}/versions/${versionId}/artifacts/${kind}/${part}`;
 export const stepUrl = (versionId: number) => artifactUrl(versionId, "step");
 export const glbUrl = (versionId: number) => artifactUrl(versionId, "glb");
 
