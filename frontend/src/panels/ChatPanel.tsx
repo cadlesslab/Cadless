@@ -33,22 +33,13 @@ function EmptyState({ onPick, disabled }: { onPick: (p: string) => void; disable
   );
 }
 
-/** @param visible — whether this panel is actually on screen. It is not always:
- *  in the narrow layout the shell keeps the panel mounted and hides it, so that
- *  a half-typed prompt survives the drawer closing. Anything that measures or
- *  focuses has to wait for the panel to come back, because both are no-ops
- *  inside a `display: none` subtree and neither reports that it did nothing.
- *  @param collapseLabel — what the close control is called. The wide layout
- *  collapses to a strip and the narrow one closes a drawer, and a control that
- *  named the wrong one would be the only wrong word on the screen. */
 /** One row of the thread: a single message, or a round's captures gathered so
  * they can be laid out together.
  *
  * A settled round comes back as one `image` message per view rather than one
  * message holding four, so without this the four views are four rows and only
  * the first is on screen. Grouping here rather than in `chatTranscript` leaves
- * the transcript's message shape alone, which is what the model's own tests
- * pin. The views of one round always share a `messageId` — they are the image
+ * the transcript's message shape alone. The views of one round always share a `messageId` — they are the image
  * blocks of a single assistant message — and always arrive next to each
  * other, so a run is what identifies them. */
 type ThreadRow = { kind: "one"; msg: Msg } | { kind: "captures"; key: string; msgs: Msg[] };
@@ -67,7 +58,10 @@ function threadRows(messages: Msg[]): ThreadRow[] {
     let end = i + 1;
     while (end < messages.length) {
       const next = messages[end];
-      if (next.kind !== "image" || next.role === "user" || next.messageId !== msg.messageId) break;
+      // No role check here: a run only continues within one `messageId`, and a
+      // message has one role, so a picture that got this far cannot be the
+      // user's. Testing for it again would be a condition nothing can make true.
+      if (next.kind !== "image" || next.messageId !== msg.messageId) break;
       end += 1;
     }
     const run = messages.slice(i, end);
@@ -83,6 +77,14 @@ function threadRows(messages: Msg[]): ThreadRow[] {
   return rows;
 }
 
+/** @param visible — whether this panel is actually on screen. It is not always:
+ *  in the narrow layout the shell keeps the panel mounted and hides it, so that
+ *  a half-typed prompt survives the drawer closing. Anything that measures or
+ *  focuses has to wait for the panel to come back, because both are no-ops
+ *  inside a `display: none` subtree and neither reports that it did nothing.
+ *  @param collapseLabel — what the close control is called. The wide layout
+ *  collapses to a strip and the narrow one closes a drawer, and a control that
+ *  named the wrong one would be the only wrong word on the screen. */
 export function ChatPanel({
   onCollapse,
   onReveal,

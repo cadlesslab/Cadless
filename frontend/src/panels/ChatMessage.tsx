@@ -436,7 +436,8 @@ export function ChatMessage({
       );
     }
     // No avatar: a settled round comes back as one of these per view, and a
-    // column of avatars beside them reads as several things the model said.
+    // repeated avatar beside each reads as several things the model said. The
+    // thread gathers a run of them into one grid, so they arrive as a block.
     return (
       <div className="msg msg-assistant msg-capture">
         <div className="msg-body">

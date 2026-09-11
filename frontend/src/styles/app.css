@@ -205,9 +205,16 @@ body.resizing { cursor: col-resize; user-select: none; }
    go without, and moves to the container wherever there is one. */
 .msg-capture { padding-left: calc(22px + var(--space-2)); }
 .msg-capture .msg-image { max-height: 120px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+/* `--views-max` caps the pair of columns rather than the picture inside one,
+   so the cells stay flush against each other instead of floating in a wide
+   track. Without it the tiles follow the panel all the way to its widest,
+   and a four-view round grows tall enough to push the reply that explains
+   it off the top of the thread — the same thing the height cap above is
+   there to stop. */
 .msg-captures {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2); padding-left: calc(22px + var(--space-2));
+  max-width: calc(var(--views-max) + 22px + var(--space-2));
 }
 .msg-captures .msg-capture { padding-left: 0; }
 /* Square cells: these are orthographic views of one part, so a shared shape is
@@ -375,12 +382,16 @@ body.resizing { cursor: col-resize; user-select: none; }
 .codegen-code code { background: none; padding: 0; font: inherit; }
 
 /* Render critique: the views the reviewer was shown on one repair round, with
-   its verdict beneath them. Two to a row, because the views are evidence to be
-   held against each other and a single column puts the last of them a scroll
-   away from the first. The verdict's colour only repeats what its sentence
+   its verdict beneath them. Fixed at two to a row: this was a wrapping row of
+   fixed tiles, so how many views sat side by side followed the panel width and
+   a round never looked the same twice. The verdict's colour only repeats what
+   its sentence
    already says, so nothing is lost where the two colours cannot be told apart. */
 .critique { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
-.critique-views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+.critique-views {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2); max-width: var(--views-max);
+}
 .critique-view {
   width: 100%; height: auto; aspect-ratio: 1; object-fit: contain;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
