@@ -187,6 +187,19 @@ def test_a_part_beyond_the_last_is_not_found(client, store):
     assert client.get(f"/versions/{vid}/artifacts/stl/7").status_code == 404
 
 
+def test_a_part_number_that_cannot_be_one_is_a_bad_request(client, store):
+    """A number outside the ordinal's range is a malformed address, not a miss.
+
+    The value is bound as a SQLite integer, and one too large to fit raises out
+    of the driver instead of answering — which reaches the caller as a server
+    error, saying the tool is broken rather than that the address is.
+    """
+    vid = _seed_with_stl_parts(store, 2)
+    huge = "9" * 24
+    assert client.get(f"/versions/{vid}/artifacts/stl/{huge}").status_code == 422
+    assert client.get(f"/versions/{vid}/artifacts/stl/-1").status_code == 422
+
+
 def test_the_wire_says_which_part_each_artifact_is(client, store):
     """Without this a client can see three files and name none of them."""
     vid = _seed_with_stl_parts(store, 3)

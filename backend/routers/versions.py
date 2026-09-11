@@ -114,6 +114,11 @@ async def rerun_version(version_id: int, store: ScopedStore = Depends(get_store)
     dest = store.version_artifact_dir(version_id)
     res = await run_in_threadpool(run_code, version.code, export_dir=dest)
     if res.ok:
+        # Re-read rather than reusing the list the guard above took. `run_code`
+        # writes files and never artifact rows, so the two agree today — but
+        # this one is what decides whether a row is written, and pinning that
+        # decision to a snapshot taken before a subprocess ran is the shape of
+        # bug that survives every test until something else starts writing.
         existing = {a.kind for a in await store.list_artifacts(version_id)}
         for kind in EXPORTERS:
             target = Path(dest) / f"model.{kind}"

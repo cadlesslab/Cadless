@@ -133,6 +133,20 @@ describe("ExportShare", () => {
     ]);
   });
 
+  it("says how far a piece-by-piece download got when one fails", async () => {
+    // The pieces before the failure are on disk already. Reporting only
+    // "couldn't download" reads as nothing having arrived, which leaves the
+    // reader with a partial model they do not know they have.
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["x"]) })
+      .mockResolvedValue({ ok: false, status: 404 });
+    vi.stubGlobal("fetch", fetchFn);
+    renderShare(versionInPieces(3));
+    fireEvent.click(screen.getByRole("button", { name: /STL/ }));
+    await waitFor(() => expect(screen.getByText("1 of 3 pieces saved")).toBeInTheDocument());
+  });
+
   it("says on the chip how many pieces a format is in", () => {
     renderShare(versionInPieces(3));
     expect(screen.getByRole("button", { name: "STL · 3 pieces" })).toBeInTheDocument();

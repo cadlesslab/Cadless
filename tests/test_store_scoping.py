@@ -241,6 +241,23 @@ def test_get_artifact_hides_another_owners(two_owners):
     assert run(go()) is None
 
 
+def test_get_artifact_part_hides_another_owners(two_owners):
+    """The same leak, reached by a second integer rather than by a kind.
+
+    A part number narrows what is asked for and must not widen who may ask: this
+    hands back file bytes addressed by two guessable integers, so it needs its
+    own guard rather than inheriting one from the accessor beside it. The
+    signature check elsewhere cannot stand in for this — it reads the parameter
+    list, not the predicate, so an unscoped query passes it unchanged.
+    """
+    s, _a, b, _ = two_owners
+
+    async def go():
+        return await s.get_artifact_part(b.version_id, "step", 0, owner=A)
+
+    assert run(go()) is None
+
+
 def test_project_id_for_catalog_item_does_not_hand_over_another_owners_copy(tmp_path):
     # Unscoped, the second importer is told the item is already held and given
     # the first importer's project.

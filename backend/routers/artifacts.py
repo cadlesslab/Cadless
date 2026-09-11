@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import FileResponse
 
 from backend.deps import get_store
@@ -78,7 +78,16 @@ async def get_thumbnail(version_id: int, store: ScopedStore = Depends(get_store)
 
 
 @router.get("/{kind}/{part}")
-async def get_part(version_id: int, kind: str, part: int, store: ScopedStore = Depends(get_store)):
+async def get_part(
+    version_id: int,
+    kind: str,
+    # Bounded, because the value is bound as a SQLite integer and one too large
+    # to fit raises out of the driver rather than answering — a server error for
+    # what is really a malformed address. The floor is the ordinal's own: parts
+    # are counted from 0, so a negative one is a bad request, not a miss.
+    part: int = Path(ge=0, lt=2**63),
+    store: ScopedStore = Depends(get_store),
+):
     """One numbered file of a kind, for a model that comes in several pieces.
 
     Two segments, so it shadows none of the fixed routes above — but unlike

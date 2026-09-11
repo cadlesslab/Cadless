@@ -8,7 +8,8 @@ re-runnable version.
 Contract (consumed by the API issues):
   Projects:  create_project, list_projects, get_project, rename_project, delete_project
   Versions:  add_version, list_versions, get_version, set_current_version
-  Artifacts: add_artifact, list_artifacts, get_artifact (+ version_artifact_dir)
+  Artifacts: add_artifact, list_artifacts, get_artifact, get_artifact_part
+             (+ version_artifact_dir)
   Chat:      get_or_create_session, add_message, update_message, list_messages
              (messages carry an optional neutral ContentBlock list via blocks_json)
 """
@@ -547,24 +548,33 @@ class Store:
             # file per kind by convention, with nothing enforcing it: a second
             # row of a kind inserted fine and then hid the first, because the
             # single-artifact read took one row and there was no second axis to
-            # tell them apart. Legacy rows are numbered by the order they were
-            # written, which for a one-per-kind database means every row is 0.
-            await db.execute("ALTER TABLE artifacts ADD COLUMN part INTEGER")
-        # Filtered to NULL so it never renumbers a row that already has a part,
-        # and run on every init() for the same reason the owner back-fill above
-        # is: a NULL arriving some other way would otherwise sit in a column the
-        # unique index below is about to refuse.
-        await db.execute(
-            "UPDATE artifacts SET part = ("
-            " SELECT COUNT(*) FROM artifacts prior"
-            " WHERE prior.version_id = artifacts.version_id"
-            " AND prior.kind = artifacts.kind AND prior.id < artifacts.id"
-            ") WHERE part IS NULL"
-        )
-        # The guard the table never had. It is created after the back-fill and
-        # not in _SCHEMA, because nothing ever stopped two rows of one kind
-        # being written: creating it first would raise during init() on exactly
-        # the databases the back-fill exists to rescue.
+            # tell them apart.
+            #
+            # NOT NULL with a default is the one shape ALTER TABLE accepts, and
+            # the shape is load-bearing rather than tidy: SQLite counts NULLs as
+            # distinct in a unique index, so a nullable column would leave the
+            # index below unable to see a duplicate — on exactly the databases
+            # this migration exists to rescue. It also leaves a migrated schema
+            # identical to a fresh one, so the two cannot drift into answering
+            # differently.
+            await db.execute("ALTER TABLE artifacts ADD COLUMN part INTEGER NOT NULL DEFAULT 0")
+            # Every existing row arrives at 0, so a version that already held two
+            # files of one kind now holds two zeroes. Number them by the order
+            # they were written, which is the only order there is, before the
+            # index below would refuse them. Inside the branch because this is a
+            # one-time repair: afterwards `add_artifact` is the only writer, and
+            # it assigns the ordinal itself.
+            await db.execute(
+                "UPDATE artifacts SET part = ("
+                " SELECT COUNT(*) FROM artifacts prior"
+                " WHERE prior.version_id = artifacts.version_id"
+                " AND prior.kind = artifacts.kind AND prior.id < artifacts.id"
+                ")"
+            )
+        # The guard the table never had. It is created after the renumbering
+        # above and not in _SCHEMA, because nothing ever stopped two rows of one
+        # kind being written: creating it first would raise during init() on
+        # exactly the databases the renumbering exists to rescue.
         await db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_kind_part "
             "ON artifacts(version_id, kind, part)"
@@ -1296,8 +1306,10 @@ class Store:
                     await db.execute(
                         # Bare columns alongside a lone MAX() come from the
                         # matching row in SQLite, so this picks the newest
-                        # thumbnail artifact per project — the same "latest wins"
-                        # rule as get_artifact.
+                        # thumbnail artifact per project. Newest on purpose: a
+                        # project re-baked keeps showing the picture it last
+                        # produced, and the older rows are history rather than
+                        # pieces of one image.
                         "SELECT v.project_id AS project_id, a.version_id AS version_id, MAX(a.id) "
                         "FROM artifacts a JOIN script_versions v ON v.id = a.version_id "
                         "JOIN projects ON projects.id = v.project_id "

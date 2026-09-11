@@ -3,6 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -196,7 +197,14 @@ def test_rerun_refuses_a_version_in_pieces(client, store, monkeypatch):
 
     vid = asyncio.run(go())
     calls: list = []
-    monkeypatch.setattr("backend.routers.versions.run_code", lambda *a, **k: calls.append((a, k)))
+
+    def _record(*args, **kwargs):
+        calls.append((args, kwargs))
+        # A result shaped like the real one, so that a broken guard fails on the
+        # status this test is about rather than on the stub's own shape.
+        return SimpleNamespace(ok=False, error="stub")
+
+    monkeypatch.setattr("backend.routers.versions.run_code", _record)
 
     r = client.post(f"/versions/{vid}/rerun")
     assert r.status_code == 409

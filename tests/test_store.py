@@ -1,6 +1,7 @@
 """Persistence layer tests. Uses asyncio.run + temp dirs (no plugin)."""
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 from cadless.store import LEGACY_PUBLISH_PLUGIN, Store
@@ -271,6 +272,47 @@ def test_part_column_backfills_a_database_written_before_it(tmp_path):
         assert (await s.add_artifact(v.id, "stl", str(third))).part == 2
 
     run(go())
+
+
+def test_a_migrated_database_still_refuses_a_duplicate_part(tmp_path):
+    """The guard has to hold on a migrated database, not only a fresh one.
+
+    SQLite counts NULLs as distinct in a unique index, so a column added back as
+    nullable leaves the index unable to see the duplicate it exists to refuse —
+    on exactly the databases the migration was written for. A fresh database
+    would pass this test either way, which is why it rewinds the schema first.
+    """
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        v = await s.add_version(p.id, "x", "result=1", ok=True)
+        d = Path(s.version_artifact_dir(v.id))
+        first = d / "m0.stl"
+        first.write_text("solid")
+        await s.add_artifact(v.id, "stl", str(first))
+
+        async with s._connect() as db:
+            await db.execute("DROP INDEX IF EXISTS idx_artifacts_version_kind_part")
+            await db.execute("ALTER TABLE artifacts DROP COLUMN part")
+            await db.commit()
+        await s.init()
+
+        second = d / "m1.stl"
+        second.write_text("solid")
+        try:
+            async with s._connect() as db:
+                await db.execute(
+                    "INSERT INTO artifacts(version_id,kind,path,bytes) VALUES (?,?,?,?)",
+                    (v.id, "stl", str(second), 5),
+                )
+                await db.commit()
+        except sqlite3.IntegrityError:
+            return True
+        return False
+
+    assert run(go()) is True
 
 
 def test_delete_cascades_versions_artifacts_and_blobs(tmp_path):
