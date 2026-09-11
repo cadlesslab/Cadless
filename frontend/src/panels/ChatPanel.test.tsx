@@ -61,6 +61,26 @@ function turnWithImage(): MessageOut[] {
   ];
 }
 
+/** A settled critique round as the transcript hands it back: one assistant
+ * message whose blocks are the verdict plus one image per view. */
+function settledRound(views = 4): MessageOut[] {
+  return [
+    {
+      id: 30, seq: 1, role: "assistant", content: null, status: "ok", error: null,
+      version_id: null, created_at: "",
+      blocks: [
+        { kind: "text", text: "Review of attempt 1: The render matches the request." },
+        ...Array.from({ length: views }, (_, i) => ({
+          kind: "image" as const,
+          media_type: "image/png",
+          data: null,
+          reading: `a render of the part this turn built, seen from view ${i}`,
+        })),
+      ],
+    },
+  ];
+}
+
 function pngFile(name: string): File {
   return new File([new Uint8Array(4)], name, { type: "image/png" });
 }
@@ -308,6 +328,41 @@ describe("ChatPanel", () => {
     const src = document.querySelector(".chat-thread img")?.getAttribute("src");
     expect(src).toMatch(/\/projects\/1\/messages\/20\/attachments\/0$/);
     expect(src).not.toContain("base64");
+  });
+
+  it("gathers a settled round's captures into one grid, not one row each", () => {
+    // The views are evidence to be compared, so they have to be on screen
+    // together. Flat, each is its own `.msg` row and the fourth is a scroll away.
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: settledRound(4),
+    });
+    const grids = document.querySelectorAll(".msg-captures");
+    expect(grids).toHaveLength(1);
+    expect(grids[0].querySelectorAll("img")).toHaveLength(4);
+  });
+
+  it("leaves a lone capture ungrouped, so it keeps the width it has today", () => {
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: settledRound(1),
+    });
+    expect(document.querySelector(".msg-captures")).toBeNull();
+    expect(document.querySelector(".msg-assistant img")).not.toBeNull();
+  });
+
+  it("keeps the user's own picture out of the capture grid", () => {
+    // A reference the user attached is not a view of what was built, and
+    // grouping it would drag it off the user's side of the thread.
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: turnWithImage(),
+    });
+    expect(document.querySelector(".msg-captures")).toBeNull();
+    expect(document.querySelector(".msg-user img")).not.toBeNull();
   });
 
   it("shows a Stop button that aborts the in-flight turn", () => {
