@@ -204,8 +204,8 @@ def test_artifacts_of_one_kind_are_addressable_by_part(tmp_path):
 
     A second file of a kind used to insert fine and then make the first
     unreachable, because resolving a kind took one row and there was nothing
-    stopping two. Nothing produces parts yet, so they are registered directly
-    here — which is the point of settling this before a splitter exists.
+    stopping two. The pieces are registered through the store directly, so what
+    is settled here is the storage contract and nothing above it.
     """
 
     async def go():

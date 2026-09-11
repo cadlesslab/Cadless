@@ -122,9 +122,7 @@ async def _mesh_path(store: ScopedStore, version_id: int) -> str:
     here takes one mesh, so serving the first piece would send a fragment of
     something somebody asked to be printed whole — and it would do it silently,
     reporting a successful job while hours of filament went into the wrong
-    shape. Declining costs nothing today, because nothing writes a version in
-    pieces yet; what it buys is that the day something does, this fails with a
-    sentence instead of a print.
+    shape. Declining is what makes that a sentence somebody reads instead.
     """
     pieces = [a for a in await store.list_artifacts(version_id) if a.kind == "stl"]
     if len(pieces) > 1:

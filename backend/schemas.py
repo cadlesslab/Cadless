@@ -66,9 +66,9 @@ class ProjectOut(BaseModel):
 class ArtifactOut(BaseModel):
     kind: str
     bytes: int
-    #: Which file of its kind this is. Without it a client can be handed three
-    #: files and have no way to ask for any particular one, because the kind is
-    #: all it could name them by. A model printed in one piece is always 0.
+    # Which file of its kind this is. Without it a client can be handed three
+    # files and have no way to ask for any particular one, because the kind is
+    # all it could name them by. A model printed in one piece is always 0.
     part: int = 0
 
     @classmethod

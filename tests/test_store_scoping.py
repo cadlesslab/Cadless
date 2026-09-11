@@ -246,9 +246,7 @@ def test_get_artifact_part_hides_another_owners(two_owners):
 
     A part number narrows what is asked for and must not widen who may ask: this
     hands back file bytes addressed by two guessable integers, so it needs its
-    own guard rather than inheriting one from the accessor beside it. The
-    signature check elsewhere cannot stand in for this — it reads the parameter
-    list, not the predicate, so an unscoped query passes it unchanged.
+    own guard rather than inheriting one from the accessor beside it.
     """
     s, _a, b, _ = two_owners
 

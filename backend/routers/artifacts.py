@@ -1,15 +1,11 @@
-"""Artifact serving: STEP/STL/OBJ download, GLB and thumbnail fetch.
-
-A version can hold several files of one kind — the pieces of a model too big to
-print whole — so each kind has a fixed route that serves the first of them and
-there is one numbered route for reaching any particular piece.
-"""
+"""Artifact serving: STEP/STL/OBJ download, GLB and thumbnail fetch."""
 
 from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 
 from backend.deps import get_store
@@ -28,8 +24,12 @@ _MEDIA = {
 
 #: Kinds a browser consumes in place rather than saving: the viewport loads a
 #: mesh and an ``<img>`` tag loads a thumbnail. Named here rather than left to
-#: each route, so the part route below serves the same kind the same way.
+#: each route, so every route serves a given kind the same way.
 _INLINE = {"glb", "thumbnail"}
+
+#: The largest value SQLite stores as an integer. Anything above it raises out of
+#: the driver at bind time rather than answering, so it is refused at the edge.
+_SQLITE_MAX_INT = 2**63
 
 
 def _serve(path: str, kind: str, filename: str) -> FileResponse:
@@ -67,13 +67,12 @@ async def get_obj(version_id: int, store: ScopedStore = Depends(get_store)):
 
 @router.get("/glb")
 async def get_glb(version_id: int, store: ScopedStore = Depends(get_store)):
-    # inline so the three.js viewport can fetch it directly
     return await _download(version_id, "glb", store)
 
 
 @router.get("/thumbnail")
 async def get_thumbnail(version_id: int, store: ScopedStore = Depends(get_store)):
-    """The baked catalog thumbnail PNG (#21), inline for <img> tags."""
+    """The baked catalog thumbnail PNG (#21)."""
     return await _download(version_id, "thumbnail", store)
 
 
@@ -81,11 +80,9 @@ async def get_thumbnail(version_id: int, store: ScopedStore = Depends(get_store)
 async def get_part(
     version_id: int,
     kind: str,
-    # Bounded, because the value is bound as a SQLite integer and one too large
-    # to fit raises out of the driver rather than answering — a server error for
-    # what is really a malformed address. The floor is the ordinal's own: parts
-    # are counted from 0, so a negative one is a bad request, not a miss.
-    part: int = Path(ge=0, lt=2**63),
+    # The floor is the ordinal's own: parts are counted from 0, so a negative
+    # one is a malformed address rather than a miss.
+    part: int = PathParam(ge=0, lt=_SQLITE_MAX_INT),
     store: ScopedStore = Depends(get_store),
 ):
     """One numbered file of a kind, for a model that comes in several pieces.

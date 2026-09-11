@@ -96,11 +96,11 @@ async def rerun_version(version_id: int, store: ScopedStore = Depends(get_store)
     if not version.code:
         raise HTTPException(status_code=400, detail="version has no code to re-run")
     # A version held in several pieces is declined before anything executes. The
-    # runner exports one file per kind, so a fresh export matches none of the
-    # pieces already recorded: it would be filed as one more piece holding the
-    # whole model, or skipped while the recorded pieces stayed stale. Neither is
-    # an answer, and inventing one here would be guessing at a file layout that
-    # does not exist yet.
+    # re-export below writes one file per kind, so it matches none of the pieces
+    # already recorded: the fresh file would be filed as one more piece holding
+    # the whole model, or skipped while every recorded piece stayed stale.
+    # Neither is an answer, and choosing between them here would be inventing a
+    # contract rather than reading one.
     recorded = await store.list_artifacts(version_id)
     if len(recorded) > len({a.kind for a in recorded}):
         raise HTTPException(
@@ -114,11 +114,10 @@ async def rerun_version(version_id: int, store: ScopedStore = Depends(get_store)
     dest = store.version_artifact_dir(version_id)
     res = await run_in_threadpool(run_code, version.code, export_dir=dest)
     if res.ok:
-        # Re-read rather than reusing the list the guard above took. `run_code`
-        # writes files and never artifact rows, so the two agree today — but
-        # this one is what decides whether a row is written, and pinning that
-        # decision to a snapshot taken before a subprocess ran is the shape of
-        # bug that survives every test until something else starts writing.
+        # Re-read rather than reusing the list the guard above took. This one
+        # decides whether a row is written, and pinning that decision to a
+        # snapshot taken before a subprocess ran is the shape of bug that
+        # survives every test until something changes underneath it.
         existing = {a.kind for a in await store.list_artifacts(version_id)}
         for kind in EXPORTERS:
             target = Path(dest) / f"model.{kind}"

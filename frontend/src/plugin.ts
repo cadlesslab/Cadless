@@ -15,6 +15,12 @@
  * shipped cannot be taken back. Where a plugin turns out to need something that
  * is not here, add it on purpose — do not reach around this file.
  *
+ * **An exported type's shape is part of the commitment too.** Adding a required
+ * field to one is a breaking change for anything that *builds* a value of it,
+ * even though it costs a reader nothing — a plugin's own test fixtures are the
+ * case that finds out. Widen one on purpose and say so, the same as adding an
+ * export.
+ *
  * ## Deliberately not exported
  *
  * - **`viewportStore` / `useViewport`** — driving the 3D viewport. Still

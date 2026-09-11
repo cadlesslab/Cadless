@@ -178,11 +178,10 @@ def test_rerun_rejects_catalog_item_403(client, store, tmp_path, monkeypatch):
 def test_rerun_refuses_a_version_in_pieces(client, store, monkeypatch):
     """Re-running a version held in pieces would leave it half-regenerated.
 
-    The runner exports one file per kind, so the fresh export matches none of the
-    pieces already recorded. It would either be filed as one more piece holding
-    the whole model, or skipped while the recorded pieces stayed stale — and
-    neither is an answer. Nothing writes pieces yet, so the route declines rather
-    than guessing at a layout that does not exist.
+    A re-export writes one file per kind, so it matches none of the pieces
+    already recorded. It would either be filed as one more piece holding the
+    whole model, or skipped while every recorded piece stayed stale — and
+    neither is an answer, so the route declines instead of choosing.
     """
 
     async def go():

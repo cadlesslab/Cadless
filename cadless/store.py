@@ -233,9 +233,8 @@ class Artifact:
     path: str
     bytes: int
     #: Which file of its kind this is, numbered from 0 within its version.
-    #: A model that fits the printer in one piece is always part 0, so the
-    #: default keeps every caller that knows nothing about parts correct.
-    #: Last, and defaulted, so positional construction stays valid.
+    #: A model that fits the printer in one piece is always part 0. Last in the
+    #: field order and defaulted, so positional construction stays valid.
     part: int = 0
 
 
@@ -979,6 +978,12 @@ class Store:
             for a in await self.list_artifacts(v.id, owner=owner):
                 src = Path(a.path)
                 if src.exists():
+                    # Copying by basename assumes the pieces of one kind have
+                    # distinct names, which holds while every writer puts them in
+                    # this one directory — two files there cannot share a name.
+                    # Anything that writes pieces into subdirectories, or copies
+                    # them in from staging, breaks that and needs a part-aware
+                    # destination here.
                     dst = Path(self.version_artifact_dir(new_v.id)) / src.name
                     shutil.copyfile(src, dst)
                     await self.add_artifact(new_v.id, a.kind, str(dst), owner=mine)

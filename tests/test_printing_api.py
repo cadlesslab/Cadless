@@ -978,8 +978,7 @@ def test_a_model_in_pieces_is_refused_rather_than_part_sliced(
     """Slicing one piece of a model asked for whole is worse than declining.
 
     The printer would run for hours and report success, and the plastic is spent
-    before anyone can see it came out the wrong shape. Nothing produces a version
-    in pieces yet, so this states the rule before anything can reach it.
+    before anyone can see it came out the wrong shape.
     """
 
     def _must_not_run(*args, **kwargs):

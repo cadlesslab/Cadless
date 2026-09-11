@@ -920,9 +920,8 @@ export const setCurrent = (projectId: number, versionId: number) =>
 // ---- artifact URLs ----
 /** Where a version's artifact of a kind lives, or a named piece of it.
  *
- * With no part, the route that has always existed: it serves the first piece,
- * which for a model printed whole is the only one. Naming a part is how the
- * rest are reached. */
+ * With no part, the route that has always existed — all a model printed whole
+ * ever needs. Naming a part is how the rest are reached. */
 export const artifactUrl = (versionId: number, kind: ArtifactKind, part?: number) =>
   part === undefined
     ? `${BASE}/versions/${versionId}/artifacts/${kind}`
