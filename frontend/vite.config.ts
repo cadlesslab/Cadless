@@ -32,6 +32,6 @@ export default defineConfig({
     // CSS blanked, `?raw` and `?inline` both come back empty and a test cannot
     // see which rule wins. Narrowed to the one stylesheet that a test reads, so
     // the rest of the suite keeps the speed the default was chosen for.
-    css: { include: [/components\.css$/] },
+    css: { include: [/components\.css$/, /app\.css$/] },
   },
 });
