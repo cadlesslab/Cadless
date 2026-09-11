@@ -8,7 +8,8 @@ re-runnable version.
 Contract (consumed by the API issues):
   Projects:  create_project, list_projects, get_project, rename_project, delete_project
   Versions:  add_version, list_versions, get_version, set_current_version
-  Artifacts: add_artifact, list_artifacts, get_artifact (+ version_artifact_dir)
+  Artifacts: add_artifact, list_artifacts, get_artifact, get_artifact_part
+             (+ version_artifact_dir)
   Chat:      get_or_create_session, add_message, update_message, list_messages
              (messages carry an optional neutral ContentBlock list via blocks_json)
 """
@@ -95,7 +96,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
     version_id INTEGER NOT NULL REFERENCES script_versions(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,
     path TEXT NOT NULL,
-    bytes INTEGER NOT NULL
+    bytes INTEGER NOT NULL,
+    part INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,6 +232,10 @@ class Artifact:
     kind: str
     path: str
     bytes: int
+    #: Which file of its kind this is, numbered from 0 within its version.
+    #: A model that fits the printer in one piece is always part 0. Last in the
+    #: field order and defaulted, so positional construction stays valid.
+    part: int = 0
 
 
 @dataclass
@@ -534,6 +540,44 @@ class Store:
         if msg_cols and "blocks_json" not in msg_cols:
             # Legacy chat_messages rows back-fill to NULL (an empty block list).
             await db.execute("ALTER TABLE chat_messages ADD COLUMN blocks_json TEXT")
+        art_rows = await (await db.execute("PRAGMA table_info(artifacts)")).fetchall()
+        art_cols = {r["name"] for r in art_rows}
+        if art_cols and "part" not in art_cols:
+            # Which file of its kind an artifact is. A version used to hold one
+            # file per kind by convention, with nothing enforcing it: a second
+            # row of a kind inserted fine and then hid the first, because the
+            # single-artifact read took one row and there was no second axis to
+            # tell them apart.
+            #
+            # NOT NULL with a default is the one shape ALTER TABLE accepts, and
+            # the shape is load-bearing rather than tidy: SQLite counts NULLs as
+            # distinct in a unique index, so a nullable column would leave the
+            # index below unable to see a duplicate — on exactly the databases
+            # this migration exists to rescue. It also leaves a migrated schema
+            # identical to a fresh one, so the two cannot drift into answering
+            # differently.
+            await db.execute("ALTER TABLE artifacts ADD COLUMN part INTEGER NOT NULL DEFAULT 0")
+            # Every existing row arrives at 0, so a version that already held two
+            # files of one kind now holds two zeroes. Number them by the order
+            # they were written, which is the only order there is, before the
+            # index below would refuse them. Inside the branch because this is a
+            # one-time repair: afterwards `add_artifact` is the only writer, and
+            # it assigns the ordinal itself.
+            await db.execute(
+                "UPDATE artifacts SET part = ("
+                " SELECT COUNT(*) FROM artifacts prior"
+                " WHERE prior.version_id = artifacts.version_id"
+                " AND prior.kind = artifacts.kind AND prior.id < artifacts.id"
+                ")"
+            )
+        # The guard the table never had. It is created after the renumbering
+        # above and not in _SCHEMA, because nothing ever stopped two rows of one
+        # kind being written: creating it first would raise during init() on
+        # exactly the databases the renumbering exists to rescue.
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_kind_part "
+            "ON artifacts(version_id, kind, part)"
+        )
         # Seed a chat session for every project that lacks one (1:1 invariant). Idempotent:
         # the LEFT JOIN filter skips projects that already have a session, so a second
         # init() is a no-op. No message rows are synthesized for legacy versions here.
@@ -934,6 +978,12 @@ class Store:
             for a in await self.list_artifacts(v.id, owner=owner):
                 src = Path(a.path)
                 if src.exists():
+                    # Copying by basename assumes the pieces of one kind have
+                    # distinct names, which holds while every writer puts them in
+                    # this one directory — two files there cannot share a name.
+                    # Anything that writes pieces into subdirectories, or copies
+                    # them in from staging, breaks that and needs a part-aware
+                    # destination here.
                     dst = Path(self.version_artifact_dir(new_v.id)) / src.name
                     shutil.copyfile(src, dst)
                     await self.add_artifact(new_v.id, a.kind, str(dst), owner=mine)
@@ -1146,17 +1196,27 @@ class Store:
         size = Path(path).stat().st_size
         pred, params = _owner_sql(owner, write=True)
         async with self._connect() as db:
+            # The part number is assigned here rather than accepted as an
+            # argument, so this method is the only place one can come from and
+            # no caller can choose a value that collides. It is computed inside
+            # the INSERT so that counting and writing cannot be separated.
             cur = await db.execute(
-                "INSERT INTO artifacts(version_id,kind,path,bytes)"
-                " SELECT ?,?,?,? FROM script_versions"
+                "INSERT INTO artifacts(version_id,kind,path,bytes,part)"
+                " SELECT ?,?,?,?,("
+                "  SELECT COALESCE(MAX(part),-1)+1 FROM artifacts"
+                "  WHERE version_id=? AND kind=?"
+                " ) FROM script_versions"
                 " JOIN projects ON projects.id = script_versions.project_id"
                 f" WHERE script_versions.id=? AND {pred}",
-                (version_id, kind, str(path), size, version_id, *params),
+                (version_id, kind, str(path), size, version_id, kind, version_id, *params),
             )
             if cur.rowcount == 0:
                 raise LookupError(f"no version {version_id} for this owner")
+            row = await (
+                await db.execute("SELECT part FROM artifacts WHERE id=?", (cur.lastrowid,))
+            ).fetchone()
             await db.commit()
-            return Artifact(cur.lastrowid, version_id, kind, str(path), size)
+            return Artifact(cur.lastrowid, version_id, kind, str(path), size, row["part"])
 
     async def list_artifacts(self, version_id: int, *, owner: Owner = UNSCOPED) -> list[Artifact]:
         pred, params = _owner_sql(owner)
@@ -1175,12 +1235,19 @@ class Store:
     async def get_artifact(
         self, version_id: int, kind: str, *, owner: Owner = UNSCOPED
     ) -> Artifact | None:
-        """One artifact of a version, or ``None`` when this owner cannot see it.
+        """The first artifact of a kind, or ``None`` when this owner cannot see it.
 
         The download routes hand back file bytes addressed by a bare version id,
         which makes this the narrowest place a guessed integer could turn into
         somebody else's geometry. Ownership is reached by joining twice, because
         an artifact knows its version and a version knows its project.
+
+        **Which one, when there are several.** Part 0, deterministically. This
+        used to order by descending id, so the answer was whichever row had been
+        written last — an ordering nothing chose and nothing could rely on. A
+        caller that wants a specific one asks :meth:`get_artifact_part`, and a
+        caller that wants them all asks :meth:`list_artifacts`; "the first part"
+        is the answer that is stable and that a single-file version already gave.
         """
         pred, params = _owner_sql(owner)
         async with self._connect() as db:
@@ -1190,8 +1257,31 @@ class Store:
                     " JOIN script_versions ON script_versions.id = artifacts.version_id"
                     " JOIN projects ON projects.id = script_versions.project_id"
                     f" WHERE artifacts.version_id=? AND artifacts.kind=? AND {pred}"
-                    " ORDER BY artifacts.id DESC LIMIT 1",
+                    " ORDER BY artifacts.part ASC, artifacts.id ASC LIMIT 1",
                     (version_id, kind, *params),
+                )
+            ).fetchone()
+        return _artifact(row) if row else None
+
+    async def get_artifact_part(
+        self, version_id: int, kind: str, part: int, *, owner: Owner = UNSCOPED
+    ) -> Artifact | None:
+        """One named part of a kind, or ``None`` when it does not exist here.
+
+        Scoped by the same double join as :meth:`get_artifact`, and for the same
+        reason: this is reached from a download route carrying two integers a
+        stranger could guess.
+        """
+        pred, params = _owner_sql(owner)
+        async with self._connect() as db:
+            row = await (
+                await db.execute(
+                    "SELECT artifacts.* FROM artifacts"
+                    " JOIN script_versions ON script_versions.id = artifacts.version_id"
+                    " JOIN projects ON projects.id = script_versions.project_id"
+                    f" WHERE artifacts.version_id=? AND artifacts.kind=?"
+                    f" AND artifacts.part=? AND {pred}",
+                    (version_id, kind, part, *params),
                 )
             ).fetchone()
         return _artifact(row) if row else None
@@ -1221,8 +1311,10 @@ class Store:
                     await db.execute(
                         # Bare columns alongside a lone MAX() come from the
                         # matching row in SQLite, so this picks the newest
-                        # thumbnail artifact per project — the same "latest wins"
-                        # rule as get_artifact.
+                        # thumbnail artifact per project. Newest on purpose: a
+                        # project re-baked keeps showing the picture it last
+                        # produced, and the older rows are history rather than
+                        # pieces of one image.
                         "SELECT v.project_id AS project_id, a.version_id AS version_id, MAX(a.id) "
                         "FROM artifacts a JOIN script_versions v ON v.id = a.version_id "
                         "JOIN projects ON projects.id = v.project_id "
@@ -1726,7 +1818,7 @@ def _version(r) -> ScriptVersion:
 
 
 def _artifact(r) -> Artifact:
-    return Artifact(r["id"], r["version_id"], r["kind"], r["path"], r["bytes"])
+    return Artifact(r["id"], r["version_id"], r["kind"], r["path"], r["bytes"], r["part"])
 
 
 def _session(r) -> ChatSession:

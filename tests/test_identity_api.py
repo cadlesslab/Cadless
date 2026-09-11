@@ -110,6 +110,23 @@ def test_downloading_another_persons_geometry_is_a_404(hosted):
     assert theirs.status_code == 404
 
 
+def test_downloading_a_named_piece_of_another_persons_geometry_is_a_404(hosted):
+    """The same bytes, reached by the route that names a piece.
+
+    Two guessable integers instead of one. A model in pieces is still one
+    person's, and the piece number narrows the request without widening who may
+    make it.
+    """
+    client, (_a, a_version, _b, _s) = hosted
+
+    mine = client.get(f"/versions/{a_version}/artifacts/step/0", headers=_as(client, "user-a"))
+    assert mine.status_code == 200
+    assert mine.text == "a-geometry"
+
+    theirs = client.get(f"/versions/{a_version}/artifacts/step/0", headers=_as(client, "user-b"))
+    assert theirs.status_code == 404
+
+
 def test_reading_another_persons_version_is_a_404(hosted):
     client, (_a, a_version, _b, _s) = hosted
     assert client.get(f"/versions/{a_version}", headers=_as(client, "user-a")).status_code == 200

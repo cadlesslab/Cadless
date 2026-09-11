@@ -54,7 +54,9 @@ function version(kinds: string[]): Version {
     id: 5, project_id: 2, prompt: "p", code: null, ok: true, error: null,
     volume: 1, bbox: [1, 1, 1], created_at: "", parameters: {}, parent_version_id: null,
     plan_step: null,
-    artifacts: kinds.map((k) => ({ kind: k as Version["artifacts"][number]["kind"], bytes: 1 })),
+    artifacts: kinds.map((k) => ({
+      kind: k as Version["artifacts"][number]["kind"], bytes: 1, part: 0,
+    })),
   };
 }
 

@@ -3,6 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -172,6 +173,41 @@ def test_rerun_rejects_catalog_item_403(client, store, tmp_path, monkeypatch):
     assert r.status_code == 403
     assert "read-only" in r.json()["detail"].lower()
     assert calls == []  # the baked artifacts were never re-exported
+
+
+def test_rerun_refuses_a_version_in_pieces(client, store, monkeypatch):
+    """Re-running a version held in pieces would leave it half-regenerated.
+
+    A re-export writes one file per kind, so it matches none of the pieces
+    already recorded. It would either be filed as one more piece holding the
+    whole model, or skipped while every recorded piece stayed stale — and
+    neither is an answer, so the route declines instead of choosing.
+    """
+
+    async def go():
+        project = await store.create_project("P")
+        version = await store.add_version(project.id, "x", "result=1", ok=True)
+        directory = Path(store.version_artifact_dir(version.id))
+        for n in range(2):
+            piece = directory / f"model_p{n}.stl"
+            piece.write_text("solid")
+            await store.add_artifact(version.id, "stl", str(piece))
+        return version.id
+
+    vid = asyncio.run(go())
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append((args, kwargs))
+        # A result shaped like the real one, so that a broken guard fails on the
+        # status this test is about rather than on the stub's own shape.
+        return SimpleNamespace(ok=False, error="stub")
+
+    monkeypatch.setattr("backend.routers.versions.run_code", _record)
+
+    r = client.post(f"/versions/{vid}/rerun")
+    assert r.status_code == 409
+    assert calls == []  # nothing was executed
 
 
 @pytest.mark.build123d

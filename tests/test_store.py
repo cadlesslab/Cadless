@@ -1,6 +1,7 @@
 """Persistence layer tests. Uses asyncio.run + temp dirs (no plugin)."""
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 from cadless.store import LEGACY_PUBLISH_PLUGIN, Store
@@ -196,6 +197,122 @@ def test_artifacts_and_blob_dir(tmp_path):
         assert await s.get_artifact(v.id, "glb") is None
 
     run(go())
+
+
+def test_artifacts_of_one_kind_are_addressable_by_part(tmp_path):
+    """Several files of one kind stay reachable instead of hiding each other.
+
+    A second file of a kind used to insert fine and then make the first
+    unreachable, because resolving a kind took one row and there was nothing
+    stopping two. The pieces are registered through the store directly, so what
+    is settled here is the storage contract and nothing above it.
+    """
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        v = await s.add_version(p.id, "x", "result=1", ok=True)
+        d = Path(s.version_artifact_dir(v.id))
+        paths = []
+        for n in range(3):
+            f = d / f"model_p{n}.stl"
+            f.write_text(f"solid part{n}")
+            paths.append(str(f))
+            await s.add_artifact(v.id, "stl", str(f))
+
+        assert [a.part for a in await s.list_artifacts(v.id)] == [0, 1, 2]
+        # The first part, not whichever was written last.
+        assert (await s.get_artifact(v.id, "stl")).path == paths[0]
+        for n, path in enumerate(paths):
+            assert (await s.get_artifact_part(v.id, "stl", n)).path == path
+        assert await s.get_artifact_part(v.id, "stl", 3) is None
+        # Each kind numbers its own parts.
+        glb = d / "model.glb"
+        glb.write_bytes(b"glTF...")
+        assert (await s.add_artifact(v.id, "glb", str(glb))).part == 0
+
+    run(go())
+
+
+def test_part_column_backfills_a_database_written_before_it(tmp_path):
+    """An older database keeps its rows and gains an order over them.
+
+    The back-fill runs before the unique index, and only a real database shows
+    why: nothing ever stopped two rows of one kind being written, so creating
+    the index first would raise during startup on exactly the databases this
+    migration exists to rescue. Rewinding the schema needs the connection
+    directly — there is no public way to un-migrate.
+    """
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        v = await s.add_version(p.id, "x", "result=1", ok=True)
+        d = Path(s.version_artifact_dir(v.id))
+        for n in range(2):
+            f = d / f"m{n}.stl"
+            f.write_text("solid")
+            await s.add_artifact(v.id, "stl", str(f))
+
+        # Back to the pre-part shape. The index goes first: SQLite refuses to
+        # drop a column an index names.
+        async with s._connect() as db:
+            await db.execute("DROP INDEX IF EXISTS idx_artifacts_version_kind_part")
+            await db.execute("ALTER TABLE artifacts DROP COLUMN part")
+            await db.commit()
+
+        await s.init()
+
+        assert [a.part for a in await s.list_artifacts(v.id)] == [0, 1]
+        # A third part carries on from the back-filled numbering.
+        third = d / "m2.stl"
+        third.write_text("solid")
+        assert (await s.add_artifact(v.id, "stl", str(third))).part == 2
+
+    run(go())
+
+
+def test_a_migrated_database_still_refuses_a_duplicate_part(tmp_path):
+    """The guard has to hold on a migrated database, not only a fresh one.
+
+    SQLite counts NULLs as distinct in a unique index, so a column added back as
+    nullable leaves the index unable to see the duplicate it exists to refuse —
+    on exactly the databases the migration was written for. A fresh database
+    would pass this test either way, which is why it rewinds the schema first.
+    """
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        v = await s.add_version(p.id, "x", "result=1", ok=True)
+        d = Path(s.version_artifact_dir(v.id))
+        first = d / "m0.stl"
+        first.write_text("solid")
+        await s.add_artifact(v.id, "stl", str(first))
+
+        async with s._connect() as db:
+            await db.execute("DROP INDEX IF EXISTS idx_artifacts_version_kind_part")
+            await db.execute("ALTER TABLE artifacts DROP COLUMN part")
+            await db.commit()
+        await s.init()
+
+        second = d / "m1.stl"
+        second.write_text("solid")
+        try:
+            async with s._connect() as db:
+                await db.execute(
+                    "INSERT INTO artifacts(version_id,kind,path,bytes) VALUES (?,?,?,?)",
+                    (v.id, "stl", str(second), 5),
+                )
+                await db.commit()
+        except sqlite3.IntegrityError:
+            return True
+        return False
+
+    assert run(go()) is True
 
 
 def test_delete_cascades_versions_artifacts_and_blobs(tmp_path):
