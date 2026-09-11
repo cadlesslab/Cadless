@@ -5,6 +5,8 @@
   /* spacing scale */
   --space-1: 4px;
   --space-2: 8px;
+  /* Two view tiles and the gap between them. */
+  --views-max: 328px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;

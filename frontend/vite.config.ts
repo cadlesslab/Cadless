@@ -30,8 +30,8 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     // Off by default, and that default is why a cascade defect shipped: with
     // CSS blanked, `?raw` and `?inline` both come back empty and a test cannot
-    // see which rule wins. Narrowed to the one stylesheet that a test reads, so
-    // the rest of the suite keeps the speed the default was chosen for.
-    css: { include: [/components\.css$/] },
+    // see which rule wins. Narrowed to the stylesheets a test reads, so the
+    // rest of the suite keeps the speed the default was chosen for.
+    css: { include: [/components\.css$/, /app\.css$/] },
   },
 });

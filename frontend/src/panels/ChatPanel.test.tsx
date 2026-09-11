@@ -47,15 +47,59 @@ function blockMessages(): MessageOut[] {
 }
 
 /** A turn as the transcript hands it back after a reload: the image block keeps
- * its shape but has shed its payload, so the picture has to be fetched. */
-function turnWithImage(): MessageOut[] {
+ * its shape but has shed its payload, so the picture has to be fetched.
+ *
+ * `pictures` is a parameter because the composer's file input takes several at
+ * once, so a turn really can carry more than one — and a fixture of one lets
+ * the run-of-one rule stand in for the rule that keeps a user's pictures out
+ * of the assistant's grid. */
+function turnWithImage(pictures = 1): MessageOut[] {
   return [
     {
       id: 20, seq: 1, role: "user", content: "make this", status: "ok", error: null,
       version_id: null, created_at: "",
       blocks: [
-        { kind: "image", media_type: "image/png", data: null, reading: "a hand-drawn bracket" },
+        ...Array.from({ length: pictures }, () => ({
+          kind: "image" as const,
+          media_type: "image/png",
+          data: null,
+          reading: "a hand-drawn bracket",
+        })),
         { kind: "text", text: "make this" },
+      ],
+    },
+  ];
+}
+
+/** Two settled rounds arriving next to each other, as separate messages. */
+function twoRounds(): MessageOut[] {
+  return [30, 31].map((id, seq) => ({
+    id, seq: seq + 1, role: "assistant", content: null, status: "ok", error: null,
+    version_id: null, created_at: "",
+    blocks: Array.from({ length: 2 }, (_, n) => ({
+      kind: "image" as const,
+      media_type: "image/png",
+      data: null,
+      reading: `a render of the part this turn built, seen from view ${n}`,
+    })),
+  }));
+}
+
+/** A settled critique round as the transcript hands it back: one assistant
+ * message whose blocks are the verdict plus one image per view. */
+function settledRound(views = 4): MessageOut[] {
+  return [
+    {
+      id: 30, seq: 1, role: "assistant", content: null, status: "ok", error: null,
+      version_id: null, created_at: "",
+      blocks: [
+        { kind: "text", text: "Review of attempt 1: The render matches the request." },
+        ...Array.from({ length: views }, (_, i) => ({
+          kind: "image" as const,
+          media_type: "image/png",
+          data: null,
+          reading: `a render of the part this turn built, seen from view ${i}`,
+        })),
       ],
     },
   ];
@@ -308,6 +352,58 @@ describe("ChatPanel", () => {
     const src = document.querySelector(".chat-thread img")?.getAttribute("src");
     expect(src).toMatch(/\/projects\/1\/messages\/20\/attachments\/0$/);
     expect(src).not.toContain("base64");
+  });
+
+  it("gathers a settled round's captures into one grid, not one row each", () => {
+    // The views are evidence to be compared, so they have to be on screen
+    // together. Flat, each is its own `.msg` row and the fourth is a scroll away.
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: settledRound(4),
+    });
+    const grids = document.querySelectorAll(".msg-captures");
+    expect(grids).toHaveLength(1);
+    expect(grids[0].querySelectorAll("img")).toHaveLength(4);
+  });
+
+  it("leaves a lone capture ungrouped, so it keeps the width it has today", () => {
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: settledRound(1),
+    });
+    expect(document.querySelector(".msg-captures")).toBeNull();
+    expect(document.querySelector(".msg-assistant img")).not.toBeNull();
+  });
+
+  it("keeps the user's own pictures out of the capture grid", () => {
+    // References the user attached are not views of what was built, and the
+    // grid would drag them off the user's side of the thread and square them
+    // off. Two of them, because with one the run-of-one rule answers first and
+    // this test never reaches the rule it is named for.
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: turnWithImage(2),
+    });
+    expect(document.querySelector(".msg-captures")).toBeNull();
+    expect(document.querySelectorAll(".msg-user img")).toHaveLength(2);
+  });
+
+  it("keeps two rounds' captures in separate grids", () => {
+    // The run is identified by the message it came from. Two rounds sitting
+    // next to each other must not merge into one eight-cell grid under a
+    // single verdict.
+    renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project],
+      messages: twoRounds(),
+    });
+    const grids = document.querySelectorAll(".msg-captures");
+    expect(grids).toHaveLength(2);
+    expect(grids[0].querySelectorAll("img")).toHaveLength(2);
+    expect(grids[1].querySelectorAll("img")).toHaveLength(2);
   });
 
   it("shows a Stop button that aborts the in-flight turn", () => {
