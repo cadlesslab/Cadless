@@ -363,6 +363,24 @@ class TestOfferingToScaleItDown:
         assert 0 < offer["percent"] < 100
         assert len(offer["size"]) == 3
 
+    def test_the_refusal_also_says_what_splitting_it_would_take(
+        self, client, oversized_version, monkeypatch
+    ):
+        """The third way out, beside scaling and turning. Said in the refusal
+        itself because that is the one part of this reply every panel already
+        shows -- this build's and the marketplace's alike."""
+
+        def never(*_a, **_k):
+            raise AssertionError("nothing is sliced until the offer is accepted")
+
+        monkeypatch.setattr(slicing, "slice_mesh", never)
+        body = client.post(f"/printing/versions/{oversized_version}/slice").json()
+
+        assert body["ok"] is False
+        assert "assembly" in body["detail"].lower()
+        # The other two remedies are still there, unchanged in shape.
+        assert body["scale_offer"] is not None
+
     def test_accepting_it_scales_the_job(self, client, oversized_version, monkeypatch):
         seen = {}
 

@@ -231,3 +231,56 @@ class TestWhatTheSlicerIsTold:
             rotate_degrees=90,
         )
         assert argv[-1] == "m.stl"
+
+
+class TestWhatSplittingWouldTake:
+    """The third way out of a model that will not fit, beside scaling and turning.
+
+    Scaling prints something smaller than was asked for and turning only helps
+    once; cutting the model up is the answer for the half of the catalogue that
+    is furniture at real scale. What is computed here is only the count -- where
+    the seams actually go is the model's decision, not arithmetic's.
+    """
+
+    def default(self):
+        return printer_profile.build_volume({})
+
+    def test_a_model_that_fits_is_offered_no_split(self):
+        assert print_fit.split_offer([70.0, 70.3, 12.0], self.default()) is None
+
+    def test_the_measured_desk_is_told_how_many_parts_it_would_take(self):
+        offer = print_fit.split_offer([1100.0, 600.0, 450.0], self.default())
+        assert offer is not None
+        # 1100/200 -> 6 across, 600/190 -> 4 deep, 450/195 -> 3 tall.
+        assert offer.pieces == 6 * 4 * 3
+
+    def test_the_count_is_measured_against_the_bed_less_its_skirt(self):
+        """The same target the scale offer aims at, and for the same reason: each
+        part is printed on its own, so each one needs the room a skirt takes.
+        Against the full 210 mm bed this model would read as two parts, not four.
+        """
+        offer = print_fit.split_offer([205.0, 100.0, 250.0], self.default())
+        assert offer is not None
+        assert offer.pieces == 4
+
+    def test_an_unusable_bounding_box_is_offered_no_split(self):
+        """The silence the rest of this module keeps, for the same reason."""
+        assert print_fit.split_offer(None, self.default()) is None
+        assert print_fit.split_offer(["wide", 10, 10], self.default()) is None
+
+    def test_a_bigger_printer_needs_fewer_parts(self):
+        small = print_fit.split_offer([1100.0, 600.0, 450.0], self.default())
+        big = print_fit.split_offer(
+            [1100.0, 600.0, 450.0],
+            printer_profile.build_volume(
+                {"printer_bed_width": 600, "printer_bed_depth": 600, "printer_max_height": 600}
+            ),
+        )
+        assert small is not None and big is not None
+        assert big.pieces < small.pieces
+
+    def test_the_sentence_names_the_count_and_how_to_ask_for_it(self):
+        offer = print_fit.split_offer([1100.0, 600.0, 450.0], self.default())
+        sentence = print_fit.split_sentence(offer)
+        assert "72" in sentence
+        assert "assembly" in sentence

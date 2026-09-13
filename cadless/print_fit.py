@@ -192,3 +192,57 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
         f"build volume is {_mm(volume.width)} x {_mm(volume.depth)} x {_mm(volume.height)} mm. "
         "Ask for a smaller model, or set your printer's real size in Settings."
     )
+
+
+@dataclass(frozen=True)
+class SplitOffer:
+    """How many parts a too-big model would take, as something to be told.
+
+    An estimate, like :class:`ScaleOffer`, and for a sharper reason: this counts a
+    straight cut along each axis, while the model decides where its own seams
+    actually go. A seam placed at a natural boundary may take more parts than a
+    grid would, or fewer. So it is a floor, and it is said as "at least".
+    """
+
+    pieces: int
+
+
+def split_offer(bbox: Sequence[Any] | None, volume: BuildVolume) -> SplitOffer | None:
+    """What cutting a too-big model up would take, or ``None``.
+
+    The third answer, beside scaling it down and turning it a quarter. Those two
+    were the whole repertoire, and for the half of the catalogue that is furniture
+    at real scale neither is what was wanted: one prints something smaller than
+    was asked for, and the other only helps once.
+
+    ``None`` covers a model that already fits and a bounding box that is not three
+    usable numbers -- the same silence the rest of this module keeps, and for the
+    same reason. It is measured against :func:`scaled_target` rather than the bare
+    bed because each part is printed on its own, so each one needs the room a
+    skirt takes.
+    """
+    if not too_big_for(bbox, volume):
+        return None
+    dimensions = _dimensions(bbox)
+    if dimensions is None:
+        return None
+    target = scaled_target(volume)
+    pieces = 1
+    for size, limit in zip(dimensions, (target.width, target.depth, target.height), strict=True):
+        pieces *= max(1, math.ceil(size / limit))
+    return SplitOffer(pieces=pieces) if pieces > 1 else None
+
+
+def split_sentence(offer: SplitOffer) -> str:
+    """The split remedy, as a line to read beside the refusal.
+
+    Written as a sentence rather than returned as a field because it has two
+    readers -- this build's own panel and a marketplace panel elsewhere -- and
+    only one of them is ours to change. Both already show the refusal verbatim,
+    so a remedy said here reaches a reader today rather than after a client
+    learns a new field.
+    """
+    return (
+        f"It would fit as an assembly of at least {offer.pieces} parts: "
+        "turn on Assembly and ask again to have the parts designed with joints."
+    )

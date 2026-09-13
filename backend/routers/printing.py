@@ -338,9 +338,19 @@ async def slice_version(
                 # real scale, so for that half the plain refusal was always the
                 # last word. The offer is returned beside the refusal and nothing
                 # is sliced until it comes back accepted.
+                #
+                # Three ways out now rather than two, and the third is said in the
+                # refusal itself rather than returned beside it. Both panels that
+                # show this -- this build's and the marketplace's -- already print
+                # `detail` verbatim, so a sentence reaches a reader now, where a
+                # new field reaches one only after a client learns to read it.
+                # Scaling and turning keep their own shapes untouched.
+                split = print_fit.split_offer(version.bbox, volume)
                 return {
                     "ok": False,
-                    "detail": why,
+                    "detail": (
+                        why if split is None else f"{why} {print_fit.split_sentence(split)}"
+                    ),
                     "slicer_missing": False,
                     "stats": {},
                     "scale_offer": (
