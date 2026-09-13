@@ -331,6 +331,7 @@ def test_render_item_thumbnail_falls_through_to_the_next_mesh_kind(tmp_path):
     assert thumb.render_item_thumbnail(tmp_path, manifest) == "artifacts/thumbnail.png"
     assert (tmp_path / "artifacts" / "thumbnail.png").exists()
 
+
 # --------------------------------------------------------------------------- #
 # named views
 # --------------------------------------------------------------------------- #
