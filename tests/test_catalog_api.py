@@ -75,9 +75,9 @@ def populated(tmp_path, _own_catalog_roots):
             ledger,
             _write_house(
                 settings.domain_catalog_dir("house"),
-                "zillow-1",
+                "house-1",
                 "house",
-                "Zillow One",
+                "House One",
                 category="bungalow",
                 tags=["garage"],
                 description="Cosy bungalow.",
@@ -88,9 +88,9 @@ def populated(tmp_path, _own_catalog_roots):
             ledger,
             _write_house(
                 settings.domain_catalog_dir("house"),
-                "zillow-2",
+                "house-2",
                 "house",
-                "Zillow Two",
+                "House Two",
                 category="two-storey",
             ),
         )
@@ -171,7 +171,7 @@ def test_catalog_says_where_each_item_came_from(with_origins):
     assert source["from-file"] == "file"
     # The other root holds the bundled samples and anything authored on this
     # machine, and this tool does not invent a rule for telling those apart.
-    assert source["zillow-1"] == "local"
+    assert source["house-1"] == "local"
     assert source["part-1"] == "local"
 
 
@@ -206,7 +206,7 @@ def test_catalog_filters_by_where_an_item_came_from(with_origins):
 
     assert [it["house_id"] for it in depot["items"]] == ["from-depot"]
     assert depot["total"] == 1
-    assert {it["house_id"] for it in local["items"]} == {"zillow-1", "zillow-2", "part-1"}
+    assert {it["house_id"] for it in local["items"]} == {"house-1", "house-2", "part-1"}
 
 
 def test_catalog_facets_report_where_items_came_from(with_origins):
@@ -235,7 +235,7 @@ def test_where_items_came_from_survives_a_ledger_nobody_can_read(with_origins, t
     with TestClient(create_app(store=with_origins)) as c:
         assert c.get("/catalog", params={"limit": 200}).json()["details_unavailable"] is False
         # Half of an entry: what a crash partway through a write leaves behind.
-        (tmp_path / "catalog-ledger.json").write_text('{"zillow-1": {"step_c')
+        (tmp_path / "catalog-ledger.json").write_text('{"house-1": {"step_c')
 
         body = c.get("/catalog", params={"limit": 200}).json()
 
@@ -243,7 +243,7 @@ def test_where_items_came_from_survives_a_ledger_nobody_can_read(with_origins, t
     source = {it["house_id"]: it["source"] for it in body["items"]}
     assert source["from-depot"] == "depot"
     assert source["from-file"] == "file"
-    assert source["zillow-1"] == "local"
+    assert source["house-1"] == "local"
     assert [f["key"] for f in body["sources"]] == ["local", "depot", "file"]
 
 
@@ -290,7 +290,7 @@ def test_catalog_marks_only_received_items_removable(with_received):
 
     removable = {it["house_id"]: it["removable"] for it in body["items"]}
     assert removable["recv-1"] is True
-    assert removable["zillow-1"] is False and removable["part-1"] is False
+    assert removable["house-1"] is False and removable["part-1"] is False
     # Every one of them is here to be looked at, so none is the other case.
     assert not any(it["files_missing"] for it in body["items"])
 
@@ -314,8 +314,8 @@ def test_catalog_offers_to_remove_a_record_whose_files_are_gone(with_received):
     # Saying local would be a claim about somebody's item made out of no longer
     # having it — this one arrived in a file, and the ledger still says so.
     assert items["recv-1"]["source"] is None
-    assert items["zillow-1"]["files_missing"] is False
-    assert items["zillow-1"]["source"] == "local"
+    assert items["house-1"]["files_missing"] is False
+    assert items["house-1"]["source"] == "local"
 
 
 def test_a_record_with_no_files_is_not_counted_among_the_local_ones(with_received):
@@ -339,7 +339,7 @@ def test_removing_a_received_item_takes_it_out_of_the_catalog(with_received):
         assert c.delete("/catalog/recv-1").status_code == 204
         listed = [it["house_id"] for it in c.get("/catalog").json()["items"]]
 
-    assert "recv-1" not in listed and "zillow-1" in listed
+    assert "recv-1" not in listed and "house-1" in listed
     assert ledger.get("recv-1") is None  # not a stale entry left behind
     assert not house.exists()
     assert asyncio.run(store.get_project(pid)) is None
@@ -348,7 +348,7 @@ def test_removing_a_received_item_takes_it_out_of_the_catalog(with_received):
 def test_removing_an_item_the_next_start_would_load_again_is_refused(with_received):
     store, ledger, _ = with_received
     with TestClient(create_app(store=store)) as c:
-        r = c.delete("/catalog/zillow-1")
+        r = c.delete("/catalog/house-1")
         listed = [it["house_id"] for it in c.get("/catalog").json()["items"]]
 
     assert r.status_code == 403
@@ -359,8 +359,8 @@ def test_removing_an_item_the_next_start_would_load_again_is_refused(with_receiv
         "This catalog item's files are in the catalog this app loads at startup, "
         "so removing it here would not outlast the next start."
     )
-    assert "zillow-1" in listed
-    assert ledger.get("zillow-1") is not None
+    assert "house-1" in listed
+    assert ledger.get("house-1") is not None
 
 
 def test_removing_an_unknown_catalog_item_is_404(with_received):
@@ -387,7 +387,7 @@ def test_an_item_whose_files_are_gone_is_cleared_rather_than_refused(with_receiv
         listed = [it["house_id"] for it in c.get("/catalog").json()["items"]]
 
     assert r.status_code == 204, r.text
-    assert "recv-1" not in listed and "zillow-1" in listed
+    assert "recv-1" not in listed and "house-1" in listed
     assert ledger.get("recv-1") is None
     assert asyncio.run(store.get_project(pid)) is None
 
@@ -406,7 +406,7 @@ def test_an_unreadable_catalog_root_is_not_read_as_an_item_with_no_files(with_re
     try:
         with TestClient(create_app(store=store)) as c:
             listed = {it["house_id"]: it for it in c.get("/catalog").json()["items"]}
-            r = c.delete("/catalog/zillow-1")
+            r = c.delete("/catalog/house-1")
     finally:
         houses.chmod(0o755)
 
@@ -414,10 +414,10 @@ def test_an_unreadable_catalog_root_is_not_read_as_an_item_with_no_files(with_re
     assert "cannot tell" in r.json()["detail"]
     # Nothing was taken, and nothing offered: a Remove button here would promise
     # what the route has just refused.
-    assert ledger.get("zillow-1") is not None
-    assert asyncio.run(store.project_id_for_catalog_item("zillow-1")) is not None
-    assert listed["zillow-1"]["files_missing"] is False
-    assert listed["zillow-1"]["removable"] is False
+    assert ledger.get("house-1") is not None
+    assert asyncio.run(store.project_id_for_catalog_item("house-1")) is not None
+    assert listed["house-1"]["files_missing"] is False
+    assert listed["house-1"]["removable"] is False
 
 
 def test_a_startup_catalog_that_is_not_there_is_not_read_as_one_holding_nothing(with_received):
@@ -433,15 +433,15 @@ def test_a_startup_catalog_that_is_not_there_is_not_read_as_one_holding_nothing(
     try:
         with TestClient(create_app(store=store)) as c:
             listed = {it["house_id"]: it for it in c.get("/catalog").json()["items"]}
-            r = c.delete("/catalog/zillow-1")
+            r = c.delete("/catalog/house-1")
     finally:
         settings.catalog_root.with_name("elsewhere").rename(settings.catalog_root)
 
     assert r.status_code == 503, r.text
-    assert ledger.get("zillow-1") is not None
-    assert asyncio.run(store.project_id_for_catalog_item("zillow-1")) is not None
-    assert listed["zillow-1"]["files_missing"] is False
-    assert listed["zillow-1"]["removable"] is False
+    assert ledger.get("house-1") is not None
+    assert asyncio.run(store.project_id_for_catalog_item("house-1")) is not None
+    assert listed["house-1"]["files_missing"] is False
+    assert listed["house-1"]["removable"] is False
 
 
 def test_a_received_root_that_is_not_there_is_an_answer(with_received):
@@ -463,16 +463,16 @@ def test_an_unreadable_manifest_is_not_read_as_an_item_with_no_files(with_receiv
     directory lists, and one manifest will not open. That item claims no id and
     drops out of the walk exactly as a missing one does."""
     store, ledger, _ = with_received
-    manifest = settings.domain_catalog_dir("house") / "zillow-1" / "manifest.json"
+    manifest = settings.domain_catalog_dir("house") / "house-1" / "manifest.json"
     manifest.chmod(0o000)
     try:
         with TestClient(create_app(store=store)) as c:
-            r = c.delete("/catalog/zillow-1")
+            r = c.delete("/catalog/house-1")
     finally:
         manifest.chmod(0o644)
 
     assert r.status_code == 503, r.text
-    assert ledger.get("zillow-1") is not None
+    assert ledger.get("house-1") is not None
 
 
 def test_an_unreadable_received_root_does_not_report_a_removal_that_took_nothing(with_received):
@@ -580,7 +580,7 @@ def test_no_route_reads_the_ledger_on_the_event_loop(with_received, monkeypatch)
     before reading anything and the watch would pass over an inline read.
     """
     store, ledger, _ = with_received
-    source_pid = asyncio.run(store.project_id_for_catalog_item("zillow-1"))
+    source_pid = asyncio.run(store.project_id_for_catalog_item("house-1"))
     watched = {"catalog-ledger.json", "manifest.json"}
     on_loop: list[str] = []
     real_read_text = Path.read_text
@@ -605,7 +605,7 @@ def test_no_route_reads_the_ledger_on_the_event_loop(with_received, monkeypatch)
         assert c.get("/projects").status_code == 200
         assert c.get(f"/projects/{clone.json()['id']}").status_code == 200
         # Refused, but only after the walk that decides it — which is the read.
-        assert c.delete("/catalog/zillow-1").status_code == 403
+        assert c.delete("/catalog/house-1").status_code == 403
     assert on_loop == []
 
 
@@ -618,7 +618,7 @@ def test_catalog_grouped_by_domain(populated):
     assert [g["domain"] for g in groups] == ["house", "mechanical"]
     house = groups[0]
     assert house["label"] == "House"
-    assert [it["name"] for it in house["items"]] == ["Zillow One", "Zillow Two"]
+    assert [it["name"] for it in house["items"]] == ["House One", "House Two"]
     assert all(it["project_id"] > 0 and it["steps"] == 1 for it in house["items"])
     # current_version_id is populated so the UI can clone the item
     assert all(it["current_version_id"] is not None for it in house["items"])
@@ -627,7 +627,7 @@ def test_catalog_grouped_by_domain(populated):
 
 def test_catalog_excludes_deleted_projects(populated):
     store, ledger = populated
-    pid = asyncio.run(store.project_id_for_catalog_item("zillow-1"))
+    pid = asyncio.run(store.project_id_for_catalog_item("house-1"))
     with TestClient(create_app(store=store)) as c:
         # Deleted from under the running app, which is the case the listing has
         # to survive. Doing it before startup would test something else: the
@@ -636,11 +636,11 @@ def test_catalog_excludes_deleted_projects(populated):
         asyncio.run(store.delete_project(pid))
         body = c.get("/catalog").json()
     names = [it["name"] for g in body["groups"] for it in g["items"]]
-    assert "Zillow One" not in names
-    assert "Zillow Two" in names
+    assert "House One" not in names
+    assert "House Two" in names
     # the flat list and total agree with the grouped view
     flat = [it["name"] for it in body["items"]]
-    assert "Zillow One" not in flat and body["total"] == len(flat)
+    assert "House One" not in flat and body["total"] == len(flat)
 
 
 # --------------------------------------------------------------------------- #
@@ -653,7 +653,7 @@ def test_catalog_items_carry_discovery_metadata(populated):
     with TestClient(create_app(store=store)) as c:
         body = c.get("/catalog").json()
     items = {it["house_id"]: it for it in body["items"]}
-    z1 = items["zillow-1"]
+    z1 = items["house-1"]
     assert z1["category"] == "bungalow"
     assert z1["tags"] == ["garage"]
     assert z1["description"] == "Cosy bungalow."
