@@ -60,8 +60,9 @@ port, bound to loopback.
    G-code returned rather than the socket opened there, is the stronger shape and
    is not what this does.
 6. What the unauthenticated settings endpoint can change MUST stay tiered.
-   Runtime tuning is settable; anything that multiplies per-turn spend is
-   settable only when the launch environment opts in; and configuration that
+   Runtime tuning is settable; anything that multiplies per-turn spend, or that
+   turns on output no later stage checks, is settable only when the launch
+   environment opts in; and configuration that
    moves where code executes, relaxes a sandbox limit, or invalidates stored
    embeddings is never registered and is refused by the
    request model rather than accepted and discarded. Tuning values MUST NOT be
@@ -79,16 +80,22 @@ port, bound to loopback.
    nothing reads it from the environment, so exporting it would hand a device
    address on the operator's network to generated code for nothing in return.
 
-   **What the printer is** — its build volume, nozzle, filament and the two
-   temperatures — is settable on the same terms and saved-only for the same
-   reason. These reach an external process's *command line*:
+   **What the printer is** — its build volume, nozzle, filament, the two
+   temperatures, what a full cartridge holds and the gap it holds on a printed
+   joint — is settable on the same terms and saved-only for the same reason.
+   Most of them reach an external process's *command line*:
    `cadless/printer_profile.py` turns them into slicer flags. That is why every
    one is checked twice against a single range table,
    `printer_profile.PRINTER_PROFILE_LIMITS` — refused at the input so
    the reader is told there, and fallen back to the default on the way out so a
    hand-edited `settings.json` cannot put `1e-09` in an argv. The argv is a list
    and never a shell string, so the risk being managed is an unusable value
-   rather than an injected one. Unset stays unset: an installation that has saved
+   rather than an injected one. Two members reach no flag and are in the table
+   anyway, because the input check is worth having wherever the value leaves
+   this process: the cartridge's capacity is a number reported back, and the
+   joint clearance is told to the model that writes the part, where a bad value
+   is an assembly that does not go together rather than a print that leaves the
+   bed. Unset stays unset: an installation that has saved
    nothing slices exactly as it did before the profile existed.
 
    A sliced job records which profile it was cut under, and `/gcode` and `/send`
@@ -193,12 +200,16 @@ catalog content read-only.
   is not evidence of a universal validation gate.
 - Environment settings take precedence over settings persisted by the UI. A
   saved value may therefore be present without being the effective value.
-- The gate over the cost-multiplying settings is read from the launch
+- The launch gate over the settings behind it is read from the launch
   environment once at process start, so it is a deployment decision rather than
   a UI affordance — an interface that hides a control is still one request away
   from it. It blocks raising spend rather than lowering it, so whoever turned
   something on can always turn it off, and closing the gate also stops a raise
-  saved while it was open from being replayed at the next boot.
+  saved while it was open from being replayed at the next boot. Spend is the
+  usual reason to sit behind it but not the only one: a switch that turns on
+  output no later stage checks is gated on the same terms, because what it
+  exposes is a wrong answer rather than a bill, and the gate is closed again the
+  same way once something does check.
 - A `Pipeline` copies the settings it was built with, so a turn stays
   attributable to one configuration even though applying a setting mutates the
   shared singleton in place. Grounding retrieval runs outside the pipeline and
