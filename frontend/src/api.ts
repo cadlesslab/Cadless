@@ -999,6 +999,7 @@ export async function streamChat(
   signal?: AbortSignal,
   forge = false,
   images: ImageAttachment[] = [],
+  assembly = false,
 ): Promise<void> {
   let res: Response;
   try {
@@ -1018,8 +1019,10 @@ export async function streamChat(
       // default is overridable by design and there is no `init` here to reassert
       // it from, which is the difference between this call and `importCatalog`.
       headers: outgoingHeaders({ headers: { "Content-Type": "application/json" } }),
-      // `forge` opts this turn into best-of-N racing. It only takes
-      // effect if the server's global forge kill-switch is also on (both-true gate).
+      // `forge` opts this turn into best-of-N racing, `assembly` into asking for
+      // the part as several interlocking pieces rather than one solid. Each only
+      // takes effect if the server's matching global kill-switch is also on
+      // (both-true gate), and the two are independent of one another.
       // Each attachment is narrowed to the two fields the turn needs rather than
       // posted whole: the composer keeps a file name on its own copies for the
       // chips, and a body already carrying megabytes of base64 is no place to
@@ -1028,6 +1031,7 @@ export async function streamChat(
         message,
         images: images.map((i) => ({ media_type: i.media_type, data: i.data })),
         forge,
+        assembly,
       }),
       signal,
     });

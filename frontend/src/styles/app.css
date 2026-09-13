@@ -279,10 +279,13 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Mid-stream the Queue/steer control sits just left of Stop. */
 .composer-queue { right: calc(var(--space-1) + 36px); }
 
-/* Per-turn Forge toggle and the attach control: small opt-in chips above the field. */
+/* The per-turn Forge and Assembly toggles and the attach control: small opt-in
+   chips above the field. The two toggles share the active treatment because they
+   are the same kind of control — on for this turn only — and the attach button,
+   which has no on state, takes only the resting style. */
 .composer-tools { display: flex; gap: var(--space-2); }
-.composer-forge, .composer-attach { font-size: 0.8rem; padding: 2px var(--space-2); height: auto; opacity: 0.7; }
-.composer-forge[data-active="true"] { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.composer-forge, .composer-assembly, .composer-attach { font-size: 0.8rem; padding: 2px var(--space-2); height: auto; opacity: 0.7; }
+.composer-forge[data-active="true"], .composer-assembly[data-active="true"] { opacity: 1; color: var(--accent); border-color: var(--accent); }
 
 /* Reference images attached to the next turn. The picker itself is out of the
    layout rather than merely transparent: a file input cannot be restyled to sit
