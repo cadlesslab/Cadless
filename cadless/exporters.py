@@ -15,8 +15,37 @@ uniformly.
 from __future__ import annotations
 
 import os
+import re
 
 from cadless.config import settings
+
+#: How one part of a build is named, and how that name is read back.
+#:
+#: Writer and reader are different processes in different packages --
+#: :mod:`cadless._worker_child` writes the files and :mod:`backend.artifact_io`
+#: copies them in -- and they have to agree exactly, because the reader turns this
+#: number into the ordinal the artifact row is filed under. A name it cannot parse
+#: is a part either dropped or filed under another part's number, and neither
+#: failure says anything at the time. So the two halves live here together.
+_PART_STEM = re.compile(r"^model_p(\d+)$")
+
+
+def part_name(index: int, total: int) -> str:
+    """The base filename for one part of a build, without its extension.
+
+    A one-solid build keeps ``model``, byte for byte what every build wrote before
+    parts existed. That is the upgrade path: an installation that never asks for
+    an assembly sees the tree it has always had, and the re-run path goes on
+    finding its file by name. Numbering starts at zero and is not padded, because
+    the reader parses the number rather than sorting the string.
+    """
+    return "model" if total == 1 else f"model_p{index}"
+
+
+def part_index(stem: str) -> int | None:
+    """The part number carried by an exported file's stem, or ``None``."""
+    match = _PART_STEM.match(stem)
+    return int(match.group(1)) if match else None
 
 
 def export_step(result, out_dir: str, name: str = "model") -> str:

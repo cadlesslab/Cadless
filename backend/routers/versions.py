@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from backend import artifact_io
 from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.schemas import VersionOut
@@ -166,13 +167,7 @@ async def reparametrize_version(
             parent_version_id=version.id,
         )
         if res.ok:
-            dest = store.version_artifact_dir(new_version.id)
-            for kind in EXPORTERS:
-                src = getattr(res, f"{kind}_path", None)
-                if src and Path(src).exists():
-                    target = Path(dest) / f"model.{kind}"
-                    shutil.copy(src, target)
-                    await store.add_artifact(new_version.id, kind, str(target))
+            await artifact_io.copy_and_register(store, new_version.id, staging)
             await store.set_current_version(version.project_id, new_version.id)
     finally:
         shutil.rmtree(staging, ignore_errors=True)

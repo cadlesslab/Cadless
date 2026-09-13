@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
+from backend import artifact_io
 from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
@@ -48,7 +49,6 @@ from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
 from cadless.config import settings
 from cadless.distill import auto_distill
-from cadless.exporters import EXPORTERS
 from cadless.forge import persist_losers
 from cadless.llm.registry import build_provider  # monkeypatched in tests
 from cadless.llm.types import ContentBlock
@@ -374,13 +374,7 @@ async def _persist_tool_version(
     thumb = payload.get("thumbnail")
     src_dir = Path(thumb).parent if thumb else None
     if src_dir and src_dir.exists():
-        dest = store.version_artifact_dir(version.id)
-        for kind in EXPORTERS:
-            src = src_dir / f"model.{kind}"
-            if src.exists():
-                target = Path(dest) / f"model.{kind}"
-                shutil.copy(src, target)
-                await store.add_artifact(version.id, kind, str(target))
+        await artifact_io.copy_and_register(store, version.id, src_dir)
     await store.set_current_version(project_id, version.id)
     return version.id
 
