@@ -190,6 +190,36 @@ body.resizing { cursor: col-resize; user-select: none; }
   padding: var(--space-2) var(--space-3); font-size: var(--text-sm);
   max-width: 85%; white-space: pre-wrap; word-break: break-word;
 }
+/* A reference picture the user attached. The bubble loses its padding and its
+   accent fill so the image is the bubble rather than sitting on a coloured slab,
+   and the picture is capped in height — a portrait photograph would otherwise
+   take the whole thread. */
+.msg-user .msg-bubble-image { padding: 0; background: none; overflow: hidden; }
+.msg-image { display: block; max-width: 100%; max-height: 220px; object-fit: contain; border-radius: var(--radius-lg); }
+/* A render the critique reviewer was shown, as it comes back on a reload. The
+   views of one round arrive as a message each, and the thread gathers a run of
+   them into `.msg-captures` so they can be read against one another instead of
+   a screenful apart. Alone, a picture keeps the row and the cap it has here —
+   at attachment size a settled round would push the reply that explains it off
+   the top of the thread. The indent stands in for the avatar these deliberately
+   go without, and moves to the container wherever there is one. */
+.msg-capture { padding-left: calc(22px + var(--space-2)); }
+.msg-capture .msg-image { max-height: 120px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+/* `--views-max` caps the pair of columns rather than the picture inside one,
+   so the cells stay flush against each other instead of floating in a wide
+   track. Without it the tiles follow the panel all the way to its widest,
+   and a four-view round grows tall enough to push the reply that explains
+   it off the top of the thread — the same thing the height cap above is
+   there to stop. */
+.msg-captures {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2); padding-left: calc(22px + var(--space-2));
+  max-width: calc(var(--views-max) + 22px + var(--space-2));
+}
+.msg-captures .msg-capture { padding-left: 0; }
+/* Square cells: these are orthographic views of one part, so a shared shape is
+   what makes them comparable, and `contain` keeps every one of them whole. */
+.msg-captures .msg-image { width: 100%; max-height: none; aspect-ratio: 1; }
 .msg-assistant { align-items: flex-start; }
 .msg-avatar { flex: 0 0 auto; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--accent); font-size: var(--text-md); }
 .msg-body { flex: 1; min-width: 0; }
@@ -249,10 +279,29 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Mid-stream the Queue/steer control sits just left of Stop. */
 .composer-queue { right: calc(var(--space-1) + 36px); }
 
-/* Per-turn Forge toggle: a small opt-in chip above the field. */
+/* Per-turn Forge toggle and the attach control: small opt-in chips above the field. */
 .composer-tools { display: flex; gap: var(--space-2); }
-.composer-forge { font-size: 0.8rem; padding: 2px var(--space-2); height: auto; opacity: 0.7; }
+.composer-forge, .composer-attach { font-size: 0.8rem; padding: 2px var(--space-2); height: auto; opacity: 0.7; }
 .composer-forge[data-active="true"] { opacity: 1; color: var(--accent); border-color: var(--accent); }
+
+/* Reference images attached to the next turn. The picker itself is out of the
+   layout rather than merely transparent: a file input cannot be restyled to sit
+   in this row in any browser, so the visible control is the button beside Forge
+   and this only carries the dialog it opens. */
+.composer-file { display: none; }
+.composer-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.composer-chip {
+  display: flex; align-items: center; gap: var(--space-1); max-width: 180px;
+  padding: 2px var(--space-2); font-size: var(--text-xs); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+/* The name is what tells two screenshots apart, so it takes the space and the
+   remove control keeps its own — a long filename would otherwise push the × off
+   the end of a panel that resizes down to 240px. */
+.composer-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip-remove { flex: none; background: none; border: 0; padding: 0; cursor: pointer; color: var(--muted); font-size: var(--text-sm); line-height: 1; }
+.composer-chip-remove:hover { color: var(--fg); }
+.composer-attach-error { margin: 0; font-size: var(--text-xs); color: var(--bad); }
 
 /* onboarding tip */
 .onboarding { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); background: var(--accent-weak); border: 1px solid var(--accent); border-radius: var(--radius-md); }
@@ -331,6 +380,25 @@ body.resizing { cursor: col-resize; user-select: none; }
   color: var(--muted); white-space: pre;
 }
 .codegen-code code { background: none; padding: 0; font: inherit; }
+
+/* Render critique: the views the reviewer was shown on one repair round, with
+   its verdict beneath them. Fixed at two to a row: this was a wrapping row of
+   fixed tiles, so how many views sat side by side followed the panel width and
+   a round never looked the same twice. The verdict's colour only repeats what
+   its sentence
+   already says, so nothing is lost where the two colours cannot be told apart. */
+.critique { margin: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.critique-views {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2); max-width: var(--views-max);
+}
+.critique-view {
+  width: 100%; height: auto; aspect-ratio: 1; object-fit: contain;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.critique-verdict { font-size: var(--text-xs); color: var(--muted); line-height: 1.5; }
+.critique-verdict .ok { color: var(--ok); }
+.critique-verdict .bad { color: var(--bad); }
 
 /* staged progress */
 .staged { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) 0; }

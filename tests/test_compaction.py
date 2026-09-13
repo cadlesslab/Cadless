@@ -49,6 +49,39 @@ def _synopsis_provider(
 # -- policy: when to compact -------------------------------------------------
 
 
+def test_an_image_block_is_represented_rather_than_dropped():
+    """A block with no ``text`` contributes nothing unless the flattener names it.
+
+    An image flattening to the empty string takes the whole message with it —
+    ``render_transcript`` skips a message whose text is empty — so the synopsis
+    would lose the fact that a reference picture was ever shown.
+    """
+    from cadless.compaction import render_transcript
+    from cadless.llm.types import ContentBlock, Message
+
+    message = Message(
+        role="user",
+        content=[
+            ContentBlock.of_image(data="aGVsbG8=", media_type="image/png", reading="an L-bracket"),
+            ContentBlock.of_text("build this"),
+        ],
+    )
+    rendered = render_transcript([message])
+    assert "an L-bracket" in rendered
+    assert "build this" in rendered
+
+
+def test_an_image_with_no_reading_is_still_named_in_the_transcript():
+    from cadless.compaction import render_transcript
+    from cadless.llm.types import ContentBlock, Message
+
+    message = Message(
+        role="user",
+        content=[ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")],
+    )
+    assert render_transcript([message]).strip() != ""
+
+
 def test_needs_compaction_false_below_threshold():
     cfg = base_settings.model_copy(
         update={"transcript_compact_threshold": 10, "transcript_keep_recent": 4}
@@ -127,6 +160,31 @@ def test_summarize_messages_uses_provider_and_preserves_facts_prompt():
     # the older transcript content is fed into the user payload
     assert provider.last_complete_user is not None
     assert "user message 0" in provider.last_complete_user
+
+
+def test_summarisation_hands_the_adapter_a_slug_it_can_resolve():
+    """The seam takes a slug; the adapter resolves it.
+
+    Resolving before dispatch hands the adapter a value it does not recognise, and
+    the caller treats a summarisation failure as a cue to truncate instead — so
+    this mistake degrades the rolling synopsis with nothing raised and nothing
+    logged. A stub that ignores ``model`` cannot see that, so this drives the real
+    adapter's model resolution and stops before the network.
+    """
+    from cadless.llm.providers import anthropic as anthropic_adapter
+
+    seen: list[str] = []
+
+    class TransportlessAnthropic(anthropic_adapter.AnthropicChatProvider):
+        def complete(self, *, model, system, user, temperature=None) -> str:
+            anthropic_adapter._resolve_api_model(model)  # raises on an unknown model
+            seen.append(model)
+            return "a summary"
+
+    text = summarize_messages(_turns(3), TransportlessAnthropic(), config=base_settings)
+
+    assert text == "a summary"
+    assert seen == [base_settings.orchestrator_model]
 
 
 # -- script_versions chain untouched -----------------------------------------

@@ -129,16 +129,34 @@ port, bound to loopback.
    `tests/test_catalog_manifest.py` and `tests/test_catalog_loader.py` hold each
    refusal.
 
+8. An image the user attached MUST reach the model that writes the script, or
+   the turn MUST be refused before it starts. It is never dropped in between.
+   `Capabilities.supports_images` decides, and a provider that does not report
+   the field at all is treated as unable to see, so an adapter written before
+   vision existed refuses attachments rather than silently discarding one. The
+   refusal happens at the request boundary because an exception raised inside a
+   running turn settles it as failed and reverts the project to its last good
+   version. `ChatProvider.complete()` stays text-only — code outside this tree
+   implements that exact signature — so an image-carrying call takes the
+   message-based path instead, on every codegen call of the turn rather than
+   only the first. The bytes are scoped to the turn that carried them; later
+   turns are given the written reading stored beside the block. Recorded in
+   ADR-0009 and enforced by the seam, chat and prompt tests.
+
 The provider seam, sandbox layers, local-first posture, embeddings behavior,
-candidate judging, and the identity seam decisions are recorded under
+candidate judging, the identity seam and the image decisions are recorded under
 `docs/adr/` and guarded by the corresponding tests.
 
 ## Data & Execution Flow
 
 1. The client submits an intent to the FastAPI API and receives progress over
-   SSE.
+   SSE. A chat turn may carry reference images alongside its text, or instead of
+   it; they are gated at the request boundary — format, size, count, and whether
+   the configured models can read one — and refused there when they cannot work.
 2. The engine assembles the prompt and asks the selected provider for build123d
-   source through the provider-neutral interface.
+   source through the provider-neutral interface. An attached image travels with
+   that prompt to every code-generating call of the turn: the fresh run, a
+   refinement, each repair round, and each best-of-N candidate.
 3. Static validation rejects disallowed syntax and imports before any execution.
 4. `cadless.worker.run_code` sends the program to the worker service when
    `CADLESS_WORKER_URL` is configured; local development and tests use a
@@ -195,10 +213,10 @@ catalog content read-only.
   attributable to one configuration even though applying a setting mutates the
   shared singleton in place. Grounding retrieval runs outside the pipeline and
   is handed that same snapshot rather than re-reading the live values.
-- The optional `VlmCritic` is an existing exception to ADR-0001's broad vendor
-  SDK wording: it lazy-loads the Bedrock SDK directly instead of using the
-  `ChatProvider` seam. It is off by default and is not the reference pattern for
-  adding chat or embedding providers.
+- The optional `VlmCritic` is no longer an exception to ADR-0001's vendor SDK
+  wording: it sends its renders through the `ChatProvider` seam like every other
+  model call, so the selected provider is what it reaches. It is handed a slug
+  and lets the adapter resolve it, as every other caller of the seam does.
 - Routes, panels and model backends can arrive from outside this tree.
   `backend/app.py` includes any router advertised under the `cadless.routers`
   entry-point group, so an installed distribution adds API routes — and its own
@@ -247,4 +265,4 @@ catalog content read-only.
 
 ## Known Unknowns
 
-- TODO: Decide whether VLM critique remains an explicit Bedrock exception or moves behind a provider-neutral vision protocol / Current basis: `cadless.vlm_critique.VlmCritic` lazy-imports `boto3` and `Pipeline` invokes the injected critic, while ADR-0001 says vendor SDKs live only in provider adapters / Resolved when: the exception is recorded in an ADR, or a neutral vision-provider seam is implemented and tested and ADR-0001 is aligned with it
+- TODO(needs confirmation): a critique served by the selected provider rather than by one vendor / evidence so far: `VlmCritic` now builds `image` blocks and calls `stream_turn` on the `ChatProvider` it was given or the one the registry builds, with no vendor SDK left in the module and the model named by slug so the adapter resolves it; a scripted provider covers the request shape and the refusal for a model that cannot see / resolved when: a real turn on a non-default provider is observed answering the critique with that provider's own model

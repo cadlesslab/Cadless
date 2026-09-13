@@ -25,14 +25,14 @@ class _RecordingGen:
         self.temperatures: list[float | None] = []
         self._lock = threading.Lock()
 
-    def generate(self, intent, grounding=None, temperature=None):
+    def generate(self, intent, grounding=None, temperature=None, images=(), on_reading=None):
         with self._lock:
             self.temperatures.append(temperature)
         # Return banned code so the run fails fast at validation (no OCCT needed);
         # the candidate is still a well-formed (failed) GenerationResult.
         return "import os\nfrom build123d import *\nresult = Box(1,1,1)\n"
 
-    def repair(self, intent, code, error, context=None):
+    def repair(self, intent, code, error, context=None, images=()):
         return code
 
 
@@ -82,7 +82,7 @@ def test_run_candidates_runs_concurrently():
     barrier = threading.Barrier(n, timeout=5)
 
     class _BarrierGen(_RecordingGen):
-        def generate(self, intent, grounding=None, temperature=None):
+        def generate(self, intent, grounding=None, temperature=None, images=(), on_reading=None):
             barrier.wait()  # blocks until all N candidates are in-flight
             return super().generate(intent, grounding, temperature)
 
@@ -102,7 +102,7 @@ def test_run_candidates_failure_isolation():
             super().__init__()
             self._calls = 0
 
-        def generate(self, intent, grounding=None, temperature=None):
+        def generate(self, intent, grounding=None, temperature=None, images=(), on_reading=None):
             with self._lock:
                 self._calls += 1
                 mine = self._calls

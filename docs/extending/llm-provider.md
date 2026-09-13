@@ -45,8 +45,9 @@ Nothing outside `cadless/llm/providers/` should ever see a vendor object.
   `thinking`, `thinking_budget_tokens`, `tool_choice`, `stop_sequences`. On the
   nullable ones, **`None` means "use the provider default"** — do not substitute
   your own. (`thinking` is a plain bool, defaulting to `False`.)
-- `Capabilities` reports `supports_thinking`, `supports_tool_choice` and
-  `max_output_tokens` (default `4096`).
+- `Capabilities` reports `supports_thinking`, `supports_tool_choice`,
+  `max_output_tokens` (default `4096`) and `supports_images` (default `False` —
+  see "Images, or a loud refusal" below for why that default is what it is).
 - `StreamEvent` is the event vocabulary listed in the next section.
 
 ### One wrinkle worth knowing up front
@@ -153,6 +154,44 @@ returns a `list[list[float]]` aligned with the input order, and the vector width
 should honour `settings.embed_dimensions` so an existing knowledge base stays
 readable. The rationale is in
 [ADR-0002](../adr/0002-embeddings-are-additive.md).
+
+## Images, or a loud refusal
+
+An `image` block carries a picture the user attached, neutrally: base64 `data`
+plus its `media_type`. Your encoder reshapes that into whatever your vendor
+takes, and `capabilities()` says whether the model can read one at all:
+
+```python
+def capabilities(self, model: str) -> Capabilities:
+    return Capabilities(..., supports_images=model in _VISION_MODELS)
+```
+
+**Report it per model, not blanket-true, and let an unknown model report
+`False`.** A model added later then reads as unable to see until someone
+confirms otherwise, which is the safe direction: the engine refuses the
+attachment rather than dropping it.
+
+This is where the contract **differs from embeddings above**. `embed` may be
+skipped quietly because the engine wanted it; an image is something the *user*
+handed over, so swallowing one would leave them looking at a part built from a
+picture the model never saw. The engine checks `supports_images` at the request
+boundary and refuses the turn; `ImagesUnsupported` is the backstop for any path
+that did not check. Never drop an image block silently, and never substitute a
+description of your own.
+
+Three details worth knowing before you write the encoder:
+
+- **The payload arrives base64.** Some APIs want it that way (the Messages API's
+  `source.data`, OpenAI's data URL); Converse wants raw `bytes` and encodes them
+  itself. Decode or forward accordingly — sending base64 where bytes are expected
+  fails at the vendor, not at the seam.
+- **Order matters, and it is already correct.** Blocks reach you in the order the
+  engine built them, with the picture ahead of the words. Preserve it.
+- **`reading` is not yours to send.** Like `provider_raw`, it is engine-side
+  provenance — a written account of the picture that later turns are given in
+  place of the bytes. No adapter puts it on the wire.
+
+The rationale is in [ADR-0009](../adr/0009-images-are-additive.md).
 
 ## Registering it
 
@@ -307,6 +346,8 @@ tests are excluded. Expect it to take a few minutes.
 - [ ] Stream translated to `StreamChunk`s with the documented payload keys
 - [ ] Config slugs mapped to vendor ids, failing loudly on an unknown slug
 - [ ] `embed` implemented, or raising `EmbeddingsUnsupported` before any SDK work
+- [ ] `image` blocks encoded, and `supports_images` reported per model — an
+      unknown model reporting `False`, never a blanket `True`
 - [ ] `_factory` at the bottom of the module — plus, **in this tree**, a
       `register_provider` call and an import line in
       `cadless/llm/providers/__init__.py`; **in your own distribution**, a

@@ -31,6 +31,7 @@ _MANAGED_ATTRS = (
     # Restored for the same reason as in test_user_settings.py: the settings
     # singleton outlives a test, so an unrestored knob is a cross-file leak.
     "vlm_critique_enabled",
+    "vlm_critique_view_count",
     "forge_enabled",
     "forge_candidate_count",
 )

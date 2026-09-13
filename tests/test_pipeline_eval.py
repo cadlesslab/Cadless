@@ -16,10 +16,14 @@ GOOD = "from build123d import *\nresult = Box(10, 10, 10)\n"
 
 
 class AlwaysGood:
-    def generate(self, intent, grounding=None, temperature=None, on_token=None):
+    def generate(
+        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+    ):
         return GOOD
 
-    def repair(self, intent, code, error, context=None):  # pragma: no cover - not reached
+    def repair(
+        self, intent, code, error, context=None, images=()
+    ):  # pragma: no cover - not reached
         return GOOD
 
 
@@ -43,7 +47,33 @@ def test_report_serialises():
     report = PipelineEvalReport(records=[PipelineEvalRecord("a", ok=True, attempts=1)])
     parsed = json.loads(report.to_json())
     assert parsed["success_rate"] == 1.0
-    assert report.to_csv().splitlines()[0] == "id,ok,attempts,repaired,volume,error"
+    assert report.to_csv().splitlines()[0] == "id,ok,attempts,repaired,volume,error,rung,candidates"
+
+
+def test_the_race_columns_are_appended_so_existing_positions_hold():
+    """A recorded baseline is read positionally as well as by name, so the two new
+    columns go after ``error`` rather than before it. Inserting them would move
+    ``error`` two columns right and make every row's empty rung read as its error
+    text — a run with real failures would look clean."""
+    report = PipelineEvalReport(
+        records=[PipelineEvalRecord("a", ok=False, attempts=1, error="boom")]
+    )
+
+    header, row = report.to_csv().splitlines()[:2]
+    assert header.split(",")[:6] == ["id", "ok", "attempts", "repaired", "volume", "error"]
+    assert row.split(",")[5] == "boom"  # still column 5, where a baseline reader expects it
+
+
+def test_a_single_run_report_carries_no_race_fields():
+    """The racing fields exist on every report but stay empty without a race, so
+    every pre-existing metric and record field of a single-run report is
+    unchanged — the schema is additive, not identical."""
+    report = PipelineEvalReport(records=[PipelineEvalRecord("a", ok=True, attempts=2)])
+
+    parsed = json.loads(report.to_json())
+    assert parsed["rung_distribution"] == {}
+    assert parsed["candidate_attempts"] == 2  # falls back to the run's own attempts
+    assert parsed["records"][0]["rung"] is None
 
 
 @pytest.mark.build123d

@@ -148,7 +148,16 @@ class SpyPipeline:
         self.calls: list[tuple[str, str | None]] = []
         self.groundings: list[str | None] = []
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+        on_reading=None,
+    ):
         from cadless.pipeline import GenerationResult
 
         self.calls.append((intent, prior_code))
@@ -162,6 +171,33 @@ class SpyPipeline:
             glb_path="/tmp/model.glb",
             parameters={"size": 10},
         )
+
+
+def test_the_loop_refuses_an_image_a_blind_model_cannot_read():
+    """The backstop on the other entry point.
+
+    A chat turn is refused at the request boundary, so this is unreachable from
+    HTTP. It is here for anything driving the loop directly, which would otherwise
+    hand the picture to a vendor and get back that vendor's word for "malformed".
+    """
+    from cadless.llm.provider import ImagesUnsupported
+    from cadless.llm.types import ContentBlock
+
+    provider = CapProvider(
+        [_text_turn("never reached")],
+        caps=Capabilities(supports_thinking=False, supports_images=False),
+    )
+    context = _context()
+    context.images = [ContentBlock.of_image(data="aGVsbG8=", media_type="image/png")]
+    agent = Agent(provider=provider, model="fake-model")
+
+    try:
+        agent.run_turn(user_text="build this", context=context)
+    except ImagesUnsupported:
+        pass
+    else:  # pragma: no cover - the assertion below is the failure report
+        raise AssertionError("an image reached a model that cannot read one")
+    assert provider.calls == []  # refused before anything was sent
 
 
 def _context(pipeline=None, reparametrize=None, grounding=None) -> ToolContext:
@@ -875,7 +911,16 @@ class FailingPipeline:
         self._attempts = attempts
         self.calls: list[tuple[str, str | None]] = []
 
-    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+    def run(
+        self,
+        intent,
+        export_dir=None,
+        on_progress=None,
+        prior_code=None,
+        grounding=None,
+        images=(),
+        on_reading=None,
+    ):
         from cadless.pipeline import Attempt, GenerationResult
 
         self.calls.append((intent, prior_code))
@@ -985,7 +1030,16 @@ def test_distinct_failing_stages_do_not_escalate():
         def __init__(self) -> None:
             self.calls: list[tuple[str, str | None]] = []
 
-        def run(self, intent, export_dir=None, on_progress=None, prior_code=None, grounding=None):
+        def run(
+            self,
+            intent,
+            export_dir=None,
+            on_progress=None,
+            prior_code=None,
+            grounding=None,
+            images=(),
+            on_reading=None,
+        ):
             self.calls.append((intent, prior_code))
             return next(pipelines).run(
                 intent, export_dir, on_progress, prior_code, grounding=grounding

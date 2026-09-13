@@ -7,9 +7,9 @@ import { useEffect, useRef, useState } from "react";
 import { Button, IconButton } from "../components";
 import { useActiveProject, useStoreSelector } from "../state";
 import { useApp } from "../useApp";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, type ComposerAttachment } from "./ChatComposer";
 import { ChatMessage } from "./ChatMessage";
-import { chatTranscript } from "./chatModel";
+import { type ChatMessage as Msg, chatTranscript } from "./chatModel";
 import { EXAMPLE_PROMPTS } from "./examples";
 
 function EmptyState({ onPick, disabled }: { onPick: (p: string) => void; disabled: boolean }) {
@@ -31,6 +31,50 @@ function EmptyState({ onPick, disabled }: { onPick: (p: string) => void; disable
       </div>
     </div>
   );
+}
+
+/** One row of the thread: a single message, or a round's captures gathered so
+ * they can be laid out together.
+ *
+ * A settled round comes back as one `image` message per view rather than one
+ * message holding four, so without this the four views are four rows and only
+ * the first is on screen. Grouping here rather than in `chatTranscript` leaves
+ * the transcript's message shape alone. The views of one round always share a `messageId` — they are the image
+ * blocks of a single assistant message — and always arrive next to each
+ * other, so a run is what identifies them. */
+type ThreadRow = { kind: "one"; msg: Msg } | { kind: "captures"; key: string; msgs: Msg[] };
+
+function threadRows(messages: Msg[]): ThreadRow[] {
+  const rows: ThreadRow[] = [];
+  for (let i = 0; i < messages.length; ) {
+    const msg = messages[i];
+    // `role` is what separates a render the model made from a reference the
+    // user handed over; by this point both are just pictures.
+    if (msg.kind !== "image" || msg.role === "user") {
+      rows.push({ kind: "one", msg });
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    while (end < messages.length) {
+      const next = messages[end];
+      // No role check here: a run only continues within one `messageId`, and a
+      // message has one role, so a picture that got this far cannot be the
+      // user's. Testing for it again would be a condition nothing can make true.
+      if (next.kind !== "image" || next.messageId !== msg.messageId) break;
+      end += 1;
+    }
+    const run = messages.slice(i, end);
+    // A single picture is not a comparison, and a lone grid cell is narrower
+    // than the width it has today, so a run of one is left as its own row.
+    rows.push(
+      run.length > 1
+        ? { kind: "captures", key: `captures-${msg.messageId}`, msgs: run }
+        : { kind: "one", msg },
+    );
+    i = end;
+  }
+  return rows;
 }
 
 /** @param visible — whether this panel is actually on screen. It is not always:
@@ -65,6 +109,10 @@ export function ChatPanel({
   // Per-turn forge opt-in: when on, the next turn races best-of-N for a
   // fresh generation (server gates it behind the global forge kill-switch too).
   const [forge, setForge] = useState(false);
+  // Reference pictures for the next turn. Per-turn like forge, and held here
+  // rather than in the composer so that clearing them is part of the same step
+  // that clears the field once a turn has gone out.
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const lastText = useRef("");
   const replay = useRef<() => void>(() => {});
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -107,21 +155,27 @@ export function ChatPanel({
   // way out — the same place the user hits the wall, not up in the header.
   const readOnly = activeProject?.is_catalog === true;
 
-  function runChat(message: string) {
+  function runChat(message: string, images: ComposerAttachment[] = []) {
     if (generating || activeProjectId == null || readOnly) return;
     lastText.current = message;
     const opted = forge;
+    // Captured, not read from state on replay: Retry re-sends the turn that
+    // failed, and by then the composer has been emptied of the very pictures
+    // that turn was about.
     replay.current = () => {
       if (generating || activeProjectId == null) return;
-      app.chat(message, opted);
+      app.chat(message, opted, images);
     };
-    app.chat(message, opted);
+    app.chat(message, opted, images);
   }
   function submit() {
     const text = value.trim();
-    if (!text || generating || activeProjectId == null) return;
-    runChat(text);
+    // A picture on its own is a request the server accepts, so an empty field
+    // with something attached still sends.
+    if ((!text && attachments.length === 0) || generating || activeProjectId == null) return;
+    runChat(text, attachments);
     setValue("");
+    setAttachments([]);
   }
   // Queue a steer message mid-stream: distinct from submit/Stop. The
   // running turn injects it at its next agent-loop boundary.
@@ -181,15 +235,29 @@ export function ChatPanel({
         {showEmpty ? (
           <EmptyState onPick={(p) => runChat(p)} disabled={activeProjectId == null || readOnly} />
         ) : (
-          messages.map((m) => (
-            <ChatMessage
-              key={m.id}
-              msg={m}
-              app={app}
-              onRetry={() => replay.current()}
-              onEdit={editLast}
-            />
-          ))
+          threadRows(messages).map((row) =>
+            row.kind === "captures" ? (
+              <div className="msg-captures" key={row.key}>
+                {row.msgs.map((m) => (
+                  <ChatMessage
+                    key={m.id}
+                    msg={m}
+                    app={app}
+                    onRetry={() => replay.current()}
+                    onEdit={editLast}
+                  />
+                ))}
+              </div>
+            ) : (
+              <ChatMessage
+                key={row.msg.id}
+                msg={row.msg}
+                app={app}
+                onRetry={() => replay.current()}
+                onEdit={editLast}
+              />
+            ),
+          )
         )}
       </div>
 
@@ -221,6 +289,8 @@ export function ChatPanel({
         disabled={activeProjectId == null || readOnly}
         forge={forge}
         onToggleForge={() => setForge((f) => !f)}
+        attachments={attachments}
+        onAttachmentsChange={setAttachments}
       />
     </section>
   );

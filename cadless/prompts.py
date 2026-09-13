@@ -9,13 +9,13 @@ the *repair* message used by the pipeline's repair loop.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
 from cadless.config import settings
 from cadless.few_shot import render_few_shot
-from cadless.llm.provider import ChatProvider
+from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.registry import build_provider
 from cadless.llm.types import (
     ContentBlock,
@@ -42,6 +42,49 @@ def extract_code(text: str) -> str:
     code = match.group(1) if match else text
     code = re.sub(r"^\s*Response:\s*", "", code)
     return code.strip() + "\n"
+
+
+#: Asked for only on a turn that carries a picture, so a text-only codegen prompt
+#: is byte-for-byte what it always was.
+#:
+#: The marker is a line-leading label rather than a fence, because ``extract_code``
+#: takes the first ```python block and a second fence would be a coin toss. The
+#: reading is what a later turn is given in place of the pixels, which is why it
+#: asks for proportions rather than adjectives.
+REFERENCE_IMAGE_INSTRUCTION = (
+    "The user attached a reference image. Build the shape it shows, applying any "
+    "change they asked for in words.\n"
+    "Before the code, write one paragraph beginning `REFERENCE:` describing what "
+    "the picture shows — the shape, its main features, and their rough proportions "
+    "— in enough detail that a later request could be answered from that paragraph "
+    "alone, without the picture. Then write the code as usual."
+)
+
+# Ends at a blank line, at a fence, or at the end of the reply — all three matter.
+# The fence terminator is not defensive: every few-shot exemplar is rendered as
+# "Response:" then a fence on the next line with no blank line between them, so the
+# model is conditioned into exactly the shape that would otherwise make the reading
+# swallow the whole script. It would fail silently when it did — the code still
+# extracts and the build still succeeds — and the flattened program would land in
+# the stored reading, in every later turn's replay, in the synopsis, and in the
+# alt text of the picture.
+_READING = re.compile(
+    r"^REFERENCE:[ \t]*(.*?)(?:\n[ \t]*\n|\n[ \t]*```|\Z)", re.MULTILINE | re.DOTALL
+)
+
+
+def extract_reading(text: str) -> str | None:
+    """Pull the model's written reading of the reference image out of a reply.
+
+    Returns ``None`` when the reply carries none — a model that ignored the
+    instruction still produced code, and losing the cache is not a reason to fail
+    the build.
+    """
+    match = _READING.search(text)
+    if not match:
+        return None
+    reading = " ".join(match.group(1).split())
+    return reading or None
 
 
 def extract_code_and_params(text: str) -> tuple[str, dict]:
@@ -153,6 +196,34 @@ def _format_failure(error: str, context: RepairContext | None) -> str:
     return "\n".join(parts)
 
 
+def _with_reference_instruction(user: str, images: Sequence[ContentBlock]) -> str:
+    """Prefix the reading instruction, but only when there is a picture to read.
+
+    A turn with no attachment gets the message exactly as the builders produced
+    it, which is what keeps the codegen contract unchanged for every existing
+    caller — the eval harness and distillation included.
+    """
+    if not images:
+        return user
+    return f"{REFERENCE_IMAGE_INSTRUCTION}\n\n{user}"
+
+
+def _emit_reading(
+    text: str, images: Sequence[ContentBlock], on_reading: Callable[[str], None] | None
+) -> None:
+    """Hand the model's reading to ``on_reading``, if it wrote one and anyone asked.
+
+    Silent on every other path. A missing reading is not an error: the code is the
+    deliverable and the reading is what saves a later turn from paying for the
+    pixels again.
+    """
+    if not images or on_reading is None:
+        return
+    reading = extract_reading(text)
+    if reading:
+        on_reading(reading)
+
+
 class CodeGenerator:
     """Generates build123d code from intent (and repairs it) via the LLM seam.
 
@@ -173,6 +244,8 @@ class CodeGenerator:
         grounding: str | None = None,
         temperature: float | None = None,
         on_token: Callable[[str], None] | None = None,
+        images: Sequence[ContentBlock] = (),
+        on_reading: Callable[[str], None] | None = None,
     ) -> str:
         """Generate build123d code from ``intent``.
 
@@ -188,9 +261,13 @@ class CodeGenerator:
         it as the model writes the code, so the chat layer can show the codegen
         live. ``None`` (the default) keeps the one-shot ``complete()`` path byte-
         for-byte — used by refine/repair and the non-chat callers (eval, distill).
+
+        ``images`` are the turn's reference pictures. They force the message path
+        whatever ``on_token`` is, because ``complete()`` takes a bare string; an
+        empty sequence (the default) leaves the routing above exactly as it was.
         """
-        user = build_user_message(intent, grounding)
-        if on_token is None:
+        user = _with_reference_instruction(build_user_message(intent, grounding), images)
+        if on_token is None and not images:
             text = self._provider.complete(
                 model=self._model,
                 system=SYSTEM_PROMPT,
@@ -198,21 +275,47 @@ class CodeGenerator:
                 temperature=temperature,
             )
         else:
-            text = self._stream_complete(user, temperature, on_token)
+            text = self._stream_complete(user, temperature, on_token, images)
+        _emit_reading(text, images, on_reading)
         return extract_code(text)
 
     def _stream_complete(
         self,
         user: str,
         temperature: float | None,
-        on_token: Callable[[str], None],
+        on_token: Callable[[str], None] | None,
+        images: Sequence[ContentBlock] = (),
     ) -> str:
-        """Mirror ``complete()`` but surface each text delta through ``on_token``."""
+        """Mirror ``complete()`` over the message path, optionally streaming.
+
+        This is the only shape on the seam that can carry anything but a string,
+        so it is where an image has to go. ``on_token`` is optional here (unlike
+        in ``generate``): a call routed through this path only because it carries
+        a picture still has no listener for the deltas.
+
+        The pictures go **before** the words. ``user`` ends on ``Response:``, the
+        model's cue to start writing, so anything appended after it lands between
+        the cue and the answer.
+        """
+        if images and not self._provider.capabilities(self._model).supports_images:
+            # The backstop the request boundary makes unnecessary — for the callers
+            # that are not it. Eval, distillation and anything composed beside the
+            # engine reach this directly, and without the check the picture goes to
+            # the vendor and comes back as whatever that API calls a malformed
+            # request. Refuse in the seam's own vocabulary instead.
+            # Named off the provider in hand, not the configured one: this generator
+            # may have been given a provider directly, and reporting the setting
+            # would name something that was never called.
+            raise ImagesUnsupported(
+                getattr(self._provider, "PROVIDER_NAME", type(self._provider).__name__)
+            )
+
         parts: list[str] = []
+        content = [*images, ContentBlock.of_text(user)]
         for chunk in self._provider.stream_turn(
             model=self._model,
             system=SYSTEM_PROMPT,
-            messages=[Message(role="user", content=[ContentBlock.of_text(user)])],
+            messages=[Message(role="user", content=content)],
             tools=[],
             params=TurnParams(temperature=temperature),
         ):
@@ -220,16 +323,32 @@ class CodeGenerator:
                 token = chunk.payload.get("text", "")
                 if token:
                     parts.append(token)
-                    on_token(token)
+                    if on_token is not None:
+                        on_token(token)
         return "".join(parts)
 
-    def refine(self, intent: str, prior_code: str) -> str:
-        """Edit existing code to satisfy a change request (the delta ``intent``)."""
-        text = self._provider.complete(
-            model=self._model,
-            system=SYSTEM_PROMPT,
-            user=build_refinement_message(intent, prior_code),
-        )
+    def refine(
+        self,
+        intent: str,
+        prior_code: str,
+        images: Sequence[ContentBlock] = (),
+        on_reading: Callable[[str], None] | None = None,
+    ) -> str:
+        """Edit existing code to satisfy a change request (the delta ``intent``).
+
+        ``images`` route the call through the message path — without them it stays
+        on the one-shot ``complete()`` exactly as before.
+        """
+        user = _with_reference_instruction(build_refinement_message(intent, prior_code), images)
+        if images:
+            text = self._stream_complete(user, None, None, images)
+        else:
+            text = self._provider.complete(
+                model=self._model,
+                system=SYSTEM_PROMPT,
+                user=user,
+            )
+        _emit_reading(text, images, on_reading)
         return extract_code(text)
 
     def repair(
@@ -238,10 +357,21 @@ class CodeGenerator:
         previous_code: str,
         error: str,
         context: RepairContext | None = None,
+        images: Sequence[ContentBlock] = (),
     ) -> str:
-        text = self._provider.complete(
-            model=self._model,
-            system=SYSTEM_PROMPT,
-            user=build_repair_message(intent, previous_code, error, context),
-        )
+        """Fix code that failed, with the turn's reference pictures still in view.
+
+        A repair round that lost the picture would be trying to fix the shape
+        against the words alone, which is the half of the request that was least
+        able to describe it in the first place.
+        """
+        user = build_repair_message(intent, previous_code, error, context)
+        if images:
+            text = self._stream_complete(user, None, None, images)
+        else:
+            text = self._provider.complete(
+                model=self._model,
+                system=SYSTEM_PROMPT,
+                user=user,
+            )
         return extract_code(text)

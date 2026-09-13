@@ -39,6 +39,26 @@ class EmbeddingsUnsupported(RuntimeError):
         )
 
 
+class ImagesUnsupported(RuntimeError):
+    """Raised when an image block reaches a provider whose model cannot read one.
+
+    The contract is the **inverse** of :class:`EmbeddingsUnsupported`. Embeddings
+    are something the app wanted; an image is something the user handed over, so
+    swallowing it would leave them looking at a part built from a picture the
+    model never saw, with nothing on screen to say so. Callers do not catch this
+    to skip — they refuse the turn before it starts, which is why the request
+    layer checks ``Capabilities.supports_images`` first and this error is the
+    backstop for the paths that did not.
+    """
+
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        super().__init__(
+            f"provider {provider!r} cannot read images; attach the picture to a "
+            "provider whose model supports vision, or send the request as text"
+        )
+
+
 @runtime_checkable
 class ChatProvider(Protocol):
     """A pluggable chat backend.

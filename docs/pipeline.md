@@ -34,7 +34,7 @@ Pipeline.run(intent, export_dir=None, on_progress=None, prior_code=None,
 | generate / refine | `prompts.py` `CodeGenerator.generate` / `.refine` | Prompt assembly (system prompt + few-shot from `few_shot.py` + optional retrieval `grounding`) and the provider call; `extract_code` pulls the fenced code out of the reply. |
 | validate | `validation.py` `validate_code` | The AST static gate — sandbox layer 1 ([ADR-0003](./adr/0003-three-layer-sandbox.md)). No execution happens for code that fails here. |
 | build + mesh | `worker.py` `run_code` | Sandboxed execution and artifact export. Meshing happens inside the worker alongside the build; `mesh` is reported ok once artifacts exist. |
-| critique *(optional)* | `vlm_critique.py` | Renders the GLB and asks a vision model whether it matches the intent; a mismatch forces a repair. Off by default. |
+| critique *(optional)* | `vlm_critique.py` | Renders the exported STL from several named views at one shared scale and asks a vision model, through the `ChatProvider` seam, whether the shape matches the intent; a mismatch forces a repair. Every attempt is reviewed, the last one included — with no budget left the finding is reported and the part is delivered with it attached, so "ran out of budget" is distinguishable from "was never checked". On by default, but only where a critic was injected: a pipeline built without one never critiques, whatever the setting says. The best-of-N fan-out opts out — it has no progress sink, so a candidate's captures would be thrown away as they were produced while the cost multiplied by the candidate count — so a forge turn currently gets no render review at all, and the judge's own vision rung is where that signal belongs once it is wired. A critique that cannot be taken is reported and skipped, never fatal to a build that already succeeded. |
 | assert *(optional)* | `assertions.py` | Deterministic geometry post-conditions (`GeometryAssertions`); a failure forces a repair. |
 | repair | `prompts.py` `CodeGenerator.repair` | The error (as a structured `RepairContext` for build failures) goes back to the model with the failing code; the loop retries with the repaired code. |
 
@@ -147,6 +147,16 @@ The agent exposes five tools to the model (`build_tools()`):
 | `ask_clarification(questions)` | Ends the turn and asks the user (max 3 questions). |
 | `submit_plan(steps)` | Streams a brief plan (max 8 steps); does **not** end the turn. |
 
+A turn may carry **reference images** alongside (or instead of) its text. They
+are gated at the request boundary — format, per-image and per-turn size, count,
+and whether the configured models can read one at all — because a refusal raised
+inside a running turn would revert the project's version. Past that gate they
+ride the neutral seam to *every* codegen call of the turn: the fresh run, a
+refinement, each repair round, and each best-of-N candidate. The bytes are scoped
+to that turn; what later turns are given instead is a written reading of the
+picture, extracted from the codegen reply and stored beside the block
+([ADR-0009](adr/0009-images-are-additive.md)).
+
 Turn hard caps (all in `config.py`): `agent_max_tool_iters=6` tool
 round-trips, `agent_token_budget=200_000` cumulative tokens,
 `agent_time_budget_secs=120` wall clock, plus a duplicate-tool-call debounce
@@ -188,3 +198,29 @@ Both paths rely on the bundled Caddy proxy passing SSE through unbuffered
   provider with your key and are never part of `make test`. Generation is not
   deterministic, so a single run is one sample — repeat and read the spread
   before quoting a number.
+- `--forge-n N` races N candidates per prompt instead of generating one, through
+  the same `forge.race_and_judge` the live agent turn uses. Sharing that one
+  function is deliberate: an A/B against a second implementation measures the
+  copy, and the copy is the thing that drifts.
+- **A race is judged, so what the judge can see decides what the numbers mean.**
+  The report carries a `rung_distribution` saying which rung settled each
+  selection. `input-order` means no rung settled it at all and the "winner" was
+  whichever candidate came back first — N times the spend for an arbitrary pick,
+  and a run to discard rather than quote. A rung that merely narrowed the field
+  is not counted as having decided, so the distribution answers "how much of the
+  ladder is alive" rather than "how far down it did we get". `assertions` and
+  `vlm` appear once the geometry and render rungs have something to work with;
+  until then `llm` is the only rung that can break a tie, and it ranks code
+  rather than geometry.
+- **A judge that cannot be reached does not fail the run**, by design: one dead
+  judge must not sink a turn that generated fine. It logs a warning per failed
+  scoring and the selection falls through to `input-order`, so an all
+  `input-order` distribution on a run you expected to be judged is the signal to
+  check the provider and its credentials. Constructing the provider validates
+  only its *name* — the adapters build their client lazily, so a missing key
+  surfaces on the first scoring call rather than before the first paid prompt.
+- **Weigh a lift against `candidate_attempts`, not against the prompt count.**
+  The rate metrics stay winner-based so they compare directly with a single-run
+  baseline, which means the race's cost is deliberately *not* folded into them —
+  it is reported beside them instead. A lift that does not clear N times the
+  spend is not a win.

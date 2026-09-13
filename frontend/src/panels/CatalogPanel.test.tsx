@@ -24,7 +24,7 @@ const item = (over: Partial<api.CatalogItem>): api.CatalogItem => ({
 
 const ITEMS: api.CatalogItem[] = [
   item({
-    house_id: "zillow-1", name: "Zillow One", project_id: 11,
+    house_id: "house-1", name: "House One", project_id: 11,
     current_version_id: 100, steps: 16, category: "bungalow",
     tags: ["garage"], description: "Cosy bungalow.",
     thumbnail_url: "/versions/100/artifacts/thumbnail",
@@ -94,7 +94,7 @@ afterEach(() => {
 describe("CatalogPanel", () => {
   it("renders a card per item with thumbnail and metadata", async () => {
     renderWithProviders(<CatalogPanel />);
-    expect(await screen.findByRole("button", { name: "Zillow One" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "House One" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Flanged Shaft" })).toBeInTheDocument();
     // the baked thumbnail is shown; items without one get a placeholder
     const img = document.querySelector(".item-thumb img");
@@ -107,19 +107,19 @@ describe("CatalogPanel", () => {
     // without this the user sees a stripped catalog and no reason for it.
     fetchCatalog.mockResolvedValueOnce({ ...RESPONSE, details_unavailable: true });
     renderWithProviders(<CatalogPanel />);
-    await screen.findByRole("button", { name: "Zillow One" });
+    await screen.findByRole("button", { name: "House One" });
     expect(await screen.findByRole("status")).toHaveTextContent(/names only/i);
   });
 
   it("shows no such notice for an ordinary catalog", async () => {
     renderWithProviders(<CatalogPanel />);
-    await screen.findByRole("button", { name: "Zillow One" });
+    await screen.findByRole("button", { name: "House One" });
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("searches with the query box", async () => {
     renderWithProviders(<CatalogPanel />);
-    await screen.findByRole("button", { name: "Zillow One" });
+    await screen.findByRole("button", { name: "House One" });
     fireEvent.change(screen.getByRole("searchbox", { name: "Search catalog" }), {
       target: { value: "zil" },
     });
@@ -178,7 +178,7 @@ describe("CatalogPanel", () => {
       sources: [{ key: "local", label: "Local", count: 2 }],
     });
     renderWithProviders(<CatalogPanel />);
-    await screen.findByRole("button", { name: "Zillow One" });
+    await screen.findByRole("button", { name: "House One" });
     expect(screen.queryByRole("group", { name: /sources/i })).not.toBeInTheDocument();
   });
 
@@ -189,7 +189,7 @@ describe("CatalogPanel", () => {
     );
     expect(card).toHaveTextContent("Depot");
     // Where most items came from is not worth saying on every card.
-    const local = screen.getByRole("button", { name: "Zillow One" }).closest(".item-card");
+    const local = screen.getByRole("button", { name: "House One" }).closest(".item-card");
     expect(local).not.toHaveTextContent("Local");
   });
 
@@ -228,20 +228,20 @@ describe("CatalogPanel", () => {
     );
     expect(card).not.toHaveTextContent("Depot");
     // And the listing itself is unaffected — this failure is not that one.
-    expect(screen.getByRole("button", { name: "Zillow One" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "House One" })).toBeInTheDocument();
   });
 
   it("opens a project when a card is clicked", async () => {
     const { store } = renderWithProviders(<CatalogPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Zillow One" }));
+    fireEvent.click(await screen.findByRole("button", { name: "House One" }));
     expect(store.get().activeProjectId).toBe(11);
   });
 
   it("customizes an item: clones it into an editable copy and opens it (#22)", async () => {
     const { store } = renderWithProviders(<CatalogPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Customize Zillow One" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Customize House One" }));
     await waitFor(() =>
-      expect(api.cloneProject).toHaveBeenCalledWith(11, "Zillow One (copy)"),
+      expect(api.cloneProject).toHaveBeenCalledWith(11, "House One (copy)"),
     );
     await waitFor(() => expect(store.get().activeProjectId).toBe(999));
   });
@@ -252,7 +252,7 @@ describe("CatalogPanel", () => {
       ...RESPONSE, items: [ITEMS[1]], total: 3, offset: 1,
     });
     renderWithProviders(<CatalogPanel />);
-    await screen.findByRole("button", { name: "Zillow One" });
+    await screen.findByRole("button", { name: "House One" });
     expect(screen.getByText(/1 of 3/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
@@ -261,7 +261,7 @@ describe("CatalogPanel", () => {
     );
     // both pages are now shown together
     expect(await screen.findByRole("button", { name: "Flanged Shaft" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Zillow One" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "House One" })).toBeInTheDocument();
   });
 
   it("offers Remove only on an item that arrived here", async () => {
@@ -271,7 +271,7 @@ describe("CatalogPanel", () => {
     renderWithProviders(<CatalogPanel />);
 
     expect(await screen.findByRole("button", { name: "Remove Received One" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Remove Zillow One" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove House One" })).toBeNull();
   });
 
   it("offers Remove on a record whose files are gone, and says what it takes", async () => {
@@ -352,7 +352,7 @@ describe("CatalogPanel", () => {
 
   it("shows an empty state when a search matches nothing", async () => {
     renderWithProviders(<CatalogPanel />);
-    await screen.findByRole("button", { name: "Zillow One" });
+    await screen.findByRole("button", { name: "House One" });
     fetchCatalog.mockResolvedValue({ ...RESPONSE, items: [], total: 0, categories: [] });
     fireEvent.change(screen.getByRole("searchbox", { name: "Search catalog" }), {
       target: { value: "no such thing" },

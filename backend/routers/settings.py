@@ -85,6 +85,7 @@ class SettingsUpdate(BaseModel):
     # gate on". Declared, the refusal comes from `user_settings.validate` with a
     # 400 that names the variable to set.
     vlm_critique_enabled: bool | None = None
+    vlm_critique_view_count: int | None = None
     forge_enabled: bool | None = None
     forge_candidate_count: int | None = None
     forge_min_n: int | None = None

@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cadless.config import Settings, settings
-from cadless.llm.provider import ChatProvider
+from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.types import (
     ContentBlock,
     Message,
@@ -246,6 +246,10 @@ class ToolContext:
     current_params: dict = field(default_factory=dict)
     export_dir: str | None = None
     grounding: str | None = None
+    # The turn's attached reference images. Unlike ``grounding`` these reach every
+    # build path — fresh, edit, and each forge candidate — because the picture is
+    # the request rather than an extra hint about it.
+    images: list[ContentBlock] = field(default_factory=list)
     forge: bool = False
     forge_n: int = 1
     # Live token sink for streaming codegen: when set, fresh
@@ -253,6 +257,15 @@ class ToolContext:
     # (the chat layer wires it to the SSE queue), instead of being collected into
     # the post-tool progress burst. ``None`` => codegen is not surfaced live.
     on_codegen: Callable[[str], None] | None = None
+    # Live sink for the render critique: the views the reviewer looked at and
+    # the verdict it reached, pushed as each round settles rather than collected
+    # into the post-tool burst — by then the loop they describe is over.
+    # ``None`` => the captures are dropped rather than collected.
+    on_critique: Callable[[dict], None] | None = None
+    # Where the model's written reading of an attached picture is handed back, so
+    # the chat layer can keep it beside the image and give it to later turns in
+    # place of the pixels. ``None`` => nobody is collecting one.
+    on_reading: Callable[[str], None] | None = None
 
     def __post_init__(self) -> None:
         if self.pipeline is None:
@@ -286,21 +299,33 @@ def _default_reparametrize(code: str, overrides: dict) -> dict:
     }
 
 
-def _route_codegen(on_progress, on_codegen):
-    """Wrap a pipeline ``on_progress`` so codegen deltas stream live.
+def _route_live_events(on_progress, on_codegen, on_critique=None):
+    """Wrap a pipeline ``on_progress`` so the live-only events stream as they happen.
 
-    Codegen token events (``{"event": "codegen", "text": …}``) are forwarded to the
-    live ``on_codegen`` sink the moment they arrive (the chat layer pushes them to
-    the SSE queue), and are NOT added to the collected progress events that burst as
-    ``tool_progress`` after the tool settles. Every other progress event flows to
-    ``on_progress`` unchanged. With no ``on_codegen`` sink, codegen events are
-    dropped (avoids hundreds of stage rows) and the rest pass through.
+    Two kinds of event are worth nothing after the fact. Codegen token events
+    (``{"event": "codegen", "text": …}``) are the code being written, and
+    critique events (``{"event": "critique", "views": …}``) are what the
+    reviewer saw mid-loop. Both are forwarded to their live sink the moment they
+    arrive (the chat layer pushes them to the SSE queue) and are NOT added to
+    the collected progress events, which burst as one ``tool_progress`` after
+    the tool settles — by which time the loop they describe is over. Leaving
+    them in the collected stream as well would deliver each of them twice.
+
+    Every other progress event flows to ``on_progress`` unchanged. With no sink
+    for a live kind, that kind is dropped rather than collected: hundreds of
+    token rows, or several hundred kilobytes of base64, are no use to a
+    consumer that cannot show them as they arrive.
     """
 
     def _route(event: dict) -> None:
-        if event.get("event") == "codegen":
+        kind = event.get("event")
+        if kind == "codegen":
             if on_codegen is not None:
                 on_codegen(event.get("text", ""))
+            return
+        if kind == "critique":
+            if on_critique is not None:
+                on_critique(event)
             return
         if on_progress is not None:
             on_progress(event)
@@ -315,6 +340,13 @@ def _result_summary(result: GenerationResult) -> dict:
     loop's convergence state so the orchestrator can detect a repeated 'Nth
     failure at the same stage' cycle and escalate to ``ask_clarification`` instead
     of burning the repair budget on the same failure.
+
+    ``critique`` carries the render review's last verdict and nothing else — a
+    boolean and an attempt number, never the reviewer's words. Without it a
+    build that ran out of repair budget still reports a clean ``ok: True``, and
+    the model announces a finished part beside a review saying it is wrong. With
+    the words it would instead be handed a vision model's free prose, written
+    from a prompt carrying the user's own, as something to act on.
     """
     return {
         "ok": result.ok,
@@ -322,6 +354,7 @@ def _result_summary(result: GenerationResult) -> dict:
         "code": result.code,
         "attempt_count": result.attempt_count,
         "last_stage": result.last_stage,
+        "critique": result.critique,
         "metrics": {
             "volume": result.volume,
             "bbox": list(result.bbox) if result.bbox else None,
@@ -726,7 +759,23 @@ class Agent:
         user_content: list[ContentBlock] = []
         if ctx_block is not None:
             user_content.append(ctx_block)
-        user_content.append(ContentBlock.of_text(user_text))
+        # Pictures before words, and a turn may be nothing but a picture. An empty
+        # text block is not something a provider will accept, so it is dropped only
+        # when a picture is standing in for it. The condition is on the images
+        # rather than on whether anything else happens to be in the list: a context
+        # block is also non-empty, and keying off that would silently change the
+        # shape a caller passing blank text with no attachment has always got.
+        if context.images and not self._caps.supports_images:
+            # The same backstop the code generator carries, on the other entry
+            # point. The request boundary checks both models before a chat turn
+            # starts, so this is unreachable from HTTP — it is here for an
+            # embedder driving the loop directly, which would otherwise hand the
+            # picture to a vendor and get back that vendor's word for "malformed".
+            # The capabilities were read once at construction, so it costs nothing.
+            raise ImagesUnsupported(self._model)
+        user_content.extend(context.images)
+        if user_text.strip() or not context.images:
+            user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
 
         produced: list[ContentBlock] = []  # new blocks for persistence
@@ -840,7 +889,23 @@ class Agent:
         user_content: list[ContentBlock] = []
         if ctx_block is not None:
             user_content.append(ctx_block)
-        user_content.append(ContentBlock.of_text(user_text))
+        # Pictures before words, and a turn may be nothing but a picture. An empty
+        # text block is not something a provider will accept, so it is dropped only
+        # when a picture is standing in for it. The condition is on the images
+        # rather than on whether anything else happens to be in the list: a context
+        # block is also non-empty, and keying off that would silently change the
+        # shape a caller passing blank text with no attachment has always got.
+        if context.images and not self._caps.supports_images:
+            # The same backstop the code generator carries, on the other entry
+            # point. The request boundary checks both models before a chat turn
+            # starts, so this is unreachable from HTTP — it is here for an
+            # embedder driving the loop directly, which would otherwise hand the
+            # picture to a vendor and get back that vendor's word for "malformed".
+            # The capabilities were read once at construction, so it costs nothing.
+            raise ImagesUnsupported(self._model)
+        user_content.extend(context.images)
+        if user_text.strip() or not context.images:
+            user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
 
         produced: list[ContentBlock] = []
@@ -1129,8 +1194,12 @@ class Agent:
                     res = context.pipeline.run(
                         args.get("spec", ""),
                         export_dir=context.export_dir,
-                        on_progress=_route_codegen(on_progress, context.on_codegen),
+                        on_progress=_route_live_events(
+                            on_progress, context.on_codegen, context.on_critique
+                        ),
                         grounding=context.grounding,
+                        images=context.images,
+                        on_reading=context.on_reading,
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
@@ -1139,7 +1208,18 @@ class Agent:
                     args.get("change", ""),
                     export_dir=context.export_dir,
                     prior_code=context.current_code,
-                    on_progress=on_progress,
+                    # Routed exactly as a fresh generation is. An edit can build
+                    # the wrong shape just as readily, so its critique needs the
+                    # same live channel — left on the raw callback the captures
+                    # ride inside the collected burst instead, arriving after the
+                    # loop they describe and never reaching the transcript. Both
+                    # sinks are passed rather than only the one this path uses
+                    # today, so the two branches cannot drift apart later.
+                    on_progress=_route_live_events(
+                        on_progress, context.on_codegen, context.on_critique
+                    ),
+                    images=context.images,
+                    on_reading=context.on_reading,
                 )
                 payload = _result_summary(res)
                 self._adopt(context, res.code, res.parameters)
@@ -1187,16 +1267,25 @@ class Agent:
         When the judge finds no passing candidate, the least-bad result is summarized
         as the (failing) payload and no losers are surfaced — nothing should be
         promoted over the existing model, so a failed race never replaces a working one.
-        """
-        from cadless.judge import select_winner
 
-        candidates = context.pipeline.run_candidates(
+        The turn's own provider is handed to the judge so its cheap-LLM rung can
+        actually decide. Without it every rung below the hard filter is skipped and
+        the ladder falls through to input order, which buys arbitrary selection at N
+        times the tokens and N times the execution. The judge resolves its own (fast,
+        cheaper) model, so this shares the connection rather than the model choice.
+        """
+        from cadless.forge import race_and_judge
+
+        judged, candidates = race_and_judge(
+            context.pipeline,
             spec,
             n=context.forge_n,
+            provider=self._provider,
             export_dir=context.export_dir,
             grounding=context.grounding,
+            images=context.images,
+            on_reading=context.on_reading,
         )
-        judged = select_winner(candidates, intent=spec)
         win = judged.winner
         payload = (
             _result_summary(win)

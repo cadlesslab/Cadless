@@ -294,8 +294,38 @@ class Settings(BaseSettings):
     # same failure. Layered above the identical-tool-call debounce.
     agent_same_stage_escalation: int = 2
 
-    # Optional VLM render-critique repair signal — OFF by default
-    vlm_critique_enabled: bool = False
+    # Reference images attached to a chat turn. Enforced at the request boundary
+    # so an attachment that cannot work is refused before a turn starts — once the
+    # turn is running, an error aborts it and reverts the project's version, which
+    # is a destructive way to say "that file was too big".
+    #
+    # The per-image ceiling is the tightest of the vendors we translate to, not the
+    # most generous: Bedrock Converse caps an image at 3.75 MB, while Anthropic
+    # allows 5 MB and OpenAI more still. Accepting a 5 MB image would mean taking a
+    # file that fails for whoever is on Bedrock.
+    chat_image_max_bytes: int = 3_750_000  # per image, decoded
+    chat_image_max_turn_bytes: int = 7_500_000  # all images in one turn, decoded
+    chat_image_max_count: int = 4  # per turn
+    # The intersection of what the four adapters can encode. A format outside this
+    # list is refused by name rather than guessed at.
+    chat_image_media_types: list[str] = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    ]
+
+    # The VLM render-critique repair signal — ON. A turn that builds a valid
+    # solid of the wrong shape is the failure this catches and nothing else
+    # does, so it is worth the extra vision round-trip it costs per round. On
+    # its own it still does nothing: a pipeline built with no critic never
+    # critiques whatever this says.
+    vlm_critique_enabled: bool = True
+    # How many of the renderer's views one critique carries. Every view is
+    # another image on every turn, which is why the count is a setting rather
+    # than a constant — and why raising it is gated like the other knobs that
+    # multiply per-turn spend.
+    vlm_critique_view_count: int = 4
     vlm_model_slug: str = "sonnet-4-6"  # vision-capable
 
     @property
