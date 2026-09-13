@@ -953,3 +953,48 @@ class TestOwnership:
         # the scoped lookup, which is the point of the test.
         response = client.post(f"/printing/versions/{version_id}/send", headers={WHO: "user-b"})
         assert response.status_code == 404
+
+
+@pytest.fixture
+def version_in_two_pieces(store):
+    """A version whose STL is two files, as a model split to fit the bed would be."""
+
+    async def go():
+        project = await store.create_project("P")
+        version = await store.add_version(project.id, "a shelf", "result=1", ok=True)
+        directory = Path(store.version_artifact_dir(version.id))
+        for n in range(2):
+            piece = directory / f"model_p{n}.stl"
+            piece.write_bytes(b"\x00" * 84)
+            await store.add_artifact(version.id, "stl", str(piece))
+        return version.id
+
+    return asyncio.run(go())
+
+
+def test_a_model_in_pieces_is_refused_rather_than_part_sliced(
+    client, version_in_two_pieces, monkeypatch
+):
+    """Slicing one piece of a model asked for whole is worse than declining.
+
+    The printer would run for hours and report success, and the plastic is spent
+    before anyone can see it came out the wrong shape.
+    """
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("the slicer was reached for a model in pieces")
+
+    monkeypatch.setattr(slicing, "slice_mesh", _must_not_run)
+    response = client.post(f"/printing/versions/{version_in_two_pieces}/slice")
+    assert response.status_code == 409
+    assert "2" in response.json()["detail"]
+
+
+def test_a_model_in_one_piece_still_slices(client, version_with_stl, monkeypatch):
+    """The refusal above is about several pieces, not about having any at all."""
+    monkeypatch.setattr(
+        slicing,
+        "slice_mesh",
+        lambda *a, **k: slicing.SliceOutcome(ok=True, stats={"time": "1h"}),
+    )
+    assert client.post(f"/printing/versions/{version_with_stl}/slice").status_code == 200

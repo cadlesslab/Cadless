@@ -116,7 +116,23 @@ def _saved_address() -> str:
 
 
 async def _mesh_path(store: ScopedStore, version_id: int) -> str:
-    """The version's STL path, or a 404. Also the ownership gate for this router."""
+    """The version's STL path, or a 404. Also the ownership gate for this router.
+
+    A model held in several pieces is refused rather than served. Every route
+    here takes one mesh, so serving the first piece would send a fragment of
+    something somebody asked to be printed whole — and it would do it silently,
+    reporting a successful job while hours of filament went into the wrong
+    shape. Declining is what makes that a sentence somebody reads instead.
+    """
+    pieces = [a for a in await store.list_artifacts(version_id) if a.kind == "stl"]
+    if len(pieces) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This model is in {len(pieces)} pieces. Printing an assembly is not "
+                "supported yet, so nothing was sent to the printer."
+            ),
+        )
     artifact = await store.get_artifact(version_id, "stl")
     if not artifact or not os.path.exists(artifact.path):
         raise HTTPException(
