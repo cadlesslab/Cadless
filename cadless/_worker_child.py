@@ -2,8 +2,9 @@
 
 Invoked as a subprocess by :mod:`cadless.worker`. Reads a code file, executes
 it, computes a geometry summary, optionally exports artifacts, and prints a single
-``__VTRESULT__ {json}`` line to stdout. Kept dependency-light and side-effect free
-apart from the optional export.
+``__VTRESULT__ {json}`` line to stdout. Kept dependency-light, and side-effect
+free apart from the optional export — which writes one file per solid and first
+removes what an earlier build left of that kind in the same directory.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
 """
@@ -99,12 +100,11 @@ def _parts_to_export(shape) -> list:
 def _clear_previous(export_dir: str, kind: str) -> None:
     """Delete this kind's files from an earlier build in the same directory.
 
-    A chat turn hands every tool call ONE export directory, so a build lands on
-    top of the last one's files. Left in place, a two-part build followed by a
-    one-solid edit leaves ``model.stl`` and ``model_p*.stl`` side by side, and
-    nothing in either name says which build is current -- the reader scans the
-    directory and has to guess. Cleared, the directory holds one shape at a time
-    and the question never arises.
+    An export directory may already hold an earlier build's files: callers reuse
+    one. Left in place, a two-part build followed by a one-solid one leaves
+    ``model.stl`` and ``model_p*.stl`` side by side, and nothing in either name
+    says which build is current -- whoever reads the directory has to guess.
+    Cleared, it holds one shape at a time and the question never arises.
 
     Failures are not swallowed: a file that cannot be removed would leave exactly
     the mixed directory this exists to prevent, and the export is better abandoned

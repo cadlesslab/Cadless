@@ -28,6 +28,7 @@ const STATUS: SettingsStatus = {
   printer_cartridge_grams: null,
   printer_nozzle_temperature: null,
   printer_bed_temperature: null,
+  printer_joint_clearance: null,
   secrets: {
     anthropic_api_key: { set: false, source: "unset" },
     openai_api_key: { set: false, source: "unset" },

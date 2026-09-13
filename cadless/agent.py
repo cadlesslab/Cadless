@@ -253,10 +253,9 @@ class ToolContext:
     images: list[ContentBlock] = field(default_factory=list)
     forge: bool = False
     forge_n: int = 1
-    # The machine this turn is building for, present only when the turn asked for
-    # an assembly and the kill-switch allows it. Both gates are applied at the
-    # route, so this field is the answer rather than one of the inputs to it:
-    # ``None`` is "ordinary turn" and the prompt is left exactly as it is.
+    # The machine this turn is building for. This is the answer rather than one
+    # of the inputs to it: whoever builds this context has already decided, and
+    # ``None`` is an ordinary turn whose prompt is left exactly as it is.
     # Forwarded to fresh generation only, like ``grounding`` -- an edit or a
     # parameter change acts on a model that already chose how many parts it is in.
     assembly: AssemblySpec | None = None

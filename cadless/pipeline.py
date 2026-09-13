@@ -241,7 +241,14 @@ class Pipeline:
                 _emit_stage(on_progress, "validate", "error", n, last_error)
                 self._record(attempts, on_progress, Attempt(n, code, "validate", last_error))
                 code = self._repair(
-                    on_progress, intent, code, last_error, n, max_tries, images=images
+                    on_progress,
+                    intent,
+                    code,
+                    last_error,
+                    n,
+                    max_tries,
+                    images=images,
+                    assembly=assembly,
                 )
                 if code is None:
                     break
@@ -283,6 +290,7 @@ class Pipeline:
                                 max_tries,
                                 forced=True,
                                 images=images,
+                                assembly=assembly,
                             )
                             continue
                     else:
@@ -308,6 +316,7 @@ class Pipeline:
                             max_tries,
                             forced=True,
                             images=images,
+                            assembly=assembly,
                         )
                         continue
                     _emit_stage(on_progress, "assert", "ok", n)
@@ -341,6 +350,7 @@ class Pipeline:
                 max_tries,
                 context=res.repair_context,
                 images=images,
+                assembly=assembly,
             )
             if code is None:
                 break
@@ -509,6 +519,7 @@ class Pipeline:
         forced: bool = False,
         context=None,
         images: Sequence[ContentBlock] = (),
+        assembly: AssemblySpec | None = None,
     ) -> str | None:
         """Ask the model to fix ``code``; return None if the budget is exhausted.
 
@@ -519,7 +530,7 @@ class Pipeline:
         if not forced and n >= max_tries:
             return None
         _emit_stage(on_progress, "repair", "begin", n, error)
-        repaired = self._gen.repair(intent, code, error, context, images=images)
+        repaired = self._gen.repair(intent, code, error, context, images=images, assembly=assembly)
         _emit_stage(on_progress, "repair", "ok", n)
         return repaired
 

@@ -166,6 +166,7 @@ def build_repair_message(
     previous_code: str,
     error: str,
     context: RepairContext | None = None,
+    assembly: AssemblySpec | None = None,
 ) -> str:
     """Message that asks the model to fix code that failed to validate/execute.
 
@@ -174,15 +175,29 @@ def build_repair_message(
     exception type, the offending source line, and the full traceback so the
     model can target deep OCCT failures precisely. Otherwise it falls back to the
     flat ``error`` string (e.g. validation/critique failures).
+
+    ``assembly`` changes what the script is asked to still be. The closing line
+    used to say "the final solid" unconditionally, which on an assembly turn
+    instructed the model to undo the very thing that turn asked for -- and a
+    repair round is where that instruction lands hardest, because the request it
+    is repairing is the one hardest to get right in the first place.
     """
     failure = _format_failure(error, context)
+    keeps = (
+        "assigns the final solid to `result`"
+        if assembly is None
+        else (
+            "assigns the whole assembly to `result` as a Compound of separate "
+            "solids, with its interlocking joints and their clearance intact"
+        )
+    )
     return (
         f"The following build123d script was generated for this request:\n"
         f"Request: {intent}\n\n"
         f"```python\n{previous_code.strip()}\n```\n\n"
         f"It failed with this error:\n{failure}\n\n"
         f"Return a corrected full script (code only) that fixes the error and still "
-        f"assigns the final solid to `result`."
+        f"{keeps}."
     )
 
 
@@ -214,9 +229,8 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     """What an assembly turn asks for, written against the printer it is for.
 
     The measurements are interpolated rather than described because the model has
-    to size parts against a real bed: "make it fit your printer" is not something
-    a generator can act on, and the default bed is the one machine we can be sure
-    the reader does not own.
+    to size parts against numbers: "make it fit your printer" is not something a
+    generator can act on.
     """
     volume = spec.volume
     fits = f"{fmt(volume.width)} x {fmt(volume.depth)} x {fmt(volume.height)} mm"
@@ -247,8 +261,8 @@ def _with_assembly_instruction(user: str, spec: AssemblySpec | None) -> str:
 
     Shaped exactly like :func:`_with_reference_instruction` above and for the same
     reason: a turn that did not ask gets the message the builders produced, byte
-    for byte, so every existing caller -- the eval harness and distillation
-    included -- keeps the prompt it has always sent.
+    for byte, so every existing caller keeps the prompt it has always sent
+    without having to know this exists.
     """
     if spec is None:
         return user
@@ -414,14 +428,16 @@ class CodeGenerator:
         error: str,
         context: RepairContext | None = None,
         images: Sequence[ContentBlock] = (),
+        assembly: AssemblySpec | None = None,
     ) -> str:
         """Fix code that failed, with the turn's reference pictures still in view.
 
         A repair round that lost the picture would be trying to fix the shape
         against the words alone, which is the half of the request that was least
-        able to describe it in the first place.
+        able to describe it in the first place. ``assembly`` is here for the same
+        reason: a round that lost it would be repairing towards a single solid.
         """
-        user = build_repair_message(intent, previous_code, error, context)
+        user = build_repair_message(intent, previous_code, error, context, assembly)
         if images:
             text = self._stream_complete(user, None, None, images)
         else:

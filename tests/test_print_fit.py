@@ -237,9 +237,9 @@ class TestWhatSplittingWouldTake:
     """The third way out of a model that will not fit, beside scaling and turning.
 
     Scaling prints something smaller than was asked for and turning only helps
-    once; cutting the model up is the answer for the half of the catalogue that
-    is furniture at real scale. What is computed here is only the count -- where
-    the seams actually go is the model's decision, not arithmetic's.
+    once; cutting the model up is the answer for anything authored at real scale.
+    What is computed here is only the count -- where the seams actually go is the
+    model's decision, not arithmetic's.
     """
 
     def default(self):
@@ -248,11 +248,11 @@ class TestWhatSplittingWouldTake:
     def test_a_model_that_fits_is_offered_no_split(self):
         assert print_fit.split_offer([70.0, 70.3, 12.0], self.default()) is None
 
-    def test_the_measured_desk_is_told_how_many_parts_it_would_take(self):
-        offer = print_fit.split_offer([1100.0, 600.0, 450.0], self.default())
+    def test_a_model_just_past_the_bed_is_counted(self):
+        # 300/200 -> 2 across, 250/190 -> 2 deep, 200/195 -> 2 tall.
+        offer = print_fit.split_offer([300.0, 250.0, 200.0], self.default())
         assert offer is not None
-        # 1100/200 -> 6 across, 600/190 -> 4 deep, 450/195 -> 3 tall.
-        assert offer.pieces == 6 * 4 * 3
+        assert offer.pieces == 8
 
     def test_the_count_is_measured_against_the_bed_less_its_skirt(self):
         """The same target the scale offer aims at, and for the same reason: each
@@ -263,24 +263,40 @@ class TestWhatSplittingWouldTake:
         assert offer is not None
         assert offer.pieces == 4
 
+    def test_the_measured_desk_is_too_far_past_the_bed_to_be_worth_splitting(self):
+        """A straight cut puts the 1100 x 600 x 450 desk at 72 parts on the
+        default bed. Nobody assembles that and no generator writes it, so past
+        the cap the count stops being said at all and the scale offer beside it
+        is the answer. The count grows with volume rather than levelling off,
+        which is what makes a ceiling necessary rather than tidy."""
+        assert print_fit.split_offer([1100.0, 600.0, 450.0], self.default()) is None
+
     def test_an_unusable_bounding_box_is_offered_no_split(self):
         """The silence the rest of this module keeps, for the same reason."""
         assert print_fit.split_offer(None, self.default()) is None
         assert print_fit.split_offer(["wide", 10, 10], self.default()) is None
 
     def test_a_bigger_printer_needs_fewer_parts(self):
-        small = print_fit.split_offer([1100.0, 600.0, 450.0], self.default())
+        model = [300.0, 250.0, 200.0]
+        small = print_fit.split_offer(model, self.default())
         big = print_fit.split_offer(
-            [1100.0, 600.0, 450.0],
+            model,
             printer_profile.build_volume(
-                {"printer_bed_width": 600, "printer_bed_depth": 600, "printer_max_height": 600}
+                {"printer_bed_width": 400, "printer_bed_depth": 400, "printer_max_height": 195}
             ),
         )
         assert small is not None and big is not None
         assert big.pieces < small.pieces
 
-    def test_the_sentence_names_the_count_and_how_to_ask_for_it(self):
-        offer = print_fit.split_offer([1100.0, 600.0, 450.0], self.default())
-        sentence = print_fit.split_sentence(offer)
-        assert "72" in sentence
-        assert "assembly" in sentence
+    def test_the_sentence_is_asserted_whole(self):
+        """Substring checks let half of it be deleted and stay green, and this is
+        a sentence a refused reader is shown -- what it says is the point. It is
+        a measure rather than an offer, because printing an assembly is refused
+        by the path that would slice one, and pointing a reader at that would be
+        routing them at a refusal."""
+        offer = print_fit.split_offer([300.0, 250.0, 200.0], self.default())
+        assert print_fit.split_sentence(offer) == (
+            "It would take an assembly of at least 8 parts to fit. Printing an "
+            "assembly is not supported yet, so that is a measure of how far past "
+            "the build volume this is rather than a way to print it."
+        )

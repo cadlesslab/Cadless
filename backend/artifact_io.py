@@ -1,11 +1,10 @@
 """Copying a build's exports into a version's artifact directory.
 
-One funnel, and deliberately so. ``Store.add_artifact`` assigns each row's part
-ordinal inside its own INSERT, as ``MAX(part) + 1`` for that version and kind, so
-**the order the rows are written is the numbering**. Three call sites deciding
-that order independently would be three chances for a part to be filed under a
-number its filename does not match -- a mismatch nothing raises on, because both
-halves are individually well formed.
+One funnel, and deliberately so. A part's ordinal is assigned by the store as it
+writes the row, so **the order the rows are written is the numbering**. Every
+call site deciding that order for itself is another chance for a part to be filed
+under a number its filename does not match -- a mismatch nothing raises on,
+because both halves are individually well formed.
 
 The build writes its files and this reads them back; the naming contract they
 share lives in :mod:`cadless.exporters`, next to the writer.
@@ -17,6 +16,7 @@ import shutil
 from pathlib import Path
 
 from cadless.exporters import EXPORTERS, part_index
+from cadless.scoped_store import ScopedStore
 
 
 def exported_parts(src_dir: Path, kind: str) -> list[Path]:
@@ -29,9 +29,10 @@ def exported_parts(src_dir: Path, kind: str) -> list[Path]:
     guessed at.
 
     A one-solid build wrote ``model.{kind}`` and is returned as the single part it
-    is. The two namings never share a directory -- the worker clears the previous
-    build's files before writing -- so finding the plain name is enough to know
-    which shape this directory holds.
+    is. Finding the plain name settles the question, so the two namings sharing a
+    directory would be a build written on top of another's leftovers -- which the
+    export step is responsible for not leaving. What this does in that case is
+    pinned by a test rather than left to the reader.
     """
     single = src_dir / f"model.{kind}"
     if single.exists():
@@ -44,12 +45,17 @@ def exported_parts(src_dir: Path, kind: str) -> list[Path]:
     return [path for _, path in sorted(numbered)]
 
 
-async def copy_and_register(store, version_id: int, src_dir: str | Path) -> int:
+async def copy_and_register(store: ScopedStore, version_id: int, src_dir: str | Path) -> int:
     """Copy every exported part in, register each, and return how many were written.
 
     The filename is carried across unchanged, so what is on disk under the version
     is what the build called it, and the part ordinal the row receives is the
     position in the order above.
+
+    ``store`` is annotated rather than left bare because this is the one place
+    every artifact write now passes through: the scoping is a property of what a
+    route hands in, and with nothing said, a later caller handing in the unscoped
+    store would look exactly like ordinary code.
     """
     src = Path(src_dir)
     dest = Path(store.version_artifact_dir(version_id))

@@ -29,7 +29,7 @@ class AlwaysGood:
         return GOOD
 
     def repair(
-        self, intent, code, error, context=None, images=()
+        self, intent, code, error, context=None, images=(), assembly=None
     ):  # pragma: no cover - not reached
         return GOOD
 

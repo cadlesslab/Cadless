@@ -266,6 +266,36 @@ def test_cost_multiplying_knob_refused_without_the_launch_gate():
     assert settings.forge_enabled is False
 
 
+@pytest.mark.parametrize("field", sorted(user_settings._TIER_B_FIELDS))
+def test_every_gated_field_refuses_a_raise_above_its_launch_baseline(field):
+    """Named one at a time, the gate's membership was never what was tested -- a
+    field could join the list and be refused by nothing. The architecture document
+    says "Tests enforce each of these" about this tier, so enumerate the tier
+    rather than a hand-picked member of it.
+
+    What has to be asked for is a *raise above the launch baseline*, which is the
+    only thing the gate blocks. The baseline rather than the live value is
+    deliberate: returning a knob to what the installation started on is never a
+    raise, or an ungated caller could turn something down and then never put it
+    back. A field already shipping at the expensive end therefore has no raise
+    available at all, and the branch below asserts that rather than skipping --
+    a field that stopped shipping that way should move to the other branch, not
+    quietly stop being covered.
+    """
+    baseline = user_settings._LAUNCH_BASELINE[field]
+
+    if isinstance(baseline, bool) and baseline:
+        assert user_settings._raises_spend(field, True) is False
+        return
+
+    raised = True if isinstance(baseline, bool) else baseline + 1
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({field: raised})
+
+    assert user_settings.load() == {}
+    assert getattr(settings, field) == baseline
+
+
 def test_a_hosted_build_refuses_a_credential(monkeypatch):
     """On a build that hosts more than one person, every caller here is a stranger.
 

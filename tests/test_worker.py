@@ -115,10 +115,10 @@ def test_a_single_solid_still_exports_under_the_plain_name(tmp_path):
 
 
 def test_a_rebuild_leaves_none_of_the_previous_shape_behind(tmp_path):
-    """A chat turn hands every tool call ONE export directory, so a build lands on
-    top of the last one's files. Without clearing, a two-part build followed by a
-    one-solid edit leaves both namings side by side and a directory scan has to
-    guess which is current -- and the stale one wins whenever it sorts first.
+    """Callers reuse an export directory, so a build lands on top of the last
+    one's files. Without clearing, a two-part build followed by a one-solid one
+    leaves both namings side by side and whoever scans the directory has to guess
+    which is current -- and the stale one wins whenever it is found first.
     """
     run_code(
         "from build123d import *\nresult = Box(10, 10, 10) + Pos(30, 0, 0) * Box(5, 5, 5)\n",

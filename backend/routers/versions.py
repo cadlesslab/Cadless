@@ -112,18 +112,46 @@ async def rerun_version(version_id: int, store: ScopedStore = Depends(get_store)
             ),
         )
 
-    dest = store.version_artifact_dir(version_id)
-    res = await run_in_threadpool(run_code, version.code, export_dir=dest)
-    if res.ok:
-        # Re-read rather than reusing the list the guard above took. This one
-        # decides whether a row is written, and pinning that decision to a
-        # snapshot taken before a subprocess ran is the shape of bug that
-        # survives every test until something changes underneath it.
-        existing = {a.kind for a in await store.list_artifacts(version_id)}
-        for kind in EXPORTERS:
-            target = Path(dest) / f"model.{kind}"
-            if kind not in existing and target.exists():
-                await store.add_artifact(version_id, kind, str(target))
+    # Never export into the version's own directory. The export step clears a
+    # kind's earlier files before writing that kind, so a rebuild landing there
+    # deletes what this version is currently serving -- and where the rebuild
+    # comes back in more pieces than the rows recorded, every one of those rows
+    # is left pointing at a file that is gone while the response still reads ok.
+    staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        res = await run_in_threadpool(run_code, version.code, export_dir=str(staging))
+        if res.ok:
+            rebuilt = {kind: artifact_io.exported_parts(staging, kind) for kind in EXPORTERS}
+            if any(len(paths) > 1 for paths in rebuilt.values()):
+                # The row count above cannot see this one. A version built before
+                # a build could hold several files of a kind has exactly one row
+                # per kind whatever its geometry, so a model that was always
+                # several solids only declares itself here, after rebuilding.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This model rebuilds in several pieces. Re-running one is not "
+                        "supported yet, so nothing was re-exported."
+                    ),
+                )
+            # Re-read rather than reusing the list the guard above took. This one
+            # decides whether a row is written, and pinning that decision to a
+            # snapshot taken before a subprocess ran is the shape of bug that
+            # survives every test until something changes underneath it.
+            existing = {a.kind for a in await store.list_artifacts(version_id)}
+            dest = Path(store.version_artifact_dir(version_id))
+            for kind, paths in rebuilt.items():
+                if not paths:
+                    continue
+                # Refreshed in place, as before -- re-running is for getting the
+                # files rebuilt, not only for filling in a kind that was missing.
+                target = dest / paths[0].name
+                shutil.copy(paths[0], target)
+                if kind not in existing:
+                    await store.add_artifact(version_id, kind, str(target))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return RerunResponse(ok=res.ok, error=res.error, version=await _version_out(store, version_id))
 
 

@@ -666,6 +666,7 @@ export interface SettingsStatus extends TuningKnobs {
   printer_cartridge_grams: number | null;
   printer_nozzle_temperature: number | null;
   printer_bed_temperature: number | null;
+  printer_joint_clearance: number | null;
   secrets: Record<string, SecretStatus>;
 }
 
@@ -698,6 +699,7 @@ export interface SettingsUpdate {
   printer_cartridge_grams?: number;
   printer_nozzle_temperature?: number;
   printer_bed_temperature?: number;
+  printer_joint_clearance?: number;
 }
 
 /** What came of taking a received `.cls` into the catalog on this machine. */

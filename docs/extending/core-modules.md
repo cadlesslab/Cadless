@@ -128,11 +128,20 @@ one silently drops a fifth:
 | `run_code` and `_run_remote` | copy exactly those keys out of the child's payload |
 | `GenerationResult` in `cadless/pipeline.py` | repeats the same four fields |
 
-`backend/routers/generation.py` reads `getattr(result, f"{kind}_path")`, so it
-picks a new kind up automatically — but only once `ExecResult` carries the
-field. Miss that step and your artifact is generated and then thrown away at the
-process boundary, which is a confusing failure to debug. The version and chat
-routes recover on their own, because they scan `model.{kind}` on disk instead.
+Every route that persists a build copies artifacts in through
+`backend/artifact_io.copy_and_register`, which scans the export directory rather
+than reading a path off the result. So a new kind is picked up from disk on all
+of them, and an artifact is no longer generated and then dropped at the process
+boundary when `ExecResult` is missing its field. Declare the field anyway: it is
+what a caller holding a result rather than a directory reads.
+
+A build with more than one solid writes one file per solid, named
+`model_p{i}.{kind}` instead of `model.{kind}`. `cadless/exporters.part_name`
+decides which, and `artifact_io.exported_parts` reads it back — they are a pair,
+and the number in the name is parsed rather than sorted, because that order is
+the part ordinal each file is filed under. Re-running such a version is refused
+rather than re-exported (`backend/routers/versions.py`): one file per kind would
+match none of the pieces already recorded.
 
 Production code always goes through the registry; the individual `export_*`
 functions are called directly only by tests.

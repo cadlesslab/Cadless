@@ -21,12 +21,12 @@ from cadless.config import settings
 
 #: How one part of a build is named, and how that name is read back.
 #:
-#: Writer and reader are different processes in different packages --
-#: :mod:`cadless._worker_child` writes the files and :mod:`backend.artifact_io`
-#: copies them in -- and they have to agree exactly, because the reader turns this
-#: number into the ordinal the artifact row is filed under. A name it cannot parse
-#: is a part either dropped or filed under another part's number, and neither
-#: failure says anything at the time. So the two halves live here together.
+#: The process that writes these files and whatever later copies them in are not
+#: the same code, and they have to agree exactly: the number in the name becomes
+#: the ordinal the part is filed under. A name the reader cannot parse is a part
+#: either dropped or filed under another part's number, and neither failure says
+#: anything at the time. So both halves live here, together, rather than as a
+#: format in one place and a pattern that has to match it in another.
 _PART_STEM = re.compile(r"^model_p(\d+)$")
 
 
@@ -35,8 +35,8 @@ def part_name(index: int, total: int) -> str:
 
     A one-solid build keeps ``model``, byte for byte what every build wrote before
     parts existed. That is the upgrade path: an installation that never asks for
-    an assembly sees the tree it has always had, and the re-run path goes on
-    finding its file by name. Numbering starts at zero and is not padded, because
+    an assembly sees the tree it has always had, so anything that went looking for
+    that name still finds it. Numbering starts at zero and is not padded, because
     the reader parses the number rather than sorting the string.
     """
     return "model" if total == 1 else f"model_p{index}"

@@ -194,6 +194,16 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
     )
 
 
+#: Above this many parts, splitting stops being worth saying at all.
+#:
+#: The count is what a straight cut would take, so it grows with volume rather
+#: than levelling off: a car-sized model against a desktop bed comes out in four
+#: figures. Nobody assembles that, no generator writes it, and the scale offer
+#: sitting beside it is the honest answer at that size. The number is the point
+#: where a reader stops taking it as information and starts taking it as a joke.
+MAX_SPLIT_PIECES = 24
+
+
 @dataclass(frozen=True)
 class SplitOffer:
     """How many parts a too-big model would take, as something to be told.
@@ -211,9 +221,9 @@ def split_offer(bbox: Sequence[Any] | None, volume: BuildVolume) -> SplitOffer |
     """What cutting a too-big model up would take, or ``None``.
 
     The third answer, beside scaling it down and turning it a quarter. Those two
-    were the whole repertoire, and for the half of the catalogue that is furniture
-    at real scale neither is what was wanted: one prints something smaller than
-    was asked for, and the other only helps once.
+    were the whole repertoire, and for anything authored at real scale neither is
+    what was wanted: one prints something smaller than was asked for, and the
+    other only ever helps once.
 
     ``None`` covers a model that already fits and a bounding box that is not three
     usable numbers -- the same silence the rest of this module keeps, and for the
@@ -230,19 +240,30 @@ def split_offer(bbox: Sequence[Any] | None, volume: BuildVolume) -> SplitOffer |
     pieces = 1
     for size, limit in zip(dimensions, (target.width, target.depth, target.height), strict=True):
         pieces *= max(1, math.ceil(size / limit))
-    return SplitOffer(pieces=pieces) if pieces > 1 else None
+    if pieces <= 1 or pieces > MAX_SPLIT_PIECES:
+        return None
+    return SplitOffer(pieces=pieces)
 
 
 def split_sentence(offer: SplitOffer) -> str:
     """The split remedy, as a line to read beside the refusal.
 
-    Written as a sentence rather than returned as a field because it has two
-    readers -- this build's own panel and a marketplace panel elsewhere -- and
-    only one of them is ours to change. Both already show the refusal verbatim,
-    so a remedy said here reaches a reader today rather than after a client
-    learns a new field.
+    A sentence rather than a field because this reply's ``detail`` is shown to a
+    reader by more than one panel and only one of them is in this tree. A remedy
+    said here arrives wherever the refusal already does; one returned beside it
+    arrives only after a client learns to read it.
+
+    It is written as a measure rather than an offer, which is what separates it
+    from the scale offer beside it. Scaling is something the reader can accept
+    here and now; an assembly is not, because printing one is not supported and a
+    multi-part version is refused by the path that would slice it. Telling them
+    to go and ask for one would be routing them at a refusal.
+
+    So it names no control and promises no outcome: it says how far past the bed
+    this model is, in the unit the reader is about to think in anyway.
     """
     return (
-        f"It would fit as an assembly of at least {offer.pieces} parts: "
-        "turn on Assembly and ask again to have the parts designed with joints."
+        f"It would take an assembly of at least {offer.pieces} parts to fit. "
+        "Printing an assembly is not supported yet, so that is a measure of how "
+        "far past the build volume this is rather than a way to print it."
     )

@@ -10,6 +10,7 @@ import pytest
 
 from cadless.config import Settings, settings
 from cadless.pipeline import Pipeline, generate_cad
+from cadless.printer_profile import AssemblySpec, BuildVolume
 
 GOOD = "from build123d import *\nresult = Box(10, 10, 10)\n"
 GOOD_PARAMS = (
@@ -61,11 +62,12 @@ class FakeGen:
             on_reading(self.reading)
         return self._outputs[0]
 
-    def repair(self, intent, code, error, context=None, images=()):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None):
         self.repairs += 1
         self.last_repair_context = context
         self.last_repair_error = error
         self.last_repair_images = list(images)
+        self.last_repair_assembly = assembly
         return self._outputs[self.repairs]
 
 
@@ -77,6 +79,29 @@ def test_exhausted_on_persistent_validation_failure():
     assert result.attempt_count == 3
     assert all(a.stage == "validate" for a in result.attempts)
     assert "validation" in result.error
+
+
+def test_a_repair_round_carries_the_assembly_spec():
+    """Validation failing on attempt 1 is the ordinary case, not a rare one, so a
+    repair that lost the spec would quietly turn most assembly turns back into
+    single solids -- on exactly the request least likely to land first time."""
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+    gen = FakeGen([BANNED, BANNED])
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run("x", assembly=spec)
+
+    assert gen.repairs == 1
+    assert gen.last_repair_assembly == spec
+
+
+def test_an_ordinary_turn_repairs_with_no_spec():
+    gen = FakeGen([BANNED, BANNED])
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run("x")
+
+    assert gen.last_repair_assembly is None
 
 
 def test_repair_count_respects_budget():

@@ -448,9 +448,14 @@ def _validate_knobs(patch: dict[str, Any]) -> None:
             f for f in _TIER_B_FIELDS.keys() & patch.keys() if _raises_spend(f, patch[f])
         )
         if raised:
+            # Spend is the usual reason to be behind this gate but not the only
+            # one, so the sentence names the union rather than asserting the one
+            # that does not apply. A field gated for reliability told the reader
+            # it would cost them money, which is a different thing to weigh.
             raise ValueError(
-                f"{', '.join(raised)} would raise what a single turn spends, so it is "
-                f"settable only when {_ADVANCED_GATE} is set in the launch environment"
+                f"{', '.join(raised)} would raise what a single turn spends, or turn on "
+                f"output nothing downstream checks yet, so it is settable only when "
+                f"{_ADVANCED_GATE} is set in the launch environment"
             )
     for field in _BOOL_FIELDS & patch.keys():
         if not isinstance(patch[field], bool):

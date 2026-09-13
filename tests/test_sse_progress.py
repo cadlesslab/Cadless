@@ -42,7 +42,7 @@ class FakeGen:
     def refine(self, intent, prior_code, images=(), on_reading=None):
         return self.outputs[0]
 
-    def repair(self, intent, code, error, context=None, images=()):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None):
         self.repairs += 1
         return self.outputs[self.repairs]
 

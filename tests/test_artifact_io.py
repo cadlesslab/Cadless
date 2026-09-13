@@ -50,6 +50,17 @@ def test_a_name_carrying_no_number_is_skipped_rather_than_guessed_at(tmp_path):
     assert names == ["model_p0.stl", "model_p1.stl"]
 
 
+def test_the_plain_name_wins_where_both_namings_are_present(tmp_path):
+    """A directory holding both is a build written over another's leftovers, and
+    the export step is responsible for not leaving them. Pinned anyway, because
+    the early return above is only the right answer while that holds -- if it
+    stops holding, this is what the reader silently gets.
+    """
+    _touch(tmp_path, "model.stl", "model_p0.stl", "model_p1.stl")
+
+    assert [p.name for p in exported_parts(tmp_path, "stl")] == ["model.stl"]
+
+
 def test_only_the_kind_asked_for_comes_back(tmp_path):
     _touch(tmp_path, "model_p0.stl", "model_p0.step")
 

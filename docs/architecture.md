@@ -159,10 +159,15 @@ candidate judging, the identity seam and the image decisions are recorded under
    `CADLESS_WORKER_URL` is configured; local development and tests use a
    resource-limited subprocess fallback.
 5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
-   the shared data volume. The API persists metadata and serves the artifacts.
+   the shared data volume — one file per kind, or one per solid where the build
+   produced several. The API persists metadata and serves the artifacts.
 6. An execution failure can return to the provider as a repair prompt. A success
    is stored as a project version whose source remains available for parameter
-   changes and deterministic rebuilds.
+   changes and deterministic rebuilds. A version held in several pieces is the
+   exception to the rebuild half and is refused rather than re-exported: one
+   file per kind would match none of the pieces already recorded, and choosing
+   between filing it as another piece and leaving every recorded piece stale
+   would be inventing a contract rather than reading one.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount

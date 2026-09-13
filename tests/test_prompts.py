@@ -127,8 +127,7 @@ def test_generator_routes_through_provider_complete():
 
 def test_an_assembly_turn_tells_the_model_which_printer_it_is_building_for():
     """The measurements have to reach the model. "Make it fit your printer" is
-    not something a generator can act on, and the default bed is the one machine
-    the reader is least likely to own."""
+    not something a generator can act on."""
     fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
     gen = CodeGenerator(provider=fake)
     spec = AssemblySpec(
@@ -156,6 +155,29 @@ def test_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
     gen.generate("a bookshelf")
 
     assert fake.last[1] == build_user_message("a bookshelf")
+
+
+def test_a_repair_round_on_an_assembly_turn_does_not_ask_for_one_solid():
+    """Repair is the third way into the model, and the one that lands hardest: it
+    fires on the turn whose request was hardest to get right in the first place.
+    Closing with "assigns the final solid to `result`" there would instruct the
+    model to undo the very thing that turn asked for, and nothing downstream
+    would notice -- one fused solid is a perfectly ordinary result.
+    """
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+
+    message = build_repair_message("a shelf", "result = 1", "boom", None, spec)
+
+    assert "Compound of separate solids" in message
+    assert "final solid" not in message
+
+
+def test_a_repair_round_on_an_ordinary_turn_still_asks_for_a_solid():
+    message = build_repair_message("a shelf", "result = 1", "boom")
+
+    assert "assigns the final solid to `result`" in message
 
 
 def test_generator_streams_tokens_via_on_token():

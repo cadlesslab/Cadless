@@ -34,7 +34,7 @@ class _RecordingGen:
         # the candidate is still a well-formed (failed) GenerationResult.
         return "import os\nfrom build123d import *\nresult = Box(1,1,1)\n"
 
-    def repair(self, intent, code, error, context=None, images=()):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None):
         return code
 
 

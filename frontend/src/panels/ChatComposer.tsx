@@ -215,7 +215,7 @@ export function ChatComposer({
             </Tooltip>
           )}
           {onToggleAssembly && (
-            <Tooltip label="Assembly: ask for the part as several interlocking pieces sized to your printer, rather than one solid. Off by default.">
+            <Tooltip label="Assembly: ask for the part as several interlocking pieces sized to the printer in Settings, rather than one solid. Off by default.">
               <Button
                 className="composer-assembly"
                 variant="ghost"
