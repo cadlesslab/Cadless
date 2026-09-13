@@ -19,9 +19,13 @@ from cadless.catalog.importer import discard_item_dir, imported_item_dir
 from cadless.catalog.ledger import Ledger, LedgerBusy, LedgerUnreadable
 from cadless.catalog.manifest import (
     CatalogManifest,
+    CatalogStep,
     discover_houses,
     load_manifest,
     read_source_json,
+    step_artifact_path,
+    step_code_path,
+    thumbnail_path,
 )
 from cadless.params import extract_params
 from cadless.scoped_store import AnyStore, system_view
@@ -40,10 +44,11 @@ def item_content_hash(house_dir: Path, manifest: CatalogManifest | None = None) 
     """
     house_dir = Path(house_dir)
     manifest = manifest or load_manifest(house_dir)
+    item = house_dir.resolve()
     digest = hashlib.sha256()
     digest.update((house_dir / "manifest.json").read_bytes())
     for step in manifest.steps:
-        digest.update((house_dir / step.code).read_bytes())
+        digest.update(step_code_path(item, step).read_bytes())
     source_path = house_dir / "source.json"
     if source_path.exists():
         digest.update(source_path.read_bytes())
@@ -63,6 +68,39 @@ def _copy_artifact(store: AnyStore, version_id: int, src: Path, filename: str) -
     dst = Path(store.version_artifact_dir(version_id)) / filename
     shutil.copyfile(src, dst)
     return str(dst)
+
+
+def _read_step_code(item: Path, step: CatalogStep) -> str:
+    return step_code_path(item, step).read_text()
+
+
+def _copy_step_artifact(
+    store: AnyStore, version_id: int, item: Path, step: CatalogStep, kind: str
+) -> str | None:
+    return _copy_artifact(store, version_id, step_artifact_path(item, step, kind), f"model.{kind}")
+
+
+def _copy_thumbnail(
+    store: AnyStore, version_id: int, item: Path, manifest: CatalogManifest
+) -> str | None:
+    return _copy_artifact(store, version_id, thumbnail_path(item, manifest), "thumbnail.png")
+
+
+async def _read_or_clear(store: AnyStore, ledger: Ledger, manifest: CatalogManifest, call, *args):
+    """Run one checked read in a worker thread; if it fails, take the item back out.
+
+    Every path was checked when the manifest was read, so a refusal here means
+    a file changed under the load or was never readable as the manifest
+    promised, and a filesystem error means the same or worse. Either way the
+    project row created before the read would stay
+    behind with no versions, which `load_house` reads as loaded and never
+    rebuilds — so the row goes with the failure.
+    """
+    try:
+        return await asyncio.to_thread(call, *args)
+    except (ValueError, OSError):
+        await clear_house(store, ledger, manifest.id)
+        raise
 
 
 async def load_house(
@@ -91,6 +129,7 @@ async def load_house(
     # them. Each piece goes to a worker thread on its own, which leaves the
     # order the store and the ledger see exactly as it was.
     manifest = await asyncio.to_thread(load_manifest, house_dir)
+    item = await asyncio.to_thread(house_dir.resolve)
     # Whether this item is already loaded is the db's answer, not the ledger's. A
     # ledger that cannot be read would otherwise report every item as absent and
     # import the whole catalog again, leaving the first copy behind as an ordinary
@@ -120,7 +159,7 @@ async def load_house(
     parent: int | None = None
     last_vid: int | None = None
     for step in manifest.steps:
-        code = await asyncio.to_thread((house_dir / step.code).read_text)
+        code = await _read_or_clear(store, ledger, manifest, _read_step_code, item, step)
         # Surface the script's editable ``params`` block the same way
         # the live generation path does, so catalog items are parametric in the UI.
         version = await store.add_version(
@@ -133,9 +172,9 @@ async def load_house(
             parameters=extract_params(code),
             parent_version_id=parent,
         )
-        for kind, rel in step.artifacts.items():
-            dst = await asyncio.to_thread(
-                _copy_artifact, store, version.id, house_dir / rel, f"model.{kind}"
+        for kind in step.artifacts:
+            dst = await _read_or_clear(
+                store, ledger, manifest, _copy_step_artifact, store, version.id, item, step, kind
             )
             if dst is not None:
                 await store.add_artifact(version.id, kind, dst)
@@ -163,8 +202,9 @@ async def load_house(
     # serve it through the ordinary per-version artifact route.
     has_thumbnail = False
     if manifest.thumbnail and last_vid is not None:
-        src = house_dir / manifest.thumbnail
-        dst = await asyncio.to_thread(_copy_artifact, store, last_vid, src, "thumbnail.png")
+        dst = await _read_or_clear(
+            store, ledger, manifest, _copy_thumbnail, store, last_vid, item, manifest
+        )
         if dst is not None:
             await store.add_artifact(last_vid, "thumbnail", dst)
             has_thumbnail = True

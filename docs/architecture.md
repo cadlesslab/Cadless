@@ -118,6 +118,16 @@ port, bound to loopback.
    applied in SQL rather than after it. The engine learns *who* is asking and
    never *how*: identity is supplied by a registered resolver, and a missing or
    failing one is a refusal rather than a fall back to the local user.
+8. A catalog manifest's `code`, artifact and `thumbnail` paths MUST resolve
+   inside their item directory, and the item directory MUST NOT be a symlink.
+   `load_manifest` refuses a spelling a `.cls` entry could not carry and a path
+   that leaves the item through a link, and the loader and the thumbnail
+   renderer open files only through the accessors that repeat that check,
+   because the loader copies what those paths name into the store and the API
+   serves the copies — so a manifest under any catalog root would otherwise
+   read and publish a file elsewhere in the container.
+   `tests/test_catalog_manifest.py` and `tests/test_catalog_loader.py` hold each
+   refusal.
 
 8. An image the user attached MUST reach the model that writes the script, or
    the turn MUST be refused before it starts. It is never dropped in between.

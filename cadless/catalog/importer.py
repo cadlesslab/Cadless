@@ -411,11 +411,11 @@ def _checked_manifest(package: ClsPackage) -> CatalogManifest:
 
     It is the document the loader obeys: it decides which file is a step's code,
     which files are that step's artifacts, and which one is the thumbnail. None
-    of that has to describe anything the package actually carries, and none of
-    it has to stay inside the item — `load_house` joins each value onto the item
-    directory, reads it, and copies the result into the store, which the API
-    serves. Written through unchecked, `../../settings.json` is a valid answer,
-    and that file holds every provider key.
+    of that has to describe anything the package actually carries. `load_manifest`
+    refuses a path that leaves the item, but one that stays inside it can still
+    name a file this package never carried — `load_house` joins each value onto
+    the item directory, reads it, and copies the result into the store, which
+    the API serves.
 
     So every path it names must be an entry of this package, and a step's code
     must be one of the entries the gate just read. The second rule is the one

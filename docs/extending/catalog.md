@@ -96,16 +96,21 @@ entry in `steps` has:
 | --- | --- |
 | `index` | 1-based position in the ladder |
 | `instruction` | the natural-language instruction for this step |
-| `code` | path to the step's script, relative to the item directory |
+| `code` | path to the step's script, relative to the item directory and inside it: no absolute path, no `..`, nothing that leaves the item through a link |
 | `geometry` | `volume` / `bbox`, measured when the item was authored |
-| `artifacts` | kind → relative path, likewise |
+| `artifacts` | kind → relative path, likewise inside the item |
 | `assertions` | optional post-conditions, e.g. `{"volume_tol": 0.05}` |
 | `expected_bodies` | how many disjoint solids the step deliberately produces; absent means 1 |
 | `transcript` | optional `user_prompt` / `assistant_message` pair |
 
-Loading validates three things, so get them right or you will see the error
+Loading validates four things, so get them right or you will see the error
 before anything runs: step indices must start at 1 and be contiguous, every
-`code` path must exist, and `domain` must name a registered domain.
+`code` path must exist, every `code`, artifact and `thumbnail` path must stay
+inside the item directory (spelled as a `.cls` entry would be, and the item
+directory must not be a symlink), and `domain` must name a registered domain.
+The containment rule is what keeps a catalog root from making the API read or
+serve a file elsewhere on the machine: the loader copies what those paths name
+into the store, and the artifacts route serves the copies.
 
 Each step's script is ordinary build123d that assigns its output to `result` —
 the same contract generated code obeys, enforced by the validator and described
@@ -231,7 +236,7 @@ Metric sets compose: `BASE_METRICS` (volume, bbox) applies everywhere,
 
 - [ ] Item directory contains `manifest.json`, under the right domain's content dir
 - [ ] `domain` names a registered domain
-- [ ] Step indices start at 1 and are contiguous; every `code` path exists
+- [ ] Step indices start at 1 and are contiguous; every `code` path exists; no `code`, artifact or `thumbnail` path leaves the item directory
 - [ ] Each step script assigns its output to `result`
 - [ ] `list` shows the item before you try to `load` it
 - [ ] New domain, if any, declares the correct `authoring_units`
