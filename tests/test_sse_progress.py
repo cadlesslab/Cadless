@@ -25,7 +25,14 @@ class FakeGen:
         self.repairs = 0
 
     def generate(
-        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+        self,
+        intent,
+        grounding=None,
+        temperature=None,
+        on_token=None,
+        images=(),
+        on_reading=None,
+        assembly=None,
     ):
         out = self.outputs[0]
         if on_token is not None:  # surface the codegen stream

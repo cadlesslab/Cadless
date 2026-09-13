@@ -349,7 +349,14 @@ def test_no_vendor_sdk_reaches_past_the_seam():
 
 class AlwaysGood:
     def generate(
-        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+        self,
+        intent,
+        grounding=None,
+        temperature=None,
+        on_token=None,
+        images=(),
+        on_reading=None,
+        assembly=None,
     ):
         return GOOD
 

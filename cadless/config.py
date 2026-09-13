@@ -260,6 +260,14 @@ class Settings(BaseSettings):
     forge_min_n: int = 2  # floor: a race needs >=2 samples to be a race
     forge_max_n: int = 5  # ceiling: cap the cost blast-radius of one turn
 
+    # Assembly output. Default-OFF and opt-in on the same both-true terms as
+    # forge: a turn passes the per-turn `assembly` flag AND this switch must be
+    # on. What it gates is not cost but reliability -- an assembly turn asks the
+    # model for interlocking parts, which is the hardest thing in the prompt for
+    # it to get right, and nothing downstream checks the joints yet. Off, every
+    # turn takes today's single-solid path byte for byte.
+    assembly_enabled: bool = False
+
     def forge_scaled_n(self) -> int:
         """Budget-scaled candidate count for an active forge turn (pure helper).
 

@@ -43,6 +43,7 @@ from cadless.assertions import (
 from cadless.config import Settings, settings
 from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
+from cadless.printer_profile import AssemblySpec
 from cadless.prompts import CodeGenerator
 from cadless.validation import validate_code
 from cadless.worker import run_code
@@ -154,6 +155,7 @@ class Pipeline:
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
         critique: bool = True,
+        assembly: AssemblySpec | None = None,
     ) -> GenerationResult:
         """Generate (or, when ``prior_code`` is given, refine) then validate/execute.
 
@@ -218,6 +220,7 @@ class Pipeline:
                 temperature=temperature,
                 images=images,
                 on_reading=on_reading,
+                assembly=assembly,
                 **extra,
             )
         _emit_stage(on_progress, mode, "ok", 1)
@@ -361,6 +364,7 @@ class Pipeline:
         temperature: float | None = None,
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
+        assembly: AssemblySpec | None = None,
     ) -> list[GenerationResult]:
         """Best-of-N fan-out (C1): run N *fresh* generations in parallel.
 
@@ -401,6 +405,7 @@ class Pipeline:
                     images=images,
                     on_reading=on_reading,
                     critique=False,
+                    assembly=assembly,
                 )
             ]
 
@@ -430,6 +435,7 @@ class Pipeline:
                     images=images,
                     on_reading=on_reading,
                     critique=False,
+                    assembly=assembly,
                 )
             except Exception as exc:  # isolate: one bad candidate must not sink others
                 return GenerationResult(

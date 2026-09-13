@@ -34,6 +34,7 @@ _MANAGED_ATTRS = (
     "vlm_critique_view_count",
     "forge_enabled",
     "forge_candidate_count",
+    "assembly_enabled",
 )
 _MANAGED_ENV = (
     "CADLESS_LLM_PROVIDER",

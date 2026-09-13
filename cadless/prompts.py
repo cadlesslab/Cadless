@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
+from cadless.api_subset import RESULT_VARIABLE
 from cadless.config import settings
 from cadless.few_shot import render_few_shot
 from cadless.llm.provider import ChatProvider, ImagesUnsupported
@@ -24,6 +25,7 @@ from cadless.llm.types import (
     TurnParams,
 )
 from cadless.params import extract_params
+from cadless.printer_profile import AssemblySpec, fmt
 from cadless.system_prompt import SYSTEM_PROMPT
 
 if TYPE_CHECKING:
@@ -208,6 +210,51 @@ def _with_reference_instruction(user: str, images: Sequence[ContentBlock]) -> st
     return f"{REFERENCE_IMAGE_INSTRUCTION}\n\n{user}"
 
 
+def _assembly_rules(spec: AssemblySpec) -> str:
+    """What an assembly turn asks for, written against the printer it is for.
+
+    The measurements are interpolated rather than described because the model has
+    to size parts against a real bed: "make it fit your printer" is not something
+    a generator can act on, and the default bed is the one machine we can be sure
+    the reader does not own.
+    """
+    volume = spec.volume
+    fits = f"{fmt(volume.width)} x {fmt(volume.depth)} x {fmt(volume.height)} mm"
+    return (
+        f"This part is for a 3D printer whose build volume is {fits}, and it is "
+        "too large to print in one piece. Build it as an ASSEMBLY of separate "
+        "solids:\n"
+        f"  * Split it into the FEWEST parts such that each one fits within {fits} "
+        "on its own.\n"
+        "  * Put each seam where a cut does least harm: at a natural boundary, not "
+        "through a feature and not across a face meant to be seen.\n"
+        "  * Join the parts with an interlocking dovetail or jigsaw profile cut "
+        "into the mating faces, so the assembly holds without glue. A plain flat "
+        "butt face is NOT acceptable.\n"
+        f"  * Leave {fmt(spec.clearance_mm)} mm of clearance on every mating face "
+        "-- cut the socket that much larger than the tab it receives. A joint that "
+        "is exact in CAD does not go together in plastic.\n"
+        "  * Orient every seam so the interlocking faces print without support: "
+        "sweep each joint profile along an axis lying in the build plane, never "
+        "overhanging it.\n"
+        f"  * Assign the whole assembly to `{RESULT_VARIABLE}` as a Compound of the "
+        "separate solids. Do NOT fuse the parts into one connected solid."
+    )
+
+
+def _with_assembly_instruction(user: str, spec: AssemblySpec | None) -> str:
+    """Prefix the assembly requirements, but only when this turn asked for them.
+
+    Shaped exactly like :func:`_with_reference_instruction` above and for the same
+    reason: a turn that did not ask gets the message the builders produced, byte
+    for byte, so every existing caller -- the eval harness and distillation
+    included -- keeps the prompt it has always sent.
+    """
+    if spec is None:
+        return user
+    return f"{_assembly_rules(spec)}\n\n{user}"
+
+
 def _emit_reading(
     text: str, images: Sequence[ContentBlock], on_reading: Callable[[str], None] | None
 ) -> None:
@@ -246,6 +293,7 @@ class CodeGenerator:
         on_token: Callable[[str], None] | None = None,
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
+        assembly: AssemblySpec | None = None,
     ) -> str:
         """Generate build123d code from ``intent``.
 
@@ -265,8 +313,16 @@ class CodeGenerator:
         ``images`` are the turn's reference pictures. They force the message path
         whatever ``on_token`` is, because ``complete()`` takes a bare string; an
         empty sequence (the default) leaves the routing above exactly as it was.
+
+        ``assembly`` is the printer this turn is building for, present only when
+        the turn asked for a part-wise model. ``None`` (the default) is what every
+        existing caller passes without knowing it, and produces the prompt they
+        have always sent.
         """
-        user = _with_reference_instruction(build_user_message(intent, grounding), images)
+        user = _with_assembly_instruction(
+            _with_reference_instruction(build_user_message(intent, grounding), images),
+            assembly,
+        )
         if on_token is None and not images:
             text = self._provider.complete(
                 model=self._model,

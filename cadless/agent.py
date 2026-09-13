@@ -58,6 +58,7 @@ from cadless.llm.types import (
 )
 from cadless.params import apply_param_overrides, extract_params
 from cadless.pipeline import GenerationResult, Pipeline
+from cadless.printer_profile import AssemblySpec
 from cadless.system_prompt import SYSTEM_PROMPT
 
 # --- tool registry ----------------------------------------------------------
@@ -252,6 +253,13 @@ class ToolContext:
     images: list[ContentBlock] = field(default_factory=list)
     forge: bool = False
     forge_n: int = 1
+    # The machine this turn is building for, present only when the turn asked for
+    # an assembly and the kill-switch allows it. Both gates are applied at the
+    # route, so this field is the answer rather than one of the inputs to it:
+    # ``None`` is "ordinary turn" and the prompt is left exactly as it is.
+    # Forwarded to fresh generation only, like ``grounding`` -- an edit or a
+    # parameter change acts on a model that already chose how many parts it is in.
+    assembly: AssemblySpec | None = None
     # Live token sink for streaming codegen: when set, fresh
     # ``generate_model`` codegen deltas are pushed here AS the code is written
     # (the chat layer wires it to the SSE queue), instead of being collected into
@@ -1200,6 +1208,7 @@ class Agent:
                         grounding=context.grounding,
                         images=context.images,
                         on_reading=context.on_reading,
+                        assembly=context.assembly,
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
@@ -1285,6 +1294,7 @@ class Agent:
             grounding=context.grounding,
             images=context.images,
             on_reading=context.on_reading,
+            assembly=context.assembly,
         )
         win = judged.winner
         payload = (

@@ -17,7 +17,14 @@ GOOD = "from build123d import *\nresult = Box(10, 10, 10)\n"
 
 class AlwaysGood:
     def generate(
-        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+        self,
+        intent,
+        grounding=None,
+        temperature=None,
+        on_token=None,
+        images=(),
+        on_reading=None,
+        assembly=None,
     ):
         return GOOD
 

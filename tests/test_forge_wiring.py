@@ -16,6 +16,7 @@ from cadless.agent import Agent, ToolContext
 from cadless.llm.providers.fake import FakeChatProvider
 from cadless.llm.types import ContentBlock
 from cadless.pipeline import GenerationResult
+from cadless.printer_profile import AssemblySpec, BuildVolume
 
 
 class RacePipeline:
@@ -25,6 +26,12 @@ class RacePipeline:
         self._candidates = candidates
         self.run_calls: list[tuple[str, str | None]] = []
         self.candidate_calls: list[int | None] = []
+        # What each path was told about the printer. Recorded on both because the
+        # two gates are independent: a turn can be forging and asking for an
+        # assembly at once, and a race that quietly dropped the spec would still
+        # produce a model -- one connected solid, from a turn that asked for parts.
+        self.run_assemblies: list = []
+        self.candidate_assemblies: list = []
 
     def run(
         self,
@@ -36,8 +43,10 @@ class RacePipeline:
         temperature=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         self.run_calls.append((intent, prior_code))
+        self.run_assemblies.append(assembly)
         return self._candidates[0]
 
     def run_candidates(
@@ -50,8 +59,10 @@ class RacePipeline:
         temperature=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         self.candidate_calls.append(n)
+        self.candidate_assemblies.append(assembly)
         return self._candidates
 
 
@@ -103,6 +114,51 @@ def test_forge_active_generate_uses_race_not_single_run():
     assert pipe.run_calls == []  # NOT the single-run path
     assert payload["ok"] is True
     assert payload["code"] == "result = Box(2,2,2)"
+
+
+def test_a_forge_turn_still_carries_the_assembly_spec():
+    """The two gates are independent, so a turn can be forging AND asking for an
+    assembly. A race that dropped the spec would still return a model -- one
+    connected solid, from a turn that asked for parts -- and no stage would say so.
+    """
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+    pipe = RacePipeline([_cand("result = Box(2,2,2)", ok=True, volume=8.0)])
+    ctx = ToolContext(pipeline=pipe, forge=True, forge_n=3, assembly=spec)
+
+    _agent()._execute_one(_gen_block(), ctx)
+
+    assert pipe.candidate_assemblies == [spec]
+
+
+def test_a_single_run_turn_carries_the_assembly_spec():
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+    pipe = RacePipeline([_cand("result = Box(1,1,1)", ok=True, volume=1.0)])
+    ctx = ToolContext(pipeline=pipe, forge=False, assembly=spec)
+
+    _agent()._execute_one(_gen_block(), ctx)
+
+    assert pipe.run_assemblies == [spec]
+
+
+def test_an_edit_is_never_told_to_build_an_assembly():
+    """The rule ``grounding`` already follows, and for a sharper reason here: an
+    edit acts on a model that has already chosen how many parts it is in, so
+    re-stating the split instruction would invite a rewrite rather than an edit.
+    """
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+    pipe = RacePipeline([_cand("result = Box(1,1,1)", ok=True, volume=1.0)])
+    ctx = ToolContext(pipeline=pipe, current_code="result = Box(1,1,1)", assembly=spec)
+    edit = ContentBlock.of_tool_use(id="tu-1", name="edit_model", input={"change": "taller"})
+
+    _agent()._execute_one(edit, ctx)
+
+    assert pipe.run_assemblies == [None]
 
 
 def test_forge_active_surfaces_losers_for_persistence():

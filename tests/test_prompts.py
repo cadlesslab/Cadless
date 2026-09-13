@@ -2,6 +2,7 @@
 
 import pytest
 
+from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
     CodeGenerator,
     build_refinement_message,
@@ -122,6 +123,39 @@ def test_generator_routes_through_provider_complete():
     system, _user, model = fake.last
     assert system  # SYSTEM_PROMPT forwarded
     assert model == "sonnet-4-6"
+
+
+def test_an_assembly_turn_tells_the_model_which_printer_it_is_building_for():
+    """The measurements have to reach the model. "Make it fit your printer" is
+    not something a generator can act on, and the default bed is the one machine
+    the reader is least likely to own."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.generate("a bookshelf", assembly=spec)
+
+    user = fake.last[1]
+    assert "210 x 200 x 195 mm" in user
+    assert "0.35 mm of clearance" in user
+    assert "dovetail" in user
+    assert "without support" in user
+    # The request itself survives the prefix.
+    assert "Request: a bookshelf" in user
+
+
+def test_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
+    """The whole guarantee of the option being off. An unconditional prefix, or a
+    spec that leaked in from somewhere, is caught here rather than by a reader
+    noticing their prompts grew."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+
+    gen.generate("a bookshelf")
+
+    assert fake.last[1] == build_user_message("a bookshelf")
 
 
 def test_generator_streams_tokens_via_on_token():

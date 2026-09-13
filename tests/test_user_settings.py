@@ -41,6 +41,7 @@ _MANAGED_ATTRS = (
     "forge_max_n",
     "repair_max_attempts",
     "bedrock_max_tokens",
+    "assembly_enabled",
 )
 _MANAGED_ENV = (
     "CADLESS_LLM_PROVIDER",

@@ -37,7 +37,9 @@ class FakeGen:
         on_token=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
+        self.last_assembly = assembly
         self.last_grounding = grounding
         self.last_temperature = temperature
         self.last_images = list(images)

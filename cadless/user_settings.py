@@ -169,11 +169,17 @@ _TIER_B_FIELDS: dict[str, str] = {
         "forge_max_n",
         "repair_max_attempts",
         "bedrock_max_tokens",
+        # Gated for a different reason than the rest of this tier: it does not
+        # multiply spend, it turns on output nothing downstream checks yet. An
+        # assembly turn asks the model for interlocking joints and no stage
+        # verifies that the parts actually interlock, so the switch stays behind
+        # the same launch gate until one does.
+        "assembly_enabled",
     )
 }
 _TUNING_FIELDS.update(_TIER_B_FIELDS)
 _SETTINGS_ATTR.update({field: field for field in _TIER_B_FIELDS})
-_BOOL_FIELDS |= {"vlm_critique_enabled", "forge_enabled"}
+_BOOL_FIELDS |= {"vlm_critique_enabled", "forge_enabled", "assembly_enabled"}
 _INT_FIELDS |= {"vlm_critique_view_count"}
 # What each gated knob was set to when this process started — the environment's
 # value where one was pinned, the shipped default otherwise. Read once, here,
@@ -236,7 +242,7 @@ _FILE_ONLY_SECRETS: frozenset[str] = frozenset()
 #: ``cadless/slicing.py`` is handed them -- and exporting them would put them in
 #: the environment ``cadless/worker.py`` gives to generated code.
 #:
-#: The ranges are `cadless.slicing.PRINTER_PROFILE_LIMITS`, imported rather than
+#: The ranges are `cadless.printer_profile.PRINTER_PROFILE_LIMITS`, imported rather than
 #: restated. That module owns them because it owns the units, the defaults and
 #: the flags they become; this one owns refusing a value at the input, so that
 #: the reader is told there rather than after waiting for a slicer to run and

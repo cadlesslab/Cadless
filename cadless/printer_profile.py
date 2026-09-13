@@ -45,6 +45,16 @@ DEFAULT_MAX_HEIGHT = 195.0
 #: density gives 0.00 g, `--filament-density 1.24` gives 2.07 g.
 DEFAULT_FILAMENT_DENSITY = 1.24
 
+#: The gap left on each mating face of a printed joint, in millimetres.
+#:
+#: A joint that is exact in CAD does not go together in plastic: the extruded
+#: bead is laid down a little wide of where it was asked for, and two faces that
+#: touch in the model interfere in the part. The value is small on purpose --
+#: enough to assemble, not enough to rattle -- and it is a *default* rather than
+#: a constant because the right figure is a property of the printer and the
+#: material, which is why it is saved beside the bed dimensions below.
+DEFAULT_JOINT_CLEARANCE = 0.2
+
 #: What each saved measurement has to be to be *usable*, in millimetres and
 #: degrees Celsius. Not what is sensible -- what the slicer can act on.
 #:
@@ -72,6 +82,14 @@ PRINTER_PROFILE_LIMITS: dict[str, tuple[float, float]] = {
     # (there are printers without a heated one) and not for a nozzle.
     "printer_nozzle_temperature": (150.0, 500.0),
     "printer_bed_temperature": (0.0, 200.0),
+    # Reaches no slicer flag either, for the same reason `printer_cartridge_grams`
+    # does not: it is told to the model that writes the part, not to the program
+    # that slices it. Zero is a real answer -- an exact fit, for somebody who
+    # would rather sand than shim -- so only a negative is a mistake. The ceiling
+    # is where a joint stops being one: past a couple of millimetres the faces no
+    # longer meet and the parts are held by glue alone, which is the joint this
+    # setting exists to avoid.
+    "printer_joint_clearance": (0.0, 2.0),
 }
 
 #: How much hotter the first layer runs than the rest. The default profile
@@ -159,10 +177,12 @@ def _number(saved: Mapping[str, Any] | None, field_name: str) -> float | None:
 def _or_default(value: float | None, fallback: float) -> float:
     """``value`` unless it is absent. Written out rather than ``or``.
 
-    ``or`` would also replace a valid zero. No dimension can be zero today --
-    every one has a floor above it in the table -- so this is not a bug being
-    fixed but a trap being removed: the next field to allow zero would otherwise
-    inherit a silent substitution nobody wrote.
+    ``or`` would also replace a valid zero. When this was written no caller could
+    pass one, so it was a trap being removed rather than a bug being fixed; the
+    field that would have sprung it has since arrived. ``printer_joint_clearance``
+    floors at zero, and zero there is an instruction -- an exact fit -- not an
+    absence. Written out, it survives; under ``or`` it would silently become the
+    default gap and the parts would come out loose.
     """
     return fallback if value is None else value
 
@@ -173,6 +193,30 @@ def build_volume(saved: Mapping[str, Any] | None = None) -> BuildVolume:
         width=_or_default(_number(saved, "printer_bed_width"), DEFAULT_BED_WIDTH),
         depth=_or_default(_number(saved, "printer_bed_depth"), DEFAULT_BED_DEPTH),
         height=_or_default(_number(saved, "printer_max_height"), DEFAULT_MAX_HEIGHT),
+    )
+
+
+@dataclass(frozen=True)
+class AssemblySpec:
+    """What a turn asking for an assembly has to tell the model about the machine.
+
+    The two travel together because either alone is misleading: a part sized to a
+    bed it will not be printed on is as wrong as a joint cut to a clearance the
+    printer does not hold. Built once, where the turn is, so the prompt cannot
+    end up describing one printer's bed and another's tolerance.
+    """
+
+    volume: BuildVolume
+    clearance_mm: float
+
+
+def assembly_spec(saved: Mapping[str, Any] | None = None) -> AssemblySpec:
+    """The build volume and joint clearance the user saved, or the defaults."""
+    return AssemblySpec(
+        volume=build_volume(saved),
+        clearance_mm=_or_default(
+            _number(saved, "printer_joint_clearance"), DEFAULT_JOINT_CLEARANCE
+        ),
     )
 
 

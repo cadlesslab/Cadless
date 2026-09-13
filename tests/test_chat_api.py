@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 import backend.routers.chat as chat
 from backend.app import create_app
+from cadless import printer_profile
 from cadless.config import settings
 from cadless.llm.providers import StreamChunk
 from cadless.llm.providers.fake import FakeChatProvider
@@ -137,6 +138,10 @@ class StubPipeline:
         self.error = error
         self.groundings: list[str | None] = []
         self.images: list[list] = []
+        # What each turn asked for by way of an assembly, recorded the same way
+        # groundings are: the per-turn block is the thing under test, and the
+        # route is the only place the both-true gate is applied.
+        self.assemblies: list = []
         # What the codegen model "wrote down" about the picture, when a test wants one.
         self.reading: str | None = None
         # The real pipeline exposes the settings snapshot its turn runs under, and
@@ -155,9 +160,11 @@ class StubPipeline:
         grounding=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         self.groundings.append(grounding)
         self.images.append(list(images))
+        self.assemblies.append(assembly)
         if on_reading is not None and self.reading is not None:
             on_reading(self.reading)
         if on_progress:
@@ -994,6 +1001,7 @@ class ForgePipeline(StubPipeline):
         temperature=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         self.run_count += 1
         return super().run(
@@ -1016,6 +1024,7 @@ class ForgePipeline(StubPipeline):
         temperature=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         self.candidate_ns.append(n)
         winner = super().run(
@@ -1152,6 +1161,106 @@ def test_forge_defaults_off_when_flag_omitted(client, store, monkeypatch):
     assert pipeline.run_count == 1
 
 
+# --- assembly mode: opt-in toggle + both-true gate ------------------
+
+
+def _stream_assembly(client, pid, *, assembly: bool, text="make a bookshelf"):
+    body = {"message": text, "assembly": assembly}
+    with client.stream("POST", f"/projects/{pid}/chat", json=body) as r:
+        assert r.status_code == 200
+        return _events("".join(r.iter_text()))
+
+
+def _assembly_turn(monkeypatch):
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    return pipeline
+
+
+def test_assembly_opt_in_with_switch_on_reaches_the_pipeline(client, store, monkeypatch):
+    """Both gates true: the turn carries a spec sized to the printer that is saved."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    pipeline = _assembly_turn(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+
+    spec = pipeline.assemblies[0]
+    assert spec is not None
+    assert (spec.volume.width, spec.volume.depth, spec.volume.height) == (
+        printer_profile.DEFAULT_BED_WIDTH,
+        printer_profile.DEFAULT_BED_DEPTH,
+        printer_profile.DEFAULT_MAX_HEIGHT,
+    )
+    assert spec.clearance_mm == printer_profile.DEFAULT_JOINT_CLEARANCE
+
+
+def test_assembly_spec_carries_the_saved_clearance(client, store, monkeypatch):
+    """A printer needing a wider gap gets one. This is the whole reason the
+    clearance is saved state rather than a constant written into the prompt."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    monkeypatch.setattr(chat.user_settings, "load", lambda: {"printer_joint_clearance": 0.35})
+    pipeline = _assembly_turn(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+
+    assert pipeline.assemblies[0].clearance_mm == 0.35
+
+
+def test_assembly_opt_in_but_switch_off_sends_nothing(client, store, monkeypatch):
+    """Per-turn opt-in WITHOUT the global switch => today's single-solid prompt."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", False)
+    pipeline = _assembly_turn(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+
+    assert pipeline.assemblies == [None]
+
+
+def test_assembly_switch_on_but_opt_out_sends_nothing(client, store, monkeypatch):
+    """The switch alone is necessary and not sufficient — the turn must opt in."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    pipeline = _assembly_turn(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=False)
+
+    assert pipeline.assemblies == [None]
+
+
+def test_assembly_defaults_off_when_flag_omitted(client, store, monkeypatch):
+    """Omitting the flag entirely behaves as opt-out even with the switch on."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    pipeline = _assembly_turn(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    # No "assembly" key in the body at all.
+    _stream_chat(client, pid, "make a bookshelf")
+
+    assert pipeline.assemblies == [None]
+
+
+def test_steer_accepts_the_assembly_flag(client, store, monkeypatch):
+    """``SteerRequest`` is ``extra="forbid"``, so a flag the composer sends on a
+    chat body would 422 here unless it is declared. Same trap ``forge`` hit."""
+    _install(monkeypatch, ScriptedProvider([_text_turn("ok")]))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    r = client.post(
+        f"/projects/{pid}/chat/steer", json={"message": "make it taller", "assembly": True}
+    )
+
+    assert r.status_code == 202
+
+
 # --- Blueprint rollback policy + replan (D3) -----------------------
 
 
@@ -1179,6 +1288,7 @@ class SequencedPipeline:
         grounding=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         ok, error = self._results[min(self._i, len(self._results) - 1)]
         self._i += 1
@@ -1403,6 +1513,7 @@ def test_generate_streams_codegen_delta_frames(client, store, monkeypatch):
             grounding=None,
             images=(),
             on_reading=None,
+            assembly=None,
         ):
             if on_progress:  # emit codegen tokens the way the real pipeline now does
                 on_progress({"event": "codegen", "text": "from build123d import *\n"})
@@ -1886,6 +1997,7 @@ class _CritiquingPipeline(StubPipeline):
         grounding=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         result = super().run(
             intent,

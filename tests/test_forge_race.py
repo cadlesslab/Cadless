@@ -35,6 +35,7 @@ class StubPipeline:
         temperature=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         self.calls.append(
             {

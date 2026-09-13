@@ -157,6 +157,7 @@ class SpyPipeline:
         grounding=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         from cadless.pipeline import GenerationResult
 
@@ -920,6 +921,7 @@ class FailingPipeline:
         grounding=None,
         images=(),
         on_reading=None,
+        assembly=None,
     ):
         from cadless.pipeline import Attempt, GenerationResult
 
@@ -1039,6 +1041,7 @@ def test_distinct_failing_stages_do_not_escalate():
             grounding=None,
             images=(),
             on_reading=None,
+            assembly=None,
         ):
             self.calls.append((intent, prior_code))
             return next(pipelines).run(
