@@ -18,7 +18,7 @@ def test_clone_copies_versions_artifacts_chat_and_current(tmp_path):
     async def go():
         s = _store(tmp_path)
         await s.init()
-        p = await s.create_project("Zillow X")
+        p = await s.create_project("House X")
         sess = await s.get_or_create_session(p.id)
 
         v1 = await s.add_version(p.id, "slab", "result = 1", ok=True, volume=1.0, bbox=(1, 1, 1))
@@ -48,9 +48,9 @@ def test_clone_copies_versions_artifacts_chat_and_current(tmp_path):
         # a forge-loser candidate row must NOT be copied
         await s.add_version(p.id, "loser", "result = 9", ok=True, candidate_of_version_id=v2.id)
 
-        clone = await s.clone_project(p.id, name="Zillow X (copy)")
+        clone = await s.clone_project(p.id, name="House X (copy)")
         assert clone is not None and clone.id != p.id
-        assert clone.name == "Zillow X (copy)"
+        assert clone.name == "House X (copy)"
 
         cvs = await s.list_versions(clone.id)
         assert [v.prompt for v in cvs] == ["slab", "walls"]  # candidate skipped
