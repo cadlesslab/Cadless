@@ -132,6 +132,41 @@ class TestTheProfileFollowsTheSavedPrinter:
         assert gap == printer_profile.FIRST_LAYER_BONUS_C
 
 
+class TestWhatAnAssemblyTurnIsToldAboutThePrinter:
+    """The two numbers a turn asking for parts has to carry, read as one.
+
+    They travel together because either alone is misleading: a part sized to a
+    bed it will not be printed on is as wrong as a joint cut to a clearance the
+    printer does not hold.
+    """
+
+    def test_nothing_saved_gives_the_defaults(self):
+        spec = printer_profile.assembly_spec({})
+        assert spec.volume == printer_profile.build_volume({})
+        assert spec.clearance_mm == printer_profile.DEFAULT_JOINT_CLEARANCE
+
+    def test_a_saved_clearance_is_what_the_model_is_told(self):
+        spec = printer_profile.assembly_spec({"printer_joint_clearance": 0.35})
+        assert spec.clearance_mm == 0.35
+
+    def test_a_saved_zero_clearance_survives_as_an_instruction(self):
+        """Zero is an answer -- an exact fit, for somebody who would rather sand
+        than shim -- and not an absence. Written with ``or``, `_or_default` would
+        turn it into the default gap and the parts would come out loose, with
+        nothing anywhere saying the saved value had been ignored."""
+        spec = printer_profile.assembly_spec({"printer_joint_clearance": 0})
+        assert spec.clearance_mm == 0.0
+
+    @pytest.mark.parametrize("saved", ["wide", 99.0, -1, float("nan"), True, None])
+    def test_a_clearance_that_cannot_be_acted_on_falls_back(self, saved):
+        """The same fail-closed read the bed dimensions get, and for the same
+        reason: `settings.json` can be hand-edited or left by an older build, and
+        a gap of `nan` is not a gap. ``True`` is in the list because `bool` is an
+        `int` and would otherwise be a 1 mm joint."""
+        spec = printer_profile.assembly_spec({"printer_joint_clearance": saved})
+        assert spec.clearance_mm == printer_profile.DEFAULT_JOINT_CLEARANCE
+
+
 class TestSavingTheProfile:
     @pytest.fixture(autouse=True)
     def _isolated(self, tmp_path, monkeypatch):
