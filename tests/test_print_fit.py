@@ -264,11 +264,13 @@ class TestWhatSplittingWouldTake:
         assert offer.pieces == 4
 
     def test_the_measured_desk_is_too_far_past_the_bed_to_be_worth_splitting(self):
-        """A straight cut puts the 1100 x 600 x 450 desk at 72 parts on the
-        default bed. Nobody assembles that and no generator writes it, so past
-        the cap the count stops being said at all and the scale offer beside it
-        is the answer. The count grows with volume rather than levelling off,
-        which is what makes a ceiling necessary rather than tidy."""
+        """The desk against the default bed lands far above the cap. Nobody
+        assembles that many, so past the ceiling the count stops being said at
+        all and the scale offer beside it is the answer. The count grows with
+        volume rather than levelling off, which is what makes a ceiling
+        necessary rather than tidy. The figure is deliberately not quoted here:
+        it would be a number derived from constants in another module and
+        asserted by nothing."""
         assert print_fit.split_offer([1100.0, 600.0, 450.0], self.default()) is None
 
     def test_an_unusable_bounding_box_is_offered_no_split(self):

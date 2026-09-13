@@ -321,8 +321,8 @@ def system_view(store: AnyStore) -> BuildStore:
     Accepts a view as well as a store so the loader can normalise whatever it
     was handed. Reaching through a view to the store underneath is a widening of
     scope, which is why this is a named function rather than a property: it is
-    greppable, and `tests/test_store_surface.py` refuses to let a router import
-    it.
+    greppable, and `tests/test_store_surface.py` refuses it to a route and to the
+    modules a route hands its view to.
 
     Per-principal catalogue storage is a different question and is not this
     seam's — it needs the directories split as well as the rows, which is the

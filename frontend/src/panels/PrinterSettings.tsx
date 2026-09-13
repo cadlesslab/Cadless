@@ -59,11 +59,11 @@ export const PRINTER_FIELDS: PrinterField[] = [
   { field: "printer_cartridge_grams", label: "Full cartridge (g)", placeholder: "" },
   { field: "printer_nozzle_temperature", label: "Nozzle temperature (°C)", placeholder: "205" },
   { field: "printer_bed_temperature", label: "Bed temperature (°C)", placeholder: "60" },
-  // Reaches no slicer flag: it is told to the model that writes an assembly, so
-  // that a joint exact in CAD comes out a joint that goes together in plastic.
-  // Zero is a real answer here — an exact fit, for somebody who would rather
-  // sand than shim — which is why the placeholder is a default rather than a
-  // floor, unlike the dimensions above.
+  // Told to the model that writes an assembly, so that a joint exact in CAD
+  // comes out one that goes together in plastic. Zero is a real answer here —
+  // an exact fit, for somebody who would rather sand than shim — so the blank
+  // field and a saved zero mean different things, which is not true of any
+  // measurement above it.
   { field: "printer_joint_clearance", label: "Joint clearance (mm)", placeholder: "0.2" },
 ];
 

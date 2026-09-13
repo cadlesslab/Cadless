@@ -198,9 +198,11 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
 #:
 #: The count is what a straight cut would take, so it grows with volume rather
 #: than levelling off: a car-sized model against a desktop bed comes out in four
-#: figures. Nobody assembles that, no generator writes it, and the scale offer
-#: sitting beside it is the honest answer at that size. The number is the point
-#: where a reader stops taking it as information and starts taking it as a joke.
+#: figures. As a measure that is still true, and it is still useless -- past a
+#: point the reader already knows the answer is "not on this printer", the scale
+#: offer beside it says so in a unit they can act on, and another digit only
+#: reads as the tool being facetious. The ceiling is where saying it stops
+#: adding anything, not where the arithmetic stops working.
 MAX_SPLIT_PIECES = 24
 
 

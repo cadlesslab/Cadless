@@ -121,7 +121,9 @@ port, bound to loopback.
    catalogue CLI and housekeeping, which act for the whole installation. Every
    public store method is therefore either scoped and exposed on that view, or
    exempt with a recorded reason — enforced by `tests/test_store_surface.py`,
-   which also refuses to let a router import the unscoped store. Filtering is
+   which also refuses the unscoped store to a route and to the modules a route
+   hands its view to: the boundary follows the store, not the directory, so
+   moving code out of `backend/routers/` is not a way to leave it. Filtering is
    applied in SQL rather than after it. The engine learns *who* is asking and
    never *how*: identity is supplied by a registered resolver, and a missing or
    failing one is a refusal rather than a fall back to the local user.
@@ -163,11 +165,15 @@ candidate judging, the identity seam and the image decisions are recorded under
    produced several. The API persists metadata and serves the artifacts.
 6. An execution failure can return to the provider as a repair prompt. A success
    is stored as a project version whose source remains available for parameter
-   changes and deterministic rebuilds. A version held in several pieces is the
-   exception to the rebuild half and is refused rather than re-exported: one
-   file per kind would match none of the pieces already recorded, and choosing
-   between filing it as another piece and leaving every recorded piece stale
-   would be inventing a contract rather than reading one.
+   changes and deterministic rebuilds. The exception to the rebuild half is a
+   version in several pieces, or one that turns out to rebuild into them: a
+   single file per kind matches none of the pieces recorded, and choosing
+   between filing it as one more piece and leaving every recorded piece stale
+   would be inventing a contract rather than reading one. The second case is
+   knowable only after rebuilding — a version recorded before a build could hold
+   several files of a kind has one row per kind whatever its geometry — so a
+   rebuild runs into a staging directory and is discarded there. A version's own
+   artifacts are never the target of a build that may turn out not to match them.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount

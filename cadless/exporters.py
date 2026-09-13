@@ -22,8 +22,9 @@ from cadless.config import settings
 #: How one part of a build is named, and how that name is read back.
 #:
 #: The process that writes these files and whatever later copies them in are not
-#: the same code, and they have to agree exactly: the number in the name becomes
-#: the ordinal the part is filed under. A name the reader cannot parse is a part
+#: the same code, and they have to agree exactly: the order of the numbers in
+#: these names is the order the parts are filed in, and so the ordinal each one
+#: ends up with. A name the reader cannot parse is a part
 #: either dropped or filed under another part's number, and neither failure says
 #: anything at the time. So both halves live here, together, rather than as a
 #: format in one place and a pattern that has to match it in another.

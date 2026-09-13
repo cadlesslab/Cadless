@@ -96,6 +96,23 @@ def test_a_repair_round_carries_the_assembly_spec():
     assert gen.last_repair_assembly == spec
 
 
+@pytest.mark.build123d
+def test_an_execution_failure_also_repairs_with_the_assembly_spec():
+    """The other branch, and in production the commoner one. The test above drives
+    banned code, so it only ever reaches the repair that follows a *validation*
+    failure; this code validates and then fails in the worker, which is the site
+    a turn actually lands on when geometry goes wrong."""
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+    gen = FakeGen([RUNTIME_FAIL, RUNTIME_FAIL])
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run("x", assembly=spec)
+
+    assert gen.repairs == 1
+    assert gen.last_repair_assembly == spec
+
+
 def test_an_ordinary_turn_repairs_with_no_spec():
     gen = FakeGen([BANNED, BANNED])
 

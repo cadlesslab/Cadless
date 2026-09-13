@@ -401,9 +401,9 @@ class TestOfferingToScaleItDown:
     def test_a_model_far_past_the_bed_is_told_nothing_about_splitting(
         self, client, oversized_version, monkeypatch
     ):
-        """The desk is 72 parts on the default bed. Past the cap the count stops
-        being said, so the refusal reads exactly as it did before this existed
-        and the scale offer is the only remedy standing."""
+        """The desk lands far above the cap on the default bed. Past it the count
+        stops being said, so the refusal reads exactly as it did before any of
+        this existed and the scale offer is the only remedy standing."""
 
         def never(*_a, **_k):
             raise AssertionError("nothing is sliced until the offer is accepted")

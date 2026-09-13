@@ -339,12 +339,13 @@ async def slice_version(
                 # last word. The offer is returned beside the refusal and nothing
                 # is sliced until it comes back accepted.
                 #
-                # Three ways out now rather than two, and the third is said in the
-                # refusal itself rather than returned beside it. Both panels that
-                # show this -- this build's and the marketplace's -- already print
-                # `detail` verbatim, so a sentence reaches a reader now, where a
-                # new field reaches one only after a client learns to read it.
-                # Scaling and turning keep their own shapes untouched.
+                # Beside it, how far past the bed this is, counted in parts. That
+                # is still two ways out and a measurement, not three ways out:
+                # printing an assembly is refused by the path that would slice
+                # one, so offering it as a remedy would route a reader at that
+                # refusal. It goes in `detail` because that is the part of this
+                # reply a panel is certain to show, and this reply has a reader
+                # outside this tree. Scaling and turning keep their own shapes.
                 split = print_fit.split_offer(version.bbox, volume)
                 return {
                     "ok": False,

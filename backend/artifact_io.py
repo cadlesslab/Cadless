@@ -16,7 +16,7 @@ import shutil
 from pathlib import Path
 
 from cadless.exporters import EXPORTERS, part_index
-from cadless.scoped_store import ScopedStore
+from cadless.scoped_store import AnyStore
 
 
 def exported_parts(src_dir: Path, kind: str) -> list[Path]:
@@ -45,7 +45,7 @@ def exported_parts(src_dir: Path, kind: str) -> list[Path]:
     return [path for _, path in sorted(numbered)]
 
 
-async def copy_and_register(store: ScopedStore, version_id: int, src_dir: str | Path) -> int:
+async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Path) -> int:
     """Copy every exported part in, register each, and return how many were written.
 
     The filename is carried across unchanged, so what is on disk under the version
@@ -53,9 +53,11 @@ async def copy_and_register(store: ScopedStore, version_id: int, src_dir: str | 
     position in the order above.
 
     ``store`` is annotated rather than left bare because this is the one place
-    every artifact write now passes through: the scoping is a property of what a
-    route hands in, and with nothing said, a later caller handing in the unscoped
-    store would look exactly like ordinary code.
+    every artifact write now passes through, and with nothing said a later caller
+    would have nothing to read. It is ``AnyStore`` rather than the scoped view
+    alone because that is what the function accepts and what its own test hands
+    it; what keeps a *route* on the scoped view is the import check in
+    ``tests/test_store_surface.py``, which covers this module by name.
     """
     src = Path(src_dir)
     dest = Path(store.version_artifact_dir(version_id))

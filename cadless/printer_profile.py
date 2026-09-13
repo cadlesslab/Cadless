@@ -61,8 +61,11 @@ DEFAULT_JOINT_CLEARANCE = 0.2
 #: One table, read at both ends and for different failures. `cadless/user_settings.py`
 #: refuses a value outside it at save time, so the reader is told at the input.
 #: `_number` below falls back to the default for one that got in anyway, so a
-#: hand-edited file cannot put `1e-09` on a command line. Two tables would drift,
-#: and the drift would be invisible until a printer did something odd.
+#: hand-edited file cannot put `1e-09` where the value is used. For most of these
+#: that place is a command line; two of them reach no flag at all and are checked
+#: on the same terms anyway, because the input check is worth having wherever a
+#: value leaves this process. Two tables would drift, and the drift would be
+#: invisible until a printer did something odd.
 PRINTER_PROFILE_LIMITS: dict[str, tuple[float, float]] = {
     "printer_bed_width": (1.0, 2000.0),
     "printer_bed_depth": (1.0, 2000.0),

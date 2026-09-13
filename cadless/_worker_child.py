@@ -171,10 +171,13 @@ def main(argv: list[str]) -> int:
                     export(part, export_dir, exporters.part_name(i, len(parts)))
                     for i, part in enumerate(parts)
                 ]
-                # The scalar stays the first part, which for a one-solid build is
-                # the whole model and the only thing any existing reader wanted.
-                # Multiplicity is read off the directory rather than carried here:
-                # a second field would be a second place for the two to disagree.
+                # The scalar stays the first part. For a one-solid build that is
+                # the whole model, which is what every reader of it was written
+                # against; for an assembly it is a *fragment*, so anything that
+                # renders or judges the one file is looking at part 0 alone.
+                # Said here because nothing in the name says it. Multiplicity is
+                # read off the directory rather than carried beside this: a
+                # second field would be a second place for the two to disagree.
                 summary[f"{kind}_path"] = paths[0]
     except Exception as exc:  # noqa: BLE001
         print(f"{SENTINEL} " + json.dumps(_error_payload(exc, code, prefix="post-process: ")))

@@ -269,9 +269,9 @@ def test_cost_multiplying_knob_refused_without_the_launch_gate():
 @pytest.mark.parametrize("field", sorted(user_settings._TIER_B_FIELDS))
 def test_every_gated_field_refuses_a_raise_above_its_launch_baseline(field):
     """Named one at a time, the gate's membership was never what was tested -- a
-    field could join the list and be refused by nothing. The architecture document
-    says "Tests enforce each of these" about this tier, so enumerate the tier
-    rather than a hand-picked member of it.
+    field could join the list and be refused by nothing. So enumerate the tier
+    rather than a hand-picked member of it, and the claim that the gate covers
+    the tier stays a fact about this suite rather than a hope.
 
     What has to be asked for is a *raise above the launch baseline*, which is the
     only thing the gate blocks. The baseline rather than the live value is
