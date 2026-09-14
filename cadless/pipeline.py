@@ -98,13 +98,24 @@ class GenerationResult:
     #: written from a prompt holding the user's, and handing that to the
     #: orchestrator as fact is the thing the transcript already refuses to do.
     critique: dict | None = None
-    #: The assembly check of the build this result carries, as
-    #: ``{"ok": bool, "order": list[int] | None, "attempt": int}``, or ``None``
-    #: where the turn did not ask for an assembly or the model produced one part.
-    #: ``order`` is the sequence the parts go together in, which the assembly
-    #: guide states. Unlike :attr:`critique` this may carry its findings' text:
-    #: those are this engine's own sentences about geometry it measured, not a
-    #: vision model's prose written from a prompt holding the user's.
+    #: The assembly check of the build this result carries, or ``None`` where the
+    #: turn did not ask for one. ``{"ok", "order", "attempt", "measured"}``, plus
+    #: ``failures`` and ``unchecked`` once something was measured.
+    #:
+    #: ``measured`` is false when the turn asked but nothing came back — the model
+    #: produced a single solid, or the worker could not split the shape. ``ok`` is
+    #: then ``None`` rather than ``True``: not checked is not the same as passed,
+    #: and without this the result is indistinguishable from a turn that never
+    #: asked.
+    #:
+    #: ``order`` is the sequence the parts go together in, **indexed from zero to
+    #: match the exported ``model_p{i}`` files** rather than the part numbers in
+    #: ``failures``, which count from one because a person reads them. Whichever
+    #: the assembly guide shows, it converts here rather than assuming.
+    #:
+    #: Unlike :attr:`critique` this may carry its findings' text: those are this
+    #: engine's own sentences about geometry it measured, not a vision model's
+    #: prose written from a prompt holding the user's.
     assembly: dict | None = None
 
     @property
@@ -327,6 +338,15 @@ class Pipeline:
                 # attached -- a vision model disagreeing about a shape is an
                 # opinion, whereas two parts occupying the same space is not, and
                 # printing it wastes hours and material.
+                if assembly is not None and res.assembly is None:
+                    # The turn asked and nothing came back. Ordinarily that means
+                    # the model produced one solid, which is not an assembly and
+                    # is print_fit's question; it also covers a worker too old to
+                    # know the flag, and a shape whose solids could not be split.
+                    # Recorded rather than passed over silently, so a reader can
+                    # tell this from a turn that never asked -- both of which
+                    # otherwise leave the result carrying nothing at all.
+                    last_assembly = {"ok": None, "order": None, "attempt": n, "measured": False}
                 if assembly is not None and res.assembly is not None:
                     _emit_stage(on_progress, "assembly", "begin", n)
                     fit = evaluate_assembly(res.assembly, assembly)
@@ -334,6 +354,7 @@ class Pipeline:
                         "ok": fit.ok,
                         "order": fit.order,
                         "attempt": n,
+                        "measured": True,
                         "failures": list(fit.failures),
                         "unchecked": list(fit.unchecked),
                     }

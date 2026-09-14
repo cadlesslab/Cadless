@@ -130,6 +130,7 @@ def run_code(
             export_dir or "",
             str(export_scale),
             "1" if check_assembly else "",
+            str(wall),
         ]
         preexec = _limit_resources(cpu) if os.name == "posix" else None
         try:

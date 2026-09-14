@@ -131,6 +131,21 @@ def test_a_single_part_result_never_runs_the_stage(monkeypatch):
     assert not [phase for phase, _ in _stages(events) if phase == "assembly"]
 
 
+def test_an_assembly_turn_that_measured_nothing_says_so(monkeypatch):
+    # "Asked and nothing came back" and "never asked" both used to leave the
+    # result carrying None, so a reader could not tell a turn whose model failed
+    # to split from one that never wanted a split.
+    result, _ = _run(FakeGen(), None, monkeypatch)
+    assert result.assembly is not None
+    assert result.assembly["measured"] is False
+    assert result.assembly["ok"] is None
+
+
+def test_a_turn_that_never_asked_is_distinguishable_from_one_that_did(monkeypatch):
+    result, _ = _run(FakeGen(), None, monkeypatch, assembly=None)
+    assert result.assembly is None
+
+
 # --- a failure is an ordinary repair signal -------------------------------
 
 

@@ -268,11 +268,91 @@ def test_a_short_pair_entry_is_unreadable_too():
     assert report.unchecked
 
 
-def test_a_gap_naming_a_part_that_does_not_exist_is_ignored():
+def test_a_gap_naming_a_part_that_does_not_exist_refuses():
     # Out of range rather than unreadable: the entry parses, it just refers to
-    # nothing. It must not widen the graph, and it must not crash.
+    # nothing. That means the gaps table disagrees with the part list, which is
+    # the same corruption the unreadable case refuses -- ignoring it would let a
+    # table that is short or misaligned read as fully measured.
     report = evaluate_assembly(_m(gaps=[[0, 1, 0.2], [0, 99, 0.2]]), SPEC)
-    assert report.ok
+    assert not report.ok
+    assert any("does not exist" in reason for reason in report.unchecked)
+
+
+def test_an_overlap_naming_a_part_that_does_not_exist_refuses():
+    report = evaluate_assembly(_m(overlaps=[[0, 99, 5.0]]), SPEC)
+    assert not report.ok
+    assert any("does not exist" in reason for reason in report.unchecked)
+
+
+# --- the payload shapes a version skew can produce ------------------------
+
+
+@pytest.mark.parametrize("bad_order", ["unknown", {"a": 1}, [0, "one"], [True, False]])
+def test_an_order_that_is_not_a_list_of_indices_refuses(bad_order):
+    # Every other field is normalised through list(...); order was taken verbatim
+    # and a string read as "an order was found", which is a fail-open on exactly
+    # the skew from_payload exists to survive.
+    m = AssemblyMeasurements.from_payload(
+        {
+            "part_bboxes": [[10.0, 10.0, 10.0], [10.0, 10.0, 10.0]],
+            "gaps": [[0, 1, 0.2]],
+            "order": bad_order,
+        }
+    )
+    report = evaluate_assembly(m, SPEC)
+    assert not report.ok
+
+
+def test_an_order_that_is_not_every_part_refuses():
+    report = evaluate_assembly(_m(order=[]), SPEC)
+    assert not report.ok
+    assert report.order is None
+    report = evaluate_assembly(_m(order=[0]), SPEC)
+    assert not report.ok
+
+
+def test_a_trapped_list_of_the_wrong_shape_does_not_raise():
+    # evaluate_assembly is documented as never raising, and it is called
+    # unguarded from the pipeline -- so a malformed payload must refuse the build
+    # rather than take the whole turn down with it.
+    m = AssemblyMeasurements.from_payload(
+        {
+            "part_bboxes": [[10.0, 10.0, 10.0], [10.0, 10.0, 10.0]],
+            "gaps": [[0, 1, 0.2]],
+            "trapped": ["left"],
+        }
+    )
+    report = evaluate_assembly(m, SPEC)
+    assert not report.ok
+
+
+def test_an_unrunnable_order_search_is_not_reported_as_a_definite_no():
+    # A completed search that finds nothing always names the parts it could not
+    # free, so no trapped set means the search never finished. Saying "no
+    # assembly order exists" there sends the model to fix geometry that was never
+    # measured -- and it was the first line of the repair prompt.
+    report = evaluate_assembly(
+        _m(order=None, trapped=[], unchecked=["assembly order: the search ran out of budget"]),
+        SPEC,
+    )
+    assert not report.ok
+    assert report.failures == []
+    signal = report.repair_signal()
+    assert "no assembly order exists" not in signal
+
+
+def test_no_order_no_reason_still_refuses():
+    report = evaluate_assembly(_m(order=None, trapped=[]), SPEC)
+    assert not report.ok
+    assert any("no reason" in reason for reason in report.unchecked)
+
+
+def test_unchecked_survives_a_payload_with_nothing_measured():
+    m = AssemblyMeasurements.from_payload(
+        {"part_bboxes": [], "unchecked": ["nothing was measured"]}
+    )
+    report = evaluate_assembly(m, SPEC)
+    assert not report.ok
 
 
 # --- the coupling this module's guard exists for --------------------------

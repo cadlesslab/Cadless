@@ -21,18 +21,23 @@ def _mated_pair():
     return [Box(20, 20, 10), Pos(20 + CLEARANCE, 0, 0) * Box(20, 20, 10)]
 
 
-def _caged():
-    """A small block walled in on all six sides -- assemblable in no order."""
-    inner = Box(6, 6, 6)
-    walls = [
-        Pos(0, 8, 0) * Box(20, 10, 20),
-        Pos(0, -8, 0) * Box(20, 10, 20),
-        Pos(0, 0, 8) * Box(20, 20, 10),
-        Pos(0, 0, -8) * Box(20, 20, 10),
-        Pos(8, 0, 0) * Box(10, 20, 20),
-        Pos(-8, 0, 0) * Box(10, 20, 20),
-    ]
-    return [inner, *walls]
+def _caged(wall=4.0):
+    """A block sealed inside a hollow shell -- assemblable in no order.
+
+    Two disjoint solids with the joint clearance between them, so what stops the
+    search is enclosure and nothing else. Two earlier versions were wrong in
+    opposite ways and both are worth naming, because each passed the trapping
+    assertions for a reason that had nothing to do with caging: six
+    interpenetrating plates blocked every part at rest, so any interfering pile
+    would have passed; six *disjoint* plates are not a cage at all, because each
+    plate simply slides away on its own and frees the block behind it.
+    """
+    inner = 6.0
+    cavity = inner + 2 * CLEARANCE
+    shell = Box(cavity + 2 * wall, cavity + 2 * wall, cavity + 2 * wall) - Box(
+        cavity, cavity, cavity
+    )
+    return [Box(inner, inner, inner), shell]
 
 
 def _gap_between(measurements, first, second):
@@ -112,6 +117,14 @@ def test_a_chain_of_four_has_an_order():
     assert sorted(m.order) == [0, 1, 2, 3]
 
 
+def test_the_cage_fixture_holds_its_block_without_touching_it():
+    # The trapping tests below are only about caging if the fixture is disjoint.
+    # Asserted here rather than assumed, because an interpenetrating pile blocks
+    # every part at rest and would pass them for the wrong reason.
+    m = measure_assembly(_caged())
+    assert m.overlaps == []
+
+
 def test_a_caged_part_has_no_order_and_is_named():
     m = measure_assembly(_caged())
     assert m.order is None
@@ -119,19 +132,12 @@ def test_a_caged_part_has_no_order_and_is_named():
 
 
 def test_a_blocker_thinner_than_a_coarse_step_is_not_jumped():
-    # The failure this guards: with a step derived from the span rather than from
-    # the geometry, the first move clears a thin wall entirely and the part reads
-    # as free. The wall here is deliberately thin next to the travel distance.
-    inner = Box(6, 6, 6)
-    walls = [
-        Pos(0, 6, 0) * Box(40, 2, 40),
-        Pos(0, -6, 0) * Box(40, 2, 40),
-        Pos(0, 0, 6) * Box(40, 40, 2),
-        Pos(0, 0, -6) * Box(40, 40, 2),
-        Pos(6, 0, 0) * Box(2, 40, 40),
-        Pos(-6, 0, 0) * Box(2, 40, 40),
-    ]
-    m = measure_assembly([inner, *walls])
+    # The failure this guards: a search that advances by a fixed step clears a
+    # thin wall on both sides without ever sampling inside it, and reports a
+    # sealed-in part as free. This shell is 0.4 mm thick against tens of
+    # millimetres of travel, so only advancing by the measured separation catches
+    # it.
+    m = measure_assembly(_caged(wall=0.4))
     assert m.order is None
     assert 0 in m.trapped
 
@@ -172,6 +178,37 @@ def test_a_joint_whose_only_exit_is_not_an_axis_still_has_an_order():
     m = measure_assembly(_captive_tongue(45))
     assert m.order is not None
     assert m.trapped == []
+
+
+# --- the travel test itself -----------------------------------------------
+
+
+def test_a_grazing_contact_is_not_stepped_over():
+    """The clash this catches lasts 0.69 mm of travel and is not near either end.
+
+    Measured on this exact pair: sliding the first cube along (1,1,0) clips the
+    corner of the second between t=14.150 and t=14.840. A search advancing by a
+    fixed fraction of a part's size samples 14.02 and then 19.02 and reports the
+    part free -- the interval a grazing contact occupies has nothing to do with
+    how thick either part is, so no fraction of a part bounds it. Advancing by
+    the measured separation is what closes this, and it is the only case in the
+    suite where the two strategies disagree.
+    """
+    from build123d import Vector
+
+    import cadless.assembly_check as module
+
+    first = Pos(5, 5, 5) * Box(10, 10, 10)
+    second = Pos(25, 5.5, 5) * Box(10, 10, 10)
+    parts = [first, second]
+    spheres = [module._sphere(part) for part in parts]
+    heading = Vector(1, 1, 0).normalized()
+    budget = module._Budget(10**6, 600.0)
+
+    blocked = module._blocked_along(
+        parts, spheres, 0, [1], heading, module._min_step(parts), budget
+    )
+    assert blocked, "the search walked past a real collision"
 
 
 # --- failing closed -------------------------------------------------------
@@ -228,13 +265,26 @@ def test_parts_that_cannot_meet_along_a_direction_are_not_stepped_through():
     assert m.trapped == []
 
 
-def test_a_collision_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
-    # A probe the kernel could not answer must not read as "nothing in the way":
-    # that frees a part on no evidence and hands back an order that may not work.
+def test_a_distance_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
+    # The search advances by the measured separation, so the distance query is
+    # what it rests on. One the kernel could not answer must not read as "nothing
+    # in the way": that frees a part on no evidence and returns an order that may
+    # not work.
+    import cadless.assembly_check as module
+
+    monkeypatch.setattr(module, "_distance", lambda first, second: None)
+    m = measure_assembly(_mated_pair())
+    assert m.order is None
+    assert m.trapped == [0, 1]
+
+
+def test_a_clash_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
+    # The other half: once two parts are in contact the separation no longer
+    # decides it and the shared volume does, so a refused volume query blocks too.
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_shared_volume", lambda first, second: None)
-    m = measure_assembly(_mated_pair())
+    m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)])
     assert m.order is None
     assert m.trapped == [0, 1]
 
@@ -248,9 +298,9 @@ def test_a_budget_spent_on_the_pairwise_phase_is_reported():
 
 
 def test_a_budget_spent_on_the_order_search_is_reported_as_that():
-    # Enough for every pair of the seven-part fixture but not for the search.
-    pairs = 7 * 6 // 2
-    m = measure_assembly(_caged(), probe_budget=pairs + 2)
+    # Enough for the pairwise phase of the two-part fixture, which spends two
+    # probes per pair, but not for the search that follows it.
+    m = measure_assembly(_caged(), probe_budget=2 + 2)
     assert m.order is None
     assert any("order" in reason for reason in m.unchecked)
 
@@ -259,7 +309,7 @@ def test_a_spent_budget_does_not_masquerade_as_a_trapped_part():
     # "We ran out of budget" and "this part is walled in" are different answers
     # and the policy layer reports them differently, so they must not be conflated.
     assert measure_assembly(_caged(), probe_budget=1).trapped == []
-    assert measure_assembly(_caged(), probe_budget=7 * 6 // 2 + 2).trapped == []
+    assert measure_assembly(_caged(), probe_budget=2 + 2).trapped == []
 
 
 def test_a_spent_time_budget_stops_the_measurement():

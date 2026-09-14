@@ -57,6 +57,13 @@ MATING_TOLERANCE_FLOOR_MM = 1.0
 #: distinction between touching and overlapping is the line this module draws.
 OVERLAP_EPSILON_MM3 = 1e-9
 
+#: Prefix on every reason the order search could not rule.
+#:
+#: A constant rather than a repeated literal because two places depend on it
+#: agreeing: the search writes it, and the policy reads it to tell 'the search
+#: did not finish' from 'it finished and found nothing'.
+_ORDER_UNCHECKED_PREFIX = "assembly order:"
+
 
 @dataclass(frozen=True)
 class AssemblyMeasurements:
@@ -95,8 +102,8 @@ class AssemblyMeasurements:
             part_bboxes=list(data.get("part_bboxes") or []),
             overlaps=list(data.get("overlaps") or []),
             gaps=list(data.get("gaps") or []),
-            order=data.get("order"),
-            trapped=list(data.get("trapped") or []),
+            order=_index_list(data.get("order")),
+            trapped=_index_list(data.get("trapped")) or [],
             unchecked=list(data.get("unchecked") or []),
         )
 
@@ -143,11 +150,16 @@ def evaluate_assembly(
     build volume belongs to :mod:`cadless.print_fit`, not here.
     """
     report = AssemblyReport()
-    if measurements is None or len(measurements.part_bboxes) < 2:
+    if measurements is None:
+        return report
+    # Carried before the part-count gate below: a payload that measured
+    # nothing still has something to say, and dropping it here turned an
+    # executor that failed outright into a silent pass.
+    report.unchecked.extend(measurements.unchecked)
+    if len(measurements.part_bboxes) < 2:
         return report
 
     report.order = measurements.order
-    report.unchecked.extend(measurements.unchecked)
     _check_fit(measurements, spec, report)
     _check_overlap(measurements, report)
     _check_mating(measurements, spec, report)
@@ -189,6 +201,9 @@ def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport) -> None:
             report.unchecked.append(f"overlap between two parts: unreadable entry {entry!r}")
             continue
         first, second, shared = pair
+        if not (0 <= first < len(m.part_bboxes) and 0 <= second < len(m.part_bboxes)):
+            report.unchecked.append(f"overlap entry {entry!r} names a part that does not exist")
+            continue
         if shared > OVERLAP_EPSILON_MM3:
             report.failures.append(
                 f"{_label(first)} and {_label(second)} share {shared:g} mm^3 of interior volume; "
@@ -207,6 +222,10 @@ def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyR
             continue
         first, second, distance = pair
         if not (0 <= first < count and 0 <= second < count):
+            # The gaps table disagrees with the part list, which is the same
+            # corruption the unreadable case refuses. Ignoring it would let a
+            # short table read as a fully measured one.
+            report.unchecked.append(f"gap entry {entry!r} names a part that does not exist")
             continue
         if distance <= tolerance:
             neighbours[first].add(second)
@@ -230,7 +249,26 @@ def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyR
 
 
 def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
+    """Rule on the order search's three outcomes, keeping the last two apart.
+
+    A search that ran to completion and found nothing always names the parts it
+    could not free, so ``order is None`` with an empty ``trapped`` means the
+    search did not finish. Saying "no assembly order exists" there would send the
+    model to fix geometry that was never measured, and it is the first line of
+    the repair prompt -- which is exactly the confusion the module docstring
+    promises this report does not make.
+    """
     if m.order is not None:
+        # An order that is not a permutation of the parts describes a different
+        # assembly from the one measured. Type-checking the list is not enough:
+        # an empty one is a list of ints and would otherwise read as "an order
+        # was found" for a build with parts in it.
+        if sorted(m.order) != list(range(len(m.part_bboxes))):
+            report.order = None
+            report.unchecked.append(
+                f"{_ORDER_UNCHECKED_PREFIX} the order given, {m.order!r}, is not a sequence "
+                f"of all {len(m.part_bboxes)} parts"
+            )
         return
     if m.trapped:
         names = ", ".join(_label(index) for index in sorted(m.trapped))
@@ -239,10 +277,11 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
             "through another part; reorient the joint so it slides in along one axis"
         )
         return
-    report.failures.append(
-        "no assembly order exists: the parts cannot be brought together one at a time "
-        "without collision"
-    )
+    # The executor normally says why it could not finish, and that reason is
+    # already on the report. A payload carrying neither a result nor a reason is
+    # inconsistent, and this is the only thing between it and reading as a pass.
+    if not any(reason.startswith(_ORDER_UNCHECKED_PREFIX) for reason in m.unchecked):
+        report.unchecked.append(f"{_ORDER_UNCHECKED_PREFIX} no result and no reason was given")
 
 
 def _groups(neighbours: dict[int, set[int]], count: int) -> list[set[int]]:
@@ -272,6 +311,24 @@ def _pair(entry: object) -> tuple[int, int, float] | None:
         return int(first), int(second), float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _index_list(value: object) -> list[int] | None:
+    """``value`` as a list of part indices, or ``None`` when it is not one.
+
+    Everything crossing the payload boundary is checked rather than trusted:
+    an api and a worker on different builds disagree about shapes as well as
+    field names, and an order that is a string used to read as a pass while a
+    trapped list of strings raised out of a function documented never to.
+    """
+    if not isinstance(value, list):
+        return None
+    out: list[int] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            return None
+        out.append(item)
+    return out
 
 
 def _label(index: int) -> str:
@@ -325,23 +382,47 @@ _AXES = (
 #: spend the executor's entire wall clock on a model with very many parts.
 ORDER_PROBE_BUDGET = 20_000
 
-#: How long the whole measurement may spend, in seconds.
+#: What share of the executor's wall clock the measurement may spend.
 #:
-#: A second bound beside the probe count, because the two fail differently.
-#: The count stops a model that produced very many parts; the clock stops a
-#: single part whose topology makes one boolean operation take seconds.
-#: Counting alone rests on probes costing roughly the same, which a
-#: pathological solid disproves -- and the executor returns no summary at all
-#: when its own wall clock runs out, so this has to stop first to say anything.
+#: A second bound beside the probe count, because the two fail differently. The
+#: count stops a model that produced very many parts; the clock stops a single
+#: part whose topology makes one boolean operation take seconds. Counting alone
+#: rests on probes costing roughly the same, which a pathological solid
+#: disproves.
+#:
+#: A share rather than a fixed number of seconds, because the executor returns no
+#: summary at all when its own clock runs out -- so this has to stop first, and a
+#: constant only does that at one particular timeout. Left a fraction, lowering
+#: the timeout tightens this with it instead of quietly inverting the two.
+MEASUREMENT_TIME_SHARE = 1.0 / 3.0
+
+#: The share applied to the default executor timeout, for a caller with no clock
+#: to divide -- a direct call in a test, and nothing on the pipeline's path.
 MEASUREMENT_TIME_BUDGET_SECONDS = 10.0
 
-#: Fraction of the thinnest part dimension used as the travel step.
+#: Smallest travel step, as a fraction of the thinnest part dimension.
 #:
-#: A step larger than a part can step straight over it: the moved solid is clear
-#: on both sides of a thin wall and the collision is never seen, which reports a
-#: walled-in part as free. Halving the thinnest dimension puts at least one
-#: sample inside anything that could block.
-_STEP_FRACTION = 0.5
+#: The search advances by however far apart the two solids currently are, which
+#: is what makes it safe rather than sampled -- moving less than the present
+#: separation cannot bring them into contact, so no collision can be stepped
+#: over. This floor exists only for the case that argument does not cover: two
+#: parts already touching, where the separation is zero and advancing by it
+#: would not progress at all.
+#:
+#: A fixed step was tried first and is unsound. Measured: two 10 mm cubes offset
+#: 0.5 mm across an oblique heading graze for 0.69 mm of travel, and a step of
+#: half the thinnest dimension samples either side of that and calls the part
+#: free. The interval a grazing contact occupies has nothing to do with how thick
+#: either part is, so no fraction of a part's size bounds it.
+_MIN_STEP_FRACTION = 0.02
+
+#: Separation at or below which two solids count as touching rather than apart.
+#:
+#: Not a tolerance on the answer but on the arithmetic: a distance query on two
+#: faces that meet returns a value at kernel noise rather than exactly zero, and
+#: advancing by that would crawl. Whether touching is a *clash* is decided by
+#: shared volume, never by this.
+_CONTACT_MM = 1e-6
 
 
 def measure_assembly(
@@ -360,15 +441,17 @@ def measure_assembly(
     overlaps: list[list[float]] = []
     gaps: list[list[float]] = []
     budget = _Budget(probe_budget, time_budget)
+    done = 0
 
     for first in range(len(parts)):
         for second in range(first + 1, len(parts)):
             try:
-                budget.spend()
+                budget.spend()  # the shared-volume probe
+                budget.spend()  # the distance probe
             except _BudgetSpent:
                 unchecked.append(
                     "overlap and gap between every pair: the measurement ran out of "
-                    f"budget after {len(gaps)} of "
+                    f"budget after {done} of "
                     f"{len(parts) * (len(parts) - 1) // 2} pairs"
                 )
                 return AssemblyMeasurements(
@@ -388,6 +471,7 @@ def measure_assembly(
             elif shared > 0.0:
                 overlaps.append([first, second, shared])
 
+            done += 1
             distance = _distance(parts[first], parts[second])
             if distance is None:
                 unchecked.append(
@@ -460,9 +544,9 @@ def _disassembly_order(parts, budget):
         return list(range(len(parts))), [], []
 
     spheres = [_sphere(part) for part in parts]
-    step = _step(parts)
-    if step is None:
-        return None, [], ["assembly order: a part has no measurable size"]
+    floor = _min_step(parts)
+    if floor is None:
+        return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"]
 
     remaining = list(range(len(parts)))
     removed: list[int] = []
@@ -471,14 +555,17 @@ def _disassembly_order(parts, budget):
         for index in remaining:
             others = [other for other in remaining if other != index]
             try:
-                if _can_be_freed(parts, spheres, index, others, step, budget):
+                if _can_be_freed(parts, spheres, index, others, floor, budget):
                     freed = index
                     break
             except _BudgetSpent:
                 return (
                     None,
                     [],
-                    ["assembly order: the search ran out of collision probes before it could rule"],
+                    [
+                        f"{_ORDER_UNCHECKED_PREFIX} the search ran out of budget "
+                        "before it could rule"
+                    ],
                 )
         if freed is None:
             return None, sorted(remaining), []
@@ -488,14 +575,27 @@ def _disassembly_order(parts, budget):
     return list(reversed(removed)), [], []
 
 
-def _can_be_freed(parts, spheres, index, others, step, budget) -> bool:
+def _can_be_freed(parts, spheres, index, others, floor, budget) -> bool:
     for direction in _candidate_directions(spheres, index, others):
-        if not _blocked_along(parts, spheres, index, others, direction, step, budget):
+        if not _blocked_along(parts, spheres, index, others, direction, floor, budget):
             return True
     return False
 
 
-def _blocked_along(parts, spheres, index, others, direction, step, budget) -> bool:
+def _blocked_along(parts, spheres, index, others, direction, floor, budget) -> bool:
+    """Whether sliding one part along ``direction`` runs it into any other.
+
+    Advances by however far apart the two solids currently are, rather than by
+    a fixed step. Moving a solid less than its distance to another cannot bring
+    the two into contact, so a jump of that size passes over nothing.
+
+    A fixed step cannot promise that, and measurably did not: a grazing contact
+    occupies an interval unrelated to either part's size, so no fraction of a
+    part bounds it. ``floor`` applies only where the two are already touching,
+    which is the one case the separation argument cannot cover.
+    """
+    from build123d import Location
+
     part = parts[index]
     centre, radius = spheres[index]
     for other in others:
@@ -509,9 +609,29 @@ def _blocked_along(parts, spheres, index, others, direction, step, budget) -> bo
         position = start
         while position <= stop:
             budget.spend()
-            if _meets(part, parts[other], direction, position):
+            moved = part.moved(Location(direction * position))
+            separation = _distance(moved, parts[other])
+            if separation is None:
+                # A probe the kernel refused. Blocked: freeing a part on a
+                # measurement that did not happen is how a bad order gets out.
                 return True
-            position += step
+            if separation > _CONTACT_MM:
+                # They are apart, so no travel shorter than the gap can bring
+                # them together. Jumping the whole gap therefore skips nothing --
+                # this is the step that makes the search safe rather than sampled,
+                # and it is also what makes it quick, since most of a path is far
+                # from anything.
+                position += max(separation, floor)
+                continue
+            budget.spend()
+            shared = _shared_volume(moved, parts[other])
+            if shared is None or shared > OVERLAP_EPSILON_MM3:
+                return True
+            # Touching but not interpenetrating: a part may slide along a face.
+            # Only here does the floor decide the step, and only here can a
+            # clash be missed -- one that both begins and ends within a floor's
+            # travel of a contact-free position.
+            position += floor
     return False
 
 
@@ -552,16 +672,6 @@ def _travel_window(centre, radius, other_centre, other_radius, direction):
     return max(0.0, along - half), stop
 
 
-def _meets(part, other, direction, distance) -> bool:
-    from build123d import Location, Vector
-
-    moved = part.moved(Location(Vector(*direction) * distance))
-    shared = _shared_volume(moved, other)
-    # An unrunnable probe must not read as "clear" -- that would free a part the
-    # search could not actually check, and hand back an order that does not work.
-    return shared is None or shared > OVERLAP_EPSILON_MM3
-
-
 def _candidate_directions(spheres, index, others):
     """The six axes, plus a direction leading away from each remaining part.
 
@@ -590,7 +700,8 @@ def _sphere(part):
     return (float(centre.X), float(centre.Y), float(centre.Z)), float(radius)
 
 
-def _step(parts) -> float | None:
+def _min_step(parts) -> float | None:
+    """The smallest travel the search will take, from the thinnest part."""
     thinnest = None
     for part in parts:
         size = part.bounding_box().size
@@ -599,7 +710,7 @@ def _step(parts) -> float | None:
             thinnest = smallest
     if thinnest is None or thinnest <= 0.0:
         return None
-    return thinnest * _STEP_FRACTION
+    return thinnest * _MIN_STEP_FRACTION
 
 
 class _BudgetSpent(Exception):
