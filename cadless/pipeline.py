@@ -639,12 +639,10 @@ class Pipeline:
         this has no store of its own to put them in: the export directory is the
         hand-off, and what it holds when a build finishes is what is taken up.
         That is also why the sweep below runs before anything else and on every
-        accepted build, rather than where the drawing happens: one directory is
-        made per chat turn and every build in that turn lands in it, so a build
-        that draws nothing would otherwise leave the previous one's frames to be
-        taken up as its own -- describing one model with pictures of another, and
-        filing enough extra rows to have a one-piece result refused a re-run for
-        being in several pieces.
+        accepted build, rather than where the drawing happens: callers reuse one
+        export directory across the builds of a turn, so a build that draws
+        nothing would otherwise leave the previous one's frames to be taken up as
+        its own -- describing one model with pictures of another.
         """
         _clear_guide_frames(export_dir)
         if not (verdict and verdict.get("ok") and verdict.get("order")):

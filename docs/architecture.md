@@ -201,13 +201,14 @@ candidate judging, the identity seam and the image decisions are recorded under
 7. After the checks accept a multi-part build, and only then, the turn describes
    it: named parts, the order the check established, and drawings of the parts
    coming apart. Like the render critique, it runs in the API process rather than
-   the worker, reading exported meshes through a first-party parser and needing
-   no geometry kernel. It is the one post-build step
-   that NEVER ends a turn — the parts are built and accepted by the time it
-   starts, so a model or a render that fails costs the description and leaves the
-   build. The order and the joints it states are the ones the check measured; it
-   re-derives neither, and a model is asked only what to call the parts, so a bad
-   answer costs vocabulary and cannot cost the sequence.
+   the worker, reading exported meshes through a first-party parser and needing no
+   geometry kernel. It is the one post-build step that NEVER ends a turn — the
+   parts are built and accepted by the time it starts, so what can go wrong is
+   graded rather than fatal: a model that declines costs only the names, a render
+   that fails costs only the pictures, and the build stands either way. The order
+   and the joints it states are the ones the check measured; it re-derives
+   neither, and a model is asked only what to call the parts, so a bad answer
+   costs vocabulary and cannot cost the sequence.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount

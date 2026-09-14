@@ -98,10 +98,10 @@ def guide_frames(
         for _, shown, moving in plans
     ]
     # One window across the whole set: the same scale, so a part keeps its size
-    # from frame to frame, and the same centre, so it keeps its place. Measured
-    # with the scale shared and the centre not: over four frames the base slid
-    # 37% of the canvas as the assembly grew around it. Fitted per frame it would
-    # also be blown up to fill the first frame it appears alone in.
+    # from frame to frame, and the same centre, so it keeps its place. A shared
+    # scale alone is not enough -- each frame would then re-centre on a subject
+    # that is growing, sliding a part that has not moved. Fitted per frame it
+    # would also be blown up to fill the first frame it appears alone in.
     union = np.concatenate(drawings)
     extent = projected_extent(union, basis)
     centre = projected_centre(union, basis)

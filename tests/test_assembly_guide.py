@@ -136,10 +136,9 @@ def test_the_frames_share_one_scale_so_a_part_keeps_its_size():
 def test_the_frames_share_one_centre_so_a_part_keeps_its_place():
     # A shared scale alone is not enough: fitted to its own middle, every frame
     # re-centres on a subject that is growing, so the part placed first slides
-    # across the canvas as the others arrive. Measured with the scale shared and
-    # the centre not, that slide was 37% of the canvas over four frames -- and
-    # the size check above cannot see it, because the ink stays the same size
-    # while moving.
+    # across the canvas as the others arrive. The size check above cannot see
+    # that, because the ink stays the same size while it moves -- which is why
+    # this one reads position instead.
     count = STEP_FRAME_MIN_PARTS
     parts = [_cube((0.0, 0.0, 30.0 * i)) for i in range(count)]
     releases = [[]] + [[0.0, 0.0, 1.0]] * (count - 1)
