@@ -26,6 +26,7 @@ import inspect
 
 import botocore.session
 
+from cadless.config import Settings
 from cadless.llm.providers.anthropic import AnthropicChatProvider
 from cadless.llm.providers.bedrock import BedrockChatProvider
 from cadless.llm.providers.openai import OpenAIChatProvider
@@ -78,8 +79,49 @@ def test_bedrock_converse_stream_accepts_every_key_the_adapter_sends():
     # this needs no client, no region configuration and no credentials.
     service = botocore.session.get_session().get_service_model("bedrock-runtime")
     body = _body(BedrockChatProvider(), "sonnet-4-6")
-    accepted = service.operation_model("ConverseStream").input_shape.members
-    _assert_accepted(body, accepted, sdk="boto3 bedrock-runtime ConverseStream")
+    top = service.operation_model("ConverseStream").input_shape.members
+    _assert_accepted(body, top, sdk="boto3 bedrock-runtime ConverseStream")
+
+    # The nested level is where this adapter's sampling controls actually sit —
+    # temperature is inside inferenceConfig, which is the same parameter whose
+    # removal from the anthropic SDK is why this file exists. A top-level check
+    # would stay green straight through AWS dropping it.
+    for nested in ("inferenceConfig", "toolConfig"):
+        if nested in body:
+            _assert_accepted(
+                body[nested],
+                top[nested].members,
+                sdk=f"boto3 bedrock-runtime ConverseStream.{nested}",
+            )
+
+
+def test_openai_embeddings_accepts_every_key_the_adapter_sends():
+    """The fourth vendor call site, and the only one not on the turn path.
+
+    ``embed`` builds its keyword arguments inline rather than through a request
+    builder, so they are captured by driving the real method against a recording
+    client instead of being restated here — a restated set would stop matching
+    the day someone adds an argument.
+    """
+    from openai.resources.embeddings import Embeddings
+
+    class _Recorder:
+        def __init__(self):
+            self.kwargs: dict = {}
+
+        def create(self, **kwargs):
+            self.kwargs = kwargs
+            return {"data": []}
+
+    recorder = _Recorder()
+    client = type("_Client", (), {"embeddings": recorder})()
+    # A text-embedding-3 model is the branch that also sends ``dimensions``, so
+    # this exercises the widest set the method can produce.
+    config = Settings(openai_embed_model="text-embedding-3-small")
+    OpenAIChatProvider(config=config, client=client).embed("a bracket")
+
+    assert recorder.kwargs, "embed() sent nothing"
+    _assert_accepted(recorder.kwargs, inspect.signature(Embeddings.create).parameters, sdk="openai")
 
 
 def test_sdk_clients_still_take_the_max_retries_argument():

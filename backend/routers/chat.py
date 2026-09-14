@@ -678,6 +678,11 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             # without this a failed turn leaves no trace in the server log at
             # all. Logged before the revert, so a revert that throws in turn
             # cannot take the original cause down with it.
+            #
+            # Never add exc.request or exc.body to this call. A provider SDK's
+            # error keeps the outgoing request on the exception, headers and
+            # all, so the API key is one attribute access away; the message and
+            # the traceback carry neither.
             logger.exception("chat turn failed for project %s", project_id)
             # Auto-revert policy: an aborted/failed turn must never leave
             # current pointing at a failed/partial version — guarantee last OK.
