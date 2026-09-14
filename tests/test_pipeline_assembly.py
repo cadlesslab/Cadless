@@ -234,3 +234,62 @@ def test_the_loop_is_bounded_however_bad_the_split(monkeypatch, tries):
     result, _ = _run(gen, _overlapping(), monkeypatch, tries=tries)
     assert not result.ok
     assert result.attempt_count <= tries
+
+
+# --- end to end, through the real worker ----------------------------------
+#
+# Everything above scripts the geometry. These run the whole loop for real: the
+# validator, a subprocess, OCCT, the measurement and the policy. Only the model
+# is scripted, because a live one costs money and answers differently each time
+# -- so what these establish is that the mechanism works on a real turn's path,
+# not that a real model produces a good split.
+
+_TWO_PARTS = "from build123d import *\nresult = Compound(children=[{a}, {b}])\n"
+CLEARED = _TWO_PARTS.format(a="Box(20, 20, 10)", b="Pos(20.2, 0, 0) * Box(20, 20, 10)")
+OVERLAPPING = _TWO_PARTS.format(a="Box(20, 20, 10)", b="Pos(19, 0, 0) * Box(20, 20, 10)")
+TOO_BIG = _TWO_PARTS.format(a="Box(400, 20, 10)", b="Pos(20.2, 0, 0) * Box(20, 20, 10)")
+
+
+@pytest.mark.build123d
+def test_a_sound_split_survives_the_whole_loop():
+    result = Pipeline(generator=FakeGen(CLEARED), config=Settings(repair_max_attempts=2)).run(
+        "a two-part bracket", assembly=SPEC
+    )
+    assert result.ok, result.error
+    assert result.assembly is not None and result.assembly["ok"] is True
+    assert sorted(result.assembly["order"]) == [0, 1]
+
+
+@pytest.mark.build123d
+def test_a_deliberately_bad_split_is_refused_and_produces_a_repair_round():
+    # The generator keeps emitting the same overlapping pair, so the loop repairs
+    # once and then refuses rather than handing the parts over.
+    gen = FakeGen(OVERLAPPING)
+    result = Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run(
+        "a two-part bracket", assembly=SPEC
+    )
+    assert not result.ok
+    assert "assembly:" in result.error
+    assert gen.repairs == 1, "the failure did not produce another attempt"
+    assert "interior volume" in result.error
+
+
+@pytest.mark.build123d
+def test_a_part_that_will_not_fit_the_bed_is_refused_end_to_end():
+    result = Pipeline(generator=FakeGen(TOO_BIG), config=Settings(repair_max_attempts=1)).run(
+        "a two-part bracket", assembly=SPEC
+    )
+    assert not result.ok
+    assert "does not fit" in result.error
+
+
+@pytest.mark.build123d
+def test_the_same_split_is_accepted_when_the_turn_did_not_ask_for_an_assembly():
+    # The overlapping pair is only a defect against the assembly contract. With
+    # the option off it is an ordinary multi-solid build and must behave exactly
+    # as it did before this stage existed.
+    result = Pipeline(generator=FakeGen(OVERLAPPING), config=Settings(repair_max_attempts=1)).run(
+        "two blocks", assembly=None
+    )
+    assert result.ok, result.error
+    assert result.assembly is None
