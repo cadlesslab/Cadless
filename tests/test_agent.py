@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
+import pytest
+
 from cadless.agent import (
     Agent,
     AgentResult,
@@ -144,9 +146,10 @@ class LoopForeverProvider(FakeChatProvider):
 class SpyPipeline:
     """Stand-in for the CAD pipeline; records calls, returns a canned result."""
 
-    def __init__(self) -> None:
+    def __init__(self, guide=None) -> None:
         self.calls: list[tuple[str, str | None]] = []
         self.groundings: list[str | None] = []
+        self.guide = guide
 
     def run(
         self,
@@ -171,6 +174,7 @@ class SpyPipeline:
             bbox=(10, 10, 10),
             glb_path="/tmp/model.glb",
             parameters={"size": 10},
+            guide=self.guide,
         )
 
 
@@ -693,6 +697,100 @@ def test_submit_plan_drops_blank_steps():
     result = agent.run_turn(user_text="x", context=_context())
     plan = next(b for b in result.blocks if b.kind == "plan")
     assert plan.input["steps"] == ["real", "second"]
+
+
+def _built_with_guide(guide):
+    """One ordinary build turn, whose pipeline returns ``guide`` on the result."""
+    pipeline = SpyPipeline(guide=guide)
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1",
+                name="generate_model",
+                tool_input={"spec": "a long bracket"},
+            ),
+            _text_turn("done"),
+        ]
+    )
+    agent = Agent(provider=provider, model="fake-model")
+    return agent.run_turn(user_text="a long bracket", context=_context(pipeline=pipeline))
+
+
+def test_a_built_assembly_puts_its_guide_in_the_transcript():
+    # Persisted as a block rather than streamed: a guide is worth keeping, and
+    # keeping it is what puts it back in front of a reader after a reload.
+    result = _built_with_guide(
+        {"parts": ["base", "arm"], "steps": ["Start with base.", "Fit arm to base."], "frames": 2}
+    )
+    guides = [b for b in result.blocks if b.kind == "guide"]
+    assert len(guides) == 1
+    assert guides[0].input["parts"] == ["base", "arm"]
+    assert guides[0].input["steps"] == ["Start with base.", "Fit arm to base."]
+    assert guides[0].input["frames"] == 2
+
+
+def test_the_guide_follows_the_build_it_describes():
+    result = _built_with_guide({"parts": ["base", "arm"], "steps": ["Start with base."]})
+    kinds = [b.kind for b in result.blocks]
+    assert kinds.index("tool_result") < kinds.index("guide")
+
+
+def test_a_build_with_no_guide_adds_no_block():
+    assert all(b.kind != "guide" for b in _built_with_guide(None).blocks)
+
+
+@pytest.mark.parametrize(
+    "guide",
+    [
+        {"steps": []},
+        {"parts": ["base"]},
+        {"steps": ["", None]},
+        "not a guide at all",
+        [],
+    ],
+)
+def test_a_guide_that_cannot_be_read_costs_no_more_than_itself(guide):
+    # It crosses the tool boundary as plain JSON. A turn that built a working set
+    # of parts must not fail over the shape of the sentence describing them.
+    result = _built_with_guide(guide)
+    assert result.stop_reason == "end_turn"
+    assert all(b.kind != "guide" for b in result.blocks)
+
+
+def test_the_streaming_path_carries_the_guide_too():
+    # Two loops in this module assemble blocks, and only one of them is what the
+    # chat route runs. A guide wired into the other alone passes every test above
+    # and reaches no reader -- which is what happened while this was written.
+    pipeline = SpyPipeline(guide={"parts": ["base", "arm"], "steps": ["Start with base."]})
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("done"),
+        ]
+    )
+    agent = Agent(provider=provider, model="fake-model")
+    events = list(agent.stream_turn(user_text="a bracket", context=_context(pipeline=pipeline)))
+    end = next(e for e in events if e.kind == "turn_end")
+    guides = [b for b in end.data["result"].blocks if b.kind == "guide"]
+    assert len(guides) == 1
+    assert guides[0].input["steps"] == ["Start with base."]
+
+
+def test_the_guide_is_never_replayed_to_the_provider():
+    # A terminal artifact for the reader, like plan. Put back into the turn's
+    # next message it would read as something the model itself had said about
+    # the build.
+    pipeline = SpyPipeline(guide={"parts": ["base"], "steps": ["Start with base."]})
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a bracket"}),
+            _text_turn("done"),
+        ]
+    )
+    agent = Agent(provider=provider, model="fake-model")
+    result = agent.run_turn(user_text="a bracket", context=_context(pipeline=pipeline))
+    replayed = [b.kind for message in result.messages for b in (message.content or [])]
+    assert "guide" not in replayed
 
 
 def test_provider_protocol_only_imports_no_vendor_sdk():

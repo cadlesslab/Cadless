@@ -50,6 +50,7 @@ from cadless.compaction import compact_history
 from cadless.config import settings
 from cadless.distill import auto_distill
 from cadless.forge import persist_losers
+from cadless.guide_writer import GuideWriter
 from cadless.llm.registry import build_provider  # monkeypatched in tests
 from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
@@ -140,8 +141,13 @@ def build_pipeline() -> Pipeline:
     The critic's provider is left unbuilt. It resolves on the first critique, so
     a turn that never reaches one — a text-only reply, a build that fails —
     costs nothing here and cannot fail for want of a credential it never used.
+
+    The guide writer is injected on the same terms and for a different reason:
+    without it a multi-part build is still described, from the order and the
+    joints the engine measured. What a writer adds is names for the parts, so a
+    pipeline built without one loses vocabulary rather than the guide.
     """
-    return Pipeline(critic=VlmCritic(renderer=render_views))
+    return Pipeline(critic=VlmCritic(renderer=render_views), guide_writer=GuideWriter())
 
 
 def _refusal(detail: str) -> EventSourceResponse:

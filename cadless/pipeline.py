@@ -35,6 +35,7 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from cadless.assembly_check import evaluate_assembly
 from cadless.assertions import (
@@ -62,6 +63,7 @@ STAGE_PHASES = (
     "mesh",
     "critique",
     "assembly",
+    "guide",
     "assert",
     "repair",
 )
@@ -125,6 +127,15 @@ class GenerationResult:
     #: engine's own sentences about geometry it measured, not a vision model's
     #: prose written from a prompt holding the user's.
     assembly: dict | None = None
+    #: How the parts go together, as a reader is shown it: ``{"parts", "steps",
+    #: "frames"}``, or ``None`` where there was no assembly to describe. Written
+    #: only once the split has been accepted -- a guide to a build about to be
+    #: refused describes an assembly nobody receives.
+    #:
+    #: ``frames`` counts the drawings stored beside the parts, addressed by index
+    #: on the artifact route. Zero is ordinary rather than a failure: a build
+    #: whose headings were never measured gets its written steps and no pictures.
+    guide: dict | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -148,6 +159,7 @@ class Pipeline:
         generator: CodeGenerator | None = None,
         config: Settings | None = None,
         critic=None,
+        guide_writer=None,
     ):
         self._gen = generator or CodeGenerator()
         # Snapshot, not the live object. The settings layer applies a change by
@@ -159,6 +171,10 @@ class Pipeline:
         # insulated. `CodeGenerator` already pins its model the same way.
         self._cfg = (config or settings).model_copy()
         self._critic = critic  # optional VlmCritic
+        # Optional GuideWriter. Without one the guide is still written, from the
+        # order and the joints alone -- what a writer adds is names for the parts,
+        # and the sentences are the engine's either way.
+        self._guide_writer = guide_writer
 
     @property
     def config(self) -> Settings:
@@ -421,6 +437,9 @@ class Pipeline:
                 _emit_stage(on_progress, "build", "ok", n)
                 # Meshing/export ran inside the worker; artifacts now exist.
                 _emit_stage(on_progress, "mesh", "ok", n)
+                # Last, and only on a split that was accepted. A guide written
+                # earlier would describe an assembly a later check still refuses.
+                guide = self._guide(on_progress, intent, code, last_assembly, export_dir, n)
                 self._record(attempts, on_progress, Attempt(n, code, "execute", None))
                 return GenerationResult(
                     ok=True,
@@ -436,6 +455,7 @@ class Pipeline:
                     attempts=attempts,
                     critique=last_critique,
                     assembly=last_assembly,
+                    guide=guide,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)
@@ -606,6 +626,65 @@ class Pipeline:
             logger.warning("render critique unavailable, skipping: %s", exc, exc_info=True)
             _emit_stage(on_progress, "critique", "error", n, f"critique unavailable: {exc}")
             return None
+
+    def _guide(self, on_progress, intent: str, code: str, verdict, export_dir, n: int):
+        """How the accepted parts go together, or ``None`` where there is no assembly.
+
+        Never fatal, and for a sharper reason than the critique's: by this point
+        the parts are built, measured and accepted, so a turn that failed here
+        would throw away a finished capability over its description.
+
+        The drawings are written beside the exports rather than returned, because
+        the pipeline has no store -- what is in the export directory when a build
+        finishes is what gets registered against the version.
+        """
+        if not (verdict and verdict.get("ok") and verdict.get("order")):
+            return None
+        order = verdict["order"]
+        if len(order) < 2:
+            return None
+
+        _emit_stage(on_progress, "guide", "begin", n)
+        try:
+            from cadless.guide_writer import plain_guide  # noqa: PLC0415
+
+            joints = verdict.get("joints") or []
+            written = (
+                self._guide_writer.write(intent, code, order, joints)
+                if self._guide_writer
+                else plain_guide(order, joints)
+            )
+            frames = self._draw_guide(export_dir, order, verdict.get("releases") or [])
+            _emit_stage(on_progress, "guide", "ok", n)
+            return {**written.as_payload(), "frames": frames}
+        except Exception as exc:  # noqa: BLE001 — a description, never the build
+            logger.warning("assembly guide unavailable, skipping: %s", exc, exc_info=True)
+            _emit_stage(on_progress, "guide", "error", n, f"guide unavailable: {exc}")
+            return None
+
+    @staticmethod
+    def _draw_guide(export_dir, order, releases) -> int:
+        """Write the guide's frames beside the exports; how many were drawn.
+
+        Zero is an ordinary answer: a turn with no export directory, parts in a
+        format the renderer cannot read, or a build whose headings were never
+        measured. The written steps stand on the order alone and go out anyway.
+        """
+        if not export_dir:
+            return 0
+        from cadless.assembly_guide import guide_frames  # noqa: PLC0415
+        from cadless.catalog.thumbnail import load_mesh  # noqa: PLC0415
+
+        directory = Path(export_dir)
+        for stale in directory.glob("guide_f*.png"):
+            # A re-run into the same directory would otherwise leave the previous
+            # build's frames to be registered beside this one's.
+            stale.unlink()
+        meshes = [load_mesh(directory / f"model_p{index}.stl") for index in range(len(order))]
+        drawn = guide_frames(meshes, order, releases)
+        for position, (_, png) in enumerate(drawn):
+            (directory / f"guide_f{position}.png").write_bytes(png)
+        return len(drawn)
 
     def _repair(
         self,

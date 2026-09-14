@@ -19,13 +19,16 @@ _MEDIA = {
     "stl": "model/stl",
     "obj": "model/obj",
     "thumbnail": "image/png",
+    # A drawing of how the parts go together. Served like a thumbnail and, like
+    # one, absent from EXPORTERS: it is not a format the model was exported to.
+    "guide": "image/png",
 }
 
 
 #: Kinds a browser consumes in place rather than saving: the viewport loads a
 #: mesh and an ``<img>`` tag loads a thumbnail. Named here rather than left to
 #: each route, so every route serves a given kind the same way.
-_INLINE = {"glb", "thumbnail"}
+_INLINE = {"glb", "thumbnail", "guide"}
 
 #: The largest value SQLite stores as an integer. Anything above it raises out of
 #: the driver at bind time rather than answering, so it is refused at the edge.

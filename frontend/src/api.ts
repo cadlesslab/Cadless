@@ -87,7 +87,8 @@ export type BlockKind =
   | "tool_result"
   | "clarification"
   | "plan"
-  | "image";
+  | "image"
+  | "guide";
 
 /** One block of a persisted turn — the whole neutral block model rather than the
  * subset this app renders today.

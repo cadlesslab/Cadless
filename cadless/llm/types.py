@@ -30,7 +30,9 @@ Role = Literal["user", "assistant"]
 # differently, so what is neutral here is the payload plus its media type; each
 # adapter shapes those into its own wire form. A model that cannot see is a
 # capability gap rather than an encoding problem — see ``Capabilities`` below.
-BlockKind = Literal["text", "thinking", "tool_use", "tool_result", "clarification", "plan", "image"]
+BlockKind = Literal[
+    "text", "thinking", "tool_use", "tool_result", "clarification", "plan", "image", "guide"
+]
 
 
 class ContentBlock(BaseModel):
@@ -106,6 +108,24 @@ class ContentBlock(BaseModel):
         replayed to a provider as a tool block.
         """
         return cls(kind="plan", input={"steps": steps}, **kw)
+
+    @classmethod
+    def of_guide(
+        cls, *, parts: list[str], steps: list[str], frames: int = 0, **kw: Any
+    ) -> ContentBlock:
+        """A neutral guide block: how the parts of an assembly go together.
+
+        ``parts`` names each piece and ``steps`` says what to do in the order the
+        engine established; ``frames`` is how many drawings were stored beside it,
+        which the reader addresses by index rather than by URL — a URL persisted
+        in a transcript outlives the route that served it.
+
+        Under ``input`` like ``clarification`` and ``plan``, and for the same
+        reason: the field already crosses the wire and is already restored on
+        reload, so a new kind costs the transcript shape nothing. A terminal UI
+        artifact — never replayed to a provider as a tool block.
+        """
+        return cls(kind="guide", input={"parts": parts, "steps": steps, "frames": frames}, **kw)
 
     @classmethod
     def of_image(
