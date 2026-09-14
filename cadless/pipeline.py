@@ -64,8 +64,8 @@ STAGE_PHASES = (
     "mesh",
     "critique",
     "assembly",
-    "guide",
     "assert",
+    "guide",
     "repair",
 )
 
@@ -110,8 +110,8 @@ class GenerationResult:
     #: heading per part -- the way the order search took that part out -- with an
     #: empty entry for the part left standing, which nothing had to be freed from.
     #: Both are indexed like ``order``. Every value here is JSON-safe on purpose:
-    #: the whole dict goes into the summary handed to the model, and a shape
-    #: ``json.dumps`` retypes silently would arrive there as something else.
+    #: this dict is serialised onward whole, and a shape ``json.dumps`` retypes
+    #: silently would arrive on the far side as something else.
     #:
     #: ``measured`` is false when the turn asked but nothing came back — the model
     #: produced a single solid, or the worker could not split the shape. ``ok`` is
@@ -133,9 +133,9 @@ class GenerationResult:
     #: only once the split has been accepted -- a guide to a build about to be
     #: refused describes an assembly nobody receives.
     #:
-    #: ``frames`` counts the drawings stored beside the parts, addressed by index
-    #: on the artifact route. Zero is ordinary rather than a failure: a build
-    #: whose headings were never measured gets its written steps and no pictures.
+    #: ``frames`` counts the drawings stored beside the parts, which a reader
+    #: addresses by index. Zero is ordinary rather than a failure: a build whose
+    #: headings were never measured gets its written steps and no pictures.
     guide: dict | None = None
 
     @property
@@ -636,17 +636,25 @@ class Pipeline:
         would throw away a finished capability over its description.
 
         The drawings are written beside the exports rather than returned, because
-        the pipeline has no store -- what is in the export directory when a build
-        finishes is what gets registered against the version.
+        this has no store of its own to put them in: the export directory is the
+        hand-off, and what it holds when a build finishes is what is taken up.
+        That is also why the sweep below runs before anything else and on every
+        accepted build, rather than where the drawing happens: one directory is
+        made per chat turn and every build in that turn lands in it, so a build
+        that draws nothing would otherwise leave the previous one's frames to be
+        taken up as its own -- describing one model with pictures of another, and
+        filing enough extra rows to have a one-piece result refused a re-run for
+        being in several pieces.
         """
+        _clear_guide_frames(export_dir)
         if not (verdict and verdict.get("ok") and verdict.get("order")):
             return None
         order = verdict["order"]
         if len(order) < 2:
             return None
 
-        _emit_stage(on_progress, "guide", "begin", n)
         try:
+            _emit_stage(on_progress, "guide", "begin", n)
             from cadless.guide_writer import plain_guide  # noqa: PLC0415
 
             joints = verdict.get("joints") or []
@@ -667,22 +675,24 @@ class Pipeline:
     def _draw_guide(export_dir, order, releases) -> int:
         """Write the guide's frames beside the exports; how many were drawn.
 
-        Zero is an ordinary answer: a turn with no export directory, parts in a
-        format the renderer cannot read, or a build whose headings were never
-        measured. The written steps stand on the order alone and go out anyway.
+        Zero is an ordinary answer, and never an error: a turn with no export
+        directory, parts in a format the renderer cannot read, or a build whose
+        headings were never measured. Failing to draw must not take the written
+        steps with it -- they stand on the order alone, which is measured whether
+        or not there is anything to draw from.
         """
         if not export_dir:
             return 0
-        from cadless.assembly_guide import guide_frames  # noqa: PLC0415
-        from cadless.catalog.thumbnail import load_mesh  # noqa: PLC0415
-
         directory = Path(export_dir)
-        for stale in directory.glob("guide_f*.png"):
-            # A re-run into the same directory would otherwise leave the previous
-            # build's frames to be registered beside this one's.
-            stale.unlink()
-        meshes = [load_mesh(directory / f"model_p{index}.stl") for index in range(len(order))]
-        drawn = guide_frames(meshes, order, releases)
+        try:
+            from cadless.assembly_guide import guide_frames  # noqa: PLC0415
+            from cadless.catalog.thumbnail import load_mesh  # noqa: PLC0415
+
+            meshes = [load_mesh(directory / f"model_p{index}.stl") for index in range(len(order))]
+            drawn = guide_frames(meshes, order, releases)
+        except Exception as exc:  # noqa: BLE001 — a picture, never the words
+            logger.warning("assembly guide: drawing failed, keeping the steps: %s", exc)
+            return 0
         for position, (_, png) in enumerate(drawn):
             (directory / f"guide_f{position}.png").write_bytes(png)
         return len(drawn)
@@ -737,6 +747,21 @@ def _signature(res) -> GeometrySignature:
         manifold=res.manifold,
         min_wall_thickness=res.min_wall_thickness,
     )
+
+
+def _clear_guide_frames(export_dir) -> None:
+    """Drop any guide frames already in the export directory.
+
+    Never raises: this runs to keep a later build from taking up an earlier one's
+    pictures, and failing to tidy must not fail the build that is tidying.
+    """
+    if not export_dir:
+        return
+    try:
+        for stale in Path(export_dir).glob("guide_f*.png"):
+            stale.unlink()
+    except OSError as exc:
+        logger.warning("assembly guide: could not clear previous frames: %s", exc)
 
 
 def _emit(on_progress, event: dict) -> None:

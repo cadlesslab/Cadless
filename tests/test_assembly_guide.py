@@ -1,8 +1,8 @@
 """How an assembly is drawn: what moves, how far, and how many frames.
 
 Meshes rather than solids, so none of this needs OCCT. The headings these frames
-are drawn from come from the order search and are tested against real geometry in
-``tests/test_worker.py``.
+are drawn from are measured by the order search against real geometry, and are
+handed in here rather than derived.
 """
 
 import io
@@ -40,16 +40,24 @@ def _cube(centre=(0.0, 0.0, 0.0), side=10.0) -> np.ndarray:
     return np.asarray(tris, dtype=np.float64) + c
 
 
-def _ink_box(png: bytes) -> tuple[int, int]:
-    """The width and height of the drawn pixels in a rendered frame."""
+def _ink_bounds(png: bytes) -> tuple[int, int, int, int]:
+    """The drawn pixels' bounding box as ``(top, left, bottom, right)``."""
     image = Image.open(io.BytesIO(png)).convert("L")
     array = np.asarray(image)
     background = np.bincount(array.reshape(-1)).argmax()
     drawn = np.argwhere(array != background)
     if drawn.size == 0:
-        return (0, 0)
+        return (0, 0, 0, 0)
     lo, hi = drawn.min(axis=0), drawn.max(axis=0)
-    return (int(hi[1] - lo[1]) + 1, int(hi[0] - lo[0]) + 1)
+    return (int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1]))
+
+
+def _ink_box(png: bytes) -> tuple[int, int]:
+    """The width and height of the drawn pixels in a rendered frame."""
+    top, left, bottom, right = _ink_bounds(png)
+    if (top, left, bottom, right) == (0, 0, 0, 0):
+        return (0, 0)
+    return (right - left + 1, bottom - top + 1)
 
 
 # --- what moves -----------------------------------------------------------
@@ -125,11 +133,38 @@ def test_the_frames_share_one_scale_so_a_part_keeps_its_size():
     assert max(first_w, first_h) < 256 * 0.5
 
 
+def test_the_frames_share_one_centre_so_a_part_keeps_its_place():
+    # A shared scale alone is not enough: fitted to its own middle, every frame
+    # re-centres on a subject that is growing, so the part placed first slides
+    # across the canvas as the others arrive. Measured with the scale shared and
+    # the centre not, that slide was 37% of the canvas over four frames -- and
+    # the size check above cannot see it, because the ink stays the same size
+    # while moving.
+    count = STEP_FRAME_MIN_PARTS
+    parts = [_cube((0.0, 0.0, 30.0 * i)) for i in range(count)]
+    releases = [[]] + [[0.0, 0.0, 1.0]] * (count - 1)
+    frames = guide_frames(parts, order=list(range(count)), releases=releases, size=256)
+
+    # The first part is at rest in every frame, so its lowest drawn row is the
+    # same row throughout unless the window moved under it.
+    bottoms = [_ink_bounds(png)[2] for _, png in frames]
+    assert max(bottoms) - min(bottoms) <= 2
+
+
 # --- nothing to draw ------------------------------------------------------
 
 
 def test_a_single_part_is_not_an_assembly_and_gets_no_frames():
     assert guide_frames([_cube()], order=[0], releases=[[]]) == []
+
+
+def test_a_heading_list_shorter_than_the_parts_does_not_raise():
+    # An engine that recorded a heading for some parts and not others: the guide
+    # is worth less than the build, so a short list falls back to "stays put"
+    # rather than taking the whole turn down with an index error.
+    parts = [_cube((0.0, 0.0, 12.0 * i)) for i in range(3)]
+    frames = guide_frames(parts, order=[0, 1, 2], releases=[[0.0, 0.0, 1.0]])
+    assert len(frames) == 1
 
 
 def test_a_build_with_no_measured_heading_draws_nothing():

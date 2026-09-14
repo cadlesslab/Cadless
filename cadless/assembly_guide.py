@@ -2,8 +2,8 @@
 
 The order search establishes a sequence in which the parts can be brought
 together, and the heading it took each one out along. This module turns those
-into pictures. It draws rather than decides: every fact it shows was measured in
-:mod:`cadless.assembly_check`, and nothing here re-derives one.
+into pictures. It draws rather than decides: every fact it shows was measured
+upstream and handed in, and nothing here re-derives one.
 
 An exploded view and a step-by-step sequence are the same drawing. Both move a
 set of parts along their headings and render the result; they differ only in
@@ -11,8 +11,8 @@ which parts are shown and which of those are moved. So there is one composer
 here and a rule that picks how to call it, rather than two renderers that could
 drift apart.
 
-Meshes, not solids: the parts have been exported by the time a guide is drawn,
-so this needs no OCCT and does not pay for it.
+Meshes, not solids: this draws from exported mesh files, so it needs no geometry
+kernel and does not pay for one.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import numpy as np
 from cadless.catalog.thumbnail import (
     DEFAULT_SIZE,
     isometric_basis,
+    projected_centre,
     projected_extent,
     render_bytes,
 )
@@ -31,10 +32,9 @@ from cadless.catalog.thumbnail import (
 #: At or above this many parts, the guide is drawn a step at a time rather than
 #: as one exploded view.
 #:
-#: Below it the step frames are near-duplicates of the exploded one. The model is
-#: asked for the fewest parts that each fit the printer, so two or three is the
-#: ordinary split, and a reader takes the whole of that in at a glance. One place
-#: to change if part counts grow.
+#: Below it a per-step frame adds a picture without adding information: a split
+#: small enough to be taken in at a glance makes every step frame a near-duplicate
+#: of the exploded one. One place to change if part counts grow.
 STEP_FRAME_MIN_PARTS = 4
 
 #: How far a part is pushed out, as a fraction of the whole assembly's largest
@@ -97,11 +97,16 @@ def guide_frames(
         )
         for _, shown, moving in plans
     ]
-    # One extent across the whole set, so a part keeps its size from frame to
-    # frame. Fitted per frame, the first would be filled by the one part in it.
-    extent = max(projected_extent(drawing, basis) for drawing in drawings)
+    # One window across the whole set: the same scale, so a part keeps its size
+    # from frame to frame, and the same centre, so it keeps its place. Measured
+    # with the scale shared and the centre not: over four frames the base slid
+    # 37% of the canvas as the assembly grew around it. Fitted per frame it would
+    # also be blown up to fill the first frame it appears alone in.
+    union = np.concatenate(drawings)
+    extent = projected_extent(union, basis)
+    centre = projected_centre(union, basis)
     return [
-        (name, render_bytes(drawing, size, basis=basis, extent=extent))
+        (name, render_bytes(drawing, size, basis=basis, extent=extent, centre=centre))
         for (name, _, _), drawing in zip(plans, drawings, strict=True)
     ]
 

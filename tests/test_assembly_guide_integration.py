@@ -114,6 +114,26 @@ def test_a_single_part_build_writes_no_guide_and_no_drawings(tmp_path):
     assert list(tmp_path.glob("guide_f*.png")) == []
 
 
+def test_a_later_build_that_draws_nothing_still_clears_the_last_one_s_frames(tmp_path):
+    # The export directory is made once per chat turn and handed to every tool
+    # call in it, so a second build lands in the first one's directory. Where the
+    # second draws no guide -- an edit, or a result that came back in one piece --
+    # a sweep that only runs while drawing never runs, and the first build's
+    # frames are registered against the second version as if they described it.
+    _build(4, tmp_path)
+    assert len(list(tmp_path.glob("guide_f*.png"))) == 4
+
+    pipeline = Pipeline(
+        generator=ScriptedGen("from build123d import *\nresult = Box(20, 20, 10)\n"),
+        config=Settings(),
+    )
+    result = pipeline.run("just a plate", export_dir=str(tmp_path), assembly=SPEC)
+
+    assert result.ok, result.error
+    assert result.guide is None
+    assert list(tmp_path.glob("guide_f*.png")) == []
+
+
 def test_a_rebuild_into_the_same_directory_leaves_no_frame_from_the_last_one(tmp_path):
     # The frames are registered from whatever is in the directory when the build
     # finishes, so a leftover would be filed against this version as if it

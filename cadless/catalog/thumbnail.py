@@ -176,15 +176,34 @@ def projected_extent(tris: np.ndarray, basis: np.ndarray) -> float:
     return float(max((hi - lo).max(), 1e-9))
 
 
-def _rasterize(tris: np.ndarray, size: int, basis: np.ndarray, extent: float) -> Image.Image:
-    """Project, shade and paint the triangles at a caller-chosen scale."""
+def projected_centre(tris: np.ndarray, basis: np.ndarray) -> np.ndarray:
+    """The middle of that bbox, as the screen-space point to centre on."""
+    xy = (tris.reshape(-1, 3) @ basis.T)[:, :2]
+    return (xy.min(axis=0) + xy.max(axis=0)) / 2
+
+
+def _rasterize(
+    tris: np.ndarray,
+    size: int,
+    basis: np.ndarray,
+    extent: float,
+    centre: np.ndarray | None = None,
+) -> Image.Image:
+    """Project, shade and paint the triangles at a caller-chosen scale.
+
+    ``centre`` is the projected point the canvas is centred on. Left unset it is
+    this drawing's own middle, which is right for a set of views of one object.
+    Passing one shared across several drawings is what holds a *changing* subject
+    still: a shared extent alone keeps each part the same size while letting the
+    whole picture slide as the subject grows.
+    """
     view = (tris.reshape(-1, 3) @ basis.T).reshape(-1, 3, 3)
     xy, depth = view[..., :2], view[..., 2].mean(axis=1)
 
     lo, hi = xy.reshape(-1, 2).min(axis=0), xy.reshape(-1, 2).max(axis=0)
     canvas = size * _SUPERSAMPLE
     scale = canvas * (1 - 2 * _MARGIN) / extent
-    screen = (xy - (lo + hi) / 2) * scale
+    screen = (xy - ((lo + hi) / 2 if centre is None else centre)) * scale
     screen[..., 1] *= -1  # image y grows downward
     screen += canvas / 2
 
@@ -228,6 +247,7 @@ def render_bytes(
     *,
     basis: np.ndarray | None = None,
     extent: float | None = None,
+    centre: np.ndarray | None = None,
 ) -> bytes:
     """One orthographic frame as PNG bytes.
 
@@ -240,7 +260,7 @@ def render_bytes(
     basis = isometric_basis() if basis is None else basis
     extent = projected_extent(tris, basis) if extent is None else extent
     buf = io.BytesIO()
-    _rasterize(tris, size, basis, extent).save(buf, format="PNG")
+    _rasterize(tris, size, basis, extent, centre).save(buf, format="PNG")
     return buf.getvalue()
 
 

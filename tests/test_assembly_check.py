@@ -199,6 +199,24 @@ def test_the_joints_and_the_verdict_move_together_when_a_pair_drifts_apart():
     assert not apart.ok
 
 
+def test_each_part_s_neighbours_come_back_in_order():
+    # The guide names a part's neighbours in the order they are listed, so an
+    # unsorted list makes a sentence's wording depend on set iteration. Nine
+    # parts, because that is where the two disagree: a small-int set iterates in
+    # value order until the table grows, so `list({1, 8})` is `[8, 1]` while a
+    # smaller pair would come back sorted either way and prove nothing.
+    ring = _m(
+        part_bboxes=[[10.0, 10.0, 10.0]] * 9,
+        gaps=[[i, i + 1, 0.2] for i in range(8)] + [[0, 8, 0.2]],
+        order=list(range(9)),
+    )
+    report = evaluate_assembly(ring, SPEC)
+
+    assert report.ok
+    assert report.joints is not None
+    assert report.joints[0] == [1, 8]
+
+
 def test_the_joints_survive_the_trip_to_the_model_unchanged():
     # The verdict is handed to the orchestrator as JSON, and json.dumps turns an
     # integer key into a string without saying so. A graph keyed by part index

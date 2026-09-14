@@ -209,6 +209,45 @@ def test_the_order_search_reports_the_axis_each_part_comes_out_along():
         assert release[1] == pytest.approx(0.0, abs=1e-6)
 
 
+def test_the_headings_are_filed_by_part_and_not_by_the_order_they_were_freed_in():
+    # Everything downstream indexes releases by part, and filing them by the
+    # order parts came out instead would still give one entry each, one of them
+    # empty, every heading a real one -- with each part drawn moving the way a
+    # different part moves.
+    #
+    # A stack cannot show that: the search frees the lowest free index first, so
+    # on anything unobstructed the two orders coincide and the mistake is
+    # invisible. Here a peg sits in a blind hole under a lid and cannot move at
+    # all until the block housing it drops away, so the block comes out first and
+    # the orders disagree. The peg then slides out sideways, which is a different
+    # heading from the block's -- filed the other way round, the two swap.
+    res = run_code(
+        "from build123d import *\n"
+        "peg = Pos(0, 0, 5.0) * Box(10, 10, 9.6)\n"
+        "block = Box(40, 40, 20) - Pos(0, 0, 5.5) * Box(10.4, 10.4, 11)\n"
+        "lid = Pos(0, 0, 13.2) * Box(40, 40, 6)\n"
+        "result = peg + block + lid\n",
+        check_assembly=True,
+    )
+    assert res.ok, res.error
+    assert res.assembly is not None
+    order = res.assembly.order
+    assert order is not None
+    boxes = res.assembly.part_bboxes
+    releases = res.assembly.releases
+    assert len(releases) == 3
+
+    # Identified by shape rather than by a fixed index, so the test says what it
+    # means whatever order the solids come back in.
+    peg = min(range(3), key=lambda i: boxes[i][0] * boxes[i][1])
+    block = max(range(3), key=lambda i: boxes[i][2])
+    assert peg != block
+
+    assert releases[block][2] == pytest.approx(-1.0, abs=1e-6)  # drops away downward
+    assert abs(releases[peg][0]) == pytest.approx(1.0, abs=1e-6)  # slides out sideways
+    assert releases[order[0]] == []  # the part left standing carries no heading
+
+
 def test_the_parts_are_measured_after_the_export_scale_is_applied():
     # The summary stays in authoring units while the export is millimetres. The
     # build volume the checks run against is millimetres, so measuring the
