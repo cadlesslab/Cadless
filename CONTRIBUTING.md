@@ -72,6 +72,20 @@ Requires Python ≥ 3.12. The heavy dependency is
 [build123d](https://github.com/gumyr/build123d) (OCCT geometry kernel), which
 installs from wheels.
 
+`make install` resolves inside the version ranges `pyproject.toml` declares, so
+it works on whatever platform you are on. CI and the two Python images install
+something stricter — the exact versions pinned in `constraints.txt`. If you
+change a dependency, regenerate that file in the same commit:
+
+```bash
+make lock           # needs docker; rewrites constraints.txt
+```
+
+It runs inside the images' own base image rather than in your venv, because a
+resolution taken on macOS can name a wheel that has no Linux build, and the
+file would then break the builds it exists to make repeatable. A test fails
+when `constraints.txt` and `pyproject.toml` disagree.
+
 ## Running the tests
 
 ```bash

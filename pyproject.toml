@@ -47,6 +47,10 @@ web = [
 dev = [
     "pytest>=8.0,<10",
     "ruff>=0.6,<0.17",
+    # tests/test_sdk_signature_conformance.py parses the specifiers in this file
+    # against constraints.txt. packaging already arrives under pip, so this
+    # declares what a test imports rather than pulling in anything new.
+    "packaging>=24,<27",
     "fastapi>=0.110,<1",
     "uvicorn>=0.29,<1",
     "aiosqlite>=0.20,<1",
