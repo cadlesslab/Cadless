@@ -79,12 +79,12 @@ of `pipeline.py`):
 
 ```python
 ("interpret", "generate", "refine", "validate", "build", "mesh",
- "critique", "assembly", "assert", "repair")
+ "critique", "assembly", "guide", "assert", "repair")
 ```
 
 The flow reads: `interpret → generate|refine → (validate → build → mesh
-[→ critique] [→ assembly] [→ assert])*` with `repair` between failed
-attempts.
+[→ critique] [→ assembly] [→ assert] [→ guide])*` with `repair` between
+failed attempts.
 
 A phase reaches the progress display only if `STEP_DEFS` in
 `frontend/src/panels/progress.ts` maps it: the lookup there drops an unknown

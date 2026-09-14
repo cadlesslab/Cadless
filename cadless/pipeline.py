@@ -17,7 +17,8 @@ here; the API layer adds ``done``/``error`` when the version is persisted:
                       "attempt": int, "error"?: str}
       the granular lifecycle. ``phase`` is one of ``STAGE_PHASES``:
       interpret -> generate|refine ->
-      (validate -> build -> mesh [-> critique] [-> assembly] [-> assert])*
+      (validate -> build -> mesh [-> critique] [-> assembly] [-> assert]
+       [-> guide])*
       with ``repair`` between failed attempts. ``attempt`` is the 1-based try
       (0 for the pre-loop interpret/generate phases). Meshing happens inside the
       worker alongside ``build``; ``mesh`` is reported ``ok`` once artifacts exist.
