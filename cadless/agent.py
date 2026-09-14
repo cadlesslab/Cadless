@@ -354,6 +354,13 @@ def _result_summary(result: GenerationResult) -> dict:
     the model announces a finished part beside a review saying it is wrong. With
     the words it would instead be handed a vision model's free prose, written
     from a prompt carrying the user's own, as something to act on.
+
+    ``assembly`` carries the geometric verdict on a multi-part build, for the
+    same reason ``critique`` is here: without it the orchestrator announces a set
+    of parts with no idea whether they go together, and it is the only place the
+    assembly order is readable once the loop has finished. It does carry its
+    findings' text, unlike ``critique`` — they are the engine's own sentences
+    about geometry it measured rather than a model's prose.
     """
     return {
         "ok": result.ok,
@@ -362,6 +369,7 @@ def _result_summary(result: GenerationResult) -> dict:
         "attempt_count": result.attempt_count,
         "last_stage": result.last_stage,
         "critique": result.critique,
+        "assembly": result.assembly,
         "metrics": {
             "volume": result.volume,
             "bbox": list(result.bbox) if result.bbox else None,

@@ -16,7 +16,8 @@ here; the API layer adds ``done``/``error`` when the version is persisted:
   {"event": "stage",  "phase": str, "status": "begin"|"ok"|"error",
                       "attempt": int, "error"?: str}
       the granular lifecycle. ``phase`` is one of ``STAGE_PHASES``:
-      interpret -> generate|refine -> (validate -> build -> mesh [-> critique])*
+      interpret -> generate|refine ->
+      (validate -> build -> mesh [-> critique] [-> assembly] [-> assert])*
       with ``repair`` between failed attempts. ``attempt`` is the 1-based try
       (0 for the pre-loop interpret/generate phases). Meshing happens inside the
       worker alongside ``build``; ``mesh`` is reported ``ok`` once artifacts exist.
@@ -35,6 +36,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from cadless.assembly_check import evaluate_assembly
 from cadless.assertions import (
     GeometryAssertions,
     GeometrySignature,
@@ -59,6 +61,7 @@ STAGE_PHASES = (
     "build",
     "mesh",
     "critique",
+    "assembly",
     "assert",
     "repair",
 )
@@ -68,7 +71,7 @@ STAGE_PHASES = (
 class Attempt:
     n: int
     code: str
-    stage: str  # "validate" | "execute"
+    stage: str  # "validate" | "execute" | "critique" | "assembly" | "assert"
     error: str | None  # None == this attempt succeeded
 
 
@@ -95,6 +98,14 @@ class GenerationResult:
     #: written from a prompt holding the user's, and handing that to the
     #: orchestrator as fact is the thing the transcript already refuses to do.
     critique: dict | None = None
+    #: The assembly check of the build this result carries, as
+    #: ``{"ok": bool, "order": list[int] | None, "attempt": int}``, or ``None``
+    #: where the turn did not ask for an assembly or the model produced one part.
+    #: ``order`` is the sequence the parts go together in, which the assembly
+    #: guide states. Unlike :attr:`critique` this may carry its findings' text:
+    #: those are this engine's own sentences about geometry it measured, not a
+    #: vision model's prose written from a prompt holding the user's.
+    assembly: dict | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -226,14 +237,17 @@ class Pipeline:
         _emit_stage(on_progress, mode, "ok", 1)
         last_error = "no attempts ran"
         last_critique: dict | None = None
+        last_assembly: dict | None = None
 
         for n in range(1, max_tries + 1):
             # Cleared here rather than beside the critique, so that every way an
             # attempt can end reaches it — a build that fails to execute never
             # gets as far as a review, and carrying the previous attempt's
             # verdict past it attaches a pass to a build that is not the one
-            # being returned.
+            # being returned. The assembly verdict is cleared here for exactly
+            # the same reason and must stay beside it.
             last_critique = None
+            last_assembly = None
             _emit_stage(on_progress, "validate", "begin", n)
             verdict = validate_code(code)
             if not verdict.ok:
@@ -256,7 +270,13 @@ class Pipeline:
             _emit_stage(on_progress, "validate", "ok", n)
 
             _emit_stage(on_progress, "build", "begin", n)
-            res = run_code(code, export_dir=export_dir, export_scale=export_scale, config=self._cfg)
+            res = run_code(
+                code,
+                export_dir=export_dir,
+                export_scale=export_scale,
+                check_assembly=assembly is not None,
+                config=self._cfg,
+            )
             if res.ok:
                 # VLM critique: a valid solid may still be the wrong shape.
                 #
@@ -295,6 +315,50 @@ class Pipeline:
                             continue
                     else:
                         _emit_stage(on_progress, "critique", "ok", n)
+                # Does the split actually go together? Only on a turn that asked
+                # for an assembly, and only once the model produced more than one
+                # part -- a lone part against the build volume is print_fit's
+                # question, not this one.
+                #
+                # Runs on every attempt including the last, for the reason the
+                # critique does: a `n < max_tries` gate leaves the build actually
+                # delivered as the one nobody checked. Unlike the critique it then
+                # refuses that build rather than handing it over with the finding
+                # attached -- a vision model disagreeing about a shape is an
+                # opinion, whereas two parts occupying the same space is not, and
+                # printing it wastes hours and material.
+                if assembly is not None and res.assembly is not None:
+                    _emit_stage(on_progress, "assembly", "begin", n)
+                    fit = evaluate_assembly(res.assembly, assembly)
+                    last_assembly = {
+                        "ok": fit.ok,
+                        "order": fit.order,
+                        "attempt": n,
+                        "failures": list(fit.failures),
+                        "unchecked": list(fit.unchecked),
+                    }
+                    signal = fit.repair_signal()
+                    if signal is not None:
+                        last_error = "assembly: " + signal
+                        _emit_stage(on_progress, "assembly", "error", n, last_error)
+                        self._record(
+                            attempts, on_progress, Attempt(n, code, "assembly", last_error)
+                        )
+                        if n >= max_tries:
+                            break
+                        code = self._repair(
+                            on_progress,
+                            intent,
+                            code,
+                            last_error,
+                            n,
+                            max_tries,
+                            forced=True,
+                            images=images,
+                            assembly=assembly,
+                        )
+                        continue
+                    _emit_stage(on_progress, "assembly", "ok", n)
                 # Deterministic geometry post-conditions: a failed
                 # assertion is a semantic repair signal via the same channel as the
                 # VLM critique. Optional and additive — only when budget remains and
@@ -337,6 +401,7 @@ class Pipeline:
                     parameters=extract_params(code),
                     attempts=attempts,
                     critique=last_critique,
+                    assembly=last_assembly,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)
@@ -362,6 +427,7 @@ class Pipeline:
             error=last_error,
             attempts=attempts,
             critique=last_critique,
+            assembly=last_assembly,
         )
 
     def run_candidates(

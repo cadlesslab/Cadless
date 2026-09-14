@@ -125,6 +125,8 @@ one silently drops a fifth:
 | Site | What it does |
 | --- | --- |
 | `ExecResult` in `cadless/worker.py` | declares `step_path` / `glb_path` / `stl_path` / `obj_path` — add yours |
+
+The same three places hold for any new *field*, not only a new export kind. `assembly` is the worked example: it is declared on `ExecResult`, read out in **both** `run_code` and `_run_remote`, and mirrored on `GenerationResult`. Two further constraints come with a field the remote path carries — `worker/service.py` returns `asdict(result)` straight to FastAPI, so the value must be a dataclass of JSON primitives or the response 500s; and it is rebuilt key by key rather than with `Type(**payload)`, because an api and a worker on different engine builds disagree about the field set and unpacking turns that into a `TypeError` that fails the whole call.
 | `run_code` and `_run_remote` | copy exactly those keys out of the child's payload |
 | `GenerationResult` in `cadless/pipeline.py` | repeats the same four fields |
 

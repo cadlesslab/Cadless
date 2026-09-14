@@ -35,6 +35,7 @@ Pipeline.run(intent, export_dir=None, on_progress=None, prior_code=None,
 | validate | `validation.py` `validate_code` | The AST static gate — sandbox layer 1 ([ADR-0003](./adr/0003-three-layer-sandbox.md)). No execution happens for code that fails here. |
 | build + mesh | `worker.py` `run_code` | Sandboxed execution and artifact export. Meshing happens inside the worker alongside the build; `mesh` is reported ok once artifacts exist. |
 | critique *(optional)* | `vlm_critique.py` | Renders the exported STL from several named views at one shared scale and asks a vision model, through the `ChatProvider` seam, whether the shape matches the intent; a mismatch forces a repair. Every attempt is reviewed, the last one included — with no budget left the finding is reported and the part is delivered with it attached, so "ran out of budget" is distinguishable from "was never checked". On by default, but only where a critic was injected: a pipeline built without one never critiques, whatever the setting says. The best-of-N fan-out opts out — it has no progress sink, so a candidate's captures would be thrown away as they were produced while the cost multiplied by the candidate count — so a forge turn currently gets no render review at all, and the judge's own vision rung is where that signal belongs once it is wired. A critique that cannot be taken is reported and skipped, never fatal to a build that already succeeded. |
+| assembly *(optional)* | `assembly_check.py` | Whether a multi-part build actually goes together: every part inside the build volume, no two parts sharing interior volume, the parts mating into one connected assembly, and an order in which each can be placed without collision. Only on a turn that asked for an assembly, and only once the model produced more than one part. Runs on **every** attempt including the last, like the critique and unlike `assert` — but where the critique attaches its finding and hands the build over, this one refuses it: two parts in the same space is a measurement, not an opinion. A check that could not be established refuses too, which is the opposite of `assert`'s skip-rather-than-fail policy and is deliberate. The measurement itself happens in the worker child, on the scaled solids, because that is the only place the parts exist. |
 | assert *(optional)* | `assertions.py` | Deterministic geometry post-conditions (`GeometryAssertions`); a failure forces a repair. |
 | repair | `prompts.py` `CodeGenerator.repair` | The error (as a structured `RepairContext` for build failures) goes back to the model with the failing code; the loop retries with the repaired code. |
 
@@ -46,6 +47,8 @@ for n in range(1, max_tries + 1):
     validate → (fail → repair, continue)
     build    → (fail → repair with RepairContext, continue)
     critique → (mismatch → forced repair)      # only when enabled
+    assembly → (fail → forced repair, or refuse on the last attempt)
+                                               # only on an assembly turn
     assert   → (fail → forced repair)          # only when assertions given
     success  → return GenerationResult(ok=True, ...)
 ```
@@ -76,11 +79,18 @@ of `pipeline.py`):
 
 ```python
 ("interpret", "generate", "refine", "validate", "build", "mesh",
- "critique", "assert", "repair")
+ "critique", "assembly", "assert", "repair")
 ```
 
 The flow reads: `interpret → generate|refine → (validate → build → mesh
-[→ critique])*` with `repair` between failed attempts.
+[→ critique] [→ assembly] [→ assert])*` with `repair` between failed
+attempts.
+
+A phase reaches the progress display only if `STEP_DEFS` in
+`frontend/src/panels/progress.ts` maps it: the lookup there drops an unknown
+phase silently, so one added here and not mirrored renders as nothing at all.
+`tests/test_stage_phase_mirror.py` fails when the two sides disagree, and a
+phase deliberately not shown is written down in its `_NOT_DISPLAYED` map.
 
 ## Execution
 
