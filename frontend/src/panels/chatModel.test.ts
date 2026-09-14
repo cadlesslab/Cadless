@@ -159,6 +159,67 @@ describe("messagesFromBlocks", () => {
     ]);
   });
 
+  it("maps a guide block to an assembly guide after the result card", () => {
+    // After, because it describes what the card produced. The plan above leads
+    // the card for the opposite reason: it is what the card was told to do.
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 9,
+        role: "assistant",
+        version_id: 42,
+        blocks: [
+          {
+            kind: "guide",
+            input: {
+              parts: ["base", "arm"],
+              steps: ["Start with base.", "Fit arm to base."],
+              frames: 2,
+            },
+          },
+        ],
+      }),
+    ]);
+    expect(msgs).toEqual([
+      { kind: "result", id: "m9", versionId: 42, ok: true, error: null },
+      {
+        kind: "guide",
+        id: "m9-g",
+        versionId: 42,
+        parts: ["base", "arm"],
+        steps: ["Start with base.", "Fit arm to base."],
+        frames: 2,
+      },
+    ]);
+  });
+
+  it("keeps a guide whose drawings were never made", () => {
+    // A build whose release headings went unmeasured still has an order worth
+    // reading, so the steps must not depend on there being pictures.
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 3,
+        role: "assistant",
+        version_id: null,
+        blocks: [{ kind: "guide", input: { parts: [], steps: ["Start with part 1."] } }],
+      }),
+    ]);
+    expect(msgs).toEqual([
+      { kind: "guide", id: "m3-g", versionId: null, parts: [], steps: ["Start with part 1."], frames: 0 },
+    ]);
+  });
+
+  it("drops a guide block carrying no steps", () => {
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 4,
+        role: "assistant",
+        version_id: null,
+        blocks: [{ kind: "guide", input: { parts: ["base"], steps: [] } }],
+      }),
+    ]);
+    expect(msgs).toEqual([]);
+  });
+
   it("skips empty blocks and tool_use/tool_result blocks", () => {
     const msgs = messagesFromBlocks([
       msg({

@@ -3,7 +3,7 @@
  * thumbnail cache, CodePanel, and the version actions from the History panel. */
 import { useEffect, useRef, useState } from "react";
 
-import { attachmentUrl } from "../api";
+import { attachmentUrl, guideFrameUrl } from "../api";
 import type { ClarificationQuestion, Version } from "../api";
 import { Button, IconButton, CadlessIcon } from "../components";
 import { useStoreSelector } from "../state";
@@ -332,6 +332,48 @@ function PlanList({ steps }: { steps: string[] }) {
   );
 }
 
+/** How a multi-part build goes together: the parts, the steps, and the drawings.
+ *
+ * The steps are an ordered list for the same reason the plan's are — an assembly
+ * order is one. Drawings are fetched by index against the version rather than
+ * from a URL held in the transcript, which would outlive the route that served
+ * it. A guide with none is ordinary: a build whose release headings were never
+ * measured still has an order worth reading. */
+function AssemblyGuide({
+  versionId,
+  parts,
+  steps,
+  frames,
+}: {
+  versionId: number | null;
+  parts: string[];
+  steps: string[];
+  frames: number;
+}) {
+  return (
+    <div className="assembly-guide">
+      {parts.length > 0 && <p className="assembly-guide-parts">Parts: {parts.join(", ")}</p>}
+      <PlanList steps={steps} />
+      {versionId != null && frames > 0 && (
+        <div className="assembly-guide-frames">
+          {Array.from({ length: frames }, (_, frame) => (
+            <img
+              key={frame}
+              src={guideFrameUrl(versionId, frame)}
+              alt={
+                frames === 1
+                  ? "The parts of this model, shown pulled apart"
+                  : `Assembly step ${frame + 1} of ${frames}`
+              }
+              loading="lazy"
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The in-flight `POST /chat` turn: streamed markdown + nested StagedProgress +
  * the settled result card, plus a stopped/error note. */
 function LiveChat({
@@ -479,6 +521,13 @@ export function ChatMessage({
           <Clarification questions={msg.questions} app={app} />
         ) : msg.kind === "plan" ? (
           <PlanList steps={msg.steps} />
+        ) : msg.kind === "guide" ? (
+          <AssemblyGuide
+            versionId={msg.versionId}
+            parts={msg.parts}
+            steps={msg.steps}
+            frames={msg.frames}
+          />
         ) : msg.kind === "result" ? (
           <ResultByVersion
             versionId={msg.versionId}

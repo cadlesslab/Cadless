@@ -27,6 +27,18 @@ export type ChatMessage =
   | { kind: "clarification"; id: string; questions: ClarificationQuestion[] }
   // An ordered plan, rendered as a numbered list ahead of the action card.
   | { kind: "plan"; id: string; steps: string[] }
+  // How a multi-part build goes together, shown after the card that produced it.
+  // `frames` counts the drawings stored against the version rather than naming
+  // them: a URL kept in a transcript outlives the route that served it, so the
+  // reader fetches each by index the way an attachment is fetched.
+  | {
+      kind: "guide";
+      id: string;
+      versionId: number | null;
+      parts: string[];
+      steps: string[];
+      frames: number;
+    }
   // A picture belonging to one turn — a reference the user attached, or a render
   // the critique reviewer was shown. It carries where to ask for the bytes rather
   // than the bytes: the transcript hands back an image block with its `data`
@@ -104,6 +116,19 @@ function stepsFromInput(input: Record<string, unknown> | null | undefined): stri
   return raw.map(String).filter((s) => s.trim());
 }
 
+/** Coerce a persisted guide block's `input` payload into named parts, ordered
+ *. steps, and how many drawings were stored beside them. Tolerant of the loose
+ *. `Record<string, unknown>` shape, like the plan coercer above. */
+function guideFromInput(input: Record<string, unknown> | null | undefined) {
+  const rawParts = input?.parts;
+  const frames = input?.frames;
+  return {
+    parts: Array.isArray(rawParts) ? rawParts.map(String).filter((p) => p.trim()) : [],
+    steps: stepsFromInput(input),
+    frames: typeof frames === "number" && frames > 0 ? Math.floor(frames) : 0,
+  };
+}
+
 /** Map a block-based transcript (`GET /projects/{id}/messages`) to chat messages.
  * `text` blocks become markdown turns; an `image` block becomes a picture to
  * fetch; an assistant message that produced a version becomes a result card.
@@ -164,6 +189,13 @@ export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
         ok: m.status !== "error",
         error: m.error,
       });
+    }
+    // After the card, because it describes what the card produced.
+    const guideBlock = m.blocks.find((b) => b.kind === "guide");
+    if (guideBlock) {
+      const guide = guideFromInput(guideBlock.input);
+      if (guide.steps.length)
+        out.push({ kind: "guide", id: `${id}-g`, versionId: m.version_id, ...guide });
     }
   }
   return out;
