@@ -12,6 +12,7 @@ from cadless.assembly_check import (
     AssemblyMeasurements,
     AssemblyReport,
     evaluate_assembly,
+    mating_tolerance,
 )
 from cadless.printer_profile import AssemblySpec, BuildVolume
 
@@ -167,6 +168,41 @@ def test_a_joint_sitting_at_exactly_the_clearance_is_mated():
 def test_a_pair_missing_from_the_gap_table_is_treated_as_not_mated():
     report = evaluate_assembly(_m(gaps=[]), SPEC)
     assert not report.ok
+
+
+def test_the_report_carries_the_joint_graph_it_judged_connectivity_from():
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 3,
+            gaps=[[0, 1, 0.2], [1, 2, 0.2], [0, 2, 60.0]],
+            order=[0, 1, 2],
+        ),
+        SPEC,
+    )
+    assert report.ok
+    assert report.joints == {0: [1], 1: [0, 2], 2: [1]}
+
+
+def test_the_joints_and_the_verdict_move_together_when_a_pair_drifts_apart():
+    # The guide states which parts join which, and the refusal states that a part
+    # joins nothing. Both must read one answer: if widening the gap removed the
+    # edge without producing the failure, or the reverse, the two have drifted.
+    far = mating_tolerance(SPEC.clearance_mm) * 2
+    joined = evaluate_assembly(_m(gaps=[[0, 1, SPEC.clearance_mm]]), SPEC)
+    apart = evaluate_assembly(_m(gaps=[[0, 1, far]]), SPEC)
+
+    assert joined.joints == {0: [1], 1: [0]}
+    assert joined.ok
+    assert apart.joints == {0: [], 1: []}
+    assert not apart.ok
+
+
+def test_a_single_part_has_no_joint_graph():
+    # Fewer than two parts leaves the evaluation before any check runs, so there
+    # is no graph -- which is not the same as an assembly whose parts turned out
+    # to touch nothing, and that one reports an empty edge list per part.
+    report = evaluate_assembly(_m(part_bboxes=[[10.0, 10.0, 10.0]], gaps=[], order=[0]), SPEC)
+    assert report.joints is None
 
 
 # --- an assembly order exists ---------------------------------------------

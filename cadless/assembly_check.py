@@ -115,6 +115,11 @@ class AssemblyReport:
     failures: list[str] = field(default_factory=list)
     unchecked: list[str] = field(default_factory=list)
     order: list[int] | None = None
+    #: Which parts were found joined to which, part index to sorted part indices.
+    #: ``None`` where mating was never checked -- fewer than two parts, or nothing
+    #: measured -- which is not the same as a build whose parts turned out to
+    #: touch nothing, and that one carries an empty list per part.
+    joints: dict[int, list[int]] | None = None
 
     @property
     def ok(self) -> bool:
@@ -211,25 +216,45 @@ def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport) -> None:
             )
 
 
-def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport) -> None:
-    count = len(m.part_bboxes)
-    tolerance = mating_tolerance(spec.clearance_mm)
-    neighbours: dict[int, set[int]] = {index: set() for index in range(count)}
-    for entry in m.gaps:
+def mating_graph(
+    gaps: list[list[float]], part_count: int, tolerance: float
+) -> tuple[dict[int, set[int]], list[str]]:
+    """Which parts sit close enough to count as joined, and what could not be read.
+
+    One derivation with two readers. Connectivity is ruled on this graph, and so
+    is anything that goes on to describe the joints; deriving it twice would let a
+    description name a joint the same build was refused for not having.
+
+    The unreadable entries come back rather than being judged here, because what
+    an unreadable gap means -- refuse, or pass over -- is the caller's policy and
+    not a property of reading the table.
+    """
+    neighbours: dict[int, set[int]] = {index: set() for index in range(part_count)}
+    problems: list[str] = []
+    for entry in gaps:
         pair = _pair(entry)
         if pair is None:
-            report.unchecked.append(f"gap between two parts: unreadable entry {entry!r}")
+            problems.append(f"gap between two parts: unreadable entry {entry!r}")
             continue
         first, second, distance = pair
-        if not (0 <= first < count and 0 <= second < count):
+        if not (0 <= first < part_count and 0 <= second < part_count):
             # The gaps table disagrees with the part list, which is the same
             # corruption the unreadable case refuses. Ignoring it would let a
             # short table read as a fully measured one.
-            report.unchecked.append(f"gap entry {entry!r} names a part that does not exist")
+            problems.append(f"gap entry {entry!r} names a part that does not exist")
             continue
         if distance <= tolerance:
             neighbours[first].add(second)
             neighbours[second].add(first)
+    return neighbours, problems
+
+
+def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport) -> None:
+    count = len(m.part_bboxes)
+    tolerance = mating_tolerance(spec.clearance_mm)
+    neighbours, problems = mating_graph(m.gaps, count, tolerance)
+    report.unchecked.extend(problems)
+    report.joints = {index: sorted(edges) for index, edges in neighbours.items()}
 
     groups = _groups(neighbours, count)
     if len(groups) == 1:
