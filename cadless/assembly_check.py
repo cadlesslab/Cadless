@@ -285,3 +285,278 @@ def _size(size: tuple[float, float, float]) -> str:
 def _size1(value: float) -> str:
     """A measurement for a sentence, rounded past the geometry's own noise."""
     return f"{round(value, 1):g}"
+
+
+# --- measurement ----------------------------------------------------------
+#
+# Everything below runs where the solids are live, inside the worker child.
+# ``build123d`` is imported inside the functions rather than at module scope, so
+# importing this module for its policy half costs nothing and pulls in no kernel.
+
+#: The six axis directions every part is tried along first.
+#:
+#: The model is asked to sweep each joint profile along an axis lying in the build
+#: plane, so a correct interlock comes apart along one of these. They are not
+#: relied on alone -- :func:`_candidate_directions` adds directions derived from
+#: the geometry, because a candidate that turns out to be blocked costs one probe
+#: while a missing one costs a false refusal.
+_AXES = (
+    (1.0, 0.0, 0.0),
+    (-1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+    (0.0, -1.0, 0.0),
+    (0.0, 0.0, 1.0),
+    (0.0, 0.0, -1.0),
+)
+
+#: How many solid-to-solid collision probes the order search may spend.
+#:
+#: The executor's wall clock covers the build, this measurement and the export
+#: together, and a blown clock returns no summary at all rather than a partial
+#: one -- so the search needs a bound of its own rather than borrowing that one.
+#: Sized from the measured cost of a probe so a pathological part count spends a
+#: fraction of the wall budget rather than all of it. Running out is reported as
+#: an unestablished check, never as a pass: a search that stopped early has not
+#: shown there is no order.
+ORDER_PROBE_BUDGET = 20_000
+
+#: Fraction of the thinnest part dimension used as the travel step.
+#:
+#: A step larger than a part can step straight over it: the moved solid is clear
+#: on both sides of a thin wall and the collision is never seen, which reports a
+#: walled-in part as free. Halving the thinnest dimension puts at least one
+#: sample inside anything that could block.
+_STEP_FRACTION = 0.5
+
+
+def measure_assembly(parts, probe_budget: int = ORDER_PROBE_BUDGET) -> AssemblyMeasurements:
+    """Measure the relations between ``parts``, which must already be in millimetres.
+
+    The scaled solids, not the authoring-unit ones: the build volume this is
+    checked against is in millimetres, and measuring the unscaled result would
+    silently compare the two.
+    """
+    boxes = [_extent(part) for part in parts]
+    unchecked: list[str] = []
+    overlaps: list[list[float]] = []
+    gaps: list[list[float]] = []
+
+    for first in range(len(parts)):
+        for second in range(first + 1, len(parts)):
+            shared = _shared_volume(parts[first], parts[second])
+            if shared is None:
+                unchecked.append(
+                    f"shared volume between {_label(first)} and {_label(second)}: "
+                    "the intersection could not be computed"
+                )
+            elif shared > 0.0:
+                overlaps.append([first, second, shared])
+
+            distance = _distance(parts[first], parts[second])
+            if distance is None:
+                unchecked.append(
+                    f"gap between {_label(first)} and {_label(second)}: "
+                    "the distance could not be computed"
+                )
+            else:
+                gaps.append([first, second, distance])
+
+    order, trapped, order_unchecked = _disassembly_order(parts, probe_budget)
+    unchecked.extend(order_unchecked)
+    return AssemblyMeasurements(
+        part_bboxes=boxes,
+        overlaps=overlaps,
+        gaps=gaps,
+        order=order,
+        trapped=trapped,
+        unchecked=unchecked,
+    )
+
+
+def _extent(part) -> list[float]:
+    size = part.bounding_box().size
+    return [float(size.X), float(size.Y), float(size.Z)]
+
+
+def _shared_volume(first, second) -> float | None:
+    """The interior volume two parts share; ``0.0`` when they only touch.
+
+    ``intersect`` rather than ``&``, which raises on an empty result where this
+    answers ``None``.
+
+    What excludes a touching pair is summing the *solids* of the intersection:
+    two parts meeting at a face intersect in a face, which contributes no solid
+    and so no volume. ``include_touched=False`` says the same thing to the kernel
+    and is kept for that, but the sum is what the answer rests on -- flipping the
+    flag alone does not change it.
+    """
+    try:
+        shared = first.intersect(second, include_touched=False)
+    except Exception:  # noqa: BLE001 - an unrunnable probe is reported, never assumed away
+        return None
+    if shared is None:
+        return 0.0
+    try:
+        return float(sum(solid.volume for solid in shared.solids()))
+    except Exception:  # noqa: BLE001 - same: report rather than guess
+        return None
+
+
+def _distance(first, second) -> float | None:
+    try:
+        return float(first.distance_to(second))
+    except Exception:  # noqa: BLE001 - same: report rather than guess
+        return None
+
+
+def _disassembly_order(parts, probe_budget: int):
+    """An order in which the parts can be assembled, or why there is none.
+
+    Found by taking the assembly apart: repeatedly free a part that can be
+    translated clear of the rest, then reverse what that produced. An order found
+    this way is one that works, because every move was checked against the solids
+    rather than inferred. The converse does not hold -- a split that only comes
+    apart along a curve, or by moving two parts at once, is refused here. That
+    costs a repair attempt, and it is the price of an answer that is never wrong
+    when it says yes.
+    """
+    if len(parts) < 2:
+        return list(range(len(parts))), [], []
+
+    spheres = [_sphere(part) for part in parts]
+    step = _step(parts)
+    if step is None:
+        return None, [], ["assembly order: a part has no measurable size"]
+
+    budget = _Budget(probe_budget)
+    remaining = list(range(len(parts)))
+    removed: list[int] = []
+    while remaining:
+        freed = None
+        for index in remaining:
+            others = [other for other in remaining if other != index]
+            try:
+                if _can_be_freed(parts, spheres, index, others, step, budget):
+                    freed = index
+                    break
+            except _BudgetSpent:
+                return (
+                    None,
+                    [],
+                    ["assembly order: the search ran out of collision probes before it could rule"],
+                )
+        if freed is None:
+            return None, sorted(remaining), []
+        remaining.remove(freed)
+        removed.append(freed)
+    # Removing in this order works, so assembling in the reverse of it does.
+    return list(reversed(removed)), [], []
+
+
+def _can_be_freed(parts, spheres, index, others, step, budget) -> bool:
+    for direction in _candidate_directions(spheres, index, others):
+        if not _blocked_along(parts, spheres, index, others, direction, step, budget):
+            return True
+    return False
+
+
+def _blocked_along(parts, spheres, index, others, direction, step, budget) -> bool:
+    part = parts[index]
+    centre, radius = spheres[index]
+    for other in others:
+        other_centre, other_radius = spheres[other]
+        window = _travel_window(centre, radius, other_centre, other_radius, direction)
+        if window is None:
+            # Their bounding spheres cannot meet along this direction, so the
+            # solids cannot either. Skipping is exact, not an approximation.
+            continue
+        start, stop = window
+        position = start
+        while position <= stop:
+            budget.spend()
+            if _meets(part, parts[other], direction, position):
+                return True
+            position += step
+    return False
+
+
+def _travel_window(centre, radius, other_centre, other_radius, direction):
+    """The distances along ``direction`` where two bounding spheres could meet."""
+    from build123d import Vector
+
+    delta = Vector(*other_centre) - Vector(*centre)
+    heading = Vector(*direction)
+    along = delta.dot(heading)
+    reach = radius + other_radius
+    perpendicular = (delta - heading * along).length
+    if perpendicular > reach:
+        return None
+    half = (reach**2 - perpendicular**2) ** 0.5
+    stop = along + half
+    if stop <= 0.0:
+        return None
+    return max(0.0, along - half), stop
+
+
+def _meets(part, other, direction, distance) -> bool:
+    from build123d import Location, Vector
+
+    moved = part.moved(Location(Vector(*direction) * distance))
+    shared = _shared_volume(moved, other)
+    # An unrunnable probe must not read as "clear" -- that would free a part the
+    # search could not actually check, and hand back an order that does not work.
+    return shared is None or shared > OVERLAP_EPSILON_MM3
+
+
+def _candidate_directions(spheres, index, others):
+    """The six axes, plus a direction leading away from each remaining part.
+
+    The geometry-derived ones cover a joint whose slide axis is not aligned to an
+    axis. Adding a candidate can only remove a false refusal, never create a false
+    pass: every direction offered is still checked against the solids, so one that
+    is not really free is rejected on the probe.
+    """
+    from build123d import Vector
+
+    directions = [Vector(*axis) for axis in _AXES]
+    centre = Vector(*spheres[index][0])
+    for other in others:
+        away = centre - Vector(*spheres[other][0])
+        if away.length > 1e-9:
+            directions.append(away.normalized())
+    return directions
+
+
+def _sphere(part):
+    """A part's bounding-sphere centre and radius, for the cheap pruning test."""
+    box = part.bounding_box()
+    centre = box.center()
+    size = box.size
+    radius = 0.5 * (size.X**2 + size.Y**2 + size.Z**2) ** 0.5
+    return (float(centre.X), float(centre.Y), float(centre.Z)), float(radius)
+
+
+def _step(parts) -> float | None:
+    thinnest = None
+    for part in parts:
+        size = part.bounding_box().size
+        smallest = min(float(size.X), float(size.Y), float(size.Z))
+        if thinnest is None or smallest < thinnest:
+            thinnest = smallest
+    if thinnest is None or thinnest <= 0.0:
+        return None
+    return thinnest * _STEP_FRACTION
+
+
+class _BudgetSpent(Exception):
+    """Raised when the order search has used every probe it was allowed."""
+
+
+class _Budget:
+    def __init__(self, allowance: int) -> None:
+        self._left = allowance
+
+    def spend(self) -> None:
+        if self._left <= 0:
+            raise _BudgetSpent
+        self._left -= 1

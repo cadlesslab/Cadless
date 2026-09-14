@@ -24,6 +24,7 @@ class RunRequest(BaseModel):
     code: str
     export_dir: str | None = None
     export_scale: float = 1.0  # authoring units -> mm, applied to exports only
+    check_assembly: bool = False  # measure how a multi-part result's parts relate
     timeout: float | None = None
 
 
@@ -40,6 +41,10 @@ def run(req: RunRequest) -> dict:
     if req.timeout:
         cfg = cfg.model_copy(update={"exec_timeout_secs": req.timeout})
     result = run_code(
-        req.code, export_dir=req.export_dir, export_scale=req.export_scale, config=cfg
+        req.code,
+        export_dir=req.export_dir,
+        export_scale=req.export_scale,
+        check_assembly=req.check_assembly,
+        config=cfg,
     )
     return asdict(result)

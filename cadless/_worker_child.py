@@ -7,6 +7,7 @@ free apart from the optional export — which writes one file per solid and firs
 removes what an earlier build left of that kind in the same directory.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
+     [<check_assembly>]
 """
 
 from __future__ import annotations
@@ -138,6 +139,10 @@ def main(argv: list[str]) -> int:
     # Authoring-units -> mm factor applied to *exports only* (issue #18/#20);
     # the geometry summary always stays in the script's authoring units.
     export_scale = float(argv[3]) if len(argv) > 3 and argv[3] else 1.0
+    # Off unless the turn asked for an assembly. A multi-solid result is not by
+    # itself an assembly, and measuring the relations between parts nobody will
+    # read costs the same wall clock the build is running on.
+    check_assembly = bool(len(argv) > 4 and argv[4])
     code = open(code_file).read()  # noqa: S108,SIM115 - trusted path from parent
 
     ns: dict = {}
@@ -160,11 +165,21 @@ def main(argv: list[str]) -> int:
                 + json.dumps({"ok": False, "error": "degenerate solid (volume <= 0)"})
             )
             return 1
+        # Scaled once, above both readers. The export writes millimetres and the
+        # assembly checks are against a build volume in millimetres, so measuring
+        # the unscaled result would compare authoring units to millimetres and
+        # never refuse a model authored in metres.
+        shape = result if export_scale == 1.0 else result.scale(export_scale)
+        parts = _parts_to_export(shape)
+        if check_assembly and len(parts) > 1:
+            from dataclasses import asdict  # noqa: PLC0415 - lazy, as the exporters are
+
+            from cadless.assembly_check import measure_assembly  # noqa: PLC0415
+
+            summary["assembly"] = asdict(measure_assembly(parts))
         if export_dir:
             from cadless import exporters  # lazy: only when export requested
 
-            shape = result if export_scale == 1.0 else result.scale(export_scale)
-            parts = _parts_to_export(shape)
             for kind, export in exporters.EXPORTERS.items():
                 _clear_previous(export_dir, kind)
                 paths = [
