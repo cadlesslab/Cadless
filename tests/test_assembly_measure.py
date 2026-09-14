@@ -4,6 +4,8 @@ The policy that reads these numbers is tested in ``tests/test_assembly_check.py`
 against synthetic values; here the numbers themselves come from real solids.
 """
 
+from types import SimpleNamespace
+
 import pytest
 from build123d import Box, Pos, Rot
 
@@ -175,6 +177,57 @@ def test_a_joint_whose_only_exit_is_not_an_axis_still_has_an_order():
 # --- failing closed -------------------------------------------------------
 
 
+class _Awkward:
+    """A part whose kernel operations raise, as a degenerate solid's can.
+
+    Real enough for the measurement to get as far as calling them: it answers a
+    bounding box and moves, and fails at exactly the two probes that matter.
+    """
+
+    def __init__(self, size=(10.0, 10.0, 10.0), centre=(0.0, 0.0, 0.0)):
+        self._size = SimpleNamespace(X=size[0], Y=size[1], Z=size[2])
+        self._centre = SimpleNamespace(X=centre[0], Y=centre[1], Z=centre[2])
+
+    def bounding_box(self):
+        return SimpleNamespace(size=self._size, center=lambda: self._centre)
+
+    def intersect(self, other, include_touched=False):
+        raise RuntimeError("OCCT boolean failed")
+
+    def distance_to(self, other):
+        raise RuntimeError("OCCT distance failed")
+
+    def moved(self, location):
+        return self
+
+
+def test_an_overlap_probe_the_kernel_refuses_is_reported_not_assumed_away():
+    m = measure_assembly([_Awkward(), _Awkward(centre=(30.0, 0.0, 0.0))])
+    assert any("shared volume" in reason for reason in m.unchecked)
+
+
+def test_a_distance_probe_the_kernel_refuses_is_reported_not_assumed_away():
+    m = measure_assembly([_Awkward(), _Awkward(centre=(30.0, 0.0, 0.0))])
+    assert any("gap" in reason for reason in m.unchecked)
+    assert m.gaps == []
+
+
+def test_a_part_with_no_measurable_size_stops_the_order_search():
+    m = measure_assembly([_Awkward(size=(0.0, 10.0, 10.0)), _Awkward(centre=(30.0, 0.0, 0.0))])
+    assert m.order is None
+    assert any("no measurable size" in reason for reason in m.unchecked)
+
+
+def test_parts_that_cannot_meet_along_a_direction_are_not_stepped_through():
+    # Their bounding spheres miss each other entirely perpendicular to every
+    # travel direction, so the search skips straight past without probing. The
+    # skip is exact rather than an approximation, which is why it is allowed to
+    # short-circuit at all.
+    m = measure_assembly([Box(10, 10, 10), Pos(0, 500, 0) * Box(10, 10, 10)])
+    assert m.order is not None
+    assert m.trapped == []
+
+
 def test_a_collision_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
     # A probe the kernel could not answer must not read as "nothing in the way":
     # that frees a part on no evidence and hands back an order that may not work.
@@ -186,18 +239,36 @@ def test_a_collision_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch
     assert m.trapped == [0, 1]
 
 
-def test_a_spent_probe_budget_is_reported_rather_than_guessed():
+def test_a_budget_spent_on_the_pairwise_phase_is_reported():
+    # One budget covers the whole measurement, so a tiny one runs out on the very
+    # first pair -- before the order search is ever reached.
     m = measure_assembly(_caged(), probe_budget=1)
     assert m.order is None
-    assert m.unchecked
+    assert any("pairs" in reason for reason in m.unchecked)
+
+
+def test_a_budget_spent_on_the_order_search_is_reported_as_that():
+    # Enough for every pair of the seven-part fixture but not for the search.
+    pairs = 7 * 6 // 2
+    m = measure_assembly(_caged(), probe_budget=pairs + 2)
+    assert m.order is None
     assert any("order" in reason for reason in m.unchecked)
 
 
 def test_a_spent_budget_does_not_masquerade_as_a_trapped_part():
-    # "We ran out of probes" and "this part is walled in" are different answers
+    # "We ran out of budget" and "this part is walled in" are different answers
     # and the policy layer reports them differently, so they must not be conflated.
-    m = measure_assembly(_caged(), probe_budget=1)
-    assert m.trapped == []
+    assert measure_assembly(_caged(), probe_budget=1).trapped == []
+    assert measure_assembly(_caged(), probe_budget=7 * 6 // 2 + 2).trapped == []
+
+
+def test_a_spent_time_budget_stops_the_measurement():
+    # The probe count bounds how many kernel calls run; the clock bounds how long
+    # they take. A pathological solid can make one call slow, which counting
+    # alone would never notice.
+    m = measure_assembly(_caged(), time_budget=0.0)
+    assert m.order is None
+    assert m.unchecked
 
 
 # --- degenerate inputs ----------------------------------------------------

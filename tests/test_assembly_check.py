@@ -247,6 +247,34 @@ def test_report_defaults_are_a_passing_report():
     assert AssemblyReport().ok
 
 
+# --- entries that cannot be read ------------------------------------------
+
+
+def test_an_unreadable_overlap_entry_refuses_rather_than_being_skipped():
+    report = evaluate_assembly(_m(overlaps=[["first", 1, 5.0]]), SPEC)
+    assert not report.ok
+    assert any("overlap" in reason for reason in report.unchecked)
+
+
+def test_an_unreadable_gap_entry_refuses_rather_than_being_skipped():
+    report = evaluate_assembly(_m(gaps=[[0, 1, 0.2], [0, "second", 1.0]]), SPEC)
+    assert not report.ok
+    assert any("gap" in reason for reason in report.unchecked)
+
+
+def test_a_short_pair_entry_is_unreadable_too():
+    report = evaluate_assembly(_m(overlaps=[[0, 1]]), SPEC)
+    assert not report.ok
+    assert report.unchecked
+
+
+def test_a_gap_naming_a_part_that_does_not_exist_is_ignored():
+    # Out of range rather than unreadable: the entry parses, it just refers to
+    # nothing. It must not widen the graph, and it must not crash.
+    report = evaluate_assembly(_m(gaps=[[0, 1, 0.2], [0, 99, 0.2]]), SPEC)
+    assert report.ok
+
+
 # --- the coupling this module's guard exists for --------------------------
 
 

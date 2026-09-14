@@ -31,6 +31,7 @@ not be checked".
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from cadless.print_fit import _dimensions, too_big_for
@@ -314,11 +315,25 @@ _AXES = (
 #: The executor's wall clock covers the build, this measurement and the export
 #: together, and a blown clock returns no summary at all rather than a partial
 #: one -- so the search needs a bound of its own rather than borrowing that one.
-#: Sized from the measured cost of a probe so a pathological part count spends a
-#: fraction of the wall budget rather than all of it. Running out is reported as
-#: an unestablished check, never as a pass: a search that stopped early has not
-#: shown there is no order.
+#: Sized from the measured cost of a probe. It bounds the *number* of kernel
+#: calls and nothing else -- ``MEASUREMENT_TIME_BUDGET_SECONDS`` beside it is
+#: what bounds their duration. Running out is reported as an unestablished
+#: check, never as a pass: work that stopped early has shown nothing.
+#:
+#: One budget covers the whole measurement, the pairwise comparisons included.
+#: Bounding only the order search left the O(n^2) phase ahead of it free to
+#: spend the executor's entire wall clock on a model with very many parts.
 ORDER_PROBE_BUDGET = 20_000
+
+#: How long the whole measurement may spend, in seconds.
+#:
+#: A second bound beside the probe count, because the two fail differently.
+#: The count stops a model that produced very many parts; the clock stops a
+#: single part whose topology makes one boolean operation take seconds.
+#: Counting alone rests on probes costing roughly the same, which a
+#: pathological solid disproves -- and the executor returns no summary at all
+#: when its own wall clock runs out, so this has to stop first to say anything.
+MEASUREMENT_TIME_BUDGET_SECONDS = 10.0
 
 #: Fraction of the thinnest part dimension used as the travel step.
 #:
@@ -329,7 +344,11 @@ ORDER_PROBE_BUDGET = 20_000
 _STEP_FRACTION = 0.5
 
 
-def measure_assembly(parts, probe_budget: int = ORDER_PROBE_BUDGET) -> AssemblyMeasurements:
+def measure_assembly(
+    parts,
+    probe_budget: int = ORDER_PROBE_BUDGET,
+    time_budget: float = MEASUREMENT_TIME_BUDGET_SECONDS,
+) -> AssemblyMeasurements:
     """Measure the relations between ``parts``, which must already be in millimetres.
 
     The scaled solids, not the authoring-unit ones: the build volume this is
@@ -340,9 +359,26 @@ def measure_assembly(parts, probe_budget: int = ORDER_PROBE_BUDGET) -> AssemblyM
     unchecked: list[str] = []
     overlaps: list[list[float]] = []
     gaps: list[list[float]] = []
+    budget = _Budget(probe_budget, time_budget)
 
     for first in range(len(parts)):
         for second in range(first + 1, len(parts)):
+            try:
+                budget.spend()
+            except _BudgetSpent:
+                unchecked.append(
+                    "overlap and gap between every pair: the measurement ran out of "
+                    f"budget after {len(gaps)} of "
+                    f"{len(parts) * (len(parts) - 1) // 2} pairs"
+                )
+                return AssemblyMeasurements(
+                    part_bboxes=boxes,
+                    overlaps=overlaps,
+                    gaps=gaps,
+                    order=None,
+                    trapped=[],
+                    unchecked=unchecked,
+                )
             shared = _shared_volume(parts[first], parts[second])
             if shared is None:
                 unchecked.append(
@@ -361,7 +397,7 @@ def measure_assembly(parts, probe_budget: int = ORDER_PROBE_BUDGET) -> AssemblyM
             else:
                 gaps.append([first, second, distance])
 
-    order, trapped, order_unchecked = _disassembly_order(parts, probe_budget)
+    order, trapped, order_unchecked = _disassembly_order(parts, budget)
     unchecked.extend(order_unchecked)
     return AssemblyMeasurements(
         part_bboxes=boxes,
@@ -409,7 +445,7 @@ def _distance(first, second) -> float | None:
         return None
 
 
-def _disassembly_order(parts, probe_budget: int):
+def _disassembly_order(parts, budget):
     """An order in which the parts can be assembled, or why there is none.
 
     Found by taking the assembly apart: repeatedly free a part that can be
@@ -428,7 +464,6 @@ def _disassembly_order(parts, probe_budget: int):
     if step is None:
         return None, [], ["assembly order: a part has no measurable size"]
 
-    budget = _Budget(probe_budget)
     remaining = list(range(len(parts)))
     removed: list[int] = []
     while remaining:
@@ -553,10 +588,18 @@ class _BudgetSpent(Exception):
 
 
 class _Budget:
-    def __init__(self, allowance: int) -> None:
-        self._left = allowance
+    """How much kernel work the measurement may still do.
+
+    Bounded two ways at once; see the two module constants for why one is not
+    enough. Checked before each probe rather than after, so an exhausted budget
+    costs nothing further.
+    """
+
+    def __init__(self, probes: int, seconds: float) -> None:
+        self._left = probes
+        self._deadline = time.monotonic() + seconds
 
     def spend(self) -> None:
-        if self._left <= 0:
+        if self._left <= 0 or time.monotonic() >= self._deadline:
             raise _BudgetSpent
         self._left -= 1
