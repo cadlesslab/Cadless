@@ -12,11 +12,25 @@ share lives in :mod:`cadless.exporters`, next to the writer.
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
 from cadless.exporters import EXPORTERS, part_index
 from cadless.scoped_store import AnyStore
+
+#: The kind guide frames are filed under. Deliberately **not** an ``EXPORTERS``
+#: member: a guide is not a format the model was exported to, and adding it there
+#: would put it through :func:`exported_parts`, whose ``model_p*`` naming is a
+#: per-part contract a guide does not meet -- so the frames would be written and
+#: then silently not found. It reaches a reader by a media type on the download
+#: route and nothing else.
+GUIDE_KIND = "guide"
+
+#: ``guide_f0.png``, ``guide_f1.png``. Numbered like the parts and parsed the same
+#: way, for the same reason: the order these are read in is the ordinal each is
+#: filed under, and a lexicographic sort would file frame ten as frame one.
+_GUIDE_STEM = re.compile(r"^guide_f(\d+)$")
 
 
 def exported_parts(src_dir: Path, kind: str) -> list[Path]:
@@ -45,6 +59,16 @@ def exported_parts(src_dir: Path, kind: str) -> list[Path]:
     return [path for _, path in sorted(numbered)]
 
 
+def guide_frames(src_dir: Path) -> list[Path]:
+    """Every guide frame this build drew, in frame order."""
+    numbered: list[tuple[int, Path]] = []
+    for path in Path(src_dir).glob("guide_f*.png"):
+        found = _GUIDE_STEM.match(path.stem)
+        if found is not None:
+            numbered.append((int(found.group(1)), path))
+    return [path for _, path in sorted(numbered)]
+
+
 async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Path) -> int:
     """Copy every exported part in, register each, and return how many were written.
 
@@ -68,4 +92,13 @@ async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Pat
             shutil.copy(path, target)
             await store.add_artifact(version_id, kind, str(target))
             written += 1
+    # The guide's frames go through the same funnel, for the reason the funnel
+    # exists: their ordinals are assigned by the order they are written in, and a
+    # second call site deciding that order is how a frame ends up filed under a
+    # number its name does not match.
+    for path in guide_frames(src):
+        target = dest / path.name
+        shutil.copy(path, target)
+        await store.add_artifact(version_id, GUIDE_KIND, str(target))
+        written += 1
     return written

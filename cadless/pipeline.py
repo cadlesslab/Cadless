@@ -17,7 +17,8 @@ here; the API layer adds ``done``/``error`` when the version is persisted:
                       "attempt": int, "error"?: str}
       the granular lifecycle. ``phase`` is one of ``STAGE_PHASES``:
       interpret -> generate|refine ->
-      (validate -> build -> mesh [-> critique] [-> assembly] [-> assert])*
+      (validate -> build -> mesh [-> critique] [-> assembly] [-> assert]
+       [-> guide])*
       with ``repair`` between failed attempts. ``attempt`` is the 1-based try
       (0 for the pre-loop interpret/generate phases). Meshing happens inside the
       worker alongside ``build``; ``mesh`` is reported ``ok`` once artifacts exist.
@@ -35,6 +36,7 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from cadless.assembly_check import evaluate_assembly
 from cadless.assertions import (
@@ -63,6 +65,7 @@ STAGE_PHASES = (
     "critique",
     "assembly",
     "assert",
+    "guide",
     "repair",
 )
 
@@ -100,7 +103,15 @@ class GenerationResult:
     critique: dict | None = None
     #: The assembly check of the build this result carries, or ``None`` where the
     #: turn did not ask for one. ``{"ok", "order", "attempt", "measured"}``, plus
-    #: ``failures`` and ``unchecked`` once something was measured.
+    #: ``failures``, ``unchecked``, ``joints`` and ``releases`` once something was
+    #: measured.
+    #:
+    #: ``joints`` is one sorted neighbour list per part, and ``releases`` one unit
+    #: heading per part -- the way the order search took that part out -- with an
+    #: empty entry for the part left standing, which nothing had to be freed from.
+    #: Both are indexed like ``order``. Every value here is JSON-safe on purpose:
+    #: this dict is serialised onward whole, and a shape ``json.dumps`` retypes
+    #: silently would arrive on the far side as something else.
     #:
     #: ``measured`` is false when the turn asked but nothing came back — the model
     #: produced a single solid, or the worker could not split the shape. ``ok`` is
@@ -117,6 +128,15 @@ class GenerationResult:
     #: engine's own sentences about geometry it measured, not a vision model's
     #: prose written from a prompt holding the user's.
     assembly: dict | None = None
+    #: How the parts go together, as a reader is shown it: ``{"parts", "steps",
+    #: "frames"}``, or ``None`` where there was no assembly to describe. Written
+    #: only once the split has been accepted -- a guide to a build about to be
+    #: refused describes an assembly nobody receives.
+    #:
+    #: ``frames`` counts the drawings stored beside the parts, which a reader
+    #: addresses by index. Zero is ordinary rather than a failure: a build whose
+    #: headings were never measured gets its written steps and no pictures.
+    guide: dict | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -140,6 +160,7 @@ class Pipeline:
         generator: CodeGenerator | None = None,
         config: Settings | None = None,
         critic=None,
+        guide_writer=None,
     ):
         self._gen = generator or CodeGenerator()
         # Snapshot, not the live object. The settings layer applies a change by
@@ -151,6 +172,10 @@ class Pipeline:
         # insulated. `CodeGenerator` already pins its model the same way.
         self._cfg = (config or settings).model_copy()
         self._critic = critic  # optional VlmCritic
+        # Optional GuideWriter. Without one the guide is still written, from the
+        # order and the joints alone -- what a writer adds is names for the parts,
+        # and the sentences are the engine's either way.
+        self._guide_writer = guide_writer
 
     @property
     def config(self) -> Settings:
@@ -357,6 +382,11 @@ class Pipeline:
                         "measured": True,
                         "failures": list(fit.failures),
                         "unchecked": list(fit.unchecked),
+                        "joints": fit.joints,
+                        # Off the measurements rather than the verdict: which way
+                        # a part came out is something measured, not something
+                        # ruled, and the report carries rulings.
+                        "releases": list(res.assembly.releases),
                     }
                     signal = fit.repair_signal()
                     if signal is not None:
@@ -408,6 +438,9 @@ class Pipeline:
                 _emit_stage(on_progress, "build", "ok", n)
                 # Meshing/export ran inside the worker; artifacts now exist.
                 _emit_stage(on_progress, "mesh", "ok", n)
+                # Last, and only on a split that was accepted. A guide written
+                # earlier would describe an assembly a later check still refuses.
+                guide = self._guide(on_progress, intent, code, last_assembly, export_dir, n)
                 self._record(attempts, on_progress, Attempt(n, code, "execute", None))
                 return GenerationResult(
                     ok=True,
@@ -423,6 +456,7 @@ class Pipeline:
                     attempts=attempts,
                     critique=last_critique,
                     assembly=last_assembly,
+                    guide=guide,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)
@@ -594,6 +628,85 @@ class Pipeline:
             _emit_stage(on_progress, "critique", "error", n, f"critique unavailable: {exc}")
             return None
 
+    def _guide(self, on_progress, intent: str, code: str, verdict, export_dir, n: int):
+        """How the accepted parts go together, or ``None`` where there is no assembly.
+
+        Never fatal, and for a sharper reason than the critique's: by this point
+        the parts are built, measured and accepted, so a turn that failed here
+        would throw away a finished capability over its description.
+
+        The drawings are written beside the exports rather than returned, because
+        this has no store of its own to put them in: the export directory is the
+        hand-off, and what it holds when a build finishes is what is taken up.
+        That is also why the sweep below runs before anything else and on every
+        accepted build, rather than where the drawing happens: callers reuse one
+        export directory across the builds of a turn, so a build that draws
+        nothing would otherwise leave the previous one's frames to be taken up as
+        its own -- describing one model with pictures of another.
+        """
+        _clear_guide_frames(export_dir)
+        if not (verdict and verdict.get("ok") and verdict.get("order")):
+            return None
+        order = verdict["order"]
+        if len(order) < 2:
+            return None
+
+        try:
+            _emit_stage(on_progress, "guide", "begin", n)
+            from cadless.guide_writer import plain_guide  # noqa: PLC0415
+
+            joints = verdict.get("joints") or []
+            written = (
+                self._guide_writer.write(intent, code, order, joints)
+                if self._guide_writer
+                else plain_guide(order, joints)
+            )
+            frames = self._draw_guide(export_dir, order, verdict.get("releases") or [])
+            _emit_stage(on_progress, "guide", "ok", n)
+            return {**written.as_payload(), "frames": frames}
+        except Exception as exc:  # noqa: BLE001 — a description, never the build
+            logger.warning("assembly guide unavailable, skipping: %s", exc, exc_info=True)
+            # Returning nothing has to mean nothing on disk, here as well as one
+            # level down: frames can already be written by the time something
+            # after them raises, and left there they are filed against a version
+            # whose guide is absent.
+            _clear_guide_frames(export_dir)
+            _emit_stage(on_progress, "guide", "error", n, f"guide unavailable: {exc}")
+            return None
+
+    @staticmethod
+    def _draw_guide(export_dir, order, releases) -> int:
+        """Write the guide's frames beside the exports; how many were drawn.
+
+        Zero is an ordinary answer, and never an error: a turn with no export
+        directory, parts in a format the renderer cannot read, or a build whose
+        headings were never measured. Failing to draw must not take the written
+        steps with it -- they stand on the order alone, which is measured whether
+        or not there is anything to draw from.
+        """
+        if not export_dir:
+            return 0
+        directory = Path(export_dir)
+        try:
+            from cadless.assembly_guide import guide_frames  # noqa: PLC0415
+            from cadless.catalog.thumbnail import load_mesh  # noqa: PLC0415
+
+            meshes = [load_mesh(directory / f"model_p{index}.stl") for index in range(len(order))]
+            drawn = guide_frames(meshes, order, releases)
+            # Writing is inside the guard too. Reading and drawing are not the
+            # only halves that can fail -- a full disk gives up part-way through
+            # the set, and leaving that half-written would both lose the steps
+            # and file frames no guide refers to.
+            for position, (_, png) in enumerate(drawn):
+                (directory / f"guide_f{position}.png").write_bytes(png)
+        except Exception as exc:  # noqa: BLE001 — a picture, never the words
+            logger.warning(
+                "assembly guide: drawing failed, keeping the steps: %s", exc, exc_info=True
+            )
+            _clear_guide_frames(export_dir)
+            return 0
+        return len(drawn)
+
     def _repair(
         self,
         on_progress,
@@ -644,6 +757,32 @@ def _signature(res) -> GeometrySignature:
         manifold=res.manifold,
         min_wall_thickness=res.min_wall_thickness,
     )
+
+
+def _clear_guide_frames(export_dir) -> None:
+    """Drop any guide frames already in the export directory.
+
+    Never raises: this runs to keep a later build from taking up an earlier one's
+    pictures, and failing to tidy must not fail the build that is tidying. The
+    sibling sweep in the worker child takes the opposite stance and lets its
+    failures out, which is right there and wrong here -- that one runs before a
+    build is accepted, so abandoning it loudly costs nothing already earned.
+
+    One file that will not go does not stop the rest: a partial sweep leaves
+    fewer frames to be taken up by mistake than an abandoned one.
+    """
+    if not export_dir:
+        return
+    try:
+        stale = list(Path(export_dir).glob("guide_f*.png"))
+    except Exception as exc:  # noqa: BLE001 — tidying, never the build
+        logger.warning("assembly guide: could not list previous frames: %s", exc, exc_info=True)
+        return
+    for frame in stale:
+        try:
+            frame.unlink()
+        except OSError as exc:
+            logger.warning("assembly guide: could not clear %s: %s", frame.name, exc)
 
 
 def _emit(on_progress, event: dict) -> None:

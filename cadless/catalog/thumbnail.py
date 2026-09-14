@@ -152,7 +152,7 @@ def _view_basis(view: str) -> np.ndarray:
     return np.stack([right, np.cross(eye, right), eye])
 
 
-def _isometric_basis() -> np.ndarray:
+def isometric_basis() -> np.ndarray:
     """The isometric basis — the camera a single-image render uses."""
     return _view_basis("iso")
 
@@ -169,22 +169,41 @@ _WORLD_LIGHT = np.array([-0.25, 0.45, 0.86]) @ _view_basis("iso")
 _WORLD_LIGHT /= np.linalg.norm(_WORLD_LIGHT)
 
 
-def _projected_extent(tris: np.ndarray, basis: np.ndarray) -> float:
+def projected_extent(tris: np.ndarray, basis: np.ndarray) -> float:
     """The larger screen-space side of the bbox this view projects onto."""
     xy = (tris.reshape(-1, 3) @ basis.T)[:, :2]
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     return float(max((hi - lo).max(), 1e-9))
 
 
-def _rasterize(tris: np.ndarray, size: int, basis: np.ndarray, extent: float) -> Image.Image:
-    """Project, shade and paint the triangles at a caller-chosen scale."""
+def projected_centre(tris: np.ndarray, basis: np.ndarray) -> np.ndarray:
+    """The middle of that bbox, as the screen-space point to centre on."""
+    xy = (tris.reshape(-1, 3) @ basis.T)[:, :2]
+    return (xy.min(axis=0) + xy.max(axis=0)) / 2
+
+
+def _rasterize(
+    tris: np.ndarray,
+    size: int,
+    basis: np.ndarray,
+    extent: float,
+    centre: np.ndarray | None = None,
+) -> Image.Image:
+    """Project, shade and paint the triangles at a caller-chosen scale.
+
+    ``centre`` is the projected point the canvas is centred on. Left unset it is
+    this drawing's own middle, which is right for a set of views of one object.
+    Passing one shared across several drawings is what holds a *changing* subject
+    still: a shared extent alone keeps each part the same size while letting the
+    whole picture slide as the subject grows.
+    """
     view = (tris.reshape(-1, 3) @ basis.T).reshape(-1, 3, 3)
     xy, depth = view[..., :2], view[..., 2].mean(axis=1)
 
     lo, hi = xy.reshape(-1, 2).min(axis=0), xy.reshape(-1, 2).max(axis=0)
     canvas = size * _SUPERSAMPLE
     scale = canvas * (1 - 2 * _MARGIN) / extent
-    screen = (xy - (lo + hi) / 2) * scale
+    screen = (xy - ((lo + hi) / 2 if centre is None else centre)) * scale
     screen[..., 1] *= -1  # image y grows downward
     screen += canvas / 2
 
@@ -219,11 +238,30 @@ def render_software(
     ``extent`` measured across several views is what makes a set of frames
     share one scale instead of each filling its own.
     """
+    Path(out_path).write_bytes(render_bytes(tris, size, basis=basis, extent=extent))
+
+
+def render_bytes(
+    tris: np.ndarray,
+    size: int,
+    *,
+    basis: np.ndarray | None = None,
+    extent: float | None = None,
+    centre: np.ndarray | None = None,
+) -> bytes:
+    """One orthographic frame as PNG bytes.
+
+    The same render as :func:`render_software` without a file in the middle, for
+    callers that hand the bytes on rather than keeping them. Both go through here
+    so a frame written to disk and one sent onward cannot come out different.
+    """
     if tris.size == 0:
         raise ValueError("mesh has no triangles")
-    basis = _isometric_basis() if basis is None else basis
-    extent = _projected_extent(tris, basis) if extent is None else extent
-    _rasterize(tris, size, basis, extent).save(out_path, format="PNG")
+    basis = isometric_basis() if basis is None else basis
+    extent = projected_extent(tris, basis) if extent is None else extent
+    buf = io.BytesIO()
+    _rasterize(tris, size, basis, extent, centre).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def render_views(
@@ -244,13 +282,8 @@ def render_views(
     bases = [(name, _view_basis(name)) for name in views]
     if not bases:
         return []
-    extent = max(_projected_extent(tris, basis) for _, basis in bases)
-    shots: list[tuple[str, bytes]] = []
-    for name, basis in bases:
-        buf = io.BytesIO()
-        _rasterize(tris, size, basis, extent).save(buf, format="PNG")
-        shots.append((name, buf.getvalue()))
-    return shots
+    extent = max(projected_extent(tris, basis) for _, basis in bases)
+    return [(name, render_bytes(tris, size, basis=basis, extent=extent)) for name, basis in bases]
 
 
 # GL-capable renderers can be prepended here; the software one always works.

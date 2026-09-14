@@ -87,7 +87,8 @@ export type BlockKind =
   | "tool_result"
   | "clarification"
   | "plan"
-  | "image";
+  | "image"
+  | "guide";
 
 /** One block of a persisted turn — the whole neutral block model rather than the
  * subset this app renders today.
@@ -933,6 +934,14 @@ export const artifactUrl = (versionId: number, kind: ArtifactKind, part?: number
     : `${BASE}/versions/${versionId}/artifacts/${kind}/${part}`;
 export const stepUrl = (versionId: number) => artifactUrl(versionId, "step");
 export const glbUrl = (versionId: number) => artifactUrl(versionId, "glb");
+
+/** Where one drawing of a version's assembly guide lives.
+ *
+ * Its own helper rather than a wider `ArtifactKind`, because a guide is not a
+ * format the model can be exported to: widening that union would offer it as a
+ * download nobody asked for. */
+export const guideFrameUrl = (versionId: number, frame: number) =>
+  `${BASE}/versions/${versionId}/artifacts/guide/${frame}`;
 
 // ---- SSE generation stream ----
 export interface StreamHandle {

@@ -355,6 +355,25 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 .plan-step { padding-left: var(--space-1); }
 
+/* assembly guide: how a multi-part build goes together — the parts, the steps,
+   and the drawings. The steps reuse .plan-list, an ordered list being what an
+   assembly order is. */
+.assembly-guide { display: flex; flex-direction: column; gap: var(--space-2); }
+.assembly-guide-parts {
+  margin: 0; font-size: var(--text-xs); color: var(--muted);
+}
+.assembly-guide-frames {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+}
+/* Sized rather than left to fill the column: a step sequence is read as a set,
+   and frames that each took their own width would break the comparison the
+   shared render scale exists to make possible. */
+.assembly-guide-frames img {
+  width: 160px; height: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
 /* thinking pane: collapsible "Thought for Ns" reasoning */
 .thinking-pane { display: flex; flex-direction: column; gap: var(--space-2); }
 .thinking-toggle {

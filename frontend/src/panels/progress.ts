@@ -39,6 +39,9 @@ const STEP_DEFS: { key: string; label: string; phases: string[] }[] = [
   // sides disagree, which is what stops this list going stale a third time.
   { key: "assembly", label: "Assembly", phases: ["assembly"] },
   { key: "assert", label: "Assert", phases: ["assert"] },
+  // After the checks, because it describes a split only once that split has been
+  // accepted. Only a multi-part build reaches it.
+  { key: "guide", label: "Guide", phases: ["guide"] },
 ];
 
 function statusFromStage(status: string): StepStatus {

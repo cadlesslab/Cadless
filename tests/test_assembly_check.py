@@ -6,12 +6,15 @@ live OCCT. The geometry that produces those numbers is tested in
 ``tests/test_worker.py``.
 """
 
+import json
+
 import pytest
 
 from cadless.assembly_check import (
     AssemblyMeasurements,
     AssemblyReport,
     evaluate_assembly,
+    mating_tolerance,
 )
 from cadless.printer_profile import AssemblySpec, BuildVolume
 
@@ -169,6 +172,68 @@ def test_a_pair_missing_from_the_gap_table_is_treated_as_not_mated():
     assert not report.ok
 
 
+def test_the_report_carries_the_joint_graph_it_judged_connectivity_from():
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 3,
+            gaps=[[0, 1, 0.2], [1, 2, 0.2], [0, 2, 60.0]],
+            order=[0, 1, 2],
+        ),
+        SPEC,
+    )
+    assert report.ok
+    assert report.joints == [[1], [0, 2], [1]]
+
+
+def test_the_joints_and_the_verdict_move_together_when_a_pair_drifts_apart():
+    # The guide states which parts join which, and the refusal states that a part
+    # joins nothing. Both must read one answer: if widening the gap removed the
+    # edge without producing the failure, or the reverse, the two have drifted.
+    far = mating_tolerance(SPEC.clearance_mm) * 2
+    joined = evaluate_assembly(_m(gaps=[[0, 1, SPEC.clearance_mm]]), SPEC)
+    apart = evaluate_assembly(_m(gaps=[[0, 1, far]]), SPEC)
+
+    assert joined.joints == [[1], [0]]
+    assert joined.ok
+    assert apart.joints == [[], []]
+    assert not apart.ok
+
+
+def test_each_part_s_neighbours_come_back_in_order():
+    # The guide names a part's neighbours in the order they are listed, so an
+    # unsorted list makes a sentence's wording depend on set iteration. Nine
+    # parts, because that is where the two disagree: a small-int set iterates in
+    # value order until the table grows, so `list({1, 8})` is `[8, 1]` while a
+    # smaller pair would come back sorted either way and prove nothing.
+    ring = _m(
+        part_bboxes=[[10.0, 10.0, 10.0]] * 9,
+        gaps=[[i, i + 1, 0.2] for i in range(8)] + [[0, 8, 0.2]],
+        order=list(range(9)),
+    )
+    report = evaluate_assembly(ring, SPEC)
+
+    assert report.ok
+    assert report.joints is not None
+    assert report.joints[0] == [1, 8]
+
+
+def test_the_joints_survive_the_trip_to_the_model_unchanged():
+    # The verdict is handed to the orchestrator as JSON, and json.dumps turns an
+    # integer key into a string without saying so. A graph keyed by part index
+    # would therefore come back a different type on the side that reads it.
+    report = evaluate_assembly(_m(), SPEC)
+    assert report.joints is not None
+    assert json.loads(json.dumps(report.joints)) == report.joints
+
+
+def test_a_single_part_has_no_joint_graph():
+    # Fewer than two parts leaves the evaluation before any check runs, so there
+    # is no graph -- which is not the same as an assembly whose parts turned out
+    # to touch nothing, and that one reports an empty edge list per part.
+    report = evaluate_assembly(_m(part_bboxes=[[10.0, 10.0, 10.0]], gaps=[], order=[0]), SPEC)
+    assert report.joints is None
+
+
 # --- an assembly order exists ---------------------------------------------
 
 
@@ -241,6 +306,22 @@ def test_measurements_from_a_payload_with_an_unknown_key_does_not_raise():
     m = AssemblyMeasurements.from_payload({"order": [0, 1], "invented_later": 7})
     assert m is not None
     assert m.order == [0, 1]
+
+
+def test_measurements_from_a_payload_missing_releases_degrades_to_empty():
+    # A worker too old to record them is the ordinary case for one deploy, and it
+    # must read as "not measured" rather than break the call.
+    m = AssemblyMeasurements.from_payload({"order": [0, 1]})
+    assert m is not None
+    assert m.releases == []
+
+
+def test_measurements_carry_one_release_direction_per_part():
+    m = AssemblyMeasurements.from_payload(
+        {"order": [1, 0], "releases": [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]}
+    )
+    assert m is not None
+    assert m.releases == [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]
 
 
 def test_report_defaults_are_a_passing_report():

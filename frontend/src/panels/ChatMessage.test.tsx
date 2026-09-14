@@ -159,6 +159,39 @@ describe("ChatMessage", () => {
     expect(getByText("fillets")).not.toBeNull();
   });
 
+  it("renders an assembly guide with its parts, steps and drawings", () => {
+    const { container, getByText } = renderMsg({
+      kind: "guide",
+      id: "m9-g",
+      versionId: 42,
+      parts: ["base", "arm"],
+      steps: ["Start with base.", "Fit arm to base."],
+      frames: 2,
+    });
+    expect(container.querySelector("ol.plan-list")?.querySelectorAll("li").length).toBe(2);
+    expect(getByText("Fit arm to base.")).not.toBeNull();
+    const drawings = container.querySelectorAll(".assembly-guide-frames img");
+    expect(drawings.length).toBe(2);
+    // Addressed by index against the version, not by a URL kept in the
+    // transcript, which would outlive the route that served it.
+    expect(drawings[1].getAttribute("src")).toContain("/versions/42/artifacts/guide/1");
+  });
+
+  it("renders an assembly guide that has no drawings", () => {
+    // A build whose release headings went unmeasured still has an order worth
+    // reading, so the steps must not be gated on there being pictures.
+    const { container, getByText } = renderMsg({
+      kind: "guide",
+      id: "m3-g",
+      versionId: 7,
+      parts: [],
+      steps: ["Start with part 1."],
+      frames: 0,
+    });
+    expect(getByText("Start with part 1.")).not.toBeNull();
+    expect(container.querySelectorAll(".assembly-guide-frames img").length).toBe(0);
+  });
+
   it("renders the live-turn plan as an ordered list ahead of the action card", () => {
     const turn: LiveTurn = {
       text: "",

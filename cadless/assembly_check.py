@@ -77,6 +77,12 @@ class AssemblyMeasurements:
     ``gaps`` the closest approach of every pair. ``order`` is an order in which
     the parts can be brought together, or ``None`` when none was found, in which
     case ``trapped`` names the parts that could not be freed.
+
+    ``releases`` carries, per part index, the unit direction the search actually
+    took that part out along -- the heading it proved clear, not one derived
+    afterwards from the shape. It is empty overall when no order was found, and
+    the entry for the part left standing last is empty too: nothing remains to
+    block that one, so any heading would pass and none would be a measurement.
     """
 
     part_bboxes: list[list[float]] = field(default_factory=list)
@@ -85,6 +91,7 @@ class AssemblyMeasurements:
     order: list[int] | None = None
     trapped: list[int] = field(default_factory=list)
     unchecked: list[str] = field(default_factory=list)
+    releases: list[list[float]] = field(default_factory=list)
 
     @classmethod
     def from_payload(cls, data: object) -> AssemblyMeasurements | None:
@@ -105,6 +112,7 @@ class AssemblyMeasurements:
             order=_index_list(data.get("order")),
             trapped=_index_list(data.get("trapped")) or [],
             unchecked=list(data.get("unchecked") or []),
+            releases=list(data.get("releases") or []),
         )
 
 
@@ -115,6 +123,15 @@ class AssemblyReport:
     failures: list[str] = field(default_factory=list)
     unchecked: list[str] = field(default_factory=list)
     order: list[int] | None = None
+    #: Which parts were found joined to which: one sorted neighbour list per part,
+    #: in part order. ``None`` where mating was never checked -- fewer than two
+    #: parts, or nothing measured -- which is not the same as a build whose parts
+    #: turned out to touch nothing, and that one carries an empty list per part.
+    #:
+    #: A list rather than a dict keyed by part index, because this travels on to
+    #: the model as JSON and ``json.dumps`` turns integer keys into strings
+    #: without saying so, so a round trip would hand back a different type.
+    joints: list[list[int]] | None = None
 
     @property
     def ok(self) -> bool:
@@ -211,25 +228,45 @@ def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport) -> None:
             )
 
 
-def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport) -> None:
-    count = len(m.part_bboxes)
-    tolerance = mating_tolerance(spec.clearance_mm)
-    neighbours: dict[int, set[int]] = {index: set() for index in range(count)}
-    for entry in m.gaps:
+def mating_graph(
+    gaps: list[list[float]], part_count: int, tolerance: float
+) -> tuple[dict[int, set[int]], list[str]]:
+    """Which parts sit close enough to count as joined, and what could not be read.
+
+    One derivation with two readers. Connectivity is ruled on this graph, and so
+    is anything that goes on to describe the joints; deriving it twice would let a
+    description name a joint the same build was refused for not having.
+
+    The unreadable entries come back rather than being judged here, because what
+    an unreadable gap means -- refuse, or pass over -- is the caller's policy and
+    not a property of reading the table.
+    """
+    neighbours: dict[int, set[int]] = {index: set() for index in range(part_count)}
+    problems: list[str] = []
+    for entry in gaps:
         pair = _pair(entry)
         if pair is None:
-            report.unchecked.append(f"gap between two parts: unreadable entry {entry!r}")
+            problems.append(f"gap between two parts: unreadable entry {entry!r}")
             continue
         first, second, distance = pair
-        if not (0 <= first < count and 0 <= second < count):
+        if not (0 <= first < part_count and 0 <= second < part_count):
             # The gaps table disagrees with the part list, which is the same
             # corruption the unreadable case refuses. Ignoring it would let a
             # short table read as a fully measured one.
-            report.unchecked.append(f"gap entry {entry!r} names a part that does not exist")
+            problems.append(f"gap entry {entry!r} names a part that does not exist")
             continue
         if distance <= tolerance:
             neighbours[first].add(second)
             neighbours[second].add(first)
+    return neighbours, problems
+
+
+def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport) -> None:
+    count = len(m.part_bboxes)
+    tolerance = mating_tolerance(spec.clearance_mm)
+    neighbours, problems = mating_graph(m.gaps, count, tolerance)
+    report.unchecked.extend(problems)
+    report.joints = [sorted(neighbours[index]) for index in range(count)]
 
     groups = _groups(neighbours, count)
     if len(groups) == 1:
@@ -481,7 +518,7 @@ def measure_assembly(
             else:
                 gaps.append([first, second, distance])
 
-    order, trapped, order_unchecked = _disassembly_order(parts, budget)
+    order, trapped, order_unchecked, releases = _disassembly_order(parts, budget)
     unchecked.extend(order_unchecked)
     return AssemblyMeasurements(
         part_bboxes=boxes,
@@ -490,6 +527,7 @@ def measure_assembly(
         order=order,
         trapped=trapped,
         unchecked=unchecked,
+        releases=releases,
     )
 
 
@@ -541,23 +579,29 @@ def _disassembly_order(parts, budget):
     when it says yes.
     """
     if len(parts) < 2:
-        return list(range(len(parts))), [], []
+        return list(range(len(parts))), [], [], []
 
     spheres = [_sphere(part) for part in parts]
     floor = _min_step(parts)
     if floor is None:
-        return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"]
+        return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
     remaining = list(range(len(parts)))
     removed: list[int] = []
+    releases: list[list[float]] = [[] for _ in parts]
     while remaining:
         freed = None
         for index in remaining:
             others = [other for other in remaining if other != index]
+            if not others:
+                # The part left standing is what the rest come off, not one that
+                # comes out itself. Nothing can block it, so every heading passes
+                # on the first probe and recording one would file the order the
+                # candidates happen to be listed in as a measurement.
+                freed = index
+                break
             try:
-                if _can_be_freed(parts, spheres, index, others, floor, budget):
-                    freed = index
-                    break
+                direction = _can_be_freed(parts, spheres, index, others, floor, budget)
             except _BudgetSpent:
                 return (
                     None,
@@ -566,20 +610,32 @@ def _disassembly_order(parts, budget):
                         f"{_ORDER_UNCHECKED_PREFIX} the search ran out of budget "
                         "before it could rule"
                     ],
+                    [],
                 )
+            if direction is not None:
+                freed = index
+                releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
+                break
         if freed is None:
-            return None, sorted(remaining), []
+            return None, sorted(remaining), [], []
         remaining.remove(freed)
         removed.append(freed)
     # Removing in this order works, so assembling in the reverse of it does.
-    return list(reversed(removed)), [], []
+    return list(reversed(removed)), [], [], releases
 
 
-def _can_be_freed(parts, spheres, index, others, floor, budget) -> bool:
+def _can_be_freed(parts, spheres, index, others, floor, budget):
+    """The heading this part comes out along, or ``None`` if none does.
+
+    Returns the direction rather than a yes, because the one that worked is the
+    only heading proved clear against the solids. Recovering it afterwards from
+    the shape would be a guess, and wrong exactly where it matters -- a joint that
+    releases along one axis only.
+    """
     for direction in _candidate_directions(spheres, index, others):
         if not _blocked_along(parts, spheres, index, others, direction, floor, budget):
-            return True
-    return False
+            return direction
+    return None
 
 
 def _blocked_along(parts, spheres, index, others, direction, floor, budget) -> bool:

@@ -200,6 +200,33 @@ def test_a_part_number_that_cannot_be_one_is_a_bad_request(client, store):
     assert client.get(f"/versions/{vid}/artifacts/stl/-1").status_code == 422
 
 
+def _seed_with_guide_frames(store, count):
+    async def go():
+        p = await store.create_project("P")
+        v = await store.add_version(p.id, "x", "result=1", ok=True)
+        d = Path(store.version_artifact_dir(v.id))
+        for n in range(count):
+            f = d / f"guide_f{n}.png"
+            f.write_bytes(b"\x89PNG\r\n\x1a\n" + bytes([n]))
+            await store.add_artifact(v.id, "guide", str(f))
+        return v.id
+
+    return asyncio.run(go())
+
+
+def test_guide_frame_served_inline_as_png(client, store):
+    """A guide frame is a picture, so it is displayed rather than downloaded --
+    the same way a thumbnail is (``_INLINE``), and it reaches the browser only
+    through the generic ``/{kind}/{part}`` route, since there is no fixed
+    ``/guide`` route the way there is a ``/thumbnail`` one."""
+    vid = _seed_with_guide_frames(store, 2)
+    r = client.get(f"/versions/{vid}/artifacts/guide/1")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert "attachment" not in r.headers.get("content-disposition", "")
+    assert r.content == b"\x89PNG\r\n\x1a\n" + bytes([1])
+
+
 def test_the_wire_says_which_part_each_artifact_is(client, store):
     """Without this a client can see three files and name none of them."""
     vid = _seed_with_stl_parts(store, 3)

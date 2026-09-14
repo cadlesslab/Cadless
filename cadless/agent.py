@@ -370,6 +370,10 @@ def _result_summary(result: GenerationResult) -> dict:
         "last_stage": result.last_stage,
         "critique": result.critique,
         "assembly": result.assembly,
+        # How the parts go together, in the words a reader is shown. Here for the
+        # reason assembly is: the orchestrator otherwise announces a set of parts
+        # while the one thing saying how to put them together sits unmentioned.
+        "guide": result.guide,
         "metrics": {
             "volume": result.volume,
             "bbox": list(result.bbox) if result.bbox else None,
@@ -377,6 +381,27 @@ def _result_summary(result: GenerationResult) -> dict:
         },
         "thumbnail": result.glb_path,  # GLB render is the thumbnail artifact
     }
+
+
+def _guide_block(raw: Any) -> ContentBlock | None:
+    """The assembly guide as a transcript block, or ``None`` where there is none.
+
+    Read defensively: this crosses the tool boundary as plain JSON, and a turn
+    that built a working set of parts must not fail on the shape of the sentence
+    describing them.
+    """
+    if not isinstance(raw, dict):
+        return None
+    steps = [step for step in (raw.get("steps") or []) if isinstance(step, str) and step]
+    if not steps:
+        return None
+    parts = [name for name in (raw.get("parts") or []) if isinstance(name, str) and name]
+    frames = raw.get("frames")
+    return ContentBlock.of_guide(
+        parts=parts,
+        steps=steps,
+        frames=frames if isinstance(frames, int) and frames > 0 else 0,
+    )
 
 
 def _reparam_summary(out: dict) -> dict:
@@ -863,11 +888,15 @@ class Agent:
 
             if action_uses:
                 result.tool_iters += 1
-            tool_results = plan_results + self._dispatch_tools(
+            dispatched, guide_blocks = self._dispatch_tools(
                 action_uses, context, seen_calls, stage_failures
             )
+            tool_results = plan_results + dispatched
             produced.extend(tool_results)
             messages.append(Message(role="user", content=tool_results))
+            # After the results and outside the message: the transcript reads
+            # build-then-guide, and the provider never sees it.
+            produced.extend(guide_blocks)
 
             # Budget caps: stop *after* feeding results so the transcript is valid.
             if (
@@ -1035,6 +1064,7 @@ class Agent:
 
             if action_uses:
                 result.tool_iters += 1
+            guide_blocks: list[ContentBlock] = []
             for tu in action_uses:
                 yield StreamEventOut(
                     "tool_start", {"tool": tu.name, "label": tool_label(tu.name or "")}
@@ -1061,7 +1091,15 @@ class Agent:
                 if payload.get("forge") is not None:
                     tool_result_data["forge"] = payload["forge"]
                 yield StreamEventOut("tool_result", tool_result_data)
+                guide_block = _guide_block(payload.get("guide"))
+                if guide_block is not None:
+                    guide_blocks.append(guide_block)
             produced.extend(tool_results)
+            # After the tool results, so the transcript reads build-then-guide.
+            # Not streamed as its own event: the guide is worth keeping rather
+            # than worth watching arrive, and the stage already says it is being
+            # written. Persisting it is what puts it back after a reload.
+            produced.extend(guide_blocks)
             messages.append(Message(role="user", content=tool_results))
 
             if (
@@ -1113,9 +1151,17 @@ class Agent:
         context: ToolContext,
         seen_calls: set[str],
         stage_failures: dict[str, int],
-    ) -> list[ContentBlock]:
-        """Execute each requested tool, debouncing identical calls."""
+    ) -> tuple[list[ContentBlock], list[ContentBlock]]:
+        """Execute each requested tool, debouncing identical calls.
+
+        Returns the tool results and, separately, any assembly guides they
+        produced. Separately because the results go back to the provider as the
+        turn's next message and a guide must not: like ``plan`` it is a terminal
+        artifact for the reader, and replaying it would put the engine's own
+        description of a build into the conversation as if the model had said it.
+        """
         results: list[ContentBlock] = []
+        guides: list[ContentBlock] = []
         for tu in tool_uses:
             signature = f"{tu.name}:{json.dumps(tu.input or {}, sort_keys=True)}"
             if signature in seen_calls:
@@ -1133,7 +1179,10 @@ class Agent:
             seen_calls.add(signature)
             block, payload = self._execute_one(tu, context)
             results.append(self._escalate_on_repeated_stage(block, payload, stage_failures))
-        return results
+            guide_block = _guide_block(payload.get("guide"))
+            if guide_block is not None:
+                guides.append(guide_block)
+        return results, guides
 
     def _escalate_on_repeated_stage(
         self,

@@ -145,6 +145,18 @@ decides which, and `artifact_io.exported_parts` reads it back — they are a pai
 and the number in the name is parsed rather than sorted, because that order is
 the part ordinal each file is filed under.
 
+**Not every artifact kind is an export format, and the difference decides where
+it is declared.** `thumbnail` and `guide` are pictures the engine made *about* a
+build rather than formats the build was converted *to*: they get a `_MEDIA` entry
+so the download route can serve them, and they stay out of `EXPORTERS`, out of
+the frontend `ArtifactKind`, and out of the export menu. Putting one in
+`EXPORTERS` would also put it on the `model_p{i}` naming path above, where
+`exported_parts` finds nothing and the file is written, ignored, and never
+served — with nothing raising. Such a kind is registered by name in
+`copy_and_register` instead, which is what keeps the ordinal-by-write-order rule
+intact for it. `tests/test_artifact_kind_mirror.py` holds the declarations
+together and states which of them are containments rather than equalities.
+
 Re-running refuses such a version, and `backend/routers/versions.py` has two
 separate guards for it because they catch different populations. The first reads
 the recorded rows and declines before executing anything: more rows than kinds

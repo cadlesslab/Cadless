@@ -5,6 +5,8 @@ stage runs, what it does with a verdict, and how the loop ends -- not the
 measurement, which ``tests/test_assembly_measure.py`` covers against real solids.
 """
 
+import json
+
 import pytest
 
 from cadless.assembly_check import AssemblyMeasurements
@@ -49,6 +51,9 @@ def _sound() -> AssemblyMeasurements:
         overlaps=[],
         gaps=[[0, 1, 0.2]],
         order=[0, 1],
+        # The second part is the one left standing, so the search recorded no
+        # heading for it -- nothing was left that could have blocked one.
+        releases=[[0.0, 0.0, 1.0], []],
     )
 
 
@@ -85,12 +90,16 @@ def _stages(events):
     return [(e.get("phase"), e.get("status")) for e in events if e.get("event") == "stage"]
 
 
-def _run(gen, measurements, monkeypatch, *, assembly=SPEC, tries=3, captured=None):
+def _run(
+    gen, measurements, monkeypatch, *, assembly=SPEC, tries=3, captured=None, guide_writer=None
+):
     _stub_run_code(monkeypatch, measurements, captured)
     events = []
-    result = Pipeline(generator=gen, config=Settings(repair_max_attempts=tries)).run(
-        "a bracket", on_progress=events.append, assembly=assembly
-    )
+    result = Pipeline(
+        generator=gen,
+        config=Settings(repair_max_attempts=tries),
+        guide_writer=guide_writer,
+    ).run("a bracket", on_progress=events.append, assembly=assembly)
     return result, events
 
 
@@ -203,9 +212,118 @@ def test_a_passing_result_carries_the_assembly_order(monkeypatch):
     assert result.assembly["order"] == [0, 1]
 
 
+def test_a_passing_result_carries_the_joints_and_the_release_headings(monkeypatch):
+    # A guide names each part's neighbours and shows each part moving the way it
+    # comes out. Both are measured while the split is checked, and both stopped at
+    # the worker boundary -- leaving anything downstream to derive them again from
+    # numbers it no longer has.
+    result, _ = _run(FakeGen(), _sound(), monkeypatch)
+    assert result.assembly is not None
+    assert result.assembly["joints"] == [[1], [0]]
+    assert result.assembly["releases"] == [[0.0, 0.0, 1.0], []]
+
+
+def test_what_the_result_carries_survives_the_trip_to_the_model(monkeypatch):
+    # This dict is serialised onward whole. Anything in it that json.dumps
+    # silently retypes would reach the far side as something else.
+    result, _ = _run(FakeGen(), _sound(), monkeypatch)
+    assert json.loads(json.dumps(result.assembly)) == result.assembly
+
+
 def test_a_result_from_a_turn_that_did_not_ask_carries_nothing(monkeypatch):
     result, _ = _run(FakeGen(), _sound(), monkeypatch, assembly=None)
     assert result.assembly is None
+
+
+# --- the guide ------------------------------------------------------------
+
+
+def test_an_accepted_split_is_described(monkeypatch):
+    result, _ = _run(FakeGen(), _sound(), monkeypatch)
+    assert result.ok
+    assert result.guide is not None
+    assert result.guide["parts"] == ["part 1", "part 2"]
+    assert result.guide["steps"] == ["Start with part 1.", "Fit part 2 to part 1."]
+    # No export directory in these runs, so there is nowhere to draw to. The
+    # written steps do not depend on the pictures.
+    assert result.guide["frames"] == 0
+
+
+def test_the_guide_reaches_the_progress_vocabulary(monkeypatch):
+    _, events = _run(FakeGen(), _sound(), monkeypatch)
+    phases = [e.get("phase") for e in events if e.get("event") == "stage"]
+    assert "guide" in phases
+    assert "guide" in STAGE_PHASES
+
+
+def test_a_refused_split_is_never_described(monkeypatch):
+    # A refused turn leaves the loop before the guide stage is reached at all,
+    # so what this pins is the route rather than a condition: should the refusal
+    # path ever start returning through the accepted one, a guide to parts
+    # nobody receives would go out reading as though the build had succeeded.
+    result, _ = _run(FakeGen(), _overlapping(), monkeypatch, tries=1)
+    assert not result.ok
+    assert result.guide is None
+
+
+def test_a_verdict_that_did_not_pass_is_not_described_even_holding_an_order():
+    # The condition behind the route above, pinned on its own because no run
+    # reaches it today: every refusal currently returns by another path. Called
+    # directly, a verdict carrying an order it did not earn must still describe
+    # nothing -- otherwise the one line standing between a failed check and a
+    # guide is only ever exercised by accident.
+    guide = Pipeline(generator=FakeGen())._guide(
+        None,
+        "a bracket",
+        GOOD,
+        {"ok": False, "order": [0, 1], "joints": [[1], [0]], "measured": True},
+        None,
+        1,
+    )
+    assert guide is None
+
+
+def test_a_turn_that_did_not_ask_is_never_described(monkeypatch):
+    result, _ = _run(FakeGen(), _sound(), monkeypatch, assembly=None)
+    assert result.ok
+    assert result.guide is None
+
+
+def test_a_single_part_build_is_not_an_assembly_and_gets_no_guide(monkeypatch):
+    lone = AssemblyMeasurements(part_bboxes=[[10.0, 10.0, 10.0]], gaps=[], order=[0])
+    result, _ = _run(FakeGen(), lone, monkeypatch)
+    assert result.ok
+    assert result.guide is None
+
+
+def test_a_writer_that_fails_costs_the_guide_and_not_the_build(monkeypatch):
+    # The parts are built, measured and accepted by this point. Losing the
+    # description must not lose them.
+    class _AngryWriter:
+        def write(self, *a, **kw):
+            raise RuntimeError("no provider")
+
+    result, events = _run(FakeGen(), _sound(), monkeypatch, guide_writer=_AngryWriter())
+    assert result.ok
+    assert result.guide is None
+    errors = [e for e in events if e.get("event") == "stage" and e.get("phase") == "guide"]
+    assert any(e.get("status") == "error" for e in errors)
+
+
+def test_the_writer_is_given_the_measured_order_and_joints(monkeypatch):
+    seen = {}
+
+    class _Spy:
+        def write(self, intent, code, order, joints):
+            seen["order"] = order
+            seen["joints"] = joints
+            from cadless.guide_writer import plain_guide
+
+            return plain_guide(order, joints)
+
+    _run(FakeGen(), _sound(), monkeypatch, guide_writer=_Spy())
+    assert seen["order"] == [0, 1]
+    assert seen["joints"] == [[1], [0]]
 
 
 def test_an_unrunnable_check_refuses_rather_than_passing(monkeypatch):
