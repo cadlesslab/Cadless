@@ -123,11 +123,15 @@ class AssemblyReport:
     failures: list[str] = field(default_factory=list)
     unchecked: list[str] = field(default_factory=list)
     order: list[int] | None = None
-    #: Which parts were found joined to which, part index to sorted part indices.
-    #: ``None`` where mating was never checked -- fewer than two parts, or nothing
-    #: measured -- which is not the same as a build whose parts turned out to
-    #: touch nothing, and that one carries an empty list per part.
-    joints: dict[int, list[int]] | None = None
+    #: Which parts were found joined to which: one sorted neighbour list per part,
+    #: in part order. ``None`` where mating was never checked -- fewer than two
+    #: parts, or nothing measured -- which is not the same as a build whose parts
+    #: turned out to touch nothing, and that one carries an empty list per part.
+    #:
+    #: A list rather than a dict keyed by part index, because this travels on to
+    #: the model as JSON and ``json.dumps`` turns integer keys into strings
+    #: without saying so, so a round trip would hand back a different type.
+    joints: list[list[int]] | None = None
 
     @property
     def ok(self) -> bool:
@@ -262,7 +266,7 @@ def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyR
     tolerance = mating_tolerance(spec.clearance_mm)
     neighbours, problems = mating_graph(m.gaps, count, tolerance)
     report.unchecked.extend(problems)
-    report.joints = {index: sorted(edges) for index, edges in neighbours.items()}
+    report.joints = [sorted(neighbours[index]) for index in range(count)]
 
     groups = _groups(neighbours, count)
     if len(groups) == 1:

@@ -6,6 +6,8 @@ live OCCT. The geometry that produces those numbers is tested in
 ``tests/test_worker.py``.
 """
 
+import json
+
 import pytest
 
 from cadless.assembly_check import (
@@ -180,7 +182,7 @@ def test_the_report_carries_the_joint_graph_it_judged_connectivity_from():
         SPEC,
     )
     assert report.ok
-    assert report.joints == {0: [1], 1: [0, 2], 2: [1]}
+    assert report.joints == [[1], [0, 2], [1]]
 
 
 def test_the_joints_and_the_verdict_move_together_when_a_pair_drifts_apart():
@@ -191,10 +193,19 @@ def test_the_joints_and_the_verdict_move_together_when_a_pair_drifts_apart():
     joined = evaluate_assembly(_m(gaps=[[0, 1, SPEC.clearance_mm]]), SPEC)
     apart = evaluate_assembly(_m(gaps=[[0, 1, far]]), SPEC)
 
-    assert joined.joints == {0: [1], 1: [0]}
+    assert joined.joints == [[1], [0]]
     assert joined.ok
-    assert apart.joints == {0: [], 1: []}
+    assert apart.joints == [[], []]
     assert not apart.ok
+
+
+def test_the_joints_survive_the_trip_to_the_model_unchanged():
+    # The verdict is handed to the orchestrator as JSON, and json.dumps turns an
+    # integer key into a string without saying so. A graph keyed by part index
+    # would therefore come back a different type on the side that reads it.
+    report = evaluate_assembly(_m(), SPEC)
+    assert report.joints is not None
+    assert json.loads(json.dumps(report.joints)) == report.joints
 
 
 def test_a_single_part_has_no_joint_graph():

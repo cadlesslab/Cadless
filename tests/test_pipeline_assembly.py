@@ -5,6 +5,8 @@ stage runs, what it does with a verdict, and how the loop ends -- not the
 measurement, which ``tests/test_assembly_measure.py`` covers against real solids.
 """
 
+import json
+
 import pytest
 
 from cadless.assembly_check import AssemblyMeasurements
@@ -49,6 +51,9 @@ def _sound() -> AssemblyMeasurements:
         overlaps=[],
         gaps=[[0, 1, 0.2]],
         order=[0, 1],
+        # The second part is the one left standing, so the search recorded no
+        # heading for it -- nothing was left that could have blocked one.
+        releases=[[0.0, 0.0, 1.0], []],
     )
 
 
@@ -201,6 +206,25 @@ def test_a_passing_result_carries_the_assembly_order(monkeypatch):
     assert result.assembly is not None
     assert result.assembly["ok"] is True
     assert result.assembly["order"] == [0, 1]
+
+
+def test_a_passing_result_carries_the_joints_and_the_release_headings(monkeypatch):
+    # A guide names each part's neighbours and shows each part moving the way it
+    # comes out. Both are measured while the split is checked, and both stopped at
+    # the worker boundary -- leaving anything downstream to derive them again from
+    # numbers it no longer has.
+    result, _ = _run(FakeGen(), _sound(), monkeypatch)
+    assert result.assembly is not None
+    assert result.assembly["joints"] == [[1], [0]]
+    assert result.assembly["releases"] == [[0.0, 0.0, 1.0], []]
+
+
+def test_what_the_result_carries_survives_the_trip_to_the_model(monkeypatch):
+    # cadless/agent.py puts this whole dict in the summary handed to the model,
+    # which is serialised. Anything in it that json.dumps silently retypes would
+    # reach the far side as something else.
+    result, _ = _run(FakeGen(), _sound(), monkeypatch)
+    assert json.loads(json.dumps(result.assembly)) == result.assembly
 
 
 def test_a_result_from_a_turn_that_did_not_ask_carries_nothing(monkeypatch):

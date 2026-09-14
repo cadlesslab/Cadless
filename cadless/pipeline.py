@@ -100,7 +100,15 @@ class GenerationResult:
     critique: dict | None = None
     #: The assembly check of the build this result carries, or ``None`` where the
     #: turn did not ask for one. ``{"ok", "order", "attempt", "measured"}``, plus
-    #: ``failures`` and ``unchecked`` once something was measured.
+    #: ``failures``, ``unchecked``, ``joints`` and ``releases`` once something was
+    #: measured.
+    #:
+    #: ``joints`` is one sorted neighbour list per part, and ``releases`` one unit
+    #: heading per part -- the way the order search took that part out -- with an
+    #: empty entry for the part left standing, which nothing had to be freed from.
+    #: Both are indexed like ``order``. Every value here is JSON-safe on purpose:
+    #: the whole dict goes into the summary handed to the model, and a shape
+    #: ``json.dumps`` retypes silently would arrive there as something else.
     #:
     #: ``measured`` is false when the turn asked but nothing came back — the model
     #: produced a single solid, or the worker could not split the shape. ``ok`` is
@@ -357,6 +365,11 @@ class Pipeline:
                         "measured": True,
                         "failures": list(fit.failures),
                         "unchecked": list(fit.unchecked),
+                        "joints": fit.joints,
+                        # Off the measurements rather than the verdict: which way
+                        # a part came out is something measured, not something
+                        # ruled, and the report carries rulings.
+                        "releases": list(res.assembly.releases),
                     }
                     signal = fit.repair_signal()
                     if signal is not None:
