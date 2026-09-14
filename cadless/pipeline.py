@@ -688,11 +688,18 @@ class Pipeline:
 
             meshes = [load_mesh(directory / f"model_p{index}.stl") for index in range(len(order))]
             drawn = guide_frames(meshes, order, releases)
+            # Writing is inside the guard too. Reading and drawing are not the
+            # only halves that can fail -- a full disk gives up part-way through
+            # the set, and leaving that half-written would both lose the steps
+            # and file frames no guide refers to.
+            for position, (_, png) in enumerate(drawn):
+                (directory / f"guide_f{position}.png").write_bytes(png)
         except Exception as exc:  # noqa: BLE001 — a picture, never the words
-            logger.warning("assembly guide: drawing failed, keeping the steps: %s", exc)
+            logger.warning(
+                "assembly guide: drawing failed, keeping the steps: %s", exc, exc_info=True
+            )
+            _clear_guide_frames(export_dir)
             return 0
-        for position, (_, png) in enumerate(drawn):
-            (directory / f"guide_f{position}.png").write_bytes(png)
         return len(drawn)
 
     def _repair(
@@ -751,15 +758,26 @@ def _clear_guide_frames(export_dir) -> None:
     """Drop any guide frames already in the export directory.
 
     Never raises: this runs to keep a later build from taking up an earlier one's
-    pictures, and failing to tidy must not fail the build that is tidying.
+    pictures, and failing to tidy must not fail the build that is tidying. The
+    sibling sweep in the worker child takes the opposite stance and lets its
+    failures out, which is right there and wrong here -- that one runs before a
+    build is accepted, so abandoning it loudly costs nothing already earned.
+
+    One file that will not go does not stop the rest: a partial sweep leaves
+    fewer frames to be taken up by mistake than an abandoned one.
     """
     if not export_dir:
         return
     try:
-        for stale in Path(export_dir).glob("guide_f*.png"):
-            stale.unlink()
-    except OSError as exc:
-        logger.warning("assembly guide: could not clear previous frames: %s", exc)
+        stale = list(Path(export_dir).glob("guide_f*.png"))
+    except Exception as exc:  # noqa: BLE001 — tidying, never the build
+        logger.warning("assembly guide: could not list previous frames: %s", exc, exc_info=True)
+        return
+    for frame in stale:
+        try:
+            frame.unlink()
+        except OSError as exc:
+            logger.warning("assembly guide: could not clear %s: %s", frame.name, exc)
 
 
 def _emit(on_progress, event: dict) -> None:

@@ -237,8 +237,18 @@ def test_the_headings_are_filed_by_part_and_not_by_the_order_they_were_freed_in(
     releases = res.assembly.releases
     assert len(releases) == 3
 
-    # Identified by shape rather than by a fixed index, so the test says what it
-    # means whatever order the solids come back in.
+    # The premise, asserted rather than assumed: this catches the mistake only
+    # while the two orders disagree, and which index each solid lands on is the
+    # kernel's to decide. Left unstated, a kernel that returned them in another
+    # order would line the two up and the test would go quietly green while
+    # guarding nothing -- which is what the first version of this fixture did.
+    removal = list(reversed(order))
+    assert removal[:-1] != list(range(len(removal) - 1)), (
+        f"fixture no longer discriminates: removal order {removal} follows part order"
+    )
+
+    # Identified by shape rather than by a fixed index, so the test reads the
+    # same whatever order the solids come back in.
     peg = min(range(3), key=lambda i: boxes[i][0] * boxes[i][1])
     block = max(range(3), key=lambda i: boxes[i][2])
     assert peg != block

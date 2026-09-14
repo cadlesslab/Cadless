@@ -102,6 +102,33 @@ def test_the_steps_name_every_part_and_the_joint_each_one_is_made_at(tmp_path):
         assert " to " in step
 
 
+def test_frames_that_cannot_be_written_cost_the_pictures_and_not_the_steps(tmp_path, monkeypatch):
+    # Writing is the half a full disk fails in, and it fails part-way: some
+    # frames land and the rest do not. Left to escape, it takes the sentences
+    # with it and leaves frames behind that no guide refers to -- filed against
+    # the version anyway, because what the directory holds is what is taken up.
+    first = _build(4, tmp_path)
+    assert first.guide is not None
+    order, releases = first.assembly["order"], first.assembly["releases"]
+    for frame in tmp_path.glob("guide_f*.png"):
+        frame.unlink()
+
+    real, calls = Path.write_bytes, {"n": 0}
+
+    def flaky(self, data):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise OSError("no space left on device")
+        return real(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", flaky)
+
+    assert Pipeline._draw_guide(str(tmp_path), order, releases) == 0
+    assert calls["n"] == 2  # one written, the next refused
+    monkeypatch.undo()
+    assert list(tmp_path.glob("guide_f*.png")) == []
+
+
 def test_a_single_part_build_writes_no_guide_and_no_drawings(tmp_path):
     pipeline = Pipeline(
         generator=ScriptedGen("from build123d import *\nresult = Box(20, 20, 10)\n"),
