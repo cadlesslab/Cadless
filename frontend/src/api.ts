@@ -70,8 +70,11 @@ export type ProgressEvent =
   | { event: "start"; intent: string; max_tries: number; mode?: "generate" | "refine" }
   | { event: "attempt"; n: number; stage: string; ok: boolean; error: string | null }
   // Granular lifecycle. The current panel ignores these; a future
-  // staged-progress UI consumes them. phase ∈ interpret|generate|refine|validate|
-  // build|mesh|critique|repair, status ∈ begin|ok|error.
+  // staged-progress UI consumes them. status ∈ begin|ok|error. The phase
+  // vocabulary is STAGE_PHASES in cadless/pipeline.py; it is not repeated here,
+  // because the copy that used to be had already gone stale — it omitted
+  // `assert` — and no test could tell. What panels/progress.ts does with each
+  // phase is pinned by tests/test_stage_phase_mirror.py instead.
   | { event: "stage"; phase: string; status: "begin" | "ok" | "error"; attempt: number; error?: string }
   | { event: "done"; version_id: number; ok: boolean; attempt_count: number }
   | { event: "error"; detail: string };
