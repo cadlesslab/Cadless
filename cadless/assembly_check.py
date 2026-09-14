@@ -516,7 +516,26 @@ def _blocked_along(parts, spheres, index, others, direction, step, budget) -> bo
 
 
 def _travel_window(centre, radius, other_centre, other_radius, direction):
-    """The distances along ``direction`` where two bounding spheres could meet."""
+    """The distances along ``direction`` where two bounding spheres could meet.
+
+    ``direction`` must be a unit vector; every caller passes one, and a longer one
+    would scale ``along`` and quietly falsify the arithmetic below rather than
+    fail.
+
+    Moving one centre by ``t`` along the heading, the two spheres overlap while
+    ``|heading * t - delta| <= reach``. Squaring gives
+    ``t^2 - 2t(delta . heading) + |delta|^2 - reach^2 <= 0``, and since
+    ``perpendicular^2 = |delta|^2 - along^2`` its roots are exactly
+    ``along +/- sqrt(reach^2 - perpendicular^2)``. So the returned pair is the
+    overlap interval itself, not an estimate of it: no real root means the two can
+    never meet along this heading, and an interval wholly behind the start means
+    moving forward never reaches it.
+
+    Skipping on that answer is exact rather than an approximation, because a
+    bounding sphere contains its solid -- spheres that miss guarantee solids that
+    miss. The converse does not hold, which is why a window that exists is then
+    stepped through against the solids rather than believed.
+    """
     from build123d import Vector
 
     delta = Vector(*other_centre) - Vector(*centre)
