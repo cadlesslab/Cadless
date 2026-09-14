@@ -300,7 +300,9 @@ def test_execution_failure_threads_repair_context(monkeypatch):
         last_traceback="Traceback (most recent call last):\nStdFail_NotDone: ...",
     )
 
-    def fake_run_code(code, *, export_dir=None, export_scale=1.0, config=None):
+    def fake_run_code(
+        code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None
+    ):
         return ExecResult(ok=False, error="boom", repair_context=ctx)
 
     monkeypatch.setattr(pipeline_mod, "run_code", fake_run_code)
@@ -336,7 +338,9 @@ def _pipeline_with_exec(monkeypatch, exec_result, outputs):
     monkeypatch.setattr(
         pipeline_mod,
         "run_code",
-        lambda code, *, export_dir=None, export_scale=1.0, config=None: exec_result,
+        lambda code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None: (
+            exec_result
+        ),
     )
     gen = FakeGen(outputs)
     return gen
@@ -348,7 +352,9 @@ def test_run_forwards_export_scale_to_worker(monkeypatch):
 
     seen = {}
 
-    def fake_run_code(code, *, export_dir=None, export_scale=1.0, config=None):
+    def fake_run_code(
+        code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None
+    ):
         seen["export_scale"] = export_scale
         return _exec_ok()
 
@@ -410,7 +416,9 @@ def test_failing_assertion_adds_repair_signal_not_hard_stop(monkeypatch):
     monkeypatch.setattr(
         pipeline_mod,
         "run_code",
-        lambda code, *, export_dir=None, export_scale=1.0, config=None: next(results),
+        lambda code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None: next(
+            results
+        ),
     )
     gen = FakeGen([GOOD, GOOD])
     result = Pipeline(generator=gen, config=Settings(repair_max_attempts=3)).run(

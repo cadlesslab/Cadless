@@ -29,6 +29,16 @@ const STEP_DEFS: { key: string; label: string; phases: string[] }[] = [
   // pending until the run settles and the success sweep below marks it done —
   // the same as any step a run never reached.
   { key: "critique", label: "Review", phases: ["critique"] },
+  // The deterministic post-build checks, in the order the loop runs them. Like
+  // the review above, each only runs when its turn asked for it, and sits
+  // pending otherwise until the success sweep marks it done.
+  //
+  // `assert` was added to the engine's phase vocabulary and never mirrored here,
+  // so it rendered as nothing at all: the lookup below silently drops a phase it
+  // does not know. `tests/test_stage_phase_mirror.py` now fails when the two
+  // sides disagree, which is what stops this list going stale a third time.
+  { key: "assembly", label: "Assembly", phases: ["assembly"] },
+  { key: "assert", label: "Assert", phases: ["assert"] },
 ];
 
 function statusFromStage(status: string): StepStatus {

@@ -15,6 +15,7 @@ import tempfile
 from dataclasses import dataclass
 
 from cadless._worker_child import SENTINEL
+from cadless.assembly_check import AssemblyMeasurements
 from cadless.config import Settings, settings
 
 
@@ -53,6 +54,10 @@ class ExecResult:
     glb_path: str | None = None
     stl_path: str | None = None
     obj_path: str | None = None
+    # How the parts of a multi-part result relate to each other, measured only
+    # when the caller asked for an assembly. ``None`` means nobody asked, which
+    # is not the same as "asked and found nothing wrong".
+    assembly: AssemblyMeasurements | None = None
     repair_context: RepairContext | None = None
 
 
@@ -91,6 +96,7 @@ def run_code(
     *,
     export_dir: str | None = None,
     export_scale: float = 1.0,
+    check_assembly: bool = False,
     config: Settings | None = None,
 ) -> ExecResult:
     """Execute `code` in an isolated subprocess and return an ExecResult.
@@ -98,10 +104,16 @@ def run_code(
     ``export_scale`` scales the shape at export time only (authoring units ->
     millimetres, from the catalog domain registry); the returned geometry
     summary (volume/bbox) always stays in authoring units.
+
+    ``check_assembly`` asks the child to measure how the parts of a multi-part
+    result relate to each other. Off by default, so a caller that did not ask for
+    an assembly gets exactly the run it always got: a result in several solids is
+    not by itself an assembly, and the measurement spends the same wall clock the
+    build does.
     """
     cfg = config or settings
     if cfg.worker_url:
-        return _run_remote(code, export_dir, export_scale, cfg)
+        return _run_remote(code, export_dir, export_scale, check_assembly, cfg)
     wall = cfg.exec_timeout_secs
     cpu = max(1, int(wall) + 1)  # CPU limit slightly above wall-clock
 
@@ -117,6 +129,8 @@ def run_code(
             code_file,
             export_dir or "",
             str(export_scale),
+            "1" if check_assembly else "",
+            str(wall),
         ]
         preexec = _limit_resources(cpu) if os.name == "posix" else None
         try:
@@ -158,11 +172,16 @@ def run_code(
             glb_path=payload.get("glb_path"),
             stl_path=payload.get("stl_path"),
             obj_path=payload.get("obj_path"),
+            assembly=AssemblyMeasurements.from_payload(payload.get("assembly")),
         )
 
 
 def _run_remote(
-    code: str, export_dir: str | None, export_scale: float, cfg: Settings
+    code: str,
+    export_dir: str | None,
+    export_scale: float,
+    check_assembly: bool,
+    cfg: Settings,
 ) -> ExecResult:
     """Delegate execution to the isolated worker service over HTTP.
 
@@ -176,6 +195,7 @@ def _run_remote(
             "code": code,
             "export_dir": export_dir,
             "export_scale": export_scale,
+            "check_assembly": check_assembly,
             "timeout": cfg.exec_timeout_secs,
         }
     ).encode()
@@ -205,6 +225,7 @@ def _run_remote(
         glb_path=data.get("glb_path"),
         stl_path=data.get("stl_path"),
         obj_path=data.get("obj_path"),
+        assembly=AssemblyMeasurements.from_payload(data.get("assembly")),
         repair_context=RepairContext(**rc) if isinstance(rc, dict) else None,
     )
 

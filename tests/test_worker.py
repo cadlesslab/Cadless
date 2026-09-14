@@ -151,3 +151,51 @@ def test_export_scale_scales_artifacts_not_geometry(tmp_path):
     tris = load_mesh(res.stl_path).reshape(-1, 3)
     span = tris.max(axis=0) - tris.min(axis=0)
     assert span == pytest.approx((2000.0, 2000.0, 2000.0), rel=1e-3)
+
+
+# --- the assembly measurement, through the real child ---------------------
+
+
+def test_a_multi_part_build_reports_assembly_measurements_when_asked():
+    res = run_code(
+        "from build123d import *\nresult = Box(20, 20, 10) + Pos(20.2, 0, 0) * Box(20, 20, 10)\n",
+        check_assembly=True,
+    )
+    assert res.ok, res.error
+    assert res.part_count == 2
+    assert res.assembly is not None
+    assert len(res.assembly.part_bboxes) == 2
+    assert res.assembly.order is not None
+
+
+def test_a_build_that_did_not_ask_carries_no_assembly_measurements():
+    res = run_code(
+        "from build123d import *\nresult = Box(20, 20, 10) + Pos(20.2, 0, 0) * Box(20, 20, 10)\n"
+    )
+    assert res.ok, res.error
+    assert res.part_count == 2
+    assert res.assembly is None
+
+
+def test_a_single_part_build_carries_no_assembly_measurements_even_when_asked():
+    res = run_code("from build123d import *\nresult = Box(10, 20, 30)", check_assembly=True)
+    assert res.ok, res.error
+    assert res.assembly is None
+
+
+def test_the_parts_are_measured_after_the_export_scale_is_applied():
+    # The summary stays in authoring units while the export is millimetres. The
+    # build volume the checks run against is millimetres, so measuring the
+    # unscaled solids would compare the two and never refuse a metres-authored
+    # model. The bbox below is 1 unit; scaled by 1000 the part boxes must read
+    # 1000 mm while the summary bbox still reads 1.
+    res = run_code(
+        "from build123d import *\nresult = Box(1, 1, 1) + Pos(2, 0, 0) * Box(1, 1, 1)\n",
+        export_scale=1000.0,
+        check_assembly=True,
+    )
+    assert res.ok, res.error
+    assert res.bbox == pytest.approx((3.0, 1.0, 1.0), rel=1e-3)
+    assert res.assembly is not None
+    for box in res.assembly.part_bboxes:
+        assert box == pytest.approx([1000.0, 1000.0, 1000.0], rel=1e-3)

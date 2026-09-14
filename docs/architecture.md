@@ -173,9 +173,16 @@ candidate judging, the identity seam and the image decisions are recorded under
 5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
    the shared data volume — one file per kind, or one per solid where the build
    produced several. The API persists metadata and serves the artifacts.
-6. An execution failure can return to the provider as a repair prompt. A success
-   is stored as a project version whose source remains available for parameter
-   changes and deterministic rebuilds. The exception to the rebuild half is a
+6. An execution failure can return to the provider as a repair prompt, and so can
+   a post-build check that ran on a program which executed perfectly well: the
+   render critique, the geometry assertions, and — on a turn that asked for an
+   assembly — whether the parts it produced actually go together. The last of
+   those is the one that can end a turn rather than only prolong it. A build
+   whose parts overlap, do not mate, or admit no collision-free assembly order is
+   refused once the repair budget is gone, so a successful execution is not by
+   itself a stored version. Everything else that succeeds is stored as a project
+   version whose source remains available for parameter changes and deterministic
+   rebuilds. The exception to the rebuild half is a
    version in several pieces, or one that turns out to rebuild into them: a
    single file per kind matches none of the pieces recorded, and choosing
    between filing it as one more piece and leaving every recorded piece stale

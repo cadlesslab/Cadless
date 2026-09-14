@@ -78,4 +78,34 @@ describe("summarizeProgress", () => {
     expect(s.state).toBe("error");
     expect(s.errorText).toBe("connection lost");
   });
+
+  it("renders the assembly check as its own step", () => {
+    const events: ProgressEvent[] = [
+      { event: "stage", phase: "build", status: "ok", attempt: 1 },
+      { event: "stage", phase: "assembly", status: "begin", attempt: 1 },
+    ];
+    const s = summarizeProgress(events);
+    expect(s.steps.find((x) => x.key === "assembly")?.status).toBe("active");
+  });
+
+  it("surfaces a failed assembly check rather than dropping the phase", () => {
+    // A phase with no step is discarded without a word, so the run would look
+    // like it stopped for no reason at all.
+    const events: ProgressEvent[] = [
+      { event: "stage", phase: "assembly", status: "error", attempt: 1, error: "parts overlap" },
+      { event: "done", version_id: 3, ok: false, attempt_count: 1 },
+    ];
+    const s = summarizeProgress(events);
+    expect(s.state).toBe("error");
+    expect(s.steps.find((x) => x.key === "assembly")?.status).toBe("error");
+    expect(s.errorText).toBe("parts overlap");
+  });
+
+  it("renders the assert stage, which reached no step until now", () => {
+    const events: ProgressEvent[] = [
+      { event: "stage", phase: "assert", status: "error", attempt: 1, error: "too thin" },
+    ];
+    const s = summarizeProgress(events);
+    expect(s.steps.find((x) => x.key === "assert")?.status).toBe("error");
+  });
 });
