@@ -154,7 +154,7 @@ the frontend `ArtifactKind`, and out of the export menu. Putting one in
 `exported_parts` finds nothing and the file is written, ignored, and never
 served — with nothing raising. Such a kind is registered by name in
 `copy_and_register` instead, which is what keeps the ordinal-by-write-order rule
-intact for it. `tests/test_artifact_kind_mirror.py` holds the four declarations
+intact for it. `tests/test_artifact_kind_mirror.py` holds the declarations
 together and states which of them are containments rather than equalities.
 
 Re-running refuses such a version, and `backend/routers/versions.py` has two

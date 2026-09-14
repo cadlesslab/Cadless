@@ -1,6 +1,6 @@
 """Pin the declarations of the artifact-kind vocabulary to each other.
 
-One vocabulary, four declarations, in two languages: ``EXPORTERS`` says what a
+One vocabulary declared in several places, in two languages: ``EXPORTERS`` says what a
 build can be exported to, ``_MEDIA`` says how each kind is served, ``ArtifactKind``
 says what the browser can name, and ``FORMAT_META``/``ORDER`` say how the export
 menu labels and orders them. Nothing compared them, and each way of drifting is

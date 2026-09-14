@@ -108,8 +108,8 @@ class GuideWriter:
     def provider(self) -> ChatProvider:
         """The configured provider, built on first use.
 
-        Lazy for the reason the critic's is: the wiring point builds a writer for
-        every turn, and most turns never ask for an assembly.
+        Lazy so that constructing a writer cannot fail where no credential is
+        resolvable: a turn that never asks for an assembly never reaches here.
         """
         if self._provider is None:
             self._provider = build_provider(settings=self._cfg)
@@ -146,8 +146,8 @@ class GuideWriter:
         chunks: list[str] = []
         for chunk in provider.stream_turn(
             # The fast model: naming a handful of parts from a script in front of
-            # it is the cheap-check shape that slug exists for, and a guide is
-            # not worth the primary model's price on every assembly turn.
+            # it is a short, cheap task, and a guide is not worth the primary
+            # model's price on every assembly turn.
             model=self._cfg.bedrock_fast_model_slug,
             system=_SYSTEM,
             messages=[

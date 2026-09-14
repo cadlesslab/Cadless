@@ -23,8 +23,8 @@ from cadless.scoped_store import AnyStore
 #: member: a guide is not a format the model was exported to, and adding it there
 #: would put it through :func:`exported_parts`, whose ``model_p*`` naming is a
 #: per-part contract a guide does not meet -- so the frames would be written and
-#: then silently not found. It reaches a reader the way ``thumbnail`` does, by a
-#: media type on the download route and nothing else.
+#: then silently not found. It reaches a reader by a media type on the download
+#: route and nothing else.
 GUIDE_KIND = "guide"
 
 #: ``guide_f0.png``, ``guide_f1.png``. Numbered like the parts and parsed the same

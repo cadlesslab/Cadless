@@ -108,8 +108,8 @@ function questionsFromInput(input: Record<string, unknown> | null | undefined): 
     .filter((q) => q.text);
 }
 
-/** Coerce a persisted plan block's `input.steps` payload into a string list
- *. Tolerant of the loose `Record<string, unknown>` shape. */
+/** Coerce a persisted plan block's `input.steps` payload into a string list.
+ * Tolerant of the loose `Record<string, unknown>` shape. */
 function stepsFromInput(input: Record<string, unknown> | null | undefined): string[] {
   const raw = input?.steps;
   if (!Array.isArray(raw)) return [];
@@ -117,8 +117,8 @@ function stepsFromInput(input: Record<string, unknown> | null | undefined): stri
 }
 
 /** Coerce a persisted guide block's `input` payload into named parts, ordered
- *. steps, and how many drawings were stored beside them. Tolerant of the loose
- *. `Record<string, unknown>` shape, like the plan coercer above. */
+ * steps, and how many drawings were stored beside them. Tolerant of the loose
+ * `Record<string, unknown>` shape, like the plan coercer above. */
 function guideFromInput(input: Record<string, unknown> | null | undefined) {
   const rawParts = input?.parts;
   const frames = input?.frames;

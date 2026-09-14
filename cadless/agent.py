@@ -386,9 +386,9 @@ def _result_summary(result: GenerationResult) -> dict:
 def _guide_block(raw: Any) -> ContentBlock | None:
     """The assembly guide as a transcript block, or ``None`` where there is none.
 
-    Read defensively for the reason every other payload here is: this crosses the
-    tool boundary as plain JSON, and a turn that built a working set of parts must
-    not fail on the shape of the sentence describing them.
+    Read defensively: this crosses the tool boundary as plain JSON, and a turn
+    that built a working set of parts must not fail on the shape of the sentence
+    describing them.
     """
     if not isinstance(raw, dict):
         return None

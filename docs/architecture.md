@@ -179,7 +179,7 @@ candidate judging, the identity seam and the image decisions are recorded under
    They are served by media type alone and MUST stay out of the exporter
    registry, whose per-part file naming they do not meet — a kind added there is
    written and then never found, with nothing raising. A mirror test holds the
-   four declarations of that vocabulary against each other.
+   declarations of that vocabulary against each other.
 6. An execution failure can return to the provider as a repair prompt, and so can
    a post-build check that ran on a program which executed perfectly well: the
    render critique, the geometry assertions, and — on a turn that asked for an
@@ -200,8 +200,9 @@ candidate judging, the identity seam and the image decisions are recorded under
    artifacts are never the target of a build that may turn out not to match them.
 7. After the checks accept a multi-part build, and only then, the turn describes
    it: named parts, the order the check established, and drawings of the parts
-   coming apart. This runs in the API process rather than the worker, on the
-   exported meshes, so it needs no geometry kernel. It is the one post-build step
+   coming apart. Like the render critique, it runs in the API process rather than
+   the worker, reading exported meshes through a first-party parser and needing
+   no geometry kernel. It is the one post-build step
    that NEVER ends a turn — the parts are built and accepted by the time it
    starts, so a model or a render that fails costs the description and leaves the
    build. The order and the joints it states are the ones the check measured; it

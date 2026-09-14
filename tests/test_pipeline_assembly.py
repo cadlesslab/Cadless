@@ -224,9 +224,8 @@ def test_a_passing_result_carries_the_joints_and_the_release_headings(monkeypatc
 
 
 def test_what_the_result_carries_survives_the_trip_to_the_model(monkeypatch):
-    # cadless/agent.py puts this whole dict in the summary handed to the model,
-    # which is serialised. Anything in it that json.dumps silently retypes would
-    # reach the far side as something else.
+    # This dict is serialised onward whole. Anything in it that json.dumps
+    # silently retypes would reach the far side as something else.
     result, _ = _run(FakeGen(), _sound(), monkeypatch)
     assert json.loads(json.dumps(result.assembly)) == result.assembly
 

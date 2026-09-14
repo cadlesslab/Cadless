@@ -938,10 +938,8 @@ export const glbUrl = (versionId: number) => artifactUrl(versionId, "glb");
 /** Where one drawing of a version's assembly guide lives.
  *
  * Its own helper rather than a wider `ArtifactKind`, because a guide is not a
- * format the model can be exported to: adding it to that union would put it in
- * the export menu's exhaustive format table and offer it as a download nobody
- * asked for. Served like the thumbnail, which is absent from that union for the
- * same reason. */
+ * format the model can be exported to: widening that union would offer it as a
+ * download nobody asked for. */
 export const guideFrameUrl = (versionId: number, frame: number) =>
   `${BASE}/versions/${versionId}/artifacts/guide/${frame}`;
 
