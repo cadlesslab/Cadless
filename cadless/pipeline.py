@@ -666,6 +666,11 @@ class Pipeline:
             return {**written.as_payload(), "frames": frames}
         except Exception as exc:  # noqa: BLE001 — a description, never the build
             logger.warning("assembly guide unavailable, skipping: %s", exc, exc_info=True)
+            # Returning nothing has to mean nothing on disk, here as well as one
+            # level down: frames can already be written by the time something
+            # after them raises, and left there they are filed against a version
+            # whose guide is absent.
+            _clear_guide_frames(export_dir)
             _emit_stage(on_progress, "guide", "error", n, f"guide unavailable: {exc}")
             return None
 
