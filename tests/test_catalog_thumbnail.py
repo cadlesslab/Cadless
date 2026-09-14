@@ -178,7 +178,7 @@ _BODY_B = _cube_tris((60.0, 0.0, 0.0), 5.0)
 
 def _projected_px(all_tris, body_tris, size):
     """Final-image pixel coords of body vertices, mirroring render_software."""
-    basis = thumb._isometric_basis()
+    basis = thumb.isometric_basis()
     xy_all = (np.asarray(all_tris, float).reshape(-1, 3) @ basis.T)[:, :2]
     lo, hi = xy_all.min(axis=0), xy_all.max(axis=0)
     extent = float(max((hi - lo).max(), 1e-9))
