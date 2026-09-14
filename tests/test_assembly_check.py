@@ -279,6 +279,22 @@ def test_measurements_from_a_payload_with_an_unknown_key_does_not_raise():
     assert m.order == [0, 1]
 
 
+def test_measurements_from_a_payload_missing_releases_degrades_to_empty():
+    # A worker too old to record them is the ordinary case for one deploy, and it
+    # must read as "not measured" rather than break the call.
+    m = AssemblyMeasurements.from_payload({"order": [0, 1]})
+    assert m is not None
+    assert m.releases == []
+
+
+def test_measurements_carry_one_release_direction_per_part():
+    m = AssemblyMeasurements.from_payload(
+        {"order": [1, 0], "releases": [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]}
+    )
+    assert m is not None
+    assert m.releases == [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]
+
+
 def test_report_defaults_are_a_passing_report():
     assert AssemblyReport().ok
 

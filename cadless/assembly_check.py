@@ -77,6 +77,12 @@ class AssemblyMeasurements:
     ``gaps`` the closest approach of every pair. ``order`` is an order in which
     the parts can be brought together, or ``None`` when none was found, in which
     case ``trapped`` names the parts that could not be freed.
+
+    ``releases`` carries, per part index, the unit direction the search actually
+    took that part out along -- the heading it proved clear, not one derived
+    afterwards from the shape. It is empty overall when no order was found, and
+    the entry for the part left standing last is empty too: nothing remains to
+    block that one, so any heading would pass and none would be a measurement.
     """
 
     part_bboxes: list[list[float]] = field(default_factory=list)
@@ -85,6 +91,7 @@ class AssemblyMeasurements:
     order: list[int] | None = None
     trapped: list[int] = field(default_factory=list)
     unchecked: list[str] = field(default_factory=list)
+    releases: list[list[float]] = field(default_factory=list)
 
     @classmethod
     def from_payload(cls, data: object) -> AssemblyMeasurements | None:
@@ -105,6 +112,7 @@ class AssemblyMeasurements:
             order=_index_list(data.get("order")),
             trapped=_index_list(data.get("trapped")) or [],
             unchecked=list(data.get("unchecked") or []),
+            releases=list(data.get("releases") or []),
         )
 
 
@@ -506,7 +514,7 @@ def measure_assembly(
             else:
                 gaps.append([first, second, distance])
 
-    order, trapped, order_unchecked = _disassembly_order(parts, budget)
+    order, trapped, order_unchecked, releases = _disassembly_order(parts, budget)
     unchecked.extend(order_unchecked)
     return AssemblyMeasurements(
         part_bboxes=boxes,
@@ -515,6 +523,7 @@ def measure_assembly(
         order=order,
         trapped=trapped,
         unchecked=unchecked,
+        releases=releases,
     )
 
 
@@ -566,23 +575,29 @@ def _disassembly_order(parts, budget):
     when it says yes.
     """
     if len(parts) < 2:
-        return list(range(len(parts))), [], []
+        return list(range(len(parts))), [], [], []
 
     spheres = [_sphere(part) for part in parts]
     floor = _min_step(parts)
     if floor is None:
-        return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"]
+        return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
     remaining = list(range(len(parts)))
     removed: list[int] = []
+    releases: list[list[float]] = [[] for _ in parts]
     while remaining:
         freed = None
         for index in remaining:
             others = [other for other in remaining if other != index]
+            if not others:
+                # The part left standing is what the rest come off, not one that
+                # comes out itself. Nothing can block it, so every heading passes
+                # on the first probe and recording one would file the order the
+                # candidates happen to be listed in as a measurement.
+                freed = index
+                break
             try:
-                if _can_be_freed(parts, spheres, index, others, floor, budget):
-                    freed = index
-                    break
+                direction = _can_be_freed(parts, spheres, index, others, floor, budget)
             except _BudgetSpent:
                 return (
                     None,
@@ -591,20 +606,32 @@ def _disassembly_order(parts, budget):
                         f"{_ORDER_UNCHECKED_PREFIX} the search ran out of budget "
                         "before it could rule"
                     ],
+                    [],
                 )
+            if direction is not None:
+                freed = index
+                releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
+                break
         if freed is None:
-            return None, sorted(remaining), []
+            return None, sorted(remaining), [], []
         remaining.remove(freed)
         removed.append(freed)
     # Removing in this order works, so assembling in the reverse of it does.
-    return list(reversed(removed)), [], []
+    return list(reversed(removed)), [], [], releases
 
 
-def _can_be_freed(parts, spheres, index, others, floor, budget) -> bool:
+def _can_be_freed(parts, spheres, index, others, floor, budget):
+    """The heading this part comes out along, or ``None`` if none does.
+
+    Returns the direction rather than a yes, because the one that worked is the
+    only heading proved clear against the solids. Recovering it afterwards from
+    the shape would be a guess, and wrong exactly where it matters -- a joint that
+    releases along one axis only.
+    """
     for direction in _candidate_directions(spheres, index, others):
         if not _blocked_along(parts, spheres, index, others, direction, floor, budget):
-            return True
-    return False
+            return direction
+    return None
 
 
 def _blocked_along(parts, spheres, index, others, direction, floor, budget) -> bool:

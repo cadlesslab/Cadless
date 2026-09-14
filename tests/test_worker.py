@@ -183,6 +183,32 @@ def test_a_single_part_build_carries_no_assembly_measurements_even_when_asked():
     assert res.assembly is None
 
 
+def test_the_order_search_reports_the_axis_each_part_comes_out_along():
+    # A tongue inside a through-channel: the only way either part comes free is
+    # along the channel. The channel deliberately runs in Z rather than X, because
+    # X is the first direction the search tries -- a search that recorded the
+    # candidate it started with instead of the one that worked would pass a
+    # channel in X and has to go red here.
+    res = run_code(
+        "from build123d import *\n"
+        "result = (Box(20, 20, 40) - Box(10.4, 10.4, 41)) + Box(10, 10, 39.6)\n",
+        check_assembly=True,
+    )
+    assert res.ok, res.error
+    assert res.part_count == 2
+    assert res.assembly is not None
+    assert res.assembly.order is not None
+    assert len(res.assembly.releases) == 2
+    # One entry per part, and the part left standing carries none: nothing is
+    # left to block it, so any heading would pass and none would be measured.
+    recorded = [release for release in res.assembly.releases if release]
+    assert len(recorded) == 1
+    for release in recorded:
+        assert abs(release[2]) == pytest.approx(1.0, abs=1e-6)
+        assert release[0] == pytest.approx(0.0, abs=1e-6)
+        assert release[1] == pytest.approx(0.0, abs=1e-6)
+
+
 def test_the_parts_are_measured_after_the_export_scale_is_applied():
     # The summary stays in authoring units while the export is millimetres. The
     # build volume the checks run against is millimetres, so measuring the
