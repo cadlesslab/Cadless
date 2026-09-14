@@ -172,7 +172,14 @@ candidate judging, the identity seam and the image decisions are recorded under
    resource-limited subprocess fallback.
 5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
    the shared data volume — one file per kind, or one per solid where the build
-   produced several. The API persists metadata and serves the artifacts.
+   produced several. The API persists metadata and serves the artifacts. Not
+   every artifact kind is an export format, and the two are declared in different
+   places: a thumbnail, and the drawings of an assembly guide, are pictures the
+   engine made *about* a build rather than formats the build was converted *to*.
+   They are served by media type alone and MUST stay out of the exporter
+   registry, whose per-part file naming they do not meet — a kind added there is
+   written and then never found, with nothing raising. A mirror test holds the
+   four declarations of that vocabulary against each other.
 6. An execution failure can return to the provider as a repair prompt, and so can
    a post-build check that ran on a program which executed perfectly well: the
    render critique, the geometry assertions, and — on a turn that asked for an
@@ -191,6 +198,15 @@ candidate judging, the identity seam and the image decisions are recorded under
    several files of a kind has one row per kind whatever its geometry — so a
    rebuild runs into a staging directory and is discarded there. A version's own
    artifacts are never the target of a build that may turn out not to match them.
+7. After the checks accept a multi-part build, and only then, the turn describes
+   it: named parts, the order the check established, and drawings of the parts
+   coming apart. This runs in the API process rather than the worker, on the
+   exported meshes, so it needs no geometry kernel. It is the one post-build step
+   that NEVER ends a turn — the parts are built and accepted by the time it
+   starts, so a model or a render that fails costs the description and leaves the
+   build. The order and the joints it states are the ones the check measured; it
+   re-derives neither, and a model is asked only what to call the parts, so a bad
+   answer costs vocabulary and cannot cost the sequence.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount
