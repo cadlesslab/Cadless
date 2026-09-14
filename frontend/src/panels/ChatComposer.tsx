@@ -101,6 +101,8 @@ export function ChatComposer({
   disabled,
   forge = false,
   onToggleForge,
+  assembly = false,
+  onToggleAssembly,
   attachments = [],
   onAttachmentsChange,
 }: {
@@ -116,6 +118,11 @@ export function ChatComposer({
   // generation. Off by default; the server gates it behind a global kill-switch.
   forge?: boolean;
   onToggleForge?: () => void;
+  // Per-turn assembly opt-in: the turn asks for the part as several interlocking
+  // pieces rather than one solid. Off by default; the server gates it behind a
+  // global kill-switch, and it is independent of `forge`.
+  assembly?: boolean;
+  onToggleAssembly?: () => void;
   // Reference pictures for the next turn. Owned by the panel, like `value`, so
   // that clearing them is part of the same "the turn went out" step.
   attachments?: ComposerAttachment[];
@@ -190,7 +197,7 @@ export function ChatComposer({
 
   return (
     <div className="composer">
-      {(onToggleForge || onAttachmentsChange) && (
+      {(onToggleForge || onToggleAssembly || onAttachmentsChange) && (
         <div className="composer-tools">
           {onToggleForge && (
             <Tooltip label="Forge: race best-of-N candidates and keep the best (costs more). Off by default.">
@@ -204,6 +211,21 @@ export function ChatComposer({
                 onClick={onToggleForge}
               >
                 ⚒ Forge
+              </Button>
+            </Tooltip>
+          )}
+          {onToggleAssembly && (
+            <Tooltip label="Assembly: ask for the part as several interlocking pieces sized to the printer in Settings, rather than one solid. Off by default.">
+              <Button
+                className="composer-assembly"
+                variant="ghost"
+                aria-label="Assembly"
+                aria-pressed={assembly}
+                data-active={assembly}
+                disabled={disabled || generating}
+                onClick={onToggleAssembly}
+              >
+                ⧉ Assembly
               </Button>
             </Tooltip>
           )}

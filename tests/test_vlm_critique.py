@@ -349,11 +349,18 @@ def test_no_vendor_sdk_reaches_past_the_seam():
 
 class AlwaysGood:
     def generate(
-        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+        self,
+        intent,
+        grounding=None,
+        temperature=None,
+        on_token=None,
+        images=(),
+        on_reading=None,
+        assembly=None,
     ):
         return GOOD
 
-    def repair(self, intent, code, error, context=None, images=()):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None):
         self.last_error = error
         return GOOD
 
@@ -551,7 +558,7 @@ def test_a_failed_run_carries_no_verdict_from_a_build_it_is_not_returning(tmp_pa
         def generate(self, intent, grounding=None, temperature=None, on_token=None, **kw):
             return GOOD
 
-        def repair(self, intent, code, error, context=None, images=()):
+        def repair(self, intent, code, error, context=None, images=(), assembly=None):
             self.calls += 1
             return "from build123d import *\nresult = 1 / 0\n"
 

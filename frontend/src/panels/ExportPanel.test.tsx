@@ -39,6 +39,7 @@ const STATUS = {
   printer_cartridge_grams: null,
   printer_nozzle_temperature: null,
   printer_bed_temperature: null,
+  printer_joint_clearance: null,
   secrets: {},
 } satisfies SettingsStatus;
 

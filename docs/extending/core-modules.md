@@ -128,11 +128,31 @@ one silently drops a fifth:
 | `run_code` and `_run_remote` | copy exactly those keys out of the child's payload |
 | `GenerationResult` in `cadless/pipeline.py` | repeats the same four fields |
 
-`backend/routers/generation.py` reads `getattr(result, f"{kind}_path")`, so it
-picks a new kind up automatically — but only once `ExecResult` carries the
-field. Miss that step and your artifact is generated and then thrown away at the
-process boundary, which is a confusing failure to debug. The version and chat
-routes recover on their own, because they scan `model.{kind}` on disk instead.
+Every route that persists a build reads its artifacts off the export directory
+rather than off the result. Three of them do it through
+`backend/artifact_io.copy_and_register`; re-running a version reads the same
+directory through `artifact_io.exported_parts` and does its own copy, because it
+writes only kinds that are not already recorded. So a new kind is picked up from
+disk on all of them, and an artifact is no longer generated and then dropped at
+the process boundary when `ExecResult` is missing its field. Declare the field
+anyway: it is what a caller holding a result rather than a directory reads.
+
+A build with more than one solid writes one file per solid, named
+`model_p{i}.{kind}` instead of `model.{kind}`. `cadless/exporters.part_name`
+decides which, and `artifact_io.exported_parts` reads it back — they are a pair,
+and the number in the name is parsed rather than sorted, because that order is
+the part ordinal each file is filed under.
+
+Re-running refuses such a version, and `backend/routers/versions.py` has two
+separate guards for it because they catch different populations. The first reads
+the recorded rows and declines before executing anything: more rows than kinds
+means the version is already held in pieces. The second catches the one the row
+count cannot see — a version recorded before a build could hold several files of
+a kind has exactly one row per kind whatever its geometry, so a model that was
+always several solids only declares itself after rebuilding. That rebuild runs
+into a staging directory, never the version's own, which is what makes the second
+guard safe to reach: it discards a rebuild rather than having already overwritten
+what the version was serving.
 
 Production code always goes through the registry; the individual `export_*`
 functions are called directly only by tests.

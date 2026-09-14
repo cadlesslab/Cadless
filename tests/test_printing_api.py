@@ -363,6 +363,58 @@ class TestOfferingToScaleItDown:
         assert 0 < offer["percent"] < 100
         assert len(offer["size"]) == 3
 
+    def test_the_refusal_also_says_what_splitting_it_would_take(self, client, store, monkeypatch):
+        """The third thing said about a model that will not fit, beside the scale
+        offer and the quarter turn. It goes in `detail` because that is the one
+        part of this reply a panel is certain to show, and what is asserted is
+        that the route appends exactly what the module produced -- the wording
+        itself is pinned where it is written, in `tests/test_print_fit.py`.
+        """
+        model = (300.0, 250.0, 200.0)
+
+        async def go():
+            project = await store.create_project("P")
+            version = await store.add_version(
+                project.id, "a cabinet", "result=1", ok=True, bbox=model
+            )
+            directory = Path(store.version_artifact_dir(version.id))
+            (directory / "model.stl").write_bytes(b"\x00" * 84)
+            await store.add_artifact(version.id, "stl", str(directory / "model.stl"))
+            return version.id
+
+        vid = asyncio.run(go())
+
+        def never(*_a, **_k):
+            raise AssertionError("nothing is sliced until the offer is accepted")
+
+        monkeypatch.setattr(slicing, "slice_mesh", never)
+        body = client.post(f"/printing/versions/{vid}/slice").json()
+
+        assert body["ok"] is False
+        expected = print_fit.split_sentence(
+            print_fit.split_offer(model, printer_profile.build_volume({}))
+        )
+        assert body["detail"].endswith(expected)
+        # The other two remedies are still there, unchanged in shape.
+        assert body["scale_offer"] is not None
+
+    def test_a_model_far_past_the_bed_is_told_nothing_about_splitting(
+        self, client, oversized_version, monkeypatch
+    ):
+        """The desk lands far above the cap on the default bed. Past it the count
+        stops being said, so the refusal reads exactly as it did before any of
+        this existed and the scale offer is the only remedy standing."""
+
+        def never(*_a, **_k):
+            raise AssertionError("nothing is sliced until the offer is accepted")
+
+        monkeypatch.setattr(slicing, "slice_mesh", never)
+        body = client.post(f"/printing/versions/{oversized_version}/slice").json()
+
+        assert body["ok"] is False
+        assert "assembly" not in body["detail"].lower()
+        assert body["scale_offer"] is not None
+
     def test_accepting_it_scales_the_job(self, client, oversized_version, monkeypatch):
         seen = {}
 

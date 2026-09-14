@@ -40,7 +40,8 @@ type PrinterField = {
     | "printer_filament_density"
     | "printer_cartridge_grams"
     | "printer_nozzle_temperature"
-    | "printer_bed_temperature";
+    | "printer_bed_temperature"
+    | "printer_joint_clearance";
   label: string;
   placeholder: string;
 };
@@ -58,6 +59,12 @@ export const PRINTER_FIELDS: PrinterField[] = [
   { field: "printer_cartridge_grams", label: "Full cartridge (g)", placeholder: "" },
   { field: "printer_nozzle_temperature", label: "Nozzle temperature (°C)", placeholder: "205" },
   { field: "printer_bed_temperature", label: "Bed temperature (°C)", placeholder: "60" },
+  // Told to the model that writes an assembly, so that a joint exact in CAD
+  // comes out one that goes together in plastic. Zero is a real answer here —
+  // an exact fit, for somebody who would rather sand than shim — so the blank
+  // field and a saved zero mean different things, which is not true of any
+  // measurement above it.
+  { field: "printer_joint_clearance", label: "Joint clearance (mm)", placeholder: "0.2" },
 ];
 
 /** A saved number as text for an input, or blank when nothing is saved.

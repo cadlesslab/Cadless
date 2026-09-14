@@ -15,8 +15,38 @@ uniformly.
 from __future__ import annotations
 
 import os
+import re
 
 from cadless.config import settings
+
+#: How one part of a build is named, and how that name is read back.
+#:
+#: The process that writes these files and whatever later copies them in are not
+#: the same code, and they have to agree exactly: the order of the numbers in
+#: these names is the order the parts are filed in, and so the ordinal each one
+#: ends up with. A name the reader cannot parse is a part
+#: either dropped or filed under another part's number, and neither failure says
+#: anything at the time. So both halves live here, together, rather than as a
+#: format in one place and a pattern that has to match it in another.
+_PART_STEM = re.compile(r"^model_p(\d+)$")
+
+
+def part_name(index: int, total: int) -> str:
+    """The base filename for one part of a build, without its extension.
+
+    A one-solid build keeps ``model``, byte for byte what every build wrote before
+    parts existed. That is the upgrade path: an installation that never asks for
+    an assembly sees the tree it has always had, so anything that went looking for
+    that name still finds it. Numbering starts at zero and is not padded, because
+    the reader parses the number rather than sorting the string.
+    """
+    return "model" if total == 1 else f"model_p{index}"
+
+
+def part_index(stem: str) -> int | None:
+    """The part number carried by an exported file's stem, or ``None``."""
+    match = _PART_STEM.match(stem)
+    return int(match.group(1)) if match else None
 
 
 def export_step(result, out_dir: str, name: str = "model") -> str:

@@ -211,6 +211,40 @@ def test_rerun_refuses_a_version_in_pieces(client, store, monkeypatch):
 
 
 @pytest.mark.build123d
+def test_rerun_keeps_the_artifacts_of_a_version_that_rebuilds_in_pieces(client, store):
+    """The row count cannot see this case, and it is the dangerous one.
+
+    A version recorded before a build could hold several files of a kind has one
+    row per kind whatever its geometry, so the guard above passes it. Re-running
+    it exported into the version's *own* directory: the clearing step removed
+    each `model.{kind}`, the rebuild wrote `model_p*` instead, and the four rows
+    were left pointing at deleted files while the response still read ok. What
+    this pins is that the version's artifacts survive being refused.
+    """
+    two_solids = "from build123d import *\nresult = Box(10,10,10) + Pos(30,0,0) * Box(5,5,5)\n"
+    _pid, vid = _seed(store, code=two_solids)
+    kinds = ("step", "glb", "stl", "obj")
+
+    async def seed_rows():
+        directory = Path(store.version_artifact_dir(vid))
+        for kind in kinds:
+            path = directory / f"model.{kind}"
+            path.write_text("built before a build could hold several files of a kind")
+            await store.add_artifact(vid, kind, str(path))
+
+    asyncio.run(seed_rows())
+
+    r = client.post(f"/versions/{vid}/rerun")
+
+    assert r.status_code == 409
+    directory = Path(store.version_artifact_dir(vid))
+    for kind in kinds:
+        assert (directory / f"model.{kind}").exists(), f"the rerun deleted {kind}"
+    # The rows still resolve — a row pointing at a deleted file downloads as 404.
+    assert client.get(f"/versions/{vid}/artifacts/stl").status_code == 200
+
+
+@pytest.mark.build123d
 def test_rerun_executes_stored_code_and_creates_artifacts(client, store):
     pid, vid = _seed(store)  # version has no artifacts yet
     r = client.post(f"/versions/{vid}/rerun")

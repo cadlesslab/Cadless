@@ -82,6 +82,56 @@ def test_export_writes_artifacts(tmp_path):
     assert os.path.getsize(res.glb_path) > 0
 
 
+def test_export_writes_one_file_per_part(tmp_path):
+    """Two disjoint solids become two files of each kind, numbered from zero.
+
+    The count was already reported before this; the geometry was not. Both solids
+    went into one file per kind, so the second part had nowhere to be addressed
+    from and nothing downstream could tell it had been lost.
+    """
+    res = run_code(
+        "from build123d import *\nresult = Box(10, 10, 10) + Pos(30, 0, 0) * Box(5, 5, 5)\n",
+        export_dir=str(tmp_path),
+    )
+    assert res.ok, res.error
+    assert res.part_count == 2
+    for kind in ("step", "stl"):
+        assert sorted(p.name for p in tmp_path.glob(f"model_p*.{kind}")) == [
+            f"model_p0.{kind}",
+            f"model_p1.{kind}",
+        ]
+        # Not beside them: one shape per directory, or a reader finds both.
+        assert not (tmp_path / f"model.{kind}").exists()
+
+
+def test_a_single_solid_still_exports_under_the_plain_name(tmp_path):
+    """The upgrade path. An installation that never asks for an assembly sees
+    exactly the tree it has always had, which is what lets the re-run path go on
+    looking for ``model.{kind}`` by name."""
+    res = run_code("from build123d import *\nresult = Box(8, 8, 8)", export_dir=str(tmp_path))
+    assert res.ok, res.error
+    assert (tmp_path / "model.step").exists()
+    assert list(tmp_path.glob("model_p*.step")) == []
+
+
+def test_a_rebuild_leaves_none_of_the_previous_shape_behind(tmp_path):
+    """Callers reuse an export directory, so a build lands on top of the last
+    one's files. Without clearing, a two-part build followed by a one-solid one
+    leaves both namings side by side and whoever scans the directory has to guess
+    which is current -- and the stale one wins whenever it is found first.
+    """
+    run_code(
+        "from build123d import *\nresult = Box(10, 10, 10) + Pos(30, 0, 0) * Box(5, 5, 5)\n",
+        export_dir=str(tmp_path),
+    )
+    assert list(tmp_path.glob("model_p*.stl"))
+
+    run_code("from build123d import *\nresult = Box(8, 8, 8)", export_dir=str(tmp_path))
+
+    assert (tmp_path / "model.stl").exists()
+    assert list(tmp_path.glob("model_p*.stl")) == []
+
+
 def test_export_scale_scales_artifacts_not_geometry(tmp_path):
     """Metre-authored domains export at 1000x so mm-assuming consumers read
     correct real-world size (issue #18); the geometry summary stays unscaled."""

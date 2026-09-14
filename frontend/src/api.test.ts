@@ -243,7 +243,12 @@ describe("chat SSE client", () => {
     const [url, init] = fetchFn.mock.calls[0];
     expect(url).toMatch(/\/projects\/7\/chat$/);
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({ message: "a cube", images: [], forge: false });
+    expect(JSON.parse(init.body)).toEqual({
+      message: "a cube",
+      images: [],
+      forge: false,
+      assembly: false,
+    });
     expect(seen.map((e) => e.event)).toEqual(["turn_start", "text_delta", "turn_end"]);
   });
 
@@ -256,7 +261,31 @@ describe("chat SSE client", () => {
     await api.streamChat(7, "a cube", () => {}, undefined, true);
 
     const init = fetchFn.mock.calls[0][1];
-    expect(JSON.parse(init.body)).toEqual({ message: "a cube", images: [], forge: true });
+    expect(JSON.parse(init.body)).toEqual({
+      message: "a cube",
+      images: [],
+      forge: true,
+      assembly: false,
+    });
+  });
+
+  it("sends assembly:true when the turn opts into assembly output", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      sseResponse(['data: {"event":"turn_end","stop_reason":"end_turn"}\n\n']),
+    );
+    vi.stubGlobal("fetch", fetchFn);
+
+    await api.streamChat(7, "a cube", () => {}, undefined, false, [], true);
+
+    const init = fetchFn.mock.calls[0][1];
+    // Spelled `assembly` on the wire because that is the field name `ChatRequest`
+    // declares; the two opt-ins are independent, so forge stays off here.
+    expect(JSON.parse(init.body)).toEqual({
+      message: "a cube",
+      images: [],
+      forge: false,
+      assembly: true,
+    });
   });
 
   it("puts the turn's attachments in the body as `images`", async () => {
@@ -277,6 +306,7 @@ describe("chat SSE client", () => {
         { media_type: "image/jpeg", data: "BBBB" },
       ],
       forge: false,
+      assembly: false,
     });
   });
 

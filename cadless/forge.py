@@ -44,6 +44,7 @@ def race_and_judge(
     grounding: str | None = None,
     images=(),
     on_reading=None,
+    assembly=None,
 ) -> tuple[JudgeResult, list[GenerationResult]]:
     """Fan out ``n`` candidates and judge them, returning the verdict and the field.
 
@@ -72,6 +73,7 @@ def race_and_judge(
         grounding=grounding,
         images=images,
         on_reading=on_reading,
+        assembly=assembly,
     )
     judged = select_winner(
         candidates,

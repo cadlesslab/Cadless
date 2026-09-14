@@ -59,8 +59,12 @@ export function useApp() {
     clearRecalled: () => store.set({ recalledPrompt: null }),
     generate: (prompt: string) => actions.generate(store, prompt),
     refine: (priorVersionId: number, delta: string) => actions.refine(store, priorVersionId, delta),
-    chat: (message: string, forge?: boolean, images?: import("./api").ImageAttachment[]) =>
-      actions.chat(store, message, forge, images),
+    chat: (
+      message: string,
+      forge?: boolean,
+      images?: import("./api").ImageAttachment[],
+      assembly?: boolean,
+    ) => actions.chat(store, message, forge, images, assembly),
     stopChat: () => actions.stopChat(store),
     steerChat: guard((message: string) => actions.steerChat(store, message)),
     bootstrap: guard(() => actions.bootstrap(store)),

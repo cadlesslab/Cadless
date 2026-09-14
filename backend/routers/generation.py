@@ -19,11 +19,11 @@ from pydantic import BaseModel, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
+from backend import artifact_io
 from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.schemas import VersionOut
 from backend.sse import SSE_HEADERS
-from cadless.exporters import EXPORTERS
 from cadless.pipeline import generate_cad  # monkeypatched in tests
 from cadless.scoped_store import ScopedStore
 from cadless.store import ScriptVersion
@@ -100,13 +100,7 @@ async def persist_generation(
             parent_version_id=parent_version_id,
         )
         if result.ok:
-            dest = store.version_artifact_dir(version.id)
-            for kind in EXPORTERS:
-                src = getattr(result, f"{kind}_path", None)
-                if src and Path(src).exists():
-                    target = Path(dest) / f"model.{kind}"
-                    shutil.copy(src, target)
-                    await store.add_artifact(version.id, kind, str(target))
+            await artifact_io.copy_and_register(store, version.id, staging)
             await store.set_current_version(project_id, version.id)
             await store.update_message(assistant.id, status="ok", version_id=version.id)
         else:

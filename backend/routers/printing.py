@@ -338,9 +338,20 @@ async def slice_version(
                 # real scale, so for that half the plain refusal was always the
                 # last word. The offer is returned beside the refusal and nothing
                 # is sliced until it comes back accepted.
+                #
+                # Beside it, how far past the bed this is, counted in parts. That
+                # is still two ways out and a measurement, not three ways out:
+                # printing an assembly is refused by the path that would slice
+                # one, so offering it as a remedy would route a reader at that
+                # refusal. It goes in `detail` because that is the part of this
+                # reply a panel is certain to show, and this reply has a reader
+                # outside this tree. Scaling and turning keep their own shapes.
+                split = print_fit.split_offer(version.bbox, volume)
                 return {
                     "ok": False,
-                    "detail": why,
+                    "detail": (
+                        why if split is None else f"{why} {print_fit.split_sentence(split)}"
+                    ),
                     "slicer_missing": False,
                     "stats": {},
                     "scale_offer": (

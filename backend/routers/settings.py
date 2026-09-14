@@ -64,6 +64,10 @@ class SettingsUpdate(BaseModel):
     printer_cartridge_grams: float | None = None
     printer_nozzle_temperature: float | None = None
     printer_bed_temperature: float | None = None
+    # The gap left on a printed joint's mating faces. Saved on the same terms as
+    # the measurements above -- it belongs to the printer and the material, not
+    # to the model -- and typed as a number for the same reason they are.
+    printer_joint_clearance: float | None = None
     # Engine tuning knobs, typed rather than str so a JSON number arrives as a
     # number. The default stays None so `exclude_none` can tell "not sent" from
     # "sent as 0/false" — for a knob those are different instructions, where for
@@ -92,6 +96,7 @@ class SettingsUpdate(BaseModel):
     forge_max_n: int | None = None
     repair_max_attempts: int | None = None
     bedrock_max_tokens: int | None = None
+    assembly_enabled: bool | None = None
 
 
 @router.get("")

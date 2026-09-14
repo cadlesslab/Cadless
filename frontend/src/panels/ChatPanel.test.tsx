@@ -192,14 +192,14 @@ describe("ChatPanel", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a 10mm cube" } });
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
-    // Forge is off by default => the turn does not opt in.
-    expect(api.streamChat).toHaveBeenCalledWith(1, "a 10mm cube", expect.any(Function), expect.any(Object), false, []);
+    // Both per-turn toggles are off by default => the turn opts into neither.
+    expect(api.streamChat).toHaveBeenCalledWith(1, "a 10mm cube", expect.any(Function), expect.any(Object), false, [], false);
   });
 
   it("runs an example prompt from the empty state", () => {
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
     fireEvent.click(screen.getByRole("button", { name: "Plate with hole" }));
-    expect(api.streamChat).toHaveBeenCalledWith(1, expect.stringContaining("plate"), expect.any(Function), expect.any(Object), false, []);
+    expect(api.streamChat).toHaveBeenCalledWith(1, expect.stringContaining("plate"), expect.any(Function), expect.any(Object), false, [], false);
   });
 
   it("opts the turn into forge mode when the Forge toggle is on", () => {
@@ -207,7 +207,17 @@ describe("ChatPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /Forge/i }));
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect(api.streamChat).toHaveBeenCalledWith(1, "a cube", expect.any(Function), expect.any(Object), true, []);
+    expect(api.streamChat).toHaveBeenCalledWith(1, "a cube", expect.any(Function), expect.any(Object), true, [], false);
+  });
+
+  it("opts the turn into assembly output when the Assembly toggle is on", () => {
+    renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
+    fireEvent.click(screen.getByRole("button", { name: /Assembly/i }));
+    fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    // The two per-turn opt-ins are independent: turning this one on must not
+    // drag forge along with it, which a copy-pasted handler would do silently.
+    expect(api.streamChat).toHaveBeenCalledWith(1, "a cube", expect.any(Function), expect.any(Object), false, [], true);
   });
 
   it("renders the block-based transcript with markdown and a result card", () => {
@@ -306,6 +316,7 @@ describe("ChatPanel", () => {
     expect(api.streamChat).toHaveBeenCalledWith(
       1, "", expect.any(Function), expect.any(Object), false,
       [expect.objectContaining({ media_type: "image/png", name: "bracket.png" })],
+      false,
     );
     // Cleared with the field: an attachment left behind would ride along with
     // the next turn, which is not what anybody meant by sending it.

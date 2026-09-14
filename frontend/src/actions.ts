@@ -177,6 +177,7 @@ export function chat(
   message: string,
   forge = false,
   images: api.ImageAttachment[] = [],
+  assembly = false,
 ): void {
   const pid = store.get().activeProjectId;
   if (pid == null || store.get().generating) return;
@@ -207,6 +208,7 @@ export function chat(
       controller.signal,
       forge,
       images,
+      assembly,
     )
     .catch((e: unknown) => {
       const detail = e instanceof Error ? e.message : "chat failed";

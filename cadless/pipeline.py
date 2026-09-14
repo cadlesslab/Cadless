@@ -43,6 +43,7 @@ from cadless.assertions import (
 from cadless.config import Settings, settings
 from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
+from cadless.printer_profile import AssemblySpec
 from cadless.prompts import CodeGenerator
 from cadless.validation import validate_code
 from cadless.worker import run_code
@@ -154,6 +155,7 @@ class Pipeline:
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
         critique: bool = True,
+        assembly: AssemblySpec | None = None,
     ) -> GenerationResult:
         """Generate (or, when ``prior_code`` is given, refine) then validate/execute.
 
@@ -218,6 +220,7 @@ class Pipeline:
                 temperature=temperature,
                 images=images,
                 on_reading=on_reading,
+                assembly=assembly,
                 **extra,
             )
         _emit_stage(on_progress, mode, "ok", 1)
@@ -238,7 +241,14 @@ class Pipeline:
                 _emit_stage(on_progress, "validate", "error", n, last_error)
                 self._record(attempts, on_progress, Attempt(n, code, "validate", last_error))
                 code = self._repair(
-                    on_progress, intent, code, last_error, n, max_tries, images=images
+                    on_progress,
+                    intent,
+                    code,
+                    last_error,
+                    n,
+                    max_tries,
+                    images=images,
+                    assembly=assembly,
                 )
                 if code is None:
                     break
@@ -280,6 +290,7 @@ class Pipeline:
                                 max_tries,
                                 forced=True,
                                 images=images,
+                                assembly=assembly,
                             )
                             continue
                     else:
@@ -305,6 +316,7 @@ class Pipeline:
                             max_tries,
                             forced=True,
                             images=images,
+                            assembly=assembly,
                         )
                         continue
                     _emit_stage(on_progress, "assert", "ok", n)
@@ -338,6 +350,7 @@ class Pipeline:
                 max_tries,
                 context=res.repair_context,
                 images=images,
+                assembly=assembly,
             )
             if code is None:
                 break
@@ -361,6 +374,7 @@ class Pipeline:
         temperature: float | None = None,
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
+        assembly: AssemblySpec | None = None,
     ) -> list[GenerationResult]:
         """Best-of-N fan-out (C1): run N *fresh* generations in parallel.
 
@@ -401,6 +415,7 @@ class Pipeline:
                     images=images,
                     on_reading=on_reading,
                     critique=False,
+                    assembly=assembly,
                 )
             ]
 
@@ -430,6 +445,7 @@ class Pipeline:
                     images=images,
                     on_reading=on_reading,
                     critique=False,
+                    assembly=assembly,
                 )
             except Exception as exc:  # isolate: one bad candidate must not sink others
                 return GenerationResult(
@@ -503,6 +519,7 @@ class Pipeline:
         forced: bool = False,
         context=None,
         images: Sequence[ContentBlock] = (),
+        assembly: AssemblySpec | None = None,
     ) -> str | None:
         """Ask the model to fix ``code``; return None if the budget is exhausted.
 
@@ -513,7 +530,7 @@ class Pipeline:
         if not forced and n >= max_tries:
             return None
         _emit_stage(on_progress, "repair", "begin", n, error)
-        repaired = self._gen.repair(intent, code, error, context, images=images)
+        repaired = self._gen.repair(intent, code, error, context, images=images, assembly=assembly)
         _emit_stage(on_progress, "repair", "ok", n)
         return repaired
 

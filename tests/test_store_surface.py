@@ -174,6 +174,12 @@ def _imports(path: Path) -> list[ast.ImportFrom]:
 
 
 ROUTER_FILES = sorted((_ROOT / "backend" / "routers").glob("*.py"))
+# The boundary follows the store, not the directory. A module a router hands its
+# scoped view to can reach for the unscoped one just as invisibly as a router
+# can, and moving code out of `backend/routers/` must not be a way to leave this
+# check behind. `artifact_io` is the single funnel for every artifact write,
+# which is where such a reach would be least visible of all.
+GUARDED_FILES = ROUTER_FILES + [_ROOT / "backend" / "artifact_io.py"]
 
 
 def test_there_are_routers_to_check():
@@ -181,8 +187,13 @@ def test_there_are_routers_to_check():
     assert len(ROUTER_FILES) >= 10
 
 
-@pytest.mark.parametrize("path", ROUTER_FILES, ids=lambda p: p.name)
-def test_a_router_does_not_import_the_unscoped_store(path):
+def test_every_guarded_file_exists():
+    """A path that has moved would otherwise be skipped rather than caught."""
+    assert all(path.is_file() for path in GUARDED_FILES)
+
+
+@pytest.mark.parametrize("path", GUARDED_FILES, ids=lambda p: p.name)
+def test_a_module_behind_a_route_does_not_import_the_unscoped_store(path):
     """Rows reach a route through the scoped view or not at all.
 
     The dataclasses are fine — they are shapes, not access. What a router must

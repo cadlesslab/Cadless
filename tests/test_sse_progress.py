@@ -25,7 +25,14 @@ class FakeGen:
         self.repairs = 0
 
     def generate(
-        self, intent, grounding=None, temperature=None, on_token=None, images=(), on_reading=None
+        self,
+        intent,
+        grounding=None,
+        temperature=None,
+        on_token=None,
+        images=(),
+        on_reading=None,
+        assembly=None,
     ):
         out = self.outputs[0]
         if on_token is not None:  # surface the codegen stream
@@ -35,7 +42,7 @@ class FakeGen:
     def refine(self, intent, prior_code, images=(), on_reading=None):
         return self.outputs[0]
 
-    def repair(self, intent, code, error, context=None, images=()):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None):
         self.repairs += 1
         return self.outputs[self.repairs]
 

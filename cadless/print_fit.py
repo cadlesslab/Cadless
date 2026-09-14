@@ -192,3 +192,80 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
         f"build volume is {_mm(volume.width)} x {_mm(volume.depth)} x {_mm(volume.height)} mm. "
         "Ask for a smaller model, or set your printer's real size in Settings."
     )
+
+
+#: Above this many parts, splitting stops being worth saying at all.
+#:
+#: The count is what a straight cut would take, so it grows with volume rather
+#: than levelling off: a car-sized model against a desktop bed comes out in four
+#: figures. As a measure that is still true, and it is still useless -- past a
+#: point the reader already knows the answer is "not on this printer", the scale
+#: offer beside it says so in a unit they can act on, and another digit only
+#: reads as the tool being facetious. The ceiling is where saying it stops
+#: adding anything, not where the arithmetic stops working.
+MAX_SPLIT_PIECES = 24
+
+
+@dataclass(frozen=True)
+class SplitOffer:
+    """How many parts a too-big model would take, as something to be told.
+
+    An estimate, like :class:`ScaleOffer`, and for a sharper reason: this counts a
+    straight cut along each axis, while the model decides where its own seams
+    actually go. A seam placed at a natural boundary may take more parts than a
+    grid would, or fewer. So it is a floor, and it is said as "at least".
+    """
+
+    pieces: int
+
+
+def split_offer(bbox: Sequence[Any] | None, volume: BuildVolume) -> SplitOffer | None:
+    """What cutting a too-big model up would take, or ``None``.
+
+    The third answer, beside scaling it down and turning it a quarter. Those two
+    were the whole repertoire, and for anything authored at real scale neither is
+    what was wanted: one prints something smaller than was asked for, and the
+    other only ever helps once.
+
+    ``None`` covers a model that already fits and a bounding box that is not three
+    usable numbers -- the same silence the rest of this module keeps, and for the
+    same reason. It is measured against :func:`scaled_target` rather than the bare
+    bed because each part is printed on its own, so each one needs the room a
+    skirt takes.
+    """
+    if not too_big_for(bbox, volume):
+        return None
+    dimensions = _dimensions(bbox)
+    if dimensions is None:
+        return None
+    target = scaled_target(volume)
+    pieces = 1
+    for size, limit in zip(dimensions, (target.width, target.depth, target.height), strict=True):
+        pieces *= max(1, math.ceil(size / limit))
+    if pieces <= 1 or pieces > MAX_SPLIT_PIECES:
+        return None
+    return SplitOffer(pieces=pieces)
+
+
+def split_sentence(offer: SplitOffer) -> str:
+    """The split remedy, as a line to read beside the refusal.
+
+    A sentence rather than a field because this reply's ``detail`` is shown to a
+    reader by more than one panel and only one of them is in this tree. A remedy
+    said here arrives wherever the refusal already does; one returned beside it
+    arrives only after a client learns to read it.
+
+    It is written as a measure rather than an offer, which is what separates it
+    from the scale offer beside it. Scaling is something the reader can accept
+    here and now; an assembly is not, because printing one is not supported and a
+    multi-part version is refused by the path that would slice it. Telling them
+    to go and ask for one would be routing them at a refusal.
+
+    So it names no control and promises no outcome: it says how far past the bed
+    this model is, in the unit the reader is about to think in anyway.
+    """
+    return (
+        f"It would take an assembly of at least {offer.pieces} parts to fit. "
+        "Printing an assembly is not supported yet, so that is a measure of how "
+        "far past the build volume this is rather than a way to print it."
+    )

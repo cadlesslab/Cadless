@@ -39,16 +39,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
+from backend import artifact_io
 from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
-from cadless import user_settings
+from cadless import printer_profile, user_settings
 from cadless.agent import Agent, SessionSteerRegistry, ToolContext
 from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
 from cadless.config import settings
 from cadless.distill import auto_distill
-from cadless.exporters import EXPORTERS
 from cadless.forge import persist_losers
 from cadless.llm.registry import build_provider  # monkeypatched in tests
 from cadless.llm.types import ContentBlock
@@ -84,6 +84,13 @@ class ChatRequest(BaseModel):
     # gate). Default False => today's single-generation behavior. Forge is per-turn,
     # not a persistent project setting: each turn opts in explicitly.
     forge: bool = False
+    # Per-turn assembly opt-in: the model is asked for interlocking parts sized to
+    # the saved printer when this is True AND the global ``assembly_enabled``
+    # kill-switch is on (the same both-true gate ``forge`` uses). Default False =>
+    # today's single-solid prompt, unchanged to the byte. Per-turn rather than a
+    # project setting for the same reason forge is: one model in a conversation
+    # may need splitting and the next may not.
+    assembly: bool = False
 
     @model_validator(mode="after")
     def _needs_something_to_act_on(self) -> ChatRequest:
@@ -114,6 +121,12 @@ class SteerRequest(BaseModel):
     # a body that has always been accepted into a 422 for a reason that has nothing
     # to do with why the model was narrowed.
     forge: bool = False
+    # Declared here for the reason directly above, before a client can send it:
+    # the composer puts this on every chat body, and a steer issued from the same
+    # component would 422 on a field that has nothing to do with why this model
+    # exists. Accepted and ignored -- steering injects a string into a loop whose
+    # parts were already decided by the generation it is steering.
+    assembly: bool = False
 
 
 def build_pipeline() -> Pipeline:
@@ -361,13 +374,7 @@ async def _persist_tool_version(
     thumb = payload.get("thumbnail")
     src_dir = Path(thumb).parent if thumb else None
     if src_dir and src_dir.exists():
-        dest = store.version_artifact_dir(version.id)
-        for kind in EXPORTERS:
-            src = src_dir / f"model.{kind}"
-            if src.exists():
-                target = Path(dest) / f"model.{kind}"
-                shutil.copy(src, target)
-                await store.add_artifact(version.id, kind, str(target))
+        await artifact_io.copy_and_register(store, version.id, src_dir)
     await store.set_current_version(project_id, version.id)
     return version.id
 
@@ -441,6 +448,15 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # AND the global kill-switch is on. N is budget-scaled (config), not hard-coded.
     forge_active = bool(body.forge and settings.forge_enabled)
     forge_n = settings.forge_scaled_n() if forge_active else 1
+    # The same both-true gate, and the printer read once here rather than deeper
+    # down: the prompt has to describe one machine, and the saved file is on disk
+    # -- reading it per candidate in a forge race would be the same answer bought
+    # N times, with nothing stopping the two halves disagreeing mid-turn.
+    assembly_spec = (
+        printer_profile.assembly_spec(await asyncio.to_thread(user_settings.load))
+        if (body.assembly and settings.assembly_enabled)
+        else None
+    )
     # The current version (if any) is the parent the race branches off, so winner +
     # loser candidate rows hang off the model the turn started from.
     project = await store.get_project(project_id)
@@ -488,6 +504,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         on_reading=_keep_first_reading if image_blocks else None,
         forge=forge_active,
         forge_n=forge_n,
+        assembly=assembly_spec,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
         on_critique=_relay_critique,
     )

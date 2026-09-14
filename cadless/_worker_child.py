@@ -2,8 +2,9 @@
 
 Invoked as a subprocess by :mod:`cadless.worker`. Reads a code file, executes
 it, computes a geometry summary, optionally exports artifacts, and prints a single
-``__VTRESULT__ {json}`` line to stdout. Kept dependency-light and side-effect free
-apart from the optional export.
+``__VTRESULT__ {json}`` line to stdout. Kept dependency-light, and side-effect
+free apart from the optional export — which writes one file per solid and first
+removes what an earlier build left of that kind in the same directory.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
 """
@@ -79,6 +80,46 @@ def _part_count(result) -> int | None:
         return None
 
 
+def _parts_to_export(shape) -> list:
+    """The pieces to write as separate files: the solids, or the shape itself.
+
+    A one-solid build exports the shape it was handed rather than the solid pulled
+    back out of it. They are the same geometry, and passing the original through
+    keeps a single-part export identical to what it was before parts existed --
+    which is what the upgrade path rests on. A shape that cannot be split is
+    exported whole for the same reason ``_part_count`` returns ``None`` there:
+    the fallback is the old behaviour, not a failure.
+    """
+    try:
+        solids = shape.solids()
+    except Exception:  # noqa: BLE001 - unsplittable shapes export whole, as before
+        return [shape]
+    return list(solids) if len(solids) > 1 else [shape]
+
+
+def _clear_previous(export_dir: str, kind: str) -> None:
+    """Delete this kind's files from an earlier build in the same directory.
+
+    An export directory may already hold an earlier build's files: callers reuse
+    one. Left in place, a two-part build followed by a one-solid one leaves
+    ``model.stl`` and ``model_p*.stl`` side by side, and nothing in either name
+    says which build is current -- whoever reads the directory has to guess.
+    Cleared, it holds one shape at a time and the question never arises.
+
+    Failures are not swallowed: a file that cannot be removed would leave exactly
+    the mixed directory this exists to prevent, and the export is better abandoned
+    loudly than completed into one.
+    """
+    from pathlib import Path
+
+    directory = Path(export_dir)
+    if not directory.is_dir():
+        return
+    for stale in [directory / f"model.{kind}", *directory.glob(f"model_p*.{kind}")]:
+        if stale.exists():
+            stale.unlink()
+
+
 def _is_manifold(result) -> bool | None:
     """Whether the result is a single closed (watertight) manifold, or None.
 
@@ -123,8 +164,21 @@ def main(argv: list[str]) -> int:
             from cadless import exporters  # lazy: only when export requested
 
             shape = result if export_scale == 1.0 else result.scale(export_scale)
+            parts = _parts_to_export(shape)
             for kind, export in exporters.EXPORTERS.items():
-                summary[f"{kind}_path"] = export(shape, export_dir)
+                _clear_previous(export_dir, kind)
+                paths = [
+                    export(part, export_dir, exporters.part_name(i, len(parts)))
+                    for i, part in enumerate(parts)
+                ]
+                # The scalar stays the first part. For a one-solid build that is
+                # the whole model, which is what every reader of it was written
+                # against; for an assembly it is a *fragment*, so anything that
+                # renders or judges the one file is looking at part 0 alone.
+                # Said here because nothing in the name says it. Multiplicity is
+                # read off the directory rather than carried beside this: a
+                # second field would be a second place for the two to disagree.
+                summary[f"{kind}_path"] = paths[0]
     except Exception as exc:  # noqa: BLE001
         print(f"{SENTINEL} " + json.dumps(_error_payload(exc, code, prefix="post-process: ")))
         return 1

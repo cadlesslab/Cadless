@@ -109,6 +109,11 @@ export function ChatPanel({
   // Per-turn forge opt-in: when on, the next turn races best-of-N for a
   // fresh generation (server gates it behind the global forge kill-switch too).
   const [forge, setForge] = useState(false);
+  // Per-turn assembly opt-in: when on, the next turn asks for the part as several
+  // interlocking pieces sized to the saved printer rather than one solid (server
+  // gates it behind the global assembly kill-switch too). Independent of forge —
+  // one turn may want splitting without racing candidates, or the other way round.
+  const [assembly, setAssembly] = useState(false);
   // Reference pictures for the next turn. Per-turn like forge, and held here
   // rather than in the composer so that clearing them is part of the same step
   // that clears the field once a turn has gone out.
@@ -159,14 +164,15 @@ export function ChatPanel({
     if (generating || activeProjectId == null || readOnly) return;
     lastText.current = message;
     const opted = forge;
+    const optedAssembly = assembly;
     // Captured, not read from state on replay: Retry re-sends the turn that
     // failed, and by then the composer has been emptied of the very pictures
-    // that turn was about.
+    // that turn was about — and the toggles may have been flipped since.
     replay.current = () => {
       if (generating || activeProjectId == null) return;
-      app.chat(message, opted, images);
+      app.chat(message, opted, images, optedAssembly);
     };
-    app.chat(message, opted, images);
+    app.chat(message, opted, images, optedAssembly);
   }
   function submit() {
     const text = value.trim();
@@ -289,6 +295,8 @@ export function ChatPanel({
         disabled={activeProjectId == null || readOnly}
         forge={forge}
         onToggleForge={() => setForge((f) => !f)}
+        assembly={assembly}
+        onToggleAssembly={() => setAssembly((a) => !a)}
         attachments={attachments}
         onAttachmentsChange={setAttachments}
       />
