@@ -113,7 +113,9 @@ def build_user_message(intent: str, grounding: str | None = None) -> str:
     return f"{render_few_shot()}\n\n{grounding}\n\nRequest: {intent}\nResponse:"
 
 
-def build_refinement_message(intent: str, prior_code: str) -> str:
+def build_refinement_message(
+    intent: str, prior_code: str, assembly: AssemblySpec | None = None
+) -> str:
     """Message that asks the model to edit an existing script to satisfy a change.
 
     ``intent`` is the change request (the delta), e.g. "make the hole 8 mm".
@@ -124,7 +126,21 @@ def build_refinement_message(intent: str, prior_code: str) -> str:
     and to change only what the request strictly requires — the earlier "smallest
     change" phrasing let the model replace a detailed multi-storey house with an
     over-simplified one on a small position tweak.
+
+    ``assembly`` decides what the closing line asks ``result`` to be, exactly as it
+    does in :func:`build_repair_message`. Editing an assembly and being told to
+    finish with "the final solid" is an instruction to fuse it, which is the one
+    thing the turn asked against -- and the prompt is otherwise silent on the
+    subject, so nothing else in the message would disagree.
     """
+    keeps = (
+        "still assign the final solid to `result`"
+        if assembly is None
+        else (
+            "still assign the whole assembly to `result` as a Compound of separate "
+            "solids, with its interlocking joints and their clearance intact"
+        )
+    )
     return (
         f"Here is an existing build123d script. It is the source of truth — treat it "
         f"as code you must EDIT in place, not redesign:\n\n"
@@ -140,7 +156,7 @@ def build_refinement_message(intent: str, prior_code: str) -> str:
         f"- For a pure dimensional change, prefer editing the value in the existing "
         f"`params` block and keep that block in sync with the geometry.\n\n"
         f"Return the FULL updated script (code only) — the original with just your "
-        f"targeted edit applied — and still assign the final solid to `result`. The "
+        f"targeted edit applied — and {keeps}. The "
         f"output should differ from the input by a small diff."
     )
 
@@ -176,20 +192,17 @@ def build_repair_message(
     model can target deep OCCT failures precisely. Otherwise it falls back to the
     flat ``error`` string (e.g. validation/critique failures).
 
-    ``assembly`` puts the turn's requirements back in front of the model. The
-    closing line used to say "the final solid" unconditionally, which on an
-    assembly turn instructed the model to undo the very thing that turn asked for
-    -- and a repair round is where that instruction lands hardest, because the
-    request it is repairing is the one hardest to get right in the first place.
+    ``assembly`` decides what the closing line asks ``result`` to be. It used to
+    say "the final solid" unconditionally, which on an assembly turn instructed
+    the model to undo the very thing that turn asked for -- and a repair round is
+    where that instruction lands hardest, because the request it is repairing is
+    the one hardest to get right in the first place.
 
-    Rewriting that line is not enough on its own, which is why the whole of
-    :func:`_assembly_rules` goes in front as well. A round told to produce
-    separate solids but never told how large the bed is has no number to size
-    them against, and one solid at the requested size satisfies every word it can
-    still see. The closing line stays because it is the tail of the instruction
-    sentence -- "fixes the error and still ..." has to end in something -- and
-    because it says what ``result`` must be after this correction specifically,
-    which the rules state for the design rather than for the round.
+    It settles the closing line and nothing else: the requirements themselves are
+    framed around this message by the caller, the way every prompt in this module
+    is framed. Applying them here as well would give the one builder that takes a
+    spec two jobs the others do not have, and a caller that then framed it like
+    its siblings -- the obvious change to make -- would send the rules twice.
     """
     failure = _format_failure(error, context)
     keeps = (
@@ -208,7 +221,7 @@ def build_repair_message(
         f"Return a corrected full script (code only) that fixes the error and still "
         f"{keeps}."
     )
-    return _with_assembly_instruction(message, assembly)
+    return message
 
 
 def _format_failure(error: str, context: RepairContext | None) -> str:
@@ -427,7 +440,9 @@ class CodeGenerator:
         into the model differ in their message and not in what frames it.
         """
         user = _with_assembly_instruction(
-            _with_reference_instruction(build_refinement_message(intent, prior_code), images),
+            _with_reference_instruction(
+                build_refinement_message(intent, prior_code, assembly), images
+            ),
             assembly,
         )
         if images:
@@ -462,8 +477,11 @@ class CodeGenerator:
         path used to do only the first -- the picture arrived with nothing saying
         what to do with it.
         """
-        user = _with_reference_instruction(
-            build_repair_message(intent, previous_code, error, context, assembly), images
+        user = _with_assembly_instruction(
+            _with_reference_instruction(
+                build_repair_message(intent, previous_code, error, context, assembly), images
+            ),
+            assembly,
         )
         if images:
             text = self._stream_complete(user, None, None, images)
