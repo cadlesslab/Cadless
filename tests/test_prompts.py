@@ -4,6 +4,7 @@ import pytest
 
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
+    REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
     build_refinement_message,
     build_repair_message,
@@ -180,6 +181,98 @@ def test_a_repair_round_on_an_ordinary_turn_still_asks_for_a_solid():
     assert "assigns the final solid to `result`" in message
 
 
+def test_a_refine_round_on_an_assembly_turn_does_not_ask_for_one_solid():
+    """The trap the repair round above closes, one door along. An edit whose
+    closing line says "the final solid" is an instruction to fuse the assembly the
+    turn asked to edit, and it would be the only sentence in that message with an
+    opinion on the matter."""
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+
+    message = build_refinement_message("make it taller", "result = 1", spec)
+
+    assert "Compound of separate solids" in message
+    assert "final solid" not in message
+
+
+def test_a_refine_round_on_an_ordinary_turn_still_asks_for_a_solid():
+    message = build_refinement_message("make it taller", "result = 1")
+
+    assert "still assign the final solid to `result`" in message
+
+
+def test_a_repair_round_on_an_assembly_turn_is_told_which_printer_it_is_for():
+    """Asking for a Compound is not enough on its own. A repair told to produce
+    separate solids but not how big the bed is has nothing to size the parts
+    against, and one solid at the full requested size satisfies every word it can
+    see. The requirements are framed around the message by the caller, so this
+    asks the generator rather than the builder.
+    """
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.repair("a shelf", "result = 1", "boom", assembly=spec)
+
+    user = fake.last[1]
+    assert "210 x 200 x 195 mm" in user
+    assert "0.35 mm of clearance" in user
+
+
+def test_a_refine_round_on_an_assembly_turn_is_told_which_printer_it_is_for():
+    """The same requirement one door along. An edit to an assembly is still an
+    assembly, so the rules that shaped it have to survive the edit."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.refine("make it taller", "result = Box(5,5,5)", assembly=spec)
+
+    user = fake.last[1]
+    assert "210 x 200 x 195 mm" in user
+    assert "0.35 mm of clearance" in user
+
+
+def test_a_repair_on_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
+    """The other half of the option-off guarantee.
+
+    The equality alone would not give it: the expected value comes from the same
+    builder the prompt does, so anything that leaked in *there* lands on both
+    sides of the `==` and the test stays green (measured). The literals below are
+    what close that, and they are written out rather than read from the module,
+    because an expectation built from the constant under test cannot fail.
+    """
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+
+    gen.repair("a shelf", "result = 1", "boom")
+
+    user = fake.last[1]
+    assert user == build_repair_message("a shelf", "result = 1", "boom")
+    assert user.startswith("The following build123d script was generated for this request:")
+    assert "This part is for a 3D printer" not in user
+    assert "The user attached a reference image" not in user
+
+
+def test_a_refine_on_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
+    """Pinned the same way as the repair case above, and for the same reason."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+
+    gen.refine("make it taller", "result = Box(5,5,5)")
+
+    user = fake.last[1]
+    assert user == build_refinement_message("make it taller", "result = Box(5,5,5)")
+    assert user.startswith("Here is an existing build123d script.")
+    assert "This part is for a 3D printer" not in user
+    assert "The user attached a reference image" not in user
+
+
 def test_generator_streams_tokens_via_on_token():
     """With on_token, generate() streams each text delta and assembles the code."""
     from cadless.llm.providers import StreamChunk
@@ -312,6 +405,60 @@ def test_a_text_only_call_still_goes_through_complete_untouched():
         fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
         call(CodeGenerator(provider=fake))  # _FakeProvider has no stream_turn at all
         assert fake.calls == 1
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda gen, images: gen.generate("a bracket", images=images), id="generate"),
+        pytest.param(
+            lambda gen, images: gen.refine("taller", "result = Box(1,1,1)", images=images),
+            id="refine",
+        ),
+        pytest.param(
+            lambda gen, images: gen.repair("a bracket", "bad", "boom", images=images),
+            id="repair",
+        ),
+    ],
+)
+def test_every_codegen_path_asks_the_model_to_read_the_picture(call):
+    """Carrying the picture is only half of it. The instruction that asks the
+    model to say what it sees before writing code was applied on two of the three
+    ways in and dropped on the third, which is the same shape as the assembly
+    spec above -- and repair is again the round where losing it costs most,
+    because it is already working from an attempt that failed.
+    """
+    provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+
+    call(CodeGenerator(provider=provider), [_image_block()])
+
+    assert REFERENCE_IMAGE_INSTRUCTION in _sent_blocks(provider)[-1].text
+
+
+def test_the_three_ways_into_the_model_frame_it_the_same_way():
+    """generate, refine and repair wrap the same two blocks around their own
+    message, and in the same order. An inverted path is invisible in any one
+    prompt -- telling requires two of them side by side -- so the ordering is
+    pinned here rather than asserted in a docstring, which never goes red.
+    """
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+    images = [_image_block()]
+    calls = {
+        "generate": lambda gen: gen.generate("a bracket", images=images, assembly=spec),
+        "refine": lambda gen: gen.refine("taller", "result = 1", images=images, assembly=spec),
+        "repair": lambda gen: gen.repair("a bracket", "bad", "boom", images=images, assembly=spec),
+    }
+
+    for name, call in calls.items():
+        provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+        call(CodeGenerator(provider=provider))
+
+        text = _sent_blocks(provider)[-1].text
+        assert text.index("This part is for a 3D printer") < text.index(
+            REFERENCE_IMAGE_INSTRUCTION
+        ), f"{name} frames the picture above the assembly rules"
 
 
 def test_the_image_is_placed_before_the_words():

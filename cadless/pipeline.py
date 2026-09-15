@@ -252,7 +252,9 @@ class Pipeline:
         _emit_stage(on_progress, mode, "begin", 1)
         if prior_code:
             # Refine is out of streaming scope: keep the one-shot call.
-            code = self._gen.refine(intent, prior_code, images=images, on_reading=on_reading)
+            code = self._gen.refine(
+                intent, prior_code, images=images, on_reading=on_reading, assembly=assembly
+            )
         else:
             # Fresh generation streams its tokens as a ``codegen`` progress event so
             # the chat layer can show the code being written live. The

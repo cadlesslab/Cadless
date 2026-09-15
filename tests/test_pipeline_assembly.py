@@ -23,6 +23,7 @@ class FakeGen:
     def __init__(self, output=GOOD):
         self._output = output
         self.repairs = 0
+        self.last_refine_assembly = None
 
     def generate(
         self,
@@ -36,7 +37,8 @@ class FakeGen:
     ):
         return self._output
 
-    def refine(self, intent, prior_code, images=(), on_reading=None):
+    def refine(self, intent, prior_code, images=(), on_reading=None, assembly=None):
+        self.last_refine_assembly = assembly
         return self._output
 
     def repair(self, intent, code, error, context=None, images=(), assembly=None):
@@ -122,6 +124,20 @@ def test_a_turn_that_asked_for_an_assembly_asks_the_worker_to_measure(monkeypatc
     captured = {}
     _run(FakeGen(), _sound(), monkeypatch, captured=captured)
     assert captured["check_assembly"] is True
+
+
+def test_an_edit_to_an_assembly_reaches_the_generator_with_the_spec(monkeypatch):
+    """``prior_code`` routes the turn through refine instead of generate, and the
+    spec has to survive that turn. Losing it here is invisible downstream: one
+    solid is an ordinary result, so nothing further in the run refuses it."""
+    _stub_run_code(monkeypatch, _sound())
+    gen = FakeGen()
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=3)).run(
+        "make it taller", prior_code="result = Box(5,5,5)", assembly=SPEC
+    )
+
+    assert gen.last_refine_assembly is SPEC
 
 
 def test_a_turn_that_did_not_ask_never_runs_the_stage(monkeypatch):

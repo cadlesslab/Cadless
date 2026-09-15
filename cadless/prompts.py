@@ -113,7 +113,9 @@ def build_user_message(intent: str, grounding: str | None = None) -> str:
     return f"{render_few_shot()}\n\n{grounding}\n\nRequest: {intent}\nResponse:"
 
 
-def build_refinement_message(intent: str, prior_code: str) -> str:
+def build_refinement_message(
+    intent: str, prior_code: str, assembly: AssemblySpec | None = None
+) -> str:
     """Message that asks the model to edit an existing script to satisfy a change.
 
     ``intent`` is the change request (the delta), e.g. "make the hole 8 mm".
@@ -124,7 +126,21 @@ def build_refinement_message(intent: str, prior_code: str) -> str:
     and to change only what the request strictly requires — the earlier "smallest
     change" phrasing let the model replace a detailed multi-storey house with an
     over-simplified one on a small position tweak.
+
+    ``assembly`` decides what the closing line asks ``result`` to be, exactly as it
+    does in :func:`build_repair_message`. Editing an assembly and being told to
+    finish with "the final solid" is an instruction to fuse it, which is the one
+    thing the turn asked against -- and the prompt is otherwise silent on the
+    subject, so nothing else in the message would disagree.
     """
+    keeps = (
+        "still assign the final solid to `result`"
+        if assembly is None
+        else (
+            "still assign the whole assembly to `result` as a Compound of separate "
+            "solids, with its interlocking joints and their clearance intact"
+        )
+    )
     return (
         f"Here is an existing build123d script. It is the source of truth — treat it "
         f"as code you must EDIT in place, not redesign:\n\n"
@@ -140,7 +156,7 @@ def build_refinement_message(intent: str, prior_code: str) -> str:
         f"- For a pure dimensional change, prefer editing the value in the existing "
         f"`params` block and keep that block in sync with the geometry.\n\n"
         f"Return the FULL updated script (code only) — the original with just your "
-        f"targeted edit applied — and still assign the final solid to `result`. The "
+        f"targeted edit applied — and {keeps}. The "
         f"output should differ from the input by a small diff."
     )
 
@@ -176,11 +192,17 @@ def build_repair_message(
     model can target deep OCCT failures precisely. Otherwise it falls back to the
     flat ``error`` string (e.g. validation/critique failures).
 
-    ``assembly`` changes what the script is asked to still be. The closing line
-    used to say "the final solid" unconditionally, which on an assembly turn
-    instructed the model to undo the very thing that turn asked for -- and a
-    repair round is where that instruction lands hardest, because the request it
-    is repairing is the one hardest to get right in the first place.
+    ``assembly`` decides what the closing line asks ``result`` to be. It used to
+    say "the final solid" unconditionally, which on an assembly turn instructed
+    the model to undo the very thing that turn asked for -- and a repair round is
+    where that instruction lands hardest, because the request it is repairing is
+    the one hardest to get right in the first place.
+
+    It settles the closing line and nothing else: the requirements themselves are
+    framed around this message by the caller, the way every prompt in this module
+    is framed. Applying them here as well would give the one builder that takes a
+    spec two jobs the others do not have, and a caller that then framed it like
+    its siblings -- the obvious change to make -- would send the rules twice.
     """
     failure = _format_failure(error, context)
     keeps = (
@@ -191,7 +213,7 @@ def build_repair_message(
             "solids, with its interlocking joints and their clearance intact"
         )
     )
-    return (
+    message = (
         f"The following build123d script was generated for this request:\n"
         f"Request: {intent}\n\n"
         f"```python\n{previous_code.strip()}\n```\n\n"
@@ -199,6 +221,7 @@ def build_repair_message(
         f"Return a corrected full script (code only) that fixes the error and still "
         f"{keeps}."
     )
+    return message
 
 
 def _format_failure(error: str, context: RepairContext | None) -> str:
@@ -403,13 +426,25 @@ class CodeGenerator:
         prior_code: str,
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
+        assembly: AssemblySpec | None = None,
     ) -> str:
         """Edit existing code to satisfy a change request (the delta ``intent``).
 
         ``images`` route the call through the message path — without them it stays
         on the one-shot ``complete()`` exactly as before.
+
+        ``assembly`` is here for the same reason it is on ``generate``: an edit to
+        an assembly is still an assembly, and a round that lost the spec would be
+        editing against the default closing rule, which asks for one connected
+        solid. The wrapping order matches ``generate`` exactly, so the three ways
+        into the model differ in their message and not in what frames it.
         """
-        user = _with_reference_instruction(build_refinement_message(intent, prior_code), images)
+        user = _with_assembly_instruction(
+            _with_reference_instruction(
+                build_refinement_message(intent, prior_code, assembly), images
+            ),
+            assembly,
+        )
         if images:
             text = self._stream_complete(user, None, None, images)
         else:
@@ -436,8 +471,18 @@ class CodeGenerator:
         against the words alone, which is the half of the request that was least
         able to describe it in the first place. ``assembly`` is here for the same
         reason: a round that lost it would be repairing towards a single solid.
+
+        Both are framed the way ``generate`` and ``refine`` frame them. Handing
+        the blocks over is not the same as asking for them to be read, and this
+        path used to do only the first -- the picture arrived with nothing saying
+        what to do with it.
         """
-        user = build_repair_message(intent, previous_code, error, context, assembly)
+        user = _with_assembly_instruction(
+            _with_reference_instruction(
+                build_repair_message(intent, previous_code, error, context, assembly), images
+            ),
+            assembly,
+        )
         if images:
             text = self._stream_complete(user, None, None, images)
         else:
