@@ -54,7 +54,7 @@ class FakeGen:
                     on_token(piece)
         return out
 
-    def refine(self, intent, prior_code, images=(), on_reading=None):
+    def refine(self, intent, prior_code, images=(), on_reading=None, assembly=None):
         self.refine_calls = getattr(self, "refine_calls", 0) + 1
         self.last_refine = (intent, prior_code)
         self.last_images = list(images)

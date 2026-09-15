@@ -39,7 +39,7 @@ class FakeGen:
             on_token(out)
         return out
 
-    def refine(self, intent, prior_code, images=(), on_reading=None):
+    def refine(self, intent, prior_code, images=(), on_reading=None, assembly=None):
         return self.outputs[0]
 
     def repair(self, intent, code, error, context=None, images=(), assembly=None):

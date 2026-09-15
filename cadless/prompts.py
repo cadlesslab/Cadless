@@ -413,13 +413,23 @@ class CodeGenerator:
         prior_code: str,
         images: Sequence[ContentBlock] = (),
         on_reading: Callable[[str], None] | None = None,
+        assembly: AssemblySpec | None = None,
     ) -> str:
         """Edit existing code to satisfy a change request (the delta ``intent``).
 
         ``images`` route the call through the message path — without them it stays
         on the one-shot ``complete()`` exactly as before.
+
+        ``assembly`` is here for the same reason it is on ``generate``: an edit to
+        an assembly is still an assembly, and a round that lost the spec would be
+        editing against the default closing rule, which asks for one connected
+        solid. The wrapping order matches ``generate`` exactly, so the three ways
+        into the model differ in their message and not in what frames it.
         """
-        user = _with_reference_instruction(build_refinement_message(intent, prior_code), images)
+        user = _with_assembly_instruction(
+            _with_reference_instruction(build_refinement_message(intent, prior_code), images),
+            assembly,
+        )
         if images:
             text = self._stream_complete(user, None, None, images)
         else:
