@@ -281,9 +281,14 @@ def run_text(paths: list[Path]) -> bool:
         print(f"  {finding}", file=sys.stderr)
     if len(findings) > 60:
         print(f"  … and {len(findings) - 60} more", file=sys.stderr)
+    # Deliberately silent on *how* to correct it: a commit message is rewritten
+    # and force-pushed, a pull request body is edited in place and must not be
+    # force-pushed at all. Naming both at once sent a reader to force-push over
+    # text that had never been in a commit. The caller knows which input it
+    # handed over, so the caller says what to do with it.
     print(
         "This text is published and cannot be taken back once a pull request exists. "
-        "Reword the commit or the body, then force-push before merging.",
+        "Correct it at its source before merging.",
         file=sys.stderr,
     )
     return False

@@ -60,6 +60,9 @@ jobs:
   attribution:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,19 +72,41 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: No assistant attribution in commit messages or the PR body
+      # The body is fetched rather than taken from `github.event.pull_request.body`.
+      # A re-run replays the original event payload, so a job that failed on a
+      # body re-read the text that had already failed and could never pass --
+      # correcting the body and re-running was not a recovery, and the only way
+      # back was to close and reopen the pull request. Fetching reads what the
+      # body says now.
+      - name: Collect the text this pull request publishes
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           git log --no-merges --format='%B' "$BASE".."$HEAD" > messages.txt
-          printf '%s' "$PR_BODY" > pr_body.txt
-          python tools/attribution_guard.py messages.txt pr_body.txt
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""' > pr_body.txt
 
-      # The same two files, read for the other thing that must not be published.
-      # Separate step so a failure names which of the two rules was broken --
-      # they have different remedies and one is far more urgent than the other.
-      - name: No internal references in commit messages or the PR body
-        run: python tools/leak_guard.py --text messages.txt pr_body.txt
+      - name: No assistant attribution in commit messages or the PR body
+        run: python tools/attribution_guard.py messages.txt pr_body.txt
+
+      # The two inputs are scanned separately, and that is not tidiness: their
+      # remedies are opposites. A commit message is rewritten and force-pushed;
+      # a body is edited in place and must not be force-pushed at all. One step
+      # covering both could only name both, and did.
+      - name: No internal references in commit messages
+        run: |
+          python tools/leak_guard.py --text messages.txt || {
+            echo "::error::Reword the commit and force-push before merging."
+            exit 1
+          }
+
+      - name: No internal references in the pull request body
+        run: |
+          python tools/leak_guard.py --text pr_body.txt || {
+            echo "::error::Edit the body (gh pr edit --body-file). Do not force-push — this text is never in a commit. Editing does not un-publish it: GitHub keeps and serves the earlier revisions, so treat what was already there as disclosed."
+            exit 1
+          }
