@@ -2,10 +2,14 @@
 FROM python:3.12-slim AS build
 ENV PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md constraints.txt ./
 COPY cadless ./cadless
 # Install into an isolated prefix we copy into the final stage.
-RUN pip install --no-cache-dir --prefix=/install ".[web]"
+# -c pins the exact resolution instead of re-resolving on every build, so an
+# image built today holds the same versions as one built next month. Without it
+# the build takes whatever each range permits on the day, which is how a major
+# SDK release reached an image nobody had changed.
+RUN pip install --no-cache-dir --prefix=/install -c constraints.txt ".[web]"
 
 FROM python:3.12-slim AS final
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

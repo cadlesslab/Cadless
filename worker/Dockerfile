@@ -11,9 +11,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Dependency layer first (cached across app-code changes) — OCP is the heavy part.
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md constraints.txt ./
 COPY cadless ./cadless
-RUN pip install --no-cache-dir ".[web]"
+# -c pins the exact resolution instead of re-resolving on every build, so an
+# image built today holds the same versions as one built next month. Without it
+# the build takes whatever each range permits on the day, which is how a major
+# SDK release reached an image nobody had changed.
+RUN pip install --no-cache-dir -c constraints.txt ".[web]"
 
 # App code for the worker service.
 COPY worker ./worker

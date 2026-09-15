@@ -21,8 +21,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # -c installs the exact resolution the two Python images install, so a
+      # green suite is evidence about what ships rather than about whatever pip
+      # happened to pick on the day the job ran.
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" -c constraints.txt
 
       # Runs the same target contributors run, so the directory list lives in
       # the Makefile alone and local checks cannot disagree with CI. The format

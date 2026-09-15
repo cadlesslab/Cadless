@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
@@ -380,7 +381,33 @@ def test_provider_exception_emits_error_and_settles_pending(client, store, monke
     assert msgs[1].status != "pending"
 
 
-def test_aborted_stream_leaves_no_dangling_pending(client, store, monkeypatch):
+def test_provider_exception_is_logged_server_side(client, store, monkeypatch, caplog):
+    """The stream must not be the only place a failed turn is visible.
+
+    The access log records 200 for a chat POST however the stream ends, so a
+    turn dying in the provider left nothing behind for anyone reading server
+    logs — which is how a total generation outage read as "nothing happens"
+    rather than as an error, for a day.
+    """
+
+    class BoomProvider(FakeChatProvider):
+        def stream_turn(self, **kwargs):
+            raise RuntimeError("kaboom")
+            yield  # pragma: no cover
+
+    _install(monkeypatch, BoomProvider())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    with caplog.at_level(logging.ERROR, logger=chat.logger.name):
+        _stream_chat(client, pid)
+
+    failures = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert failures, "a provider failure left nothing in the server log"
+    assert any(r.exc_info is not None for r in failures), "logged without the traceback"
+    assert any(str(pid) in r.getMessage() for r in failures), "logged without naming the project"
+
+
+def test_aborted_stream_leaves_no_dangling_pending(client, store, monkeypatch, caplog):
     provider = ScriptedProvider(
         [
             _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
@@ -399,6 +426,14 @@ def test_aborted_stream_leaves_no_dangling_pending(client, store, monkeypatch):
     msgs = _messages(store, pid)
     assert [m.role for m in msgs] == ["user", "assistant"]
     assert msgs[1].status != "pending"
+
+    # This turn runs to completion and the client merely stops reading, so
+    # nothing on its path is a failure and nothing on it may reach the error
+    # log. A log that cries wolf is how the one error that matters — the test
+    # above puts one there — gets scrolled past.
+    assert not [
+        r for r in caplog.records if r.levelno >= logging.ERROR and r.name == chat.logger.name
+    ]
 
 
 def test_clarification_turn_emits_event_persists_block_and_reloads(client, store, monkeypatch):

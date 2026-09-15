@@ -72,6 +72,29 @@ Requires Python ≥ 3.12. The heavy dependency is
 [build123d](https://github.com/gumyr/build123d) (OCCT geometry kernel), which
 installs from wheels.
 
+`make install` resolves inside the version ranges `pyproject.toml` declares, so
+it works on whatever platform you are on. CI and the two Python images install
+something stricter — the exact versions pinned in `constraints.txt`. If you
+change a dependency, regenerate that file in the same commit:
+
+```bash
+make lock           # needs docker; rewrites constraints.txt
+```
+
+It runs inside the images' own base image rather than in your venv, and targets
+`linux/amd64` rather than your machine. Both matter: a resolution taken on macOS
+can name a wheel that has no Linux build, and one taken on Apple Silicon picks
+the `aarch64` branch of `build123d`'s requirements, which would leave the other
+branch unconstrained in every image CI and the deploy host build. The platform
+the lock targets is where it gets installed, never where it is generated. A test
+fails when `constraints.txt` and `pyproject.toml` disagree — including when a
+bound is widened, which the pins alone cannot show.
+
+One seam this leaves: `make lint` runs `ruff format --check`, whose verdict moves
+with the ruff version, and your `make install` takes whatever the declared range
+allows while CI takes the locked one. Within a ruff minor the formatter is
+stable, so if a format check disagrees with CI, compare versions first.
+
 ## Running the tests
 
 ```bash
