@@ -4,6 +4,7 @@ import pytest
 
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
+    REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
     build_refinement_message,
     build_repair_message,
@@ -365,6 +366,34 @@ def test_a_text_only_call_still_goes_through_complete_untouched():
         fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
         call(CodeGenerator(provider=fake))  # _FakeProvider has no stream_turn at all
         assert fake.calls == 1
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda gen, images: gen.generate("a bracket", images=images), id="generate"),
+        pytest.param(
+            lambda gen, images: gen.refine("taller", "result = Box(1,1,1)", images=images),
+            id="refine",
+        ),
+        pytest.param(
+            lambda gen, images: gen.repair("a bracket", "bad", "boom", images=images),
+            id="repair",
+        ),
+    ],
+)
+def test_every_codegen_path_asks_the_model_to_read_the_picture(call):
+    """Carrying the picture is only half of it. The instruction that asks the
+    model to say what it sees before writing code was applied on two of the three
+    ways in and dropped on the third, which is the same shape as the assembly
+    spec above -- and repair is again the round where losing it costs most,
+    because it is already working from an attempt that failed.
+    """
+    provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
+
+    call(CodeGenerator(provider=provider), [_image_block()])
+
+    assert REFERENCE_IMAGE_INSTRUCTION in _sent_blocks(provider)[-1].text
 
 
 def test_the_image_is_placed_before_the_words():

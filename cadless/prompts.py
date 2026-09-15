@@ -456,8 +456,15 @@ class CodeGenerator:
         against the words alone, which is the half of the request that was least
         able to describe it in the first place. ``assembly`` is here for the same
         reason: a round that lost it would be repairing towards a single solid.
+
+        Both are framed the way ``generate`` and ``refine`` frame them. Handing
+        the blocks over is not the same as asking for them to be read, and this
+        path used to do only the first -- the picture arrived with nothing saying
+        what to do with it.
         """
-        user = build_repair_message(intent, previous_code, error, context, assembly)
+        user = _with_reference_instruction(
+            build_repair_message(intent, previous_code, error, context, assembly), images
+        )
         if images:
             text = self._stream_complete(user, None, None, images)
         else:
