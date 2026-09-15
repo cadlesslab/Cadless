@@ -176,11 +176,20 @@ def build_repair_message(
     model can target deep OCCT failures precisely. Otherwise it falls back to the
     flat ``error`` string (e.g. validation/critique failures).
 
-    ``assembly`` changes what the script is asked to still be. The closing line
-    used to say "the final solid" unconditionally, which on an assembly turn
-    instructed the model to undo the very thing that turn asked for -- and a
-    repair round is where that instruction lands hardest, because the request it
-    is repairing is the one hardest to get right in the first place.
+    ``assembly`` puts the turn's requirements back in front of the model. The
+    closing line used to say "the final solid" unconditionally, which on an
+    assembly turn instructed the model to undo the very thing that turn asked for
+    -- and a repair round is where that instruction lands hardest, because the
+    request it is repairing is the one hardest to get right in the first place.
+
+    Rewriting that line is not enough on its own, which is why the whole of
+    :func:`_assembly_rules` goes in front as well. A round told to produce
+    separate solids but never told how large the bed is has no number to size
+    them against, and one solid at the requested size satisfies every word it can
+    still see. The closing line stays because it is the tail of the instruction
+    sentence -- "fixes the error and still ..." has to end in something -- and
+    because it says what ``result`` must be after this correction specifically,
+    which the rules state for the design rather than for the round.
     """
     failure = _format_failure(error, context)
     keeps = (
@@ -191,7 +200,7 @@ def build_repair_message(
             "solids, with its interlocking joints and their clearance intact"
         )
     )
-    return (
+    message = (
         f"The following build123d script was generated for this request:\n"
         f"Request: {intent}\n\n"
         f"```python\n{previous_code.strip()}\n```\n\n"
@@ -199,6 +208,7 @@ def build_repair_message(
         f"Return a corrected full script (code only) that fixes the error and still "
         f"{keeps}."
     )
+    return _with_assembly_instruction(message, assembly)
 
 
 def _format_failure(error: str, context: RepairContext | None) -> str:
