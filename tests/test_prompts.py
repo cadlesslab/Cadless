@@ -180,6 +180,59 @@ def test_a_repair_round_on_an_ordinary_turn_still_asks_for_a_solid():
     assert "assigns the final solid to `result`" in message
 
 
+def test_a_repair_round_on_an_assembly_turn_is_told_which_printer_it_is_for():
+    """Asking for a Compound is not enough on its own. A repair that is told to
+    produce separate solids but not how big the bed is has nothing to size the
+    parts against, and the shortest way to satisfy the words it can see is one
+    solid at the full requested size -- which is what a real turn delivered.
+    """
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    message = build_repair_message("a shelf", "result = 1", "boom", None, spec)
+
+    assert "210 x 200 x 195 mm" in message
+    assert "0.35 mm of clearance" in message
+
+
+def test_a_refine_round_on_an_assembly_turn_is_told_which_printer_it_is_for():
+    """The same requirement one door along. An edit to an assembly is still an
+    assembly, so the rules that shaped it have to survive the edit."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.refine("make it taller", "result = Box(5,5,5)", assembly=spec)
+
+    user = fake.last[1]
+    assert "210 x 200 x 195 mm" in user
+    assert "0.35 mm of clearance" in user
+
+
+def test_a_repair_on_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
+    """The other half of the option-off guarantee, shaped exactly like the
+    generate pin above. A prefix that leaked in unconditionally is caught here
+    rather than by a reader noticing their repair prompts grew."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+
+    gen.repair("a shelf", "result = 1", "boom")
+
+    assert fake.last[1] == build_repair_message("a shelf", "result = 1", "boom")
+
+
+def test_a_refine_on_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+
+    gen.refine("make it taller", "result = Box(5,5,5)")
+
+    assert fake.last[1] == build_refinement_message("make it taller", "result = Box(5,5,5)")
+
+
 def test_generator_streams_tokens_via_on_token():
     """With on_token, generate() streams each text delta and assembles the code."""
     from cadless.llm.providers import StreamChunk
