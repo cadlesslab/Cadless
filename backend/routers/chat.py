@@ -44,7 +44,7 @@ from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
 from cadless import printer_profile, user_settings
-from cadless.agent import Agent, SessionSteerRegistry, ToolContext
+from cadless.agent import GENERATE_MODEL, Agent, SessionSteerRegistry, ToolContext
 from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
 from cadless.config import settings
@@ -484,17 +484,20 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # it. What the spec SAYS still comes from the settings saved now, so changing
     # printer changes what an edit has to satisfy -- the version remembers that it
     # is an assembly, never which machine it was once built for.
-    assembly_spec = (
+    wants_assembly = settings.assembly_enabled and (body.assembly or current_is_assembly)
+    spec = (
         printer_profile.assembly_spec(await asyncio.to_thread(user_settings.load))
-        if (settings.assembly_enabled and (body.assembly or current_is_assembly))
+        if wants_assembly
         else None
     )
-    # What the version this turn writes should record. Deliberately not "did this
-    # turn get a spec": with the kill-switch off a turn gets none, and recording
-    # that would ERASE the memory of a model that is still in pieces, so switching
-    # the feature off would be destructive rather than merely inert and switching it
-    # back on would not restore it. Inheriting keeps it instead.
-    record_as_assembly = assembly_spec is not None or current_is_assembly
+    # The same spec, split by where the answer came from, because the two are not
+    # entitled to the same tools: a fresh generation starts a new model and may only
+    # be an assembly if this turn asked, while an edit acts on the model that already
+    # exists and takes either. Without the split the opt-in would be permanent —
+    # every later turn in the project would inherit, including "forget that, make me
+    # a simple cube", and the composer's toggle only ever turns it on.
+    asked_spec = spec if body.assembly else None
+    inherited_spec = spec if current_is_assembly else None
     # The current version (if any) is the parent the race branches off, so winner +
     # loser candidate rows hang off the model the turn started from.
     project = await store.get_project(project_id)
@@ -542,7 +545,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         on_reading=_keep_first_reading if image_blocks else None,
         forge=forge_active,
         forge_n=forge_n,
-        assembly=assembly_spec,
+        assembly=asked_spec,
+        inherited_assembly=inherited_spec,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
         on_critique=_relay_critique,
     )
@@ -598,7 +602,14 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 ev.data,
                                 plan_step,
                                 parent_version_id=chain_parent,
-                                built_as_assembly=record_as_assembly,
+                                # A fresh generation starts a new model, so it is
+                                # an assembly only if this turn asked; anything
+                                # else derives from the current one and keeps its
+                                # answer. Read from the turn rather than from the
+                                # spec because the kill-switch being off must
+                                # leave the memory alone rather than erase it.
+                                built_as_assembly=bool(body.assembly)
+                                or (ev.data.get("tool") != GENERATE_MODEL and current_is_assembly),
                             ),
                             loop,
                         ).result()
@@ -635,7 +646,9 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                     forge_race.get("losers", []),
                                     winner_version_id=version_id,
                                     parent_version_id=parent_version_id,
-                                    built_as_assembly=record_as_assembly,
+                                    # A forge race is always a fresh generation, so
+                                    # its losers follow the winner's rule above.
+                                    built_as_assembly=bool(body.assembly),
                                 ),
                                 loop,
                             ).result()

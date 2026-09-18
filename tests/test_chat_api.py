@@ -1361,6 +1361,37 @@ def test_an_edit_to_a_model_never_built_as_an_assembly_still_sends_nothing(
     assert pipeline.assemblies == [None, None]
 
 
+def test_a_fresh_build_in_an_assembly_project_is_not_told_to_split(client, store, monkeypatch):
+    """Remembering is about the model, not about the project.
+
+    "Forget that, make me a simple cube" starts a new model, and a new model is an
+    assembly only if this turn says so. Inheriting here would make the opt-in
+    permanent — the composer's toggle is opt-in only, so there would be no way to
+    take it back — and the cube would then be recorded as an assembly itself, so
+    every later turn in the project would carry a brief that opens by saying the
+    part is too large to print in one piece.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+            _text_turn("Done."),
+            _tool_turn(tool_use_id="tu-2", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    _stream_assembly(client, pid, assembly=False, text="forget that, a simple cube")
+
+    built, fresh = pipeline.assemblies
+    assert built is not None
+    assert fresh is None
+
+
 def test_the_kill_switch_stops_a_remembered_assembly_without_forgetting_it(
     client, store, monkeypatch
 ):
