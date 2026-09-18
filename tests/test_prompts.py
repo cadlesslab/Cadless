@@ -6,6 +6,7 @@ from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
     REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
+    _assembly_rules,
     build_refinement_message,
     build_repair_message,
     build_user_message,
@@ -236,6 +237,34 @@ def test_a_refine_round_on_an_assembly_turn_is_told_which_printer_it_is_for():
     user = fake.last[1]
     assert "210 x 200 x 195 mm" in user
     assert "0.35 mm of clearance" in user
+
+
+def test_a_refine_round_is_not_asked_to_choose_the_split():
+    """The other half of the same message. An edit acts on a model whose split
+    already exists, so the design brief -- how few parts, where the seams go, how
+    they interlock, which way they print -- argues directly with this builder's own
+    "EDIT in place, not redesign", and it is the half an edit must not receive.
+
+    The first two assertions are what stop this passing vacuously: dropping the
+    spec from the edit path entirely would satisfy every absence below, and that is
+    the regression this whole change is undoing. The whole-block assertion is the
+    one that cannot drift -- rewording the rules moves it too, whereas the two
+    literal clauses would quietly stop matching anything and pass.
+    """
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.refine("make it taller", "result = Box(5,5,5)", assembly=spec)
+
+    user = fake.last[1]
+    assert "210 x 200 x 195 mm" in user
+    assert "0.35 mm of clearance" in user
+    assert _assembly_rules(spec) not in user
+    assert "FEWEST parts" not in user
+    assert "where a cut does least harm" not in user
 
 
 def test_a_repair_on_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():

@@ -144,10 +144,17 @@ def test_a_single_run_turn_carries_the_assembly_spec():
     assert pipe.run_assemblies == [spec]
 
 
-def test_an_edit_is_never_told_to_build_an_assembly():
-    """The rule ``grounding`` already follows, and for a sharper reason here: an
-    edit acts on a model that has already chosen how many parts it is in, so
-    re-stating the split instruction would invite a rewrite rather than an edit.
+def test_an_edit_still_carries_the_assembly_spec():
+    """This used to assert the opposite, on the reasoning that an edit acts on a
+    model that has already chosen how many parts it is in, so re-stating the split
+    instruction would invite a rewrite rather than an edit. That reasoning is sound
+    and is now answered where it belongs -- in ``cadless/prompts.py``, which frames
+    an edit by the constraints alone -- rather than by withholding the spec here.
+
+    Withholding it cost both halves at once: ``build_refinement_message`` falls back
+    to "the final solid", which is an instruction to fuse the assembly the turn
+    asked to edit, and the geometric check is gated on the same value, so nothing
+    measured the result either.
     """
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
@@ -158,7 +165,7 @@ def test_an_edit_is_never_told_to_build_an_assembly():
 
     _agent()._execute_one(edit, ctx)
 
-    assert pipe.run_assemblies == [None]
+    assert pipe.run_assemblies == [spec]
 
 
 def test_forge_active_surfaces_losers_for_persistence():
