@@ -6,6 +6,7 @@ from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
     REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
+    _assembly_edit_rules,
     _assembly_rules,
     build_refinement_message,
     build_repair_message,
@@ -469,25 +470,42 @@ def test_the_three_ways_into_the_model_frame_it_the_same_way():
     message, and in the same order. An inverted path is invisible in any one
     prompt -- telling requires two of them side by side -- so the ordering is
     pinned here rather than asserted in a docstring, which never goes red.
+
+    What each path is framed WITH is a separate question, and the answer is no
+    longer the same for all three: an edit gets the constraints alone, because it
+    is not entitled to choose the split. Each path therefore names its own rules
+    builder below rather than sharing one literal. Deriving the marker from the
+    source is also what keeps this honest -- a hard-coded opening phrase stops
+    matching when the rules are reworded, and a marker that matches nothing
+    silently stops testing the order it exists to pin.
     """
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
     )
     images = [_image_block()]
     calls = {
-        "generate": lambda gen: gen.generate("a bracket", images=images, assembly=spec),
-        "refine": lambda gen: gen.refine("taller", "result = 1", images=images, assembly=spec),
-        "repair": lambda gen: gen.repair("a bracket", "bad", "boom", images=images, assembly=spec),
+        "generate": (
+            lambda gen: gen.generate("a bracket", images=images, assembly=spec),
+            _assembly_rules,
+        ),
+        "refine": (
+            lambda gen: gen.refine("taller", "result = 1", images=images, assembly=spec),
+            _assembly_edit_rules,
+        ),
+        "repair": (
+            lambda gen: gen.repair("a bracket", "bad", "boom", images=images, assembly=spec),
+            _assembly_rules,
+        ),
     }
 
-    for name, call in calls.items():
+    for name, (call, rules) in calls.items():
         provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
         call(CodeGenerator(provider=provider))
 
         text = _sent_blocks(provider)[-1].text
-        assert text.index("This part is for a 3D printer") < text.index(
-            REFERENCE_IMAGE_INSTRUCTION
-        ), f"{name} frames the picture above the assembly rules"
+        assert text.index(rules(spec)) < text.index(REFERENCE_IMAGE_INSTRUCTION), (
+            f"{name} frames the picture above the assembly rules"
+        )
 
 
 def test_the_image_is_placed_before_the_words():
