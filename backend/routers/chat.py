@@ -245,15 +245,26 @@ def _blind_role(provider) -> str | None:
     return None
 
 
-async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | None, dict]:
-    """Resolve the project's current code + params for the agent's edit context."""
+async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | None, dict, bool]:
+    """Resolve the current code, params and assembly-ness for the agent's edit context.
+
+    The third value comes from the version rather than from this turn's request on
+    purpose: the turn that edits an assembly may have been made after a reload put
+    the per-turn option back to off, and the model is in pieces either way. It is
+    read here rather than fetched separately because this is already the one place
+    that loads the current version.
+    """
     project = await store.get_project(project_id)
     if not project or project.current_version_id is None:
-        return None, {}
+        return None, {}, False
     version = await store.get_version(project.current_version_id)
     if not version or not version.code:
-        return None, {}
-    return version.code, version.parameters or extract_params(version.code)
+        return None, {}, False
+    return (
+        version.code,
+        version.parameters or extract_params(version.code),
+        version.built_as_assembly,
+    )
 
 
 # How the reviewer's stored sentence opens, so ``_replayed_block`` can know it
@@ -346,6 +357,7 @@ async def _persist_tool_version(
     payload: dict,
     plan_step: int | None = None,
     parent_version_id: int | None = None,
+    built_as_assembly: bool = False,
 ) -> int | None:
     """Persist a ScriptVersion (+ artifacts) for a successful tool result.
 
@@ -376,6 +388,7 @@ async def _persist_tool_version(
         parameters=metrics.get("parameters") or {},
         parent_version_id=parent_version_id,
         plan_step=plan_step,
+        built_as_assembly=built_as_assembly,
     )
     thumb = payload.get("thumbnail")
     src_dir = Path(thumb).parent if thumb else None
@@ -418,7 +431,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
 
     session = await store.get_or_create_session(project_id)
     history = await _replay_history(store, session.id)
-    code, params = await _current_model(store, project_id)
+    code, params, current_is_assembly = await _current_model(store, project_id)
 
     # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
     # ``content``, so once there is a picture the words have to be carried beside it
@@ -458,9 +471,17 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # down: the prompt has to describe one machine, and the saved file is on disk
     # -- reading it per candidate in a forge race would be the same answer bought
     # N times, with nothing stopping the two halves disagreeing mid-turn.
+    # Asking on this turn is one way in; the other is editing a model that was
+    # already built as one, because the option is per-turn and a reload puts it back
+    # to off while the model stays in pieces. The kill-switch stays outermost of
+    # both: a version's record must not keep the feature alive after it has been
+    # switched off, or turning it off would fail for exactly the projects that used
+    # it. What the spec SAYS still comes from the settings saved now, so changing
+    # printer changes what an edit has to satisfy -- the version remembers that it
+    # is an assembly, never which machine it was once built for.
     assembly_spec = (
         printer_profile.assembly_spec(await asyncio.to_thread(user_settings.load))
-        if (body.assembly and settings.assembly_enabled)
+        if (settings.assembly_enabled and (body.assembly or current_is_assembly))
         else None
     )
     # The current version (if any) is the parent the race branches off, so winner +
@@ -566,6 +587,10 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 ev.data,
                                 plan_step,
                                 parent_version_id=chain_parent,
+                                # What this turn was building under, so a later edit
+                                # can find it. An edit that inherited the spec records
+                                # it again: the edited model is still an assembly.
+                                built_as_assembly=assembly_spec is not None,
                             ),
                             loop,
                         ).result()
