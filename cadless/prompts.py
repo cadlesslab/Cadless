@@ -306,15 +306,24 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
     The Compound requirement is deliberately absent. :func:`build_refinement_message`
     already closes an assembly edit by asking for it, so restating it here would be
     the same instruction arriving twice.
+
+    Two things this must not do. It must not assert that the script in front of the
+    model already is an assembly: the spec is a per-turn opt-in with no relation to
+    the current model, so "ask for an assembly, then edit a single-solid model"
+    reaches here and would be told something false about its own input. And having
+    left the seam question open, it cannot then leave a seam the request *does* ask
+    for unspecified -- nothing downstream measures joint shape or print orientation,
+    so a butt-jointed or unprintable new seam would pass every check there is.
     """
     fits = _fits(spec)
     return (
-        f"This script is an ASSEMBLY of separate solids, for a 3D printer whose "
-        f"build volume is {fits}. Preserve that: every solid must still fit within "
-        f"{fits} on its own, and every mating face must keep "
-        f"{fmt(spec.clearance_mm)} mm of clearance -- a joint that is exact in CAD "
-        "does not go together in plastic. Do not change how many parts there are, "
-        "or where they are joined, unless the change request asks for it."
+        f"This turn is for a 3D printer whose build volume is {fits}. Every separate "
+        f"solid in the result must fit within {fits} on its own, and every mating "
+        f"face must keep {fmt(spec.clearance_mm)} mm of clearance -- a joint that is "
+        "exact in CAD does not go together in plastic. Do not add, remove or move a "
+        "seam unless the change request asks for it; where it does, cut that seam as "
+        "an interlocking dovetail or jigsaw profile rather than a flat butt face, and "
+        "orient it to print without support."
     )
 
 

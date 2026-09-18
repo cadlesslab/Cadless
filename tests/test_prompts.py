@@ -475,9 +475,9 @@ def test_the_three_ways_into_the_model_frame_it_the_same_way():
     longer the same for all three: an edit gets the constraints alone, because it
     is not entitled to choose the split. Each path therefore names its own rules
     builder below rather than sharing one literal. Deriving the marker from the
-    source is also what keeps this honest -- a hard-coded opening phrase stops
-    matching when the rules are reworded, and a marker that matches nothing
-    silently stops testing the order it exists to pin.
+    source also keeps the failure legible under rewording: ``str.index`` raises
+    rather than passing vacuously, so a stale literal does not go quiet, but it
+    reports a missing substring instead of the ordering this exists to pin.
     """
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
