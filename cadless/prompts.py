@@ -248,15 +248,30 @@ def _with_reference_instruction(user: str, images: Sequence[ContentBlock]) -> st
     return f"{REFERENCE_IMAGE_INSTRUCTION}\n\n{user}"
 
 
+def _fits(spec: AssemblySpec) -> str:
+    """The build volume as every rule states it.
+
+    One source because two builders interpolate it: rewording it in one and not the
+    other would leave a fresh build and an edit describing different printers, and
+    neither string would look wrong on its own.
+    """
+    volume = spec.volume
+    return f"{fmt(volume.width)} x {fmt(volume.depth)} x {fmt(volume.height)} mm"
+
+
 def _assembly_rules(spec: AssemblySpec) -> str:
     """What an assembly turn asks for, written against the printer it is for.
 
     The measurements are interpolated rather than described because the model has
     to size parts against numbers: "make it fit your printer" is not something a
     generator can act on.
+
+    This is the whole brief -- the constraints AND the design decisions -- so it
+    belongs to a round entitled to decide the split: a fresh generation, or a
+    repair whose split may be what failed. An edit is not entitled to, and takes
+    :func:`_assembly_edit_rules` instead.
     """
-    volume = spec.volume
-    fits = f"{fmt(volume.width)} x {fmt(volume.depth)} x {fmt(volume.height)} mm"
+    fits = _fits(spec)
     return (
         f"This part is for a 3D printer whose build volume is {fits}, and it is "
         "too large to print in one piece. Build it as an ASSEMBLY of separate "
@@ -279,6 +294,39 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     )
 
 
+def _assembly_edit_rules(spec: AssemblySpec) -> str:
+    """The constraints an edit must respect, without the brief for choosing a split.
+
+    An edit acts on a model whose split already exists, so asking it again for the
+    fewest parts and where the seams go argues with the same message's "EDIT in
+    place, not redesign" and invites the rewrite that message exists to prevent.
+    What an edit must still respect is the arithmetic it cannot infer: the bed each
+    solid has to fit, and the gap a joint needs to go together in plastic.
+
+    The Compound requirement is deliberately absent. :func:`build_refinement_message`
+    already closes an assembly edit by asking for it, so restating it here would be
+    the same instruction arriving twice.
+
+    Two things this must not do. It must not assert that the script in front of the
+    model already is an assembly: the spec is a per-turn opt-in with no relation to
+    the current model, so "ask for an assembly, then edit a single-solid model"
+    reaches here and would be told something false about its own input. And having
+    left the seam question open, it cannot then leave a seam the request *does* ask
+    for unspecified -- nothing downstream measures joint shape or print orientation,
+    so a butt-jointed or unprintable new seam would pass every check there is.
+    """
+    fits = _fits(spec)
+    return (
+        f"This turn is for a 3D printer whose build volume is {fits}. Every separate "
+        f"solid in the result must fit within {fits} on its own, and every mating "
+        f"face must keep {fmt(spec.clearance_mm)} mm of clearance -- a joint that is "
+        "exact in CAD does not go together in plastic. Do not add, remove or move a "
+        "seam unless the change request asks for it; where it does, cut that seam as "
+        "an interlocking dovetail or jigsaw profile rather than a flat butt face, and "
+        "orient it to print without support."
+    )
+
+
 def _with_assembly_instruction(user: str, spec: AssemblySpec | None) -> str:
     """Prefix the assembly requirements, but only when this turn asked for them.
 
@@ -290,6 +338,19 @@ def _with_assembly_instruction(user: str, spec: AssemblySpec | None) -> str:
     if spec is None:
         return user
     return f"{_assembly_rules(spec)}\n\n{user}"
+
+
+def _with_assembly_edit_instruction(user: str, spec: AssemblySpec | None) -> str:
+    """Prefix the edit-path constraints. Shaped exactly like its sibling above.
+
+    A second named wrapper rather than a flag on the first: the caller already
+    knows whether it is generating or editing, so naming the wrapper keeps that
+    decision where it is made, while a flag would carry the question to every call
+    site and read as configuration rather than as which round this is.
+    """
+    if spec is None:
+        return user
+    return f"{_assembly_edit_rules(spec)}\n\n{user}"
 
 
 def _emit_reading(
@@ -436,10 +497,12 @@ class CodeGenerator:
         ``assembly`` is here for the same reason it is on ``generate``: an edit to
         an assembly is still an assembly, and a round that lost the spec would be
         editing against the default closing rule, which asks for one connected
-        solid. The wrapping order matches ``generate`` exactly, so the three ways
-        into the model differ in their message and not in what frames it.
+        solid. The wrapping order matches ``generate`` exactly; what differs is
+        which rules go in. An edit is the one round not entitled to choose the
+        split, so it is framed by the constraints alone -- see
+        :func:`_assembly_edit_rules`.
         """
-        user = _with_assembly_instruction(
+        user = _with_assembly_edit_instruction(
             _with_reference_instruction(
                 build_refinement_message(intent, prior_code, assembly), images
             ),

@@ -9,8 +9,11 @@ import json
 
 import pytest
 
+from cadless.agent import Agent, ToolContext
 from cadless.assembly_check import AssemblyMeasurements
 from cadless.config import Settings
+from cadless.llm.providers.fake import FakeChatProvider
+from cadless.llm.types import ContentBlock
 from cadless.pipeline import STAGE_PHASES, Pipeline
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.worker import ExecResult
@@ -215,6 +218,31 @@ def test_the_error_says_the_budget_ended_it_rather_than_a_pass(monkeypatch):
     result, _ = _run(FakeGen(), _overlapping(), monkeypatch, tries=1)
     assert result.error is not None
     assert "not accepted" in result.error
+
+
+def test_an_edit_that_breaks_the_assembly_is_refused_too(monkeypatch):
+    """The refusal above, reached the way a user reaches it -- through the edit
+    tool rather than by calling the pipeline directly.
+
+    Both halves are needed here and neither is enough alone, which is why this is
+    driven from the agent and not from ``Pipeline.run``. The stage refuses a bad
+    split whichever mode produced it, so a pipeline-level edit test would pass
+    equally well while the tool above it dropped the spec; and the tool handing
+    the spec down proves only that it arrived. Withhold it at the tool and the
+    worker is never asked to measure, the stage has nothing to look at, and this
+    overlapping result comes back ``ok`` -- an edit turning a sound assembly into
+    an unassemblable one and being accepted, immediately after a fresh build of
+    the same model would have been refused.
+    """
+    _stub_run_code(monkeypatch, _overlapping())
+    pipeline = Pipeline(generator=FakeGen(), config=Settings(repair_max_attempts=1))
+    ctx = ToolContext(pipeline=pipeline, current_code="result = Box(5,5,5)", assembly=SPEC)
+    edit = ContentBlock.of_tool_use(id="tu-1", name="edit_model", input={"change": "taller"})
+
+    _, payload = Agent(provider=FakeChatProvider(), model="fake-model")._execute_one(edit, ctx)
+
+    assert payload["ok"] is False
+    assert "assembly:" in payload["error"]
 
 
 # --- what the result carries ----------------------------------------------

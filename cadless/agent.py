@@ -256,8 +256,12 @@ class ToolContext:
     # The machine this turn is building for. This is the answer rather than one
     # of the inputs to it: whoever builds this context has already decided, and
     # ``None`` is an ordinary turn whose prompt is left exactly as it is.
-    # Forwarded to fresh generation only, like ``grounding`` -- an edit or a
-    # parameter change acts on a model that already chose how many parts it is in.
+    # Forwarded to every path that generates code, including an edit -- unlike
+    # ``grounding``, which stops at fresh generation. That an edit acts on a model
+    # which already chose how many parts it is in is a statement about what its
+    # prompt should SAY, and `cadless.prompts` acts on it by framing an edit with
+    # the constraints alone; it is not a reason to withhold the value, which also
+    # gates whether the parts are measured at all.
     assembly: AssemblySpec | None = None
     # Live token sink for streaming codegen: when set, fresh
     # ``generate_model`` codegen deltas are pushed here AS the code is written
@@ -1285,6 +1289,18 @@ class Agent:
                     ),
                     images=context.images,
                     on_reading=context.on_reading,
+                    # An edit to an assembly is still an assembly. Withholding the
+                    # spec here did not leave the edit merely unguided: the closing
+                    # rule falls back to asking for "the final solid", which is an
+                    # instruction to fuse the parts the turn asked to keep apart,
+                    # and the geometric check is gated on this same value, so
+                    # nothing measured what came back either. The concern that
+                    # withholding it answered -- that re-stating the split brief
+                    # invites a rewrite rather than an edit -- is answered in
+                    # `cadless.prompts`, which frames an edit by the constraints
+                    # alone. Unlike `grounding` above, which refine has no
+                    # parameter to receive, this one was plumbed all the way down.
+                    assembly=context.assembly,
                 )
                 payload = _result_summary(res)
                 self._adopt(context, res.code, res.parameters)

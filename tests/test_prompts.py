@@ -6,6 +6,8 @@ from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
     REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
+    _assembly_edit_rules,
+    _assembly_rules,
     build_refinement_message,
     build_repair_message,
     build_user_message,
@@ -238,6 +240,34 @@ def test_a_refine_round_on_an_assembly_turn_is_told_which_printer_it_is_for():
     assert "0.35 mm of clearance" in user
 
 
+def test_a_refine_round_is_not_asked_to_choose_the_split():
+    """The other half of the same message. An edit acts on a model whose split
+    already exists, so the design brief -- how few parts, where the seams go, how
+    they interlock, which way they print -- argues directly with this builder's own
+    "EDIT in place, not redesign", and it is the half an edit must not receive.
+
+    The first two assertions are what stop this passing vacuously: dropping the
+    spec from the edit path entirely would satisfy every absence below, and that is
+    the regression this whole change is undoing. The whole-block assertion is the
+    one that cannot drift -- rewording the rules moves it too, whereas the two
+    literal clauses would quietly stop matching anything and pass.
+    """
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.refine("make it taller", "result = Box(5,5,5)", assembly=spec)
+
+    user = fake.last[1]
+    assert "210 x 200 x 195 mm" in user
+    assert "0.35 mm of clearance" in user
+    assert _assembly_rules(spec) not in user
+    assert "FEWEST parts" not in user
+    assert "where a cut does least harm" not in user
+
+
 def test_a_repair_on_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
     """The other half of the option-off guarantee.
 
@@ -440,25 +470,42 @@ def test_the_three_ways_into_the_model_frame_it_the_same_way():
     message, and in the same order. An inverted path is invisible in any one
     prompt -- telling requires two of them side by side -- so the ordering is
     pinned here rather than asserted in a docstring, which never goes red.
+
+    What each path is framed WITH is a separate question, and the answer is no
+    longer the same for all three: an edit gets the constraints alone, because it
+    is not entitled to choose the split. Each path therefore names its own rules
+    builder below rather than sharing one literal. Deriving the marker from the
+    source also keeps the failure legible under rewording: ``str.index`` raises
+    rather than passing vacuously, so a stale literal does not go quiet, but it
+    reports a missing substring instead of the ordering this exists to pin.
     """
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
     )
     images = [_image_block()]
     calls = {
-        "generate": lambda gen: gen.generate("a bracket", images=images, assembly=spec),
-        "refine": lambda gen: gen.refine("taller", "result = 1", images=images, assembly=spec),
-        "repair": lambda gen: gen.repair("a bracket", "bad", "boom", images=images, assembly=spec),
+        "generate": (
+            lambda gen: gen.generate("a bracket", images=images, assembly=spec),
+            _assembly_rules,
+        ),
+        "refine": (
+            lambda gen: gen.refine("taller", "result = 1", images=images, assembly=spec),
+            _assembly_edit_rules,
+        ),
+        "repair": (
+            lambda gen: gen.repair("a bracket", "bad", "boom", images=images, assembly=spec),
+            _assembly_rules,
+        ),
     }
 
-    for name, call in calls.items():
+    for name, (call, rules) in calls.items():
         provider = _recording_stream_provider("```python\nresult = Box(1,1,1)\n```")
         call(CodeGenerator(provider=provider))
 
         text = _sent_blocks(provider)[-1].text
-        assert text.index("This part is for a 3D printer") < text.index(
-            REFERENCE_IMAGE_INSTRUCTION
-        ), f"{name} frames the picture above the assembly rules"
+        assert text.index(rules(spec)) < text.index(REFERENCE_IMAGE_INSTRUCTION), (
+            f"{name} frames the picture above the assembly rules"
+        )
 
 
 def test_the_image_is_placed_before_the_words():
