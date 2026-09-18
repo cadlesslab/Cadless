@@ -915,6 +915,7 @@ class Store:
             source.volume,
             source.bbox,
             parameters=dict(source.parameters),
+            built_as_assembly=source.built_as_assembly,
             owner=mine,
         )
         await self.set_current_version(project.id, seed.id, owner=mine)
@@ -987,6 +988,7 @@ class Store:
                 parameters=dict(v.parameters),
                 parent_version_id=id_map.get(v.parent_version_id),
                 plan_step=v.plan_step,
+                built_as_assembly=v.built_as_assembly,
                 owner=mine,
             )
             id_map[v.id] = new_v.id

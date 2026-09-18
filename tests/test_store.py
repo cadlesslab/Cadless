@@ -404,6 +404,32 @@ def test_version_persists_whether_it_was_built_as_an_assembly(tmp_path):
     run(go())
 
 
+def test_a_branch_and_a_clone_keep_the_assembly_record(tmp_path):
+    """A copy that drops the flag recreates the very bug the column exists to close.
+
+    The copied model is still in pieces; only the record of why would be gone, and
+    the first edit to it would be told to assign the final solid — which is an
+    instruction to fuse the parts.
+    """
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        v = await s.add_version(
+            p.id, "a shelf", "result = Compound()", ok=True, built_as_assembly=True
+        )
+        await s.set_current_version(p.id, v.id)
+
+        branch = await s.branch_project(v.id)
+        assert (await s.list_versions(branch.id))[0].built_as_assembly is True
+
+        clone = await s.clone_project(p.id)
+        assert (await s.list_versions(clone.id))[0].built_as_assembly is True
+
+    run(go())
+
+
 def test_migration_adds_parameters_column_to_legacy_db(tmp_path):
     """A DB created without parameters_json gains the column on init()."""
     import sqlite3
