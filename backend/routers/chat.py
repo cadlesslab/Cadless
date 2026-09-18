@@ -87,10 +87,15 @@ class ChatRequest(BaseModel):
     forge: bool = False
     # Per-turn assembly opt-in: the model is asked for interlocking parts sized to
     # the saved printer when this is True AND the global ``assembly_enabled``
-    # kill-switch is on (the same both-true gate ``forge`` uses). Default False =>
-    # today's single-solid prompt, unchanged to the byte. Per-turn rather than a
-    # project setting for the same reason forge is: one model in a conversation
-    # may need splitting and the next may not.
+    # kill-switch is on (the same both-true gate ``forge`` uses).
+    #
+    # It is one of two ways in, not the only one. The other is the version's own
+    # record: a model built as an assembly stays one, so an edit made after a reload
+    # put this flag back to False is still framed and checked as an assembly. This
+    # field therefore means "this turn is asking", never "this turn is the only
+    # thing that decides" -- unlike ``forge``, which really is per-turn, because
+    # forgetting a race costs a cheaper generation while forgetting an assembly asks
+    # the model to fuse a model that is in pieces.
     assembly: bool = False
 
     @model_validator(mode="after")
@@ -484,6 +489,12 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         if (settings.assembly_enabled and (body.assembly or current_is_assembly))
         else None
     )
+    # What the version this turn writes should record. Deliberately not "did this
+    # turn get a spec": with the kill-switch off a turn gets none, and recording
+    # that would ERASE the memory of a model that is still in pieces, so switching
+    # the feature off would be destructive rather than merely inert and switching it
+    # back on would not restore it. Inheriting keeps it instead.
+    record_as_assembly = assembly_spec is not None or current_is_assembly
     # The current version (if any) is the parent the race branches off, so winner +
     # loser candidate rows hang off the model the turn started from.
     project = await store.get_project(project_id)
@@ -587,10 +598,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 ev.data,
                                 plan_step,
                                 parent_version_id=chain_parent,
-                                # What this turn was building under, so a later edit
-                                # can find it. An edit that inherited the spec records
-                                # it again: the edited model is still an assembly.
-                                built_as_assembly=assembly_spec is not None,
+                                built_as_assembly=record_as_assembly,
                             ),
                             loop,
                         ).result()
@@ -627,6 +635,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                     forge_race.get("losers", []),
                                     winner_version_id=version_id,
                                     parent_version_id=parent_version_id,
+                                    built_as_assembly=record_as_assembly,
                                 ),
                                 loop,
                             ).result()

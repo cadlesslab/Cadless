@@ -1296,20 +1296,21 @@ def test_steer_accepts_the_assembly_flag(client, store, monkeypatch):
     assert r.status_code == 202
 
 
-def _build_then_edit(monkeypatch):
-    """Two turns through one provider: a fresh build, then an edit of what it made."""
-    provider = ScriptedProvider(
-        [
-            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
-            _text_turn("Done."),
+def _build_then_edit(monkeypatch, edits: int = 1):
+    """One fresh build followed by ``edits`` edits of what it made, one provider."""
+    turns = [
+        _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+        _text_turn("Done."),
+    ]
+    for n in range(edits):
+        turns += [
             _tool_turn(
-                tool_use_id="tu-2", name="edit_model", tool_input={"change": "20 mm taller"}
+                tool_use_id=f"tu-e{n}", name="edit_model", tool_input={"change": "20 mm taller"}
             ),
             _text_turn("Edited."),
         ]
-    )
     pipeline = StubPipeline()
-    _install(monkeypatch, provider, pipeline=pipeline)
+    _install(monkeypatch, ScriptedProvider(turns), pipeline=pipeline)
     return pipeline
 
 
@@ -1327,13 +1328,19 @@ def test_an_edit_keeps_the_assembly_the_version_was_built_with(client, store, mo
     pid = client.post("/projects", json={"name": "P"}).json()["id"]
 
     _stream_assembly(client, pid, assembly=True)
+    # A different printer saved between the two turns. Asserting the edit picks it
+    # up is what pins the central decision: the version remembers that it is an
+    # assembly, never which machine it was built for. Comparing the two specs to
+    # each other instead would pass equally well if the spec were stored and
+    # replayed, which is the design this rejected.
+    monkeypatch.setattr(chat.user_settings, "load", lambda: {"printer_joint_clearance": 0.35})
     _stream_assembly(client, pid, assembly=False, text="make it 20 mm taller")
 
     built, edited = pipeline.assemblies
     assert built is not None
     assert edited is not None
-    assert edited.volume == built.volume
-    assert edited.clearance_mm == built.clearance_mm
+    assert built.clearance_mm == printer_profile.DEFAULT_JOINT_CLEARANCE
+    assert edited.clearance_mm == 0.35
 
 
 def test_an_edit_to_a_model_never_built_as_an_assembly_still_sends_nothing(
@@ -1352,6 +1359,34 @@ def test_an_edit_to_a_model_never_built_as_an_assembly_still_sends_nothing(
     _stream_assembly(client, pid, assembly=False, text="make it 20 mm taller")
 
     assert pipeline.assemblies == [None, None]
+
+
+def test_the_kill_switch_stops_a_remembered_assembly_without_forgetting_it(
+    client, store, monkeypatch
+):
+    """Two properties of the switch, and they pull in opposite directions.
+
+    It has to be outermost, or a version's record would keep the feature alive
+    after it was turned off — which is the one thing a kill-switch must not allow.
+    But it must not be destructive either: recording "this turn had no spec" while
+    it is off would erase the memory of a model that is still in pieces, and
+    turning the switch back on would not bring it back. So the middle turn gets
+    nothing and the third one still does.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    pipeline = _build_then_edit(monkeypatch, edits=2)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    monkeypatch.setattr(chat.settings, "assembly_enabled", False)
+    _stream_assembly(client, pid, assembly=False, text="make it taller")
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    _stream_assembly(client, pid, assembly=False, text="make it wider")
+
+    built, while_off, back_on = pipeline.assemblies
+    assert built is not None
+    assert while_off is None
+    assert back_on is not None
 
 
 # --- Blueprint rollback policy + replan (D3) -----------------------

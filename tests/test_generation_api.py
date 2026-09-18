@@ -213,6 +213,37 @@ def test_refine_passes_prior_code_and_records_lineage(client, store, monkeypatch
     assert child["id"] != parent["id"]
 
 
+def test_a_refinement_keeps_the_assembly_record(client, store, monkeypatch):
+    """A refinement is a new version of the same model, so it is still an assembly.
+
+    This route never sets the flag itself — a fresh prompt is not an assembly and
+    the request has no field for one — but dropping it on a refinement would leave
+    the model in pieces with nothing recording why, and the next chat edit would be
+    told to assign the final solid. Read from the store, since the flag is
+    deliberately not on the wire.
+    """
+    import asyncio
+
+    async def seed():
+        p = await store.create_project("P")
+        v = await store.add_version(
+            p.id, "a shelf", "result = Compound()", ok=True, built_as_assembly=True
+        )
+        return p.id, v.id
+
+    pid, vid = asyncio.run(seed())
+    monkeypatch.setattr(gen, "generate_cad", _fake_success)
+
+    r = client.post(
+        f"/projects/{pid}/generate",
+        json={"prior_version_id": vid, "delta_prompt": "make it 8mm"},
+    )
+
+    assert r.status_code == 200, r.text
+    child_id = r.json()["version"]["id"]
+    assert asyncio.run(store.get_version(child_id)).built_as_assembly is True
+
+
 def test_refine_without_delta_prompt_422(client, monkeypatch):
     monkeypatch.setattr(gen, "generate_cad", _fake_success)
     pid = client.post("/projects", json={"name": "P"}).json()["id"]

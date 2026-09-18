@@ -430,6 +430,38 @@ def test_a_branch_and_a_clone_keep_the_assembly_record(tmp_path):
     run(go())
 
 
+def test_forge_losers_record_the_assembly_they_were_raced_under(tmp_path):
+    """A losing candidate is not current, but it is promotable.
+
+    ``set_current_version`` does not exclude candidate rows, so promoting a loser
+    whose flag contradicts its geometry would land the project back on a model that
+    reads as one solid while being in pieces — the same end state as forgetting.
+    """
+    from cadless.forge import persist_losers
+    from cadless.pipeline import GenerationResult
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        winner = await s.add_version(
+            p.id, "a shelf", "result = Compound()", ok=True, built_as_assembly=True
+        )
+        losers = [
+            GenerationResult(
+                ok=True, intent="a shelf", code="result = Compound()", parameters={}, glb_path=None
+            )
+        ]
+
+        rows = await persist_losers(
+            s, p.id, "a shelf", losers, winner_version_id=winner.id, built_as_assembly=True
+        )
+
+        assert [r.built_as_assembly for r in rows] == [True]
+
+    run(go())
+
+
 def test_migration_adds_parameters_column_to_legacy_db(tmp_path):
     """A DB created without parameters_json gains the column on init()."""
     import sqlite3
