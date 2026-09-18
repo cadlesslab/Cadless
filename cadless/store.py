@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS script_versions (
     parent_version_id INTEGER,
     candidate_of_version_id INTEGER,
     plan_step INTEGER,
+    built_as_assembly INTEGER,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -223,6 +224,11 @@ class ScriptVersion:
     parent_version_id: int | None = None
     candidate_of_version_id: int | None = None
     plan_step: int | None = None
+    # Whether the turn that built this version asked for an assembly. Not the spec
+    # itself: which bed and which clearance apply belong to the printer the user
+    # owns now, so storing them here would let a version built for a larger bed
+    # keep being edited against it after they changed machines.
+    built_as_assembly: bool = False
 
 
 @dataclass
@@ -535,6 +541,15 @@ class Store:
             # the UI can narrate "rolled back to step N". NULL = no active plan; a
             # lightweight annotation over the existing chain, no new snapshot store.
             await db.execute("ALTER TABLE script_versions ADD COLUMN plan_step INTEGER")
+        if "built_as_assembly" not in cols:
+            # Whether the turn that produced this version asked for an assembly.
+            # Recorded because the round that needs the answer is a LATER one: an
+            # edit, whose own request may have been made after a reload put the
+            # per-turn option back to off. NULL on every legacy row and read as
+            # False -- "was not asked for" and "was written before we recorded it"
+            # take the same branch deliberately, because guessing True would start
+            # measuring edits to models that never asked to be assemblies.
+            await db.execute("ALTER TABLE script_versions ADD COLUMN built_as_assembly INTEGER")
         msg_rows = await (await db.execute("PRAGMA table_info(chat_messages)")).fetchall()
         msg_cols = {r["name"] for r in msg_rows}
         if msg_cols and "blocks_json" not in msg_cols:
@@ -1018,6 +1033,7 @@ class Store:
         parent_version_id: int | None = None,
         candidate_of_version_id: int | None = None,
         plan_step: int | None = None,
+        built_as_assembly: bool = False,
         *,
         owner: Owner = UNSCOPED,
     ) -> ScriptVersion:
@@ -1038,8 +1054,9 @@ class Store:
             cur = await db.execute(
                 "INSERT INTO script_versions"
                 "(project_id,prompt,code,ok,error,volume,bbox_json,parameters_json,"
-                "parent_version_id,candidate_of_version_id,plan_step,created_at)"
-                " SELECT ?,?,?,?,?,?,?,?,?,?,?,?"
+                "parent_version_id,candidate_of_version_id,plan_step,built_as_assembly,"
+                "created_at)"
+                " SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?"
                 f" WHERE EXISTS (SELECT 1 FROM projects WHERE id=? AND {pred})",
                 (
                     project_id,
@@ -1053,6 +1070,7 @@ class Store:
                     parent_version_id,
                     candidate_of_version_id,
                     plan_step,
+                    int(built_as_assembly),
                     ts,
                     project_id,
                     *owner_params,
@@ -1076,6 +1094,7 @@ class Store:
                 parent_version_id,
                 candidate_of_version_id,
                 plan_step,
+                built_as_assembly,
             )
 
     async def list_versions(
@@ -1814,6 +1833,7 @@ def _version(r) -> ScriptVersion:
         r["parent_version_id"],
         r["candidate_of_version_id"],
         r["plan_step"],
+        bool(r["built_as_assembly"]),
     )
 
 

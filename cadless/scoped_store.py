@@ -140,6 +140,7 @@ class ScopedStore:
         parent_version_id: int | None = None,
         candidate_of_version_id: int | None = None,
         plan_step: int | None = None,
+        built_as_assembly: bool = False,
     ) -> ScriptVersion:
         return await self._store.add_version(
             project_id,
@@ -153,6 +154,7 @@ class ScopedStore:
             parent_version_id,
             candidate_of_version_id,
             plan_step,
+            built_as_assembly,
             owner=self._owner,
         )
 
