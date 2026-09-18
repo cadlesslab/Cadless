@@ -377,6 +377,33 @@ def test_version_persists_parent_lineage(tmp_path):
     run(go())
 
 
+def test_version_persists_whether_it_was_built_as_an_assembly(tmp_path):
+    """Whether the turn asked for an assembly outlives the turn.
+
+    It has to live on the version rather than on the request, because the thing
+    that needs the answer is a *later* turn — an edit, whose own request may have
+    been made after a reload put the option back to off.
+    """
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        built = await s.add_version(
+            p.id, "a shelf", "result = Compound()", ok=True, built_as_assembly=True
+        )
+        assert built.built_as_assembly is True
+        assert (await s.get_version(built.id)).built_as_assembly is True
+        assert (await s.list_versions(p.id))[0].built_as_assembly is True
+        # The default is False rather than None on purpose: "was not asked for" and
+        # "was written before we recorded it" take the same branch, so no caller has
+        # to decide what an unknown means.
+        plain = await s.add_version(p.id, "x", "result=1", ok=True)
+        assert (await s.get_version(plain.id)).built_as_assembly is False
+
+    run(go())
+
+
 def test_migration_adds_parameters_column_to_legacy_db(tmp_path):
     """A DB created without parameters_json gains the column on init()."""
     import sqlite3
@@ -408,6 +435,40 @@ def test_migration_adds_parameters_column_to_legacy_db(tmp_path):
         )
         got = await s.get_version(nv.id)
         assert got.parameters == {"a": 1} and got.parent_version_id == v.id
+
+    run(go())
+
+
+def test_migration_adds_the_assembly_column_to_legacy_db(tmp_path):
+    """A DB created before the column gains it on init(), and its rows read False.
+
+    Reading an unknown as False is the safe direction: the flag decides whether an
+    edit is measured against a printer bed, so guessing True would start refusing
+    edits to models that never asked to be assemblies.
+    """
+    import sqlite3
+
+    db = tmp_path / "db.sqlite"
+    legacy = sqlite3.connect(db)
+    legacy.executescript(
+        "CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,"
+        " created_at TEXT NOT NULL, updated_at TEXT NOT NULL, current_version_id INTEGER);"
+        "CREATE TABLE script_versions (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " project_id INTEGER NOT NULL, prompt TEXT NOT NULL, code TEXT, ok INTEGER NOT NULL,"
+        " error TEXT, volume REAL, bbox_json TEXT, created_at TEXT NOT NULL);"
+        "INSERT INTO projects(name,created_at,updated_at) VALUES ('old','t','t');"
+        "INSERT INTO script_versions(project_id,prompt,ok,created_at)"
+        " VALUES (1,'legacy',1,'t');"
+    )
+    legacy.commit()
+    legacy.close()
+
+    async def go():
+        s = Store(db_path=db, artifacts_dir=tmp_path / "artifacts")
+        await s.init()
+        assert (await s.list_versions(1))[0].built_as_assembly is False
+        nv = await s.add_version(1, "new", "result=1", ok=True, built_as_assembly=True)
+        assert (await s.get_version(nv.id)).built_as_assembly is True
 
     run(go())
 
