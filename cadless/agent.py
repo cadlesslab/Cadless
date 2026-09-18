@@ -263,6 +263,14 @@ class ToolContext:
     # the constraints alone; it is not a reason to withhold the value, which also
     # gates whether the parts are measured at all.
     assembly: AssemblySpec | None = None
+    # The same machine, reached the other way: what the model being edited was
+    # already built as, rather than what this turn asked for. Separate from
+    # ``assembly`` because the two are not entitled to the same paths. A fresh
+    # generation starts a new model, so only an explicit request may make it an
+    # assembly -- inheriting there would make the opt-in permanent, since the
+    # composer's toggle only ever turns it on. An edit acts on the model that
+    # already exists, so it takes either.
+    inherited_assembly: AssemblySpec | None = None
     # Live token sink for streaming codegen: when set, fresh
     # ``generate_model`` codegen deltas are pushed here AS the code is written
     # (the chat layer wires it to the SSE queue), instead of being collected into
@@ -1300,7 +1308,11 @@ class Agent:
                     # `cadless.prompts`, which frames an edit by the constraints
                     # alone. Unlike `grounding` above, which refine has no
                     # parameter to receive, this one was plumbed all the way down.
-                    assembly=context.assembly,
+                    # Either source will do here, unlike the fresh branch above:
+                    # this tool edits the model that already exists, so what that
+                    # model was built as is as good an answer as what the turn
+                    # asked for.
+                    assembly=context.assembly or context.inherited_assembly,
                 )
                 payload = _result_summary(res)
                 self._adopt(context, res.code, res.parameters)

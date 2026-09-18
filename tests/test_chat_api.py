@@ -1296,6 +1296,130 @@ def test_steer_accepts_the_assembly_flag(client, store, monkeypatch):
     assert r.status_code == 202
 
 
+def _build_then_edit(monkeypatch, edits: int = 1):
+    """One fresh build followed by ``edits`` edits of what it made, one provider."""
+    turns = [
+        _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+        _text_turn("Done."),
+    ]
+    for n in range(edits):
+        turns += [
+            _tool_turn(
+                tool_use_id=f"tu-e{n}", name="edit_model", tool_input={"change": "20 mm taller"}
+            ),
+            _text_turn("Edited."),
+        ]
+    pipeline = StubPipeline()
+    _install(monkeypatch, ScriptedProvider(turns), pipeline=pipeline)
+    return pipeline
+
+
+def test_an_edit_keeps_the_assembly_the_version_was_built_with(client, store, monkeypatch):
+    """The second turn is the one a reload produces: the option has gone back to
+    off, and the person is editing a model that is in pieces.
+
+    Without this, the edit is not merely unguided -- ``build_refinement_message``
+    falls back to asking for "the final solid", which is an instruction to fuse the
+    parts, and the geometric check is gated on the same value so nothing measures
+    what comes back.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    pipeline = _build_then_edit(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    # A different printer saved between the two turns. Asserting the edit picks it
+    # up is what pins the central decision: the version remembers that it is an
+    # assembly, never which machine it was built for. Comparing the two specs to
+    # each other instead would pass equally well if the spec were stored and
+    # replayed, which is the design this rejected.
+    monkeypatch.setattr(chat.user_settings, "load", lambda: {"printer_joint_clearance": 0.35})
+    _stream_assembly(client, pid, assembly=False, text="make it 20 mm taller")
+
+    built, edited = pipeline.assemblies
+    assert built is not None
+    assert edited is not None
+    assert built.clearance_mm == printer_profile.DEFAULT_JOINT_CLEARANCE
+    assert edited.clearance_mm == 0.35
+
+
+def test_an_edit_to_a_model_never_built_as_an_assembly_still_sends_nothing(
+    client, store, monkeypatch
+):
+    """The other half, and the one that keeps the fix honest. Remembering must be
+    remembering, not a second way to opt in: a project whose model was never an
+    assembly has to reach the pipeline with nothing, or every edit in the product
+    would start being measured against a printer bed it never asked about.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    pipeline = _build_then_edit(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=False)
+    _stream_assembly(client, pid, assembly=False, text="make it 20 mm taller")
+
+    assert pipeline.assemblies == [None, None]
+
+
+def test_a_fresh_build_in_an_assembly_project_is_not_told_to_split(client, store, monkeypatch):
+    """Remembering is about the model, not about the project.
+
+    "Forget that, make me a simple cube" starts a new model, and a new model is an
+    assembly only if this turn says so. Inheriting here would make the opt-in
+    permanent — the composer's toggle is opt-in only, so there would be no way to
+    take it back — and the cube would then be recorded as an assembly itself, so
+    every later turn in the project would carry a brief that opens by saying the
+    part is too large to print in one piece.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+            _text_turn("Done."),
+            _tool_turn(tool_use_id="tu-2", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    _stream_assembly(client, pid, assembly=False, text="forget that, a simple cube")
+
+    built, fresh = pipeline.assemblies
+    assert built is not None
+    assert fresh is None
+
+
+def test_the_kill_switch_stops_a_remembered_assembly_without_forgetting_it(
+    client, store, monkeypatch
+):
+    """Two properties of the switch, and they pull in opposite directions.
+
+    It has to be outermost, or a version's record would keep the feature alive
+    after it was turned off — which is the one thing a kill-switch must not allow.
+    But it must not be destructive either: recording "this turn had no spec" while
+    it is off would erase the memory of a model that is still in pieces, and
+    turning the switch back on would not bring it back. So the middle turn gets
+    nothing and the third one still does.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    pipeline = _build_then_edit(monkeypatch, edits=2)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    monkeypatch.setattr(chat.settings, "assembly_enabled", False)
+    _stream_assembly(client, pid, assembly=False, text="make it taller")
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    _stream_assembly(client, pid, assembly=False, text="make it wider")
+
+    built, while_off, back_on = pipeline.assemblies
+    assert built is not None
+    assert while_off is None
+    assert back_on is not None
+
+
 # --- Blueprint rollback policy + replan (D3) -----------------------
 
 

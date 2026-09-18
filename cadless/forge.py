@@ -94,6 +94,7 @@ async def persist_losers(
     *,
     winner_version_id: int,
     parent_version_id: int | None = None,
+    built_as_assembly: bool = False,
 ) -> list[ScriptVersion]:
     """Persist the losing candidates of a race as NON-CURRENT rows (C4).
 
@@ -116,6 +117,10 @@ async def persist_losers(
             parameters=cand.parameters,
             parent_version_id=parent_version_id,
             candidate_of_version_id=winner_version_id,
+            # A loser was raced under the same spec as the winner. It is not current,
+            # but it is promotable, and a promoted row whose flag contradicts its
+            # geometry would land the project back on a model that looks single.
+            built_as_assembly=built_as_assembly,
         )
         persisted.append(loser_version)
     return persisted

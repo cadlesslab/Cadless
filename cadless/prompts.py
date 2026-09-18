@@ -308,9 +308,10 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
     the same instruction arriving twice.
 
     Two things this must not do. It must not assert that the script in front of the
-    model already is an assembly: the spec is a per-turn opt-in with no relation to
-    the current model, so "ask for an assembly, then edit a single-solid model"
-    reaches here and would be told something false about its own input. And having
+    model already is an assembly: a spec does not prove the current script is one,
+    because asking on the turn is enough to produce it, so "ask for an assembly,
+    then edit a single-solid model" reaches here and would be told something false
+    about its own input. And having
     left the seam question open, it cannot then leave a seam the request *does* ask
     for unspecified -- nothing downstream measures joint shape or print orientation,
     so a butt-jointed or unprintable new seam would pass every check there is.
