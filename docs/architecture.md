@@ -166,12 +166,18 @@ candidate judging, the identity seam and the image decisions are recorded under
    source through the provider-neutral interface. An attached image travels with
    that prompt to every code-generating call of the turn: the fresh run, a
    refinement, each repair round, and each best-of-N candidate. On a turn that
-   asked for an assembly the printer's build volume and joint clearance are
-   framed the same way, by every code-generating call that is handed them. A call
-   that is not handed them works against the closing rule asking for one
-   connected solid, and one solid is an ordinary result that nothing downstream
-   refuses — the assembly check does not fire on it, so the turn passes every
-   gate and returns the single oversized part the option existed to avoid.
+   asked for an assembly the printer's build volume and joint clearance reach
+   every one of those calls as well, framed in the same place and the same order.
+   What they say differs by round, and deliberately: a fresh run and a repair are
+   entitled to decide the split, so they carry the whole brief — how few parts,
+   where the seams fall, how they interlock; an edit is not, because the split
+   already exists and asking for it again argues with that same message's
+   instruction to edit in place rather than redesign, so an edit carries the
+   constraints alone. A call handed neither works against the closing rule asking
+   for one connected solid, and one solid is an ordinary result that nothing
+   downstream refuses — the assembly check does not fire on it, so such a turn
+   passes every gate and returns the single oversized part the option existed to
+   avoid.
 3. Static validation rejects disallowed syntax and imports before any execution.
 4. `cadless.worker.run_code` sends the program to the worker service when
    `CADLESS_WORKER_URL` is configured; local development and tests use a
