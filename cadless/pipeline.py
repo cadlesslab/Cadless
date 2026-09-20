@@ -244,6 +244,14 @@ class Pipeline:
         attempts: list[Attempt] = []
         max_tries = max(1, self._cfg.repair_max_attempts)
         mode = "refine" if prior_code else "generate"
+        # Which repair rounds of this turn may redesign the split. A fresh run
+        # has no split to preserve, so every one of its repairs is entitled; an
+        # edit acts on a model already cut, so its repairs are not -- they are
+        # fixing what the edit produced, not answering how the thing comes apart.
+        # Computed once here rather than at each repair site so the five of them
+        # cannot drift, and overridden at exactly one of them: the assembly check,
+        # where the split is what failed and a redesign is the answer.
+        may_resplit = prior_code is None
         _emit(
             on_progress, {"event": "start", "intent": intent, "max_tries": max_tries, "mode": mode}
         )
@@ -299,6 +307,7 @@ class Pipeline:
                     last_error,
                     n,
                     max_tries,
+                    may_resplit=may_resplit,
                     images=images,
                     assembly=assembly,
                 )
@@ -346,6 +355,7 @@ class Pipeline:
                                 last_error,
                                 n,
                                 max_tries,
+                                may_resplit=may_resplit,
                                 forced=True,
                                 images=images,
                                 assembly=assembly,
@@ -406,6 +416,12 @@ class Pipeline:
                             last_error,
                             n,
                             max_tries,
+                            # The one site that overrides the turn's answer: the
+                            # split is what failed here, so this round is the one
+                            # a redesign answers -- on an edit as much as on a
+                            # fresh run. Withholding the brief would leave it
+                            # failing the same check until the budget ran out.
+                            may_resplit=True,
                             forced=True,
                             images=images,
                             assembly=assembly,
@@ -431,6 +447,7 @@ class Pipeline:
                             last_error,
                             n,
                             max_tries,
+                            may_resplit=may_resplit,
                             forced=True,
                             images=images,
                             assembly=assembly,
@@ -470,6 +487,7 @@ class Pipeline:
                 last_error,
                 n,
                 max_tries,
+                may_resplit=may_resplit,
                 context=res.repair_context,
                 images=images,
                 assembly=assembly,
@@ -718,6 +736,7 @@ class Pipeline:
         n,
         max_tries,
         *,
+        may_resplit: bool,
         forced: bool = False,
         context=None,
         images: Sequence[ContentBlock] = (),
@@ -728,11 +747,20 @@ class Pipeline:
         ``forced`` is used by the critique path, which has already guaranteed
         ``n < max_tries`` before calling. ``context`` is the structured
         :class:`~cadless.worker.RepairContext` from an execution failure; validation/critique failures pass ``None``.
+
+        ``may_resplit`` has no default on purpose. The generator's own parameter
+        does -- it is a public surface with callers that predate the question --
+        but here the answer depends on which stage failed, which only the call
+        site knows, so a default would let a new repair site inherit an answer it
+        never gave and be wrong in whichever direction the default happened to
+        point.
         """
         if not forced and n >= max_tries:
             return None
         _emit_stage(on_progress, "repair", "begin", n, error)
-        repaired = self._gen.repair(intent, code, error, context, images=images, assembly=assembly)
+        repaired = self._gen.repair(
+            intent, code, error, context, images=images, assembly=assembly, may_resplit=may_resplit
+        )
         _emit_stage(on_progress, "repair", "ok", n)
         return repaired
 

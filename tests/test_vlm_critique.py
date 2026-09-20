@@ -360,7 +360,7 @@ class AlwaysGood:
     ):
         return GOOD
 
-    def repair(self, intent, code, error, context=None, images=(), assembly=None):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None, may_resplit=True):
         self.last_error = error
         return GOOD
 
@@ -558,7 +558,9 @@ def test_a_failed_run_carries_no_verdict_from_a_build_it_is_not_returning(tmp_pa
         def generate(self, intent, grounding=None, temperature=None, on_token=None, **kw):
             return GOOD
 
-        def repair(self, intent, code, error, context=None, images=(), assembly=None):
+        def repair(
+            self, intent, code, error, context=None, images=(), assembly=None, may_resplit=True
+        ):
             self.calls += 1
             return "from build123d import *\nresult = 1 / 0\n"
 

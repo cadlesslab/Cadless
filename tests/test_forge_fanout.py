@@ -23,6 +23,7 @@ class _RecordingGen:
 
     def __init__(self):
         self.temperatures: list[float | None] = []
+        self.repair_may_resplits: list[bool] = []
         self._lock = threading.Lock()
 
     def generate(
@@ -34,8 +35,27 @@ class _RecordingGen:
         # the candidate is still a well-formed (failed) GenerationResult.
         return "import os\nfrom build123d import *\nresult = Box(1,1,1)\n"
 
-    def repair(self, intent, code, error, context=None, images=(), assembly=None):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None, may_resplit=True):
+        with self._lock:
+            self.repair_may_resplits.append(may_resplit)
         return code
+
+
+def test_a_candidates_repair_may_decide_the_split():
+    """The fan-out generates rather than edits, so every repair under it is a
+    fresh-run repair and keeps the whole design brief.
+
+    Nothing about the fan-out changed, which is exactly why this is here: the
+    entitlement is now computed per turn, and a claim that a whole path was left
+    alone is worth an assertion rather than a sentence in a pull request nobody
+    can re-run.
+    """
+    gen = _RecordingGen()
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run_candidates("a bracket", n=2)
+
+    assert gen.repair_may_resplits, "no candidate reached a repair round"
+    assert all(gen.repair_may_resplits)
 
 
 def test_run_candidates_returns_n_results():

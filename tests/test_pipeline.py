@@ -62,7 +62,7 @@ class FakeGen:
             on_reading(self.reading)
         return self._outputs[0]
 
-    def repair(self, intent, code, error, context=None, images=(), assembly=None):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None, may_resplit=True):
         self.repairs += 1
         self.last_repair_context = context
         self.last_repair_error = error

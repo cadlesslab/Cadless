@@ -28,6 +28,7 @@ class FakeGen:
         self._output = output
         self.repairs = 0
         self.last_refine_assembly = None
+        self.repair_may_resplits: list[bool] = []
 
     def generate(
         self,
@@ -45,9 +46,10 @@ class FakeGen:
         self.last_refine_assembly = assembly
         return self._output
 
-    def repair(self, intent, code, error, context=None, images=(), assembly=None):
+    def repair(self, intent, code, error, context=None, images=(), assembly=None, may_resplit=True):
         self.repairs += 1
         self.last_repair_error = error
+        self.repair_may_resplits.append(may_resplit)
         return self._output
 
 
@@ -253,6 +255,32 @@ def test_a_repair_beneath_an_edit_is_not_asked_to_design_the_split():
     assert _assembly_rules(SPEC) not in repair
     assert "FEWEST parts" not in repair
     assert "where a cut does least harm" not in repair
+
+
+def test_a_repair_forced_by_the_assembly_check_may_resplit_even_under_an_edit(monkeypatch):
+    """The exception to the test above, and the reason it is an exception rather
+    than a special case someone forgot.
+
+    An edit that breaks the assembly escalates here: the check fires, forces a
+    repair, and that repair is the turn's one chance to cut the model
+    differently. Framed by the constraints alone it could only try the same split
+    again, so the turn would keep failing the same check until the budget ran out
+    and then refuse -- a failure mode indistinguishable from a model that simply
+    could not do it.
+
+    The assertion is worth more than it looks because the turn driving it is an
+    edit: this site is overriding what the rest of the turn computed, so wiring
+    it like its four siblings records False here and goes red.
+    """
+    _stub_run_code(monkeypatch, _overlapping())
+    gen = FakeGen()
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=3)).run(
+        "make it taller", prior_code="result = Box(5,5,5)", assembly=SPEC
+    )
+
+    assert gen.repair_may_resplits, "the assembly check never forced a repair"
+    assert all(gen.repair_may_resplits)
 
 
 # --- the last attempt: refused, not presented -----------------------------
