@@ -16,6 +16,7 @@ from cadless.llm.providers.fake import FakeChatProvider
 from cadless.llm.types import ContentBlock
 from cadless.pipeline import STAGE_PHASES, Pipeline
 from cadless.printer_profile import AssemblySpec, BuildVolume
+from cadless.prompts import CodeGenerator, _assembly_edit_rules, _assembly_rules
 from cadless.worker import ExecResult
 
 GOOD = "from build123d import *\nresult = Box(10, 10, 10)\n"
@@ -48,6 +49,32 @@ class FakeGen:
         self.repairs += 1
         self.last_repair_error = error
         return self._output
+
+
+# Never validates: `os` is a disallowed import, so a run whose every output is
+# this one fails at the validate stage and never reaches the worker.
+NEVER_VALIDATES = "```python\nimport os\nresult = os\n```"
+TWO_PART = "from build123d import *\nresult = Compound([Box(10,10,10), Box(10,10,10)])\n"
+
+
+class _RecordingProvider(FakeChatProvider):
+    """Records the user message of every completion, so a test can read the
+    prompt a round actually sent.
+
+    The doubles above replace the generator, which is what makes them cheap --
+    and also what makes them blind here: a fake generator composes no prompt, so
+    no assertion about framing can be made through one. This sits a layer lower,
+    under a real ``CodeGenerator``, which is the only way the framing of a round
+    is observable from a pipeline test.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.calls: list[str] = []
+
+    def complete(self, *, model, system, user, **kw):
+        self.calls.append(user)
+        return NEVER_VALIDATES
 
 
 def _sound() -> AssemblyMeasurements:
@@ -194,6 +221,38 @@ def test_the_repair_signal_names_the_check_that_failed(monkeypatch):
 def test_the_failing_attempt_is_recorded_under_its_own_stage(monkeypatch):
     result, _ = _run(FakeGen(), _overlapping(), monkeypatch, tries=2)
     assert any(a.stage == "assembly" for a in result.attempts)
+
+
+# --- what a repair round is told, and by which round it is framed ---------
+
+
+def test_a_repair_beneath_an_edit_is_not_asked_to_design_the_split():
+    """An edit acts on a model whose split already exists, and a repair under it
+    is still that edit -- fixing what the edit produced, not answering a question
+    about how the thing should come apart. Framing that round with the whole
+    design brief puts "split it into the FEWEST parts" above a request to fix a
+    typo, which is the contradiction the edit prompt itself was cleared of.
+
+    Two assertions carry the test and the first is what stops the second passing
+    vacuously: dropping the spec from the repair path altogether would satisfy
+    every absence below while losing the bed and the clearance the round must
+    still respect. The whole-block assertion is the one that cannot drift --
+    rewording the rules moves it too, whereas the literal clauses beneath it
+    would quietly stop matching anything and pass.
+    """
+    prov = _RecordingProvider()
+
+    Pipeline(
+        generator=CodeGenerator(provider=prov),
+        config=Settings(repair_max_attempts=2),
+    ).run("make it 20 mm taller", prior_code=TWO_PART, assembly=SPEC)
+
+    assert len(prov.calls) == 2, "expected one edit round followed by one repair round"
+    repair = prov.calls[1]
+    assert _assembly_edit_rules(SPEC) in repair
+    assert _assembly_rules(SPEC) not in repair
+    assert "FEWEST parts" not in repair
+    assert "where a cut does least harm" not in repair
 
 
 # --- the last attempt: refused, not presented -----------------------------
