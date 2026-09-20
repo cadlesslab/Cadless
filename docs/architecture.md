@@ -174,12 +174,18 @@ candidate judging, the identity seam and the image decisions are recorded under
    the record does *not* hold is the machine: which bed and which clearance apply
    are read from the settings saved now, so changing printer changes what an edit
    must satisfy rather than pinning it to the one it was first built for.
-   What they say differs by round, and deliberately: a fresh run and a repair are
-   entitled to decide the split, so they carry the whole brief — how few parts,
-   where the seams fall, how they interlock; an edit is not, because the split
-   already exists and asking for it again argues with that same message's
-   instruction to edit in place rather than redesign, so an edit carries the
-   constraints alone. A call handed neither works against the closing rule asking
+   What they say differs by round, and deliberately: a fresh run is entitled to
+   decide the split, so it carries the whole brief — how few parts, where the
+   seams fall, how they interlock; an edit is not, because the split already
+   exists and asking for it again argues with that same message's instruction to
+   edit in place rather than redesign, so an edit carries the constraints alone.
+   A repair holds no entitlement of its own and inherits the one belonging to the
+   turn it is repairing — the whole brief beneath a fresh run, the constraints
+   alone beneath an edit — with one exception: a repair forced by the assembly
+   check carries the whole brief whatever the turn, because there the split is
+   what failed and cutting the model differently is the answer. Without that
+   exception an edit that broke its assembly could only keep re-offering the same
+   split until the repair budget ran out. A call handed neither works against the closing rule asking
    for one connected solid, and one solid is an ordinary result that nothing
    downstream refuses — the assembly check does not fire on it, so such a turn
    passes every gate and returns the single oversized part the option existed to
