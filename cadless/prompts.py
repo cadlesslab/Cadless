@@ -295,17 +295,22 @@ def _assembly_rules(spec: AssemblySpec) -> str:
 
 
 def _assembly_edit_rules(spec: AssemblySpec) -> str:
-    """The constraints an edit must respect, without the brief for choosing a split.
+    """The constraints a round that may not decide the split must respect, without
+    the brief for choosing one.
 
     An edit acts on a model whose split already exists, so asking it again for the
     fewest parts and where the seams go argues with the same message's "EDIT in
     place, not redesign" and invites the rewrite that message exists to prevent.
-    What an edit must still respect is the arithmetic it cannot infer: the bed each
-    solid has to fit, and the gap a joint needs to go together in plastic.
+    A repair beneath an edit takes these rules for the same reason -- it is that
+    edit one round on, fixing what the edit produced. A repair forced by the
+    assembly check does not, because there the split is what failed. What any such
+    round must still respect is the arithmetic it cannot infer: the bed each solid
+    has to fit, and the gap a joint needs to go together in plastic.
 
-    The Compound requirement is deliberately absent. :func:`build_refinement_message`
-    already closes an assembly edit by asking for it, so restating it here would be
-    the same instruction arriving twice.
+    The Compound requirement is deliberately absent. Both builders these rules are
+    wrapped around -- :func:`build_refinement_message` and
+    :func:`build_repair_message` -- already close an assembly turn by asking for
+    it, so restating it here would be the same instruction arriving twice.
 
     Two things this must not do. It must not assert that the script in front of the
     model already is an assembly: a spec does not prove the current script is one,
