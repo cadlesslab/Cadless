@@ -528,6 +528,8 @@ class CodeGenerator:
         context: RepairContext | None = None,
         images: Sequence[ContentBlock] = (),
         assembly: AssemblySpec | None = None,
+        *,
+        may_resplit: bool = True,
     ) -> str:
         """Fix code that failed, with the turn's reference pictures still in view.
 
@@ -536,12 +538,23 @@ class CodeGenerator:
         able to describe it in the first place. ``assembly`` is here for the same
         reason: a round that lost it would be repairing towards a single solid.
 
-        Both are framed the way ``generate`` and ``refine`` frame them. Handing
-        the blocks over is not the same as asking for them to be read, and this
-        path used to do only the first -- the picture arrived with nothing saying
-        what to do with it.
+        Both are framed in the same place and the same order as ``generate`` and
+        ``refine`` frame them. Handing the blocks over is not the same as asking
+        for them to be read, and this path used to do only the first -- the
+        picture arrived with nothing saying what to do with it.
+
+        ``may_resplit`` chooses between the two assembly framings, and the
+        question it asks is entitlement rather than which round this is: a repair
+        beneath an edit is not entitled to redesign the split, *except* where the
+        assembly check is itself what failed, which is the one failure a redesign
+        answers. Only the caller knows which stage produced the error, so only
+        the caller can answer it. The default is the framing every caller had
+        before this parameter existed, so a caller that does not know keeps the
+        prompt it has always sent -- a caller that does know is expected to say
+        so rather than lean on it.
         """
-        user = _with_assembly_instruction(
+        frame = _with_assembly_instruction if may_resplit else _with_assembly_edit_instruction
+        user = frame(
             _with_reference_instruction(
                 build_repair_message(intent, previous_code, error, context, assembly), images
             ),

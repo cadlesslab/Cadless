@@ -268,6 +268,56 @@ def test_a_refine_round_is_not_asked_to_choose_the_split():
     assert "where a cut does least harm" not in user
 
 
+def test_a_repair_that_may_not_resplit_is_not_asked_to_choose_the_split():
+    """The same half of the same message, one round further in. A repair beneath
+    an edit is still that edit -- it fixes what the edit produced -- so framing it
+    with the design brief puts the very clauses the edit prompt was cleared of
+    back above a request to fix a fault.
+
+    Pinned exactly like the refine case above, and for the same reasons: the two
+    presence assertions stop it passing vacuously, since dropping the spec from
+    this path entirely would satisfy every absence beneath them, and the
+    whole-block assertion is the one that survives a rewording of the rules.
+    """
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.repair("a shelf", "result = 1", "boom", assembly=spec, may_resplit=False)
+
+    user = fake.last[1]
+    assert "210 x 200 x 195 mm" in user
+    assert "0.35 mm of clearance" in user
+    assert _assembly_rules(spec) not in user
+    assert "FEWEST parts" not in user
+    assert "where a cut does least harm" not in user
+
+
+def test_a_repair_that_may_resplit_still_carries_the_whole_brief():
+    """The exception, guarded where it is decided.
+
+    A repair whose assembly check is what failed is the one round a redesign of
+    the split actually answers, and the escalation an edit relies on runs through
+    it: the check fires, forces a repair, and that repair has to be able to cut
+    the model differently. Framing every repair by the constraints alone would
+    close that door silently -- the turn would simply keep failing the same check
+    until the budget ran out -- so the test above is not enough on its own.
+    """
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.repair("a shelf", "result = 1", "boom", assembly=spec, may_resplit=True)
+
+    user = fake.last[1]
+    assert _assembly_rules(spec) in user
+    assert _assembly_edit_rules(spec) not in user
+
+
 def test_a_repair_on_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
     """The other half of the option-off guarantee.
 
@@ -474,7 +524,9 @@ def test_the_three_ways_into_the_model_frame_it_the_same_way():
     What each path is framed WITH is a separate question, and the answer is no
     longer the same for all three: an edit gets the constraints alone, because it
     is not entitled to choose the split. Each path therefore names its own rules
-    builder below rather than sharing one literal. Deriving the marker from the
+    builder below rather than sharing one literal, and repair appears twice
+    because it has both framings -- the ordering has to hold on each of them, and
+    the one it takes beneath an edit is the newer of the two. Deriving the marker from the
     source also keeps the failure legible under rewording: ``str.index`` raises
     rather than passing vacuously, so a stale literal does not go quiet, but it
     reports a missing substring instead of the ordering this exists to pin.
@@ -495,6 +547,12 @@ def test_the_three_ways_into_the_model_frame_it_the_same_way():
         "repair": (
             lambda gen: gen.repair("a bracket", "bad", "boom", images=images, assembly=spec),
             _assembly_rules,
+        ),
+        "repair beneath an edit": (
+            lambda gen: gen.repair(
+                "a bracket", "bad", "boom", images=images, assembly=spec, may_resplit=False
+            ),
+            _assembly_edit_rules,
         ),
     }
 
