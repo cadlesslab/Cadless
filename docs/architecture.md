@@ -185,11 +185,11 @@ candidate judging, the identity seam and the image decisions are recorded under
    check carries the whole brief whatever the turn, because there the split is
    what failed and cutting the model differently is the answer. Without that
    exception an edit that broke its assembly could only keep re-offering the same
-   split until the repair budget ran out. A call handed neither works against the closing rule asking
-   for one connected solid, and one solid is an ordinary result that nothing
-   downstream refuses — the assembly check does not fire on it, so such a turn
-   passes every gate and returns the single oversized part the option existed to
-   avoid.
+   split until the repair budget ran out. A call handed neither works against the
+   closing rule asking for one connected solid, and one solid is an ordinary
+   result that nothing downstream refuses — the assembly check does not fire on
+   it, so such a turn passes every gate and returns the single oversized part the
+   option existed to avoid.
 3. Static validation rejects disallowed syntax and imports before any execution.
 4. `cadless.worker.run_code` sends the program to the worker service when
    `CADLESS_WORKER_URL` is configured; local development and tests use a

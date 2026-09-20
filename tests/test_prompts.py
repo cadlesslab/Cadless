@@ -526,10 +526,10 @@ def test_the_three_ways_into_the_model_frame_it_the_same_way():
     is not entitled to choose the split. Each path therefore names its own rules
     builder below rather than sharing one literal, and repair appears twice
     because it has both framings -- the ordering has to hold on each of them, and
-    the one it takes beneath an edit is the newer of the two. Deriving the marker from the
-    source also keeps the failure legible under rewording: ``str.index`` raises
-    rather than passing vacuously, so a stale literal does not go quiet, but it
-    reports a missing substring instead of the ordering this exists to pin.
+    the one it takes beneath an edit is the newer of the two. Deriving the marker
+    from the source also keeps the failure legible under rewording: ``str.index``
+    raises rather than passing vacuously, so a stale literal does not go quiet,
+    but it reports a missing substring instead of the ordering this exists to pin.
     """
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35

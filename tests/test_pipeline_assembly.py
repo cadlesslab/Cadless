@@ -72,10 +72,13 @@ class _RecordingProvider(FakeChatProvider):
 
     def __init__(self):
         super().__init__()
-        self.calls: list[str] = []
+        # Not ``calls``: the base class keeps its own list of dicts under that
+        # name, and shadowing it would make a later test that passes images fail
+        # with a type error rather than an assertion anyone can read.
+        self.user_messages: list[str] = []
 
-    def complete(self, *, model, system, user, **kw):
-        self.calls.append(user)
+    def complete(self, *, model, system, user, temperature: float | None = None):
+        self.user_messages.append(user)
         return NEVER_VALIDATES
 
 
@@ -249,12 +252,37 @@ def test_a_repair_beneath_an_edit_is_not_asked_to_design_the_split():
         config=Settings(repair_max_attempts=2),
     ).run("make it 20 mm taller", prior_code=TWO_PART, assembly=SPEC)
 
-    assert len(prov.calls) == 2, "expected one edit round followed by one repair round"
-    repair = prov.calls[1]
+    assert len(prov.user_messages) == 2, "expected one edit round then one repair round"
+    repair = prov.user_messages[1]
     assert _assembly_edit_rules(SPEC) in repair
     assert _assembly_rules(SPEC) not in repair
     assert "FEWEST parts" not in repair
     assert "where a cut does least harm" not in repair
+    # The edit rules leave the Compound requirement out because the message they
+    # wrap already closes with it. That reasoning is only true while it stays out
+    # of both, so it is pinned here rather than left in a docstring.
+    assert repair.count("Compound") == 1
+
+
+def test_a_turn_with_empty_prior_code_frames_its_repairs_as_the_fresh_run_it_is():
+    """Empty prior code takes the fresh-generation branch, so its repairs have to
+    be framed as a fresh run's.
+
+    The three readings of ``prior_code`` in the run loop have to agree, and under
+    an identity test they do not: the turn would be handed the whole brief on its
+    first round and the edit constraints on every repair of it, arguing with
+    itself one round later. No caller passes an empty string today; the assertion
+    is that whoever does gets one turn rather than two halves of different ones.
+    """
+    prov = _RecordingProvider()
+
+    Pipeline(
+        generator=CodeGenerator(provider=prov),
+        config=Settings(repair_max_attempts=2),
+    ).run("a shelf", prior_code="", assembly=SPEC)
+
+    assert len(prov.user_messages) == 2, "expected one fresh round then one repair round"
+    assert _assembly_rules(SPEC) in prov.user_messages[1]
 
 
 def test_a_repair_forced_by_the_assembly_check_may_resplit_even_under_an_edit(monkeypatch):

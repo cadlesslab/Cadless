@@ -267,8 +267,9 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     generator can act on.
 
     This is the whole brief -- the constraints AND the design decisions -- so it
-    belongs to a round entitled to decide the split: a fresh generation, or a
-    repair whose split may be what failed. An edit is not entitled to, and takes
+    belongs to a round entitled to decide the split: a fresh generation and every
+    repair beneath one, plus any repair the assembly check forced. An edit is not
+    entitled to, nor is a repair beneath an edit, and both take
     :func:`_assembly_edit_rules` instead.
     """
     fits = _fits(spec)
@@ -552,7 +553,8 @@ class CodeGenerator:
         question it asks is entitlement rather than which round this is: a repair
         beneath an edit is not entitled to redesign the split, *except* where the
         assembly check is itself what failed, which is the one failure a redesign
-        answers. Only the caller knows which stage produced the error, so only
+        answers among the stages wired to carry a spec today. Only the caller
+        knows which stage produced the error, so only
         the caller can answer it. The default is the framing every caller had
         before this parameter existed, so a caller that does not know keeps the
         prompt it has always sent -- a caller that does know is expected to say

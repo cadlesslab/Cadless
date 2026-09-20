@@ -251,7 +251,14 @@ class Pipeline:
         # Computed once here rather than at each repair site so the five of them
         # cannot drift, and overridden at exactly one of them: the assembly check,
         # where the split is what failed and a redesign is the answer.
-        may_resplit = prior_code is None
+        #
+        # Truthiness rather than `is None`, to read `prior_code` the same way the
+        # two lines around it do. An empty string takes the fresh-generation
+        # branch below, so under identity it would be handed a fresh design on the
+        # first round and edit framing on every repair of it -- one turn arguing
+        # with itself. No caller reaches it today; the point is that the three
+        # readings agree whoever does.
+        may_resplit = not prior_code
         _emit(
             on_progress, {"event": "start", "intent": intent, "max_tries": max_tries, "mode": mode}
         )
@@ -447,6 +454,14 @@ class Pipeline:
                             last_error,
                             n,
                             max_tries,
+                            # Inherits rather than overriding, and one assertion
+                            # class argues for the other reading: an expected part
+                            # count answered only by cutting the model differently.
+                            # Left inheriting because no caller reaches this site
+                            # with an assembly spec -- the tool path passes a spec
+                            # and no assertions, the API path assertions and no
+                            # spec -- so overriding here would be a behaviour
+                            # nothing can exercise. Revisit when one wires both.
                             may_resplit=may_resplit,
                             forced=True,
                             images=images,

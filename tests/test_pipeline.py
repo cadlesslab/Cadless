@@ -4,6 +4,7 @@ Unit tests inject a scripted fake generator. Execution-bearing tests are marked
 build123d; the full live test is marked bedrock.
 """
 
+import inspect
 import os
 
 import pytest
@@ -79,6 +80,25 @@ def test_exhausted_on_persistent_validation_failure():
     assert result.attempt_count == 3
     assert all(a.stage == "validate" for a in result.attempts)
     assert "validation" in result.error
+
+
+def test_a_repair_site_cannot_inherit_an_answer_it_never_gave():
+    """``_repair``'s ``may_resplit`` has no default, and that absence is what the
+    five call sites rely on instead of a test each.
+
+    Four of them pass the turn's answer and one overrides it, and the failure that
+    would actually recur is a *sixth* site added later and framed by whichever
+    value the default happened to hold. Giving the parameter a default is a silent
+    no-op today -- every existing site passes it explicitly -- so nothing else in
+    the suite goes red on it, and the reasoning that makes three per-site tests
+    unnecessary would be gone with nothing to say so.
+
+    Introspection rather than behaviour because there is no behaviour to observe:
+    a default that is never reached changes no prompt.
+    """
+    default = inspect.signature(Pipeline._repair).parameters["may_resplit"].default
+
+    assert default is inspect.Parameter.empty
 
 
 def test_a_repair_round_carries_the_assembly_spec():
