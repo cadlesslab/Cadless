@@ -66,6 +66,7 @@ async def persist_generation(
     *,
     prior_code: str | None = None,
     parent_version_id: int | None = None,
+    built_as_assembly: bool = False,
 ) -> tuple[ScriptVersion, int]:
     """Run the pipeline (in a worker thread) and persist version + artifacts.
 
@@ -98,6 +99,7 @@ async def persist_generation(
             result.bbox,
             parameters=result.parameters,
             parent_version_id=parent_version_id,
+            built_as_assembly=built_as_assembly,
         )
         if result.ok:
             await artifact_io.copy_and_register(store, version.id, staging)
@@ -117,14 +119,21 @@ async def persist_generation(
     return version, result.attempt_count
 
 
-async def _resolve_refinement(store: ScopedStore, project_id: int, prior_version_id: int) -> str:
-    """Validate the refinement source and return its code (raises HTTPException)."""
+async def _resolve_refinement(
+    store: ScopedStore, project_id: int, prior_version_id: int
+) -> tuple[str, bool]:
+    """Validate the refinement source and return its code and assembly-ness.
+
+    The second value travels with the code because a refinement produces a new
+    version of the same model: dropping it there would leave a model still in
+    pieces with no record of why, and the next edit would be told to fuse it.
+    """
     prior = await store.get_version(prior_version_id)
     if not prior or prior.project_id != project_id:
         raise HTTPException(status_code=404, detail="prior version not found")
     if not prior.code:
         raise HTTPException(status_code=400, detail="prior version has no code to refine")
-    return prior.code
+    return prior.code, prior.built_as_assembly
 
 
 @router.post("/projects/{project_id}/generate", response_model=GenerateResponse)
@@ -133,11 +142,19 @@ async def generate(project_id: int, body: GenerateRequest, store: ScopedStore = 
         raise HTTPException(status_code=404, detail="project not found")
     await reject_if_catalog(store, project_id, "generate new versions")
     intent, prior_code, parent_id = body.prompt, None, None
+    inherited_assembly = False
     if body.prior_version_id is not None:
-        prior_code = await _resolve_refinement(store, project_id, body.prior_version_id)
+        prior_code, inherited_assembly = await _resolve_refinement(
+            store, project_id, body.prior_version_id
+        )
         intent, parent_id = body.delta_prompt, body.prior_version_id
     version, attempts = await persist_generation(
-        store, project_id, intent, prior_code=prior_code, parent_version_id=parent_id
+        store,
+        project_id,
+        intent,
+        prior_code=prior_code,
+        parent_version_id=parent_id,
+        built_as_assembly=inherited_assembly,
     )
     artifacts = await store.list_artifacts(version.id)
     return GenerateResponse(
@@ -162,12 +179,15 @@ async def generate_stream(
         raise HTTPException(status_code=404, detail="project not found")
     await reject_if_catalog(store, project_id, "generate new versions")
     intent, prior_code, parent_id = prompt, None, None
+    inherited_assembly = False
     if prior_version_id is not None:
         if not delta_prompt:
             raise HTTPException(
                 status_code=422, detail="delta_prompt is required when prior_version_id is set"
             )
-        prior_code = await _resolve_refinement(store, project_id, prior_version_id)
+        prior_code, inherited_assembly = await _resolve_refinement(
+            store, project_id, prior_version_id
+        )
         intent, parent_id = delta_prompt, prior_version_id
     elif not prompt:
         raise HTTPException(status_code=422, detail="prompt is required")
@@ -187,6 +207,7 @@ async def generate_stream(
                 on_progress,
                 prior_code=prior_code,
                 parent_version_id=parent_id,
+                built_as_assembly=inherited_assembly,
             )
             on_progress(
                 {

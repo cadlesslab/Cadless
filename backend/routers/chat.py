@@ -44,7 +44,7 @@ from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
 from cadless import printer_profile, user_settings
-from cadless.agent import Agent, SessionSteerRegistry, ToolContext
+from cadless.agent import GENERATE_MODEL, Agent, SessionSteerRegistry, ToolContext
 from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
 from cadless.config import settings
@@ -87,10 +87,15 @@ class ChatRequest(BaseModel):
     forge: bool = False
     # Per-turn assembly opt-in: the model is asked for interlocking parts sized to
     # the saved printer when this is True AND the global ``assembly_enabled``
-    # kill-switch is on (the same both-true gate ``forge`` uses). Default False =>
-    # today's single-solid prompt, unchanged to the byte. Per-turn rather than a
-    # project setting for the same reason forge is: one model in a conversation
-    # may need splitting and the next may not.
+    # kill-switch is on (the same both-true gate ``forge`` uses).
+    #
+    # It is one of two ways in, not the only one. The other is the version's own
+    # record: a model built as an assembly stays one, so an edit made after a reload
+    # put this flag back to False is still framed and checked as an assembly. This
+    # field therefore means "this turn is asking", never "this turn is the only
+    # thing that decides" -- unlike ``forge``, which really is per-turn, because
+    # forgetting a race costs a cheaper generation while forgetting an assembly asks
+    # the model to fuse a model that is in pieces.
     assembly: bool = False
 
     @model_validator(mode="after")
@@ -245,15 +250,26 @@ def _blind_role(provider) -> str | None:
     return None
 
 
-async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | None, dict]:
-    """Resolve the project's current code + params for the agent's edit context."""
+async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | None, dict, bool]:
+    """Resolve the current code, params and assembly-ness for the agent's edit context.
+
+    The third value comes from the version rather than from this turn's request on
+    purpose: the turn that edits an assembly may have been made after a reload put
+    the per-turn option back to off, and the model is in pieces either way. It is
+    read here rather than fetched separately because this is already the one place
+    that loads the current version.
+    """
     project = await store.get_project(project_id)
     if not project or project.current_version_id is None:
-        return None, {}
+        return None, {}, False
     version = await store.get_version(project.current_version_id)
     if not version or not version.code:
-        return None, {}
-    return version.code, version.parameters or extract_params(version.code)
+        return None, {}, False
+    return (
+        version.code,
+        version.parameters or extract_params(version.code),
+        version.built_as_assembly,
+    )
 
 
 # How the reviewer's stored sentence opens, so ``_replayed_block`` can know it
@@ -346,6 +362,7 @@ async def _persist_tool_version(
     payload: dict,
     plan_step: int | None = None,
     parent_version_id: int | None = None,
+    built_as_assembly: bool = False,
 ) -> int | None:
     """Persist a ScriptVersion (+ artifacts) for a successful tool result.
 
@@ -376,6 +393,7 @@ async def _persist_tool_version(
         parameters=metrics.get("parameters") or {},
         parent_version_id=parent_version_id,
         plan_step=plan_step,
+        built_as_assembly=built_as_assembly,
     )
     thumb = payload.get("thumbnail")
     src_dir = Path(thumb).parent if thumb else None
@@ -418,7 +436,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
 
     session = await store.get_or_create_session(project_id)
     history = await _replay_history(store, session.id)
-    code, params = await _current_model(store, project_id)
+    code, params, current_is_assembly = await _current_model(store, project_id)
 
     # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
     # ``content``, so once there is a picture the words have to be carried beside it
@@ -458,11 +476,28 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # down: the prompt has to describe one machine, and the saved file is on disk
     # -- reading it per candidate in a forge race would be the same answer bought
     # N times, with nothing stopping the two halves disagreeing mid-turn.
-    assembly_spec = (
+    # Asking on this turn is one way in; the other is editing a model that was
+    # already built as one, because the option is per-turn and a reload puts it back
+    # to off while the model stays in pieces. The kill-switch stays outermost of
+    # both: a version's record must not keep the feature alive after it has been
+    # switched off, or turning it off would fail for exactly the projects that used
+    # it. What the spec SAYS still comes from the settings saved now, so changing
+    # printer changes what an edit has to satisfy -- the version remembers that it
+    # is an assembly, never which machine it was once built for.
+    wants_assembly = settings.assembly_enabled and (body.assembly or current_is_assembly)
+    spec = (
         printer_profile.assembly_spec(await asyncio.to_thread(user_settings.load))
-        if (body.assembly and settings.assembly_enabled)
+        if wants_assembly
         else None
     )
+    # The same spec, split by where the answer came from, because the two are not
+    # entitled to the same tools: a fresh generation starts a new model and may only
+    # be an assembly if this turn asked, while an edit acts on the model that already
+    # exists and takes either. Without the split the opt-in would be permanent —
+    # every later turn in the project would inherit, including "forget that, make me
+    # a simple cube", and the composer's toggle only ever turns it on.
+    asked_spec = spec if body.assembly else None
+    inherited_spec = spec if current_is_assembly else None
     # The current version (if any) is the parent the race branches off, so winner +
     # loser candidate rows hang off the model the turn started from.
     project = await store.get_project(project_id)
@@ -510,7 +545,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         on_reading=_keep_first_reading if image_blocks else None,
         forge=forge_active,
         forge_n=forge_n,
-        assembly=assembly_spec,
+        assembly=asked_spec,
+        inherited_assembly=inherited_spec,
         on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
         on_critique=_relay_critique,
     )
@@ -566,6 +602,14 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 ev.data,
                                 plan_step,
                                 parent_version_id=chain_parent,
+                                # A fresh generation starts a new model, so it is
+                                # an assembly only if this turn asked; anything
+                                # else derives from the current one and keeps its
+                                # answer. Read from the turn rather than from the
+                                # spec because the kill-switch being off must
+                                # leave the memory alone rather than erase it.
+                                built_as_assembly=bool(body.assembly)
+                                or (ev.data.get("tool") != GENERATE_MODEL and current_is_assembly),
                             ),
                             loop,
                         ).result()
@@ -602,6 +646,9 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                     forge_race.get("losers", []),
                                     winner_version_id=version_id,
                                     parent_version_id=parent_version_id,
+                                    # A forge race is always a fresh generation, so
+                                    # its losers follow the winner's rule above.
+                                    built_as_assembly=bool(body.assembly),
                                 ),
                                 loop,
                             ).result()

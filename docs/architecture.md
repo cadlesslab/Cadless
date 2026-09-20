@@ -168,6 +168,12 @@ candidate judging, the identity seam and the image decisions are recorded under
    refinement, each repair round, and each best-of-N candidate. On a turn that
    asked for an assembly the printer's build volume and joint clearance reach
    every one of those calls as well, framed in the same place and the same order.
+   A turn asks either by opting in or by editing a model already recorded as an
+   assembly — the record lives on the version, so a reload that clears the opt-in
+   does not turn the next edit back into a request for one connected solid. What
+   the record does *not* hold is the machine: which bed and which clearance apply
+   are read from the settings saved now, so changing printer changes what an edit
+   must satisfy rather than pinning it to the one it was first built for.
    What they say differs by round, and deliberately: a fresh run and a repair are
    entitled to decide the split, so they carry the whole brief — how few parts,
    where the seams fall, how they interlock; an edit is not, because the split

@@ -31,13 +31,20 @@ def client(store):
         yield c
 
 
-def _seed(store, code=PARAMS_CODE, params=None):
+def _seed(store, code=PARAMS_CODE, params=None, built_as_assembly=False):
     params = {"size": 10} if params is None else params
 
     async def go():
         p = await store.create_project("P")
         v = await store.add_version(
-            p.id, "a cube", code, ok=True, volume=1000.0, bbox=(10, 10, 10), parameters=params
+            p.id,
+            "a cube",
+            code,
+            ok=True,
+            volume=1000.0,
+            bbox=(10, 10, 10),
+            parameters=params,
+            built_as_assembly=built_as_assembly,
         )
         return p.id, v.id
 
@@ -114,3 +121,22 @@ def test_reparametrize_produces_new_geometry_without_llm(client, store):
     assert client.get(f"/projects/{pid}").json()["current_version_id"] == new["id"]
     # the original version is untouched
     assert client.get(f"/versions/{vid}").json()["parameters"] == {"size": 10}
+
+
+@pytest.mark.build123d
+def test_reparametrize_keeps_the_assembly_record(client, store):
+    """Different numbers, same model — so it is still an assembly.
+
+    This route reaches the same store method the agent's set_parameters tool does,
+    and dropping the record here would leave the model in pieces with nothing
+    saying so: the next chat edit would be told to assign the final solid, which is
+    an instruction to fuse it. Read from the store rather than the response because
+    the flag is deliberately not on the wire.
+    """
+    pid, vid = _seed(store, built_as_assembly=True)
+
+    r = client.post(f"/versions/{vid}/reparametrize", json={"params": {"size": 20}})
+
+    assert r.status_code == 200, r.text
+    new_id = r.json()["version"]["id"]
+    assert asyncio.run(store.get_version(new_id)).built_as_assembly is True
