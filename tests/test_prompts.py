@@ -278,6 +278,11 @@ def test_a_repair_that_may_not_resplit_is_not_asked_to_choose_the_split():
     presence assertions stop it passing vacuously, since dropping the spec from
     this path entirely would satisfy every absence beneath them, and the
     whole-block assertion is the one that survives a rewording of the rules.
+
+    The last assertion is a different subject that belongs on this composition
+    rather than beside it: :func:`_assembly_edit_rules` leaves the Compound
+    requirement out because the message it is wrapped around already closes with
+    one, and that reasoning holds only while it stays out of exactly one of them.
     """
     fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
     gen = CodeGenerator(provider=fake)
@@ -293,6 +298,7 @@ def test_a_repair_that_may_not_resplit_is_not_asked_to_choose_the_split():
     assert _assembly_rules(spec) not in user
     assert "FEWEST parts" not in user
     assert "where a cut does least harm" not in user
+    assert user.count("Compound") == 1
 
 
 def test_a_repair_that_may_resplit_still_carries_the_whole_brief():

@@ -238,12 +238,12 @@ def test_a_repair_beneath_an_edit_is_not_asked_to_design_the_split():
     design brief puts "split it into the FEWEST parts" above a request to fix a
     typo, which is the contradiction the edit prompt itself was cleared of.
 
-    Two assertions carry the test and the first is what stops the second passing
-    vacuously: dropping the spec from the repair path altogether would satisfy
-    every absence below while losing the bed and the clearance the round must
-    still respect. The whole-block assertion is the one that cannot drift --
-    rewording the rules moves it too, whereas the literal clauses beneath it
-    would quietly stop matching anything and pass.
+    The presence assertion is what stops the absences passing vacuously: dropping
+    the spec from the repair path altogether would satisfy every one of them while
+    losing the bed and the clearance the round must still respect. The whole-block
+    assertion is the one that cannot drift -- rewording the rules moves it too,
+    whereas the literal clauses beneath it would quietly stop matching anything
+    and pass.
     """
     prov = _RecordingProvider()
 
@@ -258,18 +258,14 @@ def test_a_repair_beneath_an_edit_is_not_asked_to_design_the_split():
     assert _assembly_rules(SPEC) not in repair
     assert "FEWEST parts" not in repair
     assert "where a cut does least harm" not in repair
-    # The edit rules leave the Compound requirement out because the message they
-    # wrap already closes with it. That reasoning is only true while it stays out
-    # of both, so it is pinned here rather than left in a docstring.
-    assert repair.count("Compound") == 1
 
 
 def test_a_turn_with_empty_prior_code_frames_its_repairs_as_the_fresh_run_it_is():
     """Empty prior code takes the fresh-generation branch, so its repairs have to
     be framed as a fresh run's.
 
-    The three readings of ``prior_code`` in the run loop have to agree, and under
-    an identity test they do not: the turn would be handed the whole brief on its
+    Every reading of ``prior_code`` in the run loop has to agree, and under an
+    identity test they do not: the turn would be handed the whole brief on its
     first round and the edit constraints on every repair of it, arguing with
     itself one round later. No caller passes an empty string today; the assertion
     is that whoever does gets one turn rather than two halves of different ones.
@@ -298,7 +294,7 @@ def test_a_repair_forced_by_the_assembly_check_may_resplit_even_under_an_edit(mo
 
     The assertion is worth more than it looks because the turn driving it is an
     edit: this site is overriding what the rest of the turn computed, so wiring
-    it like its four siblings records False here and goes red.
+    it like its siblings records False here and goes red.
     """
     _stub_run_code(monkeypatch, _overlapping())
     gen = FakeGen()

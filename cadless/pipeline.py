@@ -248,16 +248,16 @@ class Pipeline:
         # has no split to preserve, so every one of its repairs is entitled; an
         # edit acts on a model already cut, so its repairs are not -- they are
         # fixing what the edit produced, not answering how the thing comes apart.
-        # Computed once here rather than at each repair site so the five of them
-        # cannot drift, and overridden at exactly one of them: the assembly check,
-        # where the split is what failed and a redesign is the answer.
+        # Computed once here rather than at each repair site so they cannot drift
+        # apart, and overridden at exactly one: the assembly check, where the
+        # split is what failed and a redesign is the answer.
         #
         # Truthiness rather than `is None`, to read `prior_code` the same way the
-        # two lines around it do. An empty string takes the fresh-generation
-        # branch below, so under identity it would be handed a fresh design on the
-        # first round and edit framing on every repair of it -- one turn arguing
-        # with itself. No caller reaches it today; the point is that the three
-        # readings agree whoever does.
+        # lines around it do. An empty string takes the fresh-generation branch
+        # below, so under identity it would be handed a fresh design on the first
+        # round and edit framing on every repair of it -- one turn arguing with
+        # itself. No caller reaches it today; the point is that every reading of
+        # `prior_code` in this loop agrees whoever does.
         may_resplit = not prior_code
         _emit(
             on_progress, {"event": "start", "intent": intent, "max_tries": max_tries, "mode": mode}
@@ -456,12 +456,13 @@ class Pipeline:
                             max_tries,
                             # Inherits rather than overriding, and one assertion
                             # class argues for the other reading: an expected part
-                            # count answered only by cutting the model differently.
-                            # Left inheriting because no caller reaches this site
-                            # with an assembly spec -- the tool path passes a spec
-                            # and no assertions, the API path assertions and no
-                            # spec -- so overriding here would be a behaviour
-                            # nothing can exercise. Revisit when one wires both.
+                            # count is answered only by cutting the model
+                            # differently. Left inheriting because on the paths
+                            # that carry a spec today the turn's answer is already
+                            # the right one, so an override here would be
+                            # behaviour nothing in this tree can exercise.
+                            # Revisit when a caller wires an assembly spec and
+                            # geometry assertions together.
                             may_resplit=may_resplit,
                             forced=True,
                             images=images,
