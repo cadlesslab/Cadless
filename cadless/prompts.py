@@ -267,8 +267,9 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     generator can act on.
 
     This is the whole brief -- the constraints AND the design decisions -- so it
-    belongs to a round entitled to decide the split: a fresh generation, or a
-    repair whose split may be what failed. An edit is not entitled to, and takes
+    belongs to a round entitled to decide the split: a fresh generation and every
+    repair beneath one, plus any repair the assembly check forced. An edit is not
+    entitled to, nor is a repair beneath an edit, and both take
     :func:`_assembly_edit_rules` instead.
     """
     fits = _fits(spec)
@@ -295,17 +296,22 @@ def _assembly_rules(spec: AssemblySpec) -> str:
 
 
 def _assembly_edit_rules(spec: AssemblySpec) -> str:
-    """The constraints an edit must respect, without the brief for choosing a split.
+    """The constraints a round that may not decide the split must respect, without
+    the brief for choosing one.
 
     An edit acts on a model whose split already exists, so asking it again for the
     fewest parts and where the seams go argues with the same message's "EDIT in
     place, not redesign" and invites the rewrite that message exists to prevent.
-    What an edit must still respect is the arithmetic it cannot infer: the bed each
-    solid has to fit, and the gap a joint needs to go together in plastic.
+    A repair beneath an edit takes these rules for the same reason -- it is that
+    edit one round on, fixing what the edit produced. A repair forced by the
+    assembly check does not, because there the split is what failed. What any such
+    round must still respect is the arithmetic it cannot infer: the bed each solid
+    has to fit, and the gap a joint needs to go together in plastic.
 
-    The Compound requirement is deliberately absent. :func:`build_refinement_message`
-    already closes an assembly edit by asking for it, so restating it here would be
-    the same instruction arriving twice.
+    The Compound requirement is deliberately absent. Both builders these rules are
+    wrapped around -- :func:`build_refinement_message` and
+    :func:`build_repair_message` -- already close an assembly turn by asking for
+    it, so restating it here would be the same instruction arriving twice.
 
     Two things this must not do. It must not assert that the script in front of the
     model already is an assembly: a spec does not prove the current script is one,
@@ -528,6 +534,8 @@ class CodeGenerator:
         context: RepairContext | None = None,
         images: Sequence[ContentBlock] = (),
         assembly: AssemblySpec | None = None,
+        *,
+        may_resplit: bool = True,
     ) -> str:
         """Fix code that failed, with the turn's reference pictures still in view.
 
@@ -536,12 +544,24 @@ class CodeGenerator:
         able to describe it in the first place. ``assembly`` is here for the same
         reason: a round that lost it would be repairing towards a single solid.
 
-        Both are framed the way ``generate`` and ``refine`` frame them. Handing
-        the blocks over is not the same as asking for them to be read, and this
-        path used to do only the first -- the picture arrived with nothing saying
-        what to do with it.
+        Both are framed in the same place and the same order as ``generate`` and
+        ``refine`` frame them. Handing the blocks over is not the same as asking
+        for them to be read, and this path used to do only the first -- the
+        picture arrived with nothing saying what to do with it.
+
+        ``may_resplit`` chooses between the two assembly framings, and the
+        question it asks is entitlement rather than which round this is: a repair
+        beneath an edit is not entitled to redesign the split, *except* where the
+        assembly check is itself what failed, which is the one failure a redesign
+        answers among the stages wired to carry a spec today. Only the caller
+        knows which stage produced the error, so only the caller can answer it.
+        The default is the framing every caller had before this parameter
+        existed, so a caller that does not know keeps the prompt it has always
+        sent -- a caller that does know is expected to say so rather than lean
+        on it.
         """
-        user = _with_assembly_instruction(
+        frame = _with_assembly_instruction if may_resplit else _with_assembly_edit_instruction
+        user = frame(
             _with_reference_instruction(
                 build_repair_message(intent, previous_code, error, context, assembly), images
             ),
