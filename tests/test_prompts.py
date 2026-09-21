@@ -301,6 +301,27 @@ def test_a_repair_that_may_not_resplit_is_not_asked_to_choose_the_split():
     assert user.count("Compound") == 1
 
 
+def test_a_repair_that_was_told_nothing_keeps_the_framing_it_always_had():
+    """The default is what makes this parameter source-compatible, so it is pinned
+    on purpose rather than incidentally.
+
+    A caller written before the parameter existed passes no keyword and must keep
+    the prompt it has always sent. Until this test, the only assertion that would
+    have noticed the default flipping was the block-ordering test above, which
+    omits the keyword for reasons of its own -- so adding the keyword there for
+    tidiness would have left the default guarded by nothing at all.
+    """
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.repair("a shelf", "result = 1", "boom", assembly=spec)
+
+    assert _assembly_rules(spec) in fake.last[1]
+
+
 def test_a_repair_that_may_resplit_still_carries_the_whole_brief():
     """The exception, guarded where it is decided.
 
