@@ -712,6 +712,62 @@ def test_the_chat_route_is_the_one_place_a_critic_is_injected():
     assert Pipeline()._critic is None
 
 
+def _capture_judge_kwargs(monkeypatch) -> dict:
+    """Stand in for the race so the forge path's own wiring is what is read."""
+    from cadless.judge import JudgeResult, Rung
+
+    seen: dict = {}
+
+    def _race(pipeline, intent, **kw):
+        seen.update(kw)
+        return JudgeResult(winner=None, rung=Rung.FILTER, ranking=[], no_winner=True), []
+
+    monkeypatch.setattr("cadless.forge.race_and_judge", _race)
+    return seen
+
+
+def test_the_forge_path_hands_the_judge_a_reviewer(monkeypatch):
+    """The same wiring failure as above, one seam over.
+
+    The judge's render rung runs only when it is handed a reviewer, and nothing
+    ever handed it one -- so a rung that looked live had never decided anything,
+    which is indistinguishable from one that always agreed.
+    """
+    from cadless.agent import Agent, ToolContext
+
+    seen = _capture_judge_kwargs(monkeypatch)
+    critic = VlmCritic(renderer=_renderer(), provider=_provider("MATCH"))
+    pipeline = Pipeline(critic=critic, config=Settings(vlm_critique_enabled=True))
+
+    Agent(provider=FakeChatProvider(), model="fake-model")._forge_generate(
+        "a bracket", ToolContext(pipeline=pipeline)
+    )
+
+    assert seen["critic"] is critic
+
+
+def test_the_forge_path_hands_over_nothing_while_the_review_is_off(monkeypatch):
+    """One setting, both paths. The judge's rung asks only whether it got one.
+
+    Handed a reviewer the pipeline itself would not run, an installation with
+    the review switched off would pay for vision on the one path that fans out
+    to N candidates -- the expensive one.
+    """
+    from cadless.agent import Agent, ToolContext
+
+    seen = _capture_judge_kwargs(monkeypatch)
+    pipeline = Pipeline(
+        critic=VlmCritic(renderer=_renderer(), provider=_provider("MATCH")),
+        config=Settings(vlm_critique_enabled=False),
+    )
+
+    Agent(provider=FakeChatProvider(), model="fake-model")._forge_generate(
+        "a bracket", ToolContext(pipeline=pipeline)
+    )
+
+    assert seen["critic"] is None
+
+
 def test_the_setting_ships_on():
     """The capability is not delivered while it is off for everyone."""
     assert Settings().vlm_critique_enabled is True

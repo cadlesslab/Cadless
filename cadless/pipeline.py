@@ -190,6 +190,17 @@ class Pipeline:
         """
         return self._cfg
 
+    @property
+    def critic(self):
+        """The reviewer this pipeline would use, or ``None`` where it would not.
+
+        Gated on the setting as well as on injection, because the forge judge's
+        rung asks only whether it was given one. Handing it a reviewer this
+        pipeline would not itself run would leave the setting off for one path
+        and on for the other, and the one it was on for is the expensive one.
+        """
+        return self._critic if self._cfg.vlm_critique_enabled else None
+
     def run(
         self,
         intent: str,
@@ -656,7 +667,7 @@ class Pipeline:
         """
         _emit_stage(on_progress, "critique", "begin", n)
         try:
-            crit = self._critic.critique(intent, _critique_subject(res.stl_path))
+            crit = self._critic.critique(intent, critique_subject(res.stl_path))
             # Publishing sits inside the guard as well. It reads the verdict's
             # captures, so a critic composed outside this tree that returns
             # something shaped differently would otherwise raise here — past the
@@ -792,8 +803,12 @@ class Pipeline:
         return repaired
 
 
-def _critique_subject(stl_path: str) -> str | list[str]:
+def critique_subject(stl_path: str) -> str | list[str]:
     """What the reviewer is shown for a build: the whole of it.
+
+    Public because the forge judge reviews candidates through the same rung and
+    must resolve them the same way. One definition rather than the same rule
+    spelled twice, for the reason the reader it calls gives.
 
     ``stl_path`` is the *first* part of a multi-part build -- for one solid that
     is the model, and for an assembly it is a fragment. Reviewing that alone asks

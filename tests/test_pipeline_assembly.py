@@ -15,7 +15,7 @@ from cadless.assembly_check import AssemblyMeasurements
 from cadless.config import Settings
 from cadless.llm.providers.fake import FakeChatProvider
 from cadless.llm.types import ContentBlock
-from cadless.pipeline import STAGE_PHASES, Pipeline, _critique_subject
+from cadless.pipeline import STAGE_PHASES, Pipeline, critique_subject
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import CodeGenerator, _assembly_edit_rules, _assembly_rules
 from cadless.vlm_critique import Critique
@@ -659,9 +659,9 @@ def test_a_build_with_nothing_to_widen_to_hands_back_the_one_file(tmp_path):
     """
     single = tmp_path / "model.stl"
     single.write_bytes(b"x")
-    assert _critique_subject(str(single)) == str(single)
+    assert critique_subject(str(single)) == str(single)
 
     bare = tmp_path / "nowhere"
     bare.mkdir()
     missing = bare / "model_p0.stl"
-    assert _critique_subject(str(missing)) == str(missing)
+    assert critique_subject(str(missing)) == str(missing)
