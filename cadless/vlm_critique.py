@@ -33,8 +33,12 @@ from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.registry import build_provider
 from cadless.llm.types import ContentBlock, Message, StopReason, StreamEvent, TurnParams
 
-# A renderer maps (mesh path, view names) to one PNG per view, in that order.
-Renderer = Callable[[str, Sequence[str]], list[tuple[str, bytes]]]
+# A renderer maps (what to draw, view names) to one PNG per view, in that order.
+# What to draw is one mesh path, or the several a multi-part build wrote, which
+# are drawn together as the one model they form. Widened rather than replaced:
+# the count of pictures a critique sends is what it costs, and a caller handing
+# over one path must still get exactly the frames it got before.
+Renderer = Callable[[str | Sequence[str], Sequence[str]], list[tuple[str, bytes]]]
 
 _MEDIA_TYPE = "image/png"
 
@@ -181,7 +185,7 @@ class VlmCritic:
         count = int(self._cfg.vlm_critique_view_count)
         return VIEW_ORDER[: max(1, min(count, len(VIEW_ORDER)))]
 
-    def critique(self, intent: str, mesh_path: str) -> Critique:
+    def critique(self, intent: str, mesh_path: str | Sequence[str]) -> Critique:
         provider = self.provider
         # The slug, not a resolved vendor id: every adapter resolves the slug
         # itself, and handing one a resolved id raises on every call. The

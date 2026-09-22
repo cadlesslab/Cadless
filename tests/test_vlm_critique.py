@@ -292,6 +292,37 @@ def test_critic_asks_for_the_configured_number_of_views():
     assert seen == [("/tmp/x.stl", VIEW_ORDER[:2])]
 
 
+def test_a_multi_part_build_reaches_the_renderer_whole():
+    """Every part is handed over, and as one call rather than one call each."""
+    seen: list = []
+    parts = ["/tmp/model_p0.stl", "/tmp/model_p1.stl", "/tmp/model_p2.stl"]
+    cfg = Settings(vlm_critique_view_count=2)
+    critic = VlmCritic(renderer=_renderer(seen), provider=_provider("MATCH"), config=cfg)
+
+    critic.critique("a bracket", parts)
+
+    assert seen == [(parts, VIEW_ORDER[:2])]
+
+
+def test_a_multi_part_build_costs_the_same_pictures_as_a_single_one():
+    """The frames are views, not parts, and that is what this turn costs.
+
+    The hosted engine runs the review on every build turn against the visitor's
+    own key, so a change that drew one frame per part would multiply a bill
+    nobody is watching. One critique, one frame per configured view, whether the
+    build came back as one solid or five.
+    """
+    cfg = Settings(vlm_critique_view_count=2)
+    single = VlmCritic(renderer=_renderer(), provider=_provider("MATCH"), config=cfg).critique(
+        "a bracket", "/tmp/model.stl"
+    )
+    several = VlmCritic(renderer=_renderer(), provider=_provider("MATCH"), config=cfg).critique(
+        "a bracket", ["/tmp/model_p0.stl", "/tmp/model_p1.stl", "/tmp/model_p2.stl"]
+    )
+
+    assert len(several.captures) == len(single.captures) == 2
+
+
 def test_critic_names_the_views_it_sent():
     """The verdict can only cite a view the request named."""
     provider = _provider("MATCH")
