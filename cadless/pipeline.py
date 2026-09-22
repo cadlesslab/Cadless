@@ -733,7 +733,12 @@ class Pipeline:
             from cadless.assembly_guide import guide_frames  # noqa: PLC0415
             from cadless.catalog.thumbnail import load_mesh  # noqa: PLC0415
 
-            meshes = [load_mesh(directory / f"model_p{index}.stl") for index in range(len(order))]
+            # Through the shared reader rather than by spelling the part names
+            # here: a second spelling drifts from the writer's quietly, and a
+            # guide drawn from the wrong files describes a model nobody built.
+            # A count that disagrees with the order draws nothing, which
+            # ``guide_frames`` already treats as an ordinary answer.
+            meshes = [load_mesh(part) for part in exported_parts(directory, "stl")]
             drawn = guide_frames(meshes, order, releases)
             # Writing is inside the guard too. Reading and drawing are not the
             # only halves that can fail -- a full disk gives up part-way through
