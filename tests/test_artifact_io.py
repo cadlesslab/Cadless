@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import cadless.exporters
 from backend.app import create_app
 from backend.artifact_io import GUIDE_KIND, copy_and_register, exported_parts, guide_frames
 from cadless.exporters import EXPORTERS
@@ -23,6 +24,17 @@ from cadless.store import Store
 def _touch(directory: Path, *names: str) -> None:
     for name in names:
         (directory / name).write_bytes(b"x")
+
+
+def test_the_reader_has_one_definition_and_this_module_re_exports_it():
+    """Three callers ask what a build wrote, and they must get the same answer.
+
+    A second copy here would stay individually correct while drifting from the
+    pattern beside the writer -- a part dropped or filed under another's number,
+    which nothing raises on. Identity is what rules that out; the behavioural
+    tests below cannot, because a duplicate would satisfy them too.
+    """
+    assert exported_parts is cadless.exporters.exported_parts
 
 
 def test_parts_are_ordered_by_number_not_by_name(tmp_path):
