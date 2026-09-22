@@ -30,6 +30,21 @@ Renderer = Callable[[np.ndarray, Path, int], None]
 
 DEFAULT_SIZE = 384
 
+#: How many parts one drawing will put together before it refuses.
+#:
+#: The rasterizer is a per-triangle Python loop with no clock on it, and the
+#: parts of a build arrive from a caller rather than from anything that counts
+#: them. What keeps that bounded today is incidental -- a part has to be exported
+#: before it can be drawn, and exporting costs more per part than drawing does,
+#: so the worker's own wall-clock caps both. Incidental is not stated: raise that
+#: timeout, or make an export cheaper, and the ceiling moves with nothing saying
+#: it did. This is the ceiling said out loud.
+#:
+#: Well above what a split is meant to produce -- the generator is asked for the
+#: fewest parts that each fit the bed -- so reaching it means something has gone
+#: wrong rather than that somebody built an elaborate assembly.
+MAX_COMPOSITE_PARTS = 64
+
 _Z_AXIS = np.array([0.0, 0.0, 1.0])
 _Y_AXIS = np.array([0.0, 1.0, 0.0])
 
@@ -283,15 +298,22 @@ def render_views(
     own frame and the same edge would appear at a different size in each. A set
     of parts shares that extent as well, so none is sized against its own bounds
     rather than the model's.
-    Raises ``ValueError`` for an unknown view name or an unloadable mesh.
+    Raises ``ValueError`` for an unknown view name, an unloadable mesh, or more
+    parts than :data:`MAX_COMPOSITE_PARTS`. A caller that reads a refusal as "not
+    drawn" rather than as a failure gets the right behaviour from all three.
     """
     if isinstance(mesh, str | Path):
         tris = load_mesh(Path(mesh))
     else:
-        loaded = [load_mesh(Path(part)) for part in mesh]
-        if not loaded:
+        parts = list(mesh)
+        if not parts:
             raise ValueError("no mesh to render")
-        tris = np.concatenate(loaded)
+        if len(parts) > MAX_COMPOSITE_PARTS:
+            # Counted before loading: the point is not to read them either.
+            raise ValueError(
+                f"too many parts to draw together: {len(parts)} > {MAX_COMPOSITE_PARTS}"
+            )
+        tris = np.concatenate([load_mesh(Path(part)) for part in parts])
     if tris.size == 0:
         raise ValueError(f"mesh has no triangles: {mesh}")
     bases = [(name, _view_basis(name)) for name in views]
