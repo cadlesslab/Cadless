@@ -133,7 +133,7 @@ The same three places hold for any new *field*, not only a new export kind. `ass
 Every route that persists a build reads its artifacts off the export directory
 rather than off the result. Three of them do it through
 `backend/artifact_io.copy_and_register`; re-running a version reads the same
-directory through `artifact_io.exported_parts` and does its own copy, because it
+directory through `exporters.exported_parts` and does its own copy, because it
 writes only kinds that are not already recorded. So a new kind is picked up from
 disk on all of them, and an artifact is no longer generated and then dropped at
 the process boundary when `ExecResult` is missing its field. Declare the field
@@ -141,9 +141,13 @@ anyway: it is what a caller holding a result rather than a directory reads.
 
 A build with more than one solid writes one file per solid, named
 `model_p{i}.{kind}` instead of `model.{kind}`. `cadless/exporters.part_name`
-decides which, and `artifact_io.exported_parts` reads it back — they are a pair,
-and the number in the name is parsed rather than sorted, because that order is
-the part ordinal each file is filed under.
+decides which and `exported_parts` in that same module reads it back — they are a
+pair, kept side by side so the two spellings cannot drift apart, and the number
+in the name is parsed rather than sorted, because that order is the part ordinal
+each file is filed under. `backend/artifact_io` re-exports the reader for the
+callers that have always reached it through there; everything that asks what a
+build wrote — the copy path, the render review, the assembly guide — asks that
+one function, so they cannot disagree about which files exist.
 
 **Not every artifact kind is an export format, and the difference decides where
 it is declared.** `thumbnail` and `guide` are pictures the engine made *about* a

@@ -21,10 +21,13 @@ call per candidate would erase the benefit.
   (the `Rung` enum records which one decided, for inspection):
   1. **filter** — hard disqualifiers: failed builds, degenerate geometry.
   2. **assertions** — deterministic geometry post-conditions, when given.
-  3. **vlm** — render critique, when the judge is handed a critic. That is a
-     separate thing from the render-critique setting, which governs the
-     pipeline's own loop and has no bearing here; the live call site passes no
-     critic today, so this rung does not fire on a real turn.
+  3. **vlm** — render critique, when the judge is handed a critic. The live call
+     site passed none for as long as this ladder existed, so the rung never fired
+     on a real turn and was indistinguishable from one that always agreed. It is
+     since handed the pipeline's own reviewer, gated on the render-critique
+     setting, so one switch governs both paths rather than this ladder keeping a
+     second and invisible one. Each candidate is reviewed as the whole build it
+     is, not as its first exported part.
   4. **llm** — a cheap-model comparison as the last resort.
   Ties fall back to input order, keeping the outcome deterministic. A rung whose
   dependency is absent is skipped, and a provider that cannot be reached for any
