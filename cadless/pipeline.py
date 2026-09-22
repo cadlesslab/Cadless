@@ -45,6 +45,7 @@ from cadless.assertions import (
     evaluate_assertions,
 )
 from cadless.config import Settings, settings
+from cadless.exporters import exported_parts
 from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
 from cadless.printer_profile import AssemblySpec
@@ -647,10 +648,15 @@ class Pipeline:
         Reported rather than swallowed. A reviewer that never ran looks exactly
         like one that always agreed, and that is the version of this failure
         nobody would notice.
+
+        What it is shown is the whole build rather than the scalar path, which on
+        a multi-part build names one piece. Parts the renderer cannot read raise
+        and land in the guard below, which is a review that did not happen --
+        never one that passed.
         """
         _emit_stage(on_progress, "critique", "begin", n)
         try:
-            crit = self._critic.critique(intent, res.stl_path)
+            crit = self._critic.critique(intent, _critique_subject(res.stl_path))
             # Publishing sits inside the guard as well. It reads the verdict's
             # captures, so a critic composed outside this tree that returns
             # something shaped differently would otherwise raise here — past the
@@ -779,6 +785,27 @@ class Pipeline:
         )
         _emit_stage(on_progress, "repair", "ok", n)
         return repaired
+
+
+def _critique_subject(stl_path: str) -> str | list[str]:
+    """What the reviewer is shown for a build: the whole of it.
+
+    ``stl_path`` is the *first* part of a multi-part build -- for one solid that
+    is the model, and for an assembly it is a fragment. Reviewing that alone asks
+    about a piece while the verdict is filed against the model, so a wrong split
+    can pass and a sound one can be repaired against a mismatch nobody built.
+
+    Multiplicity is read off the directory rather than carried in a second field
+    beside the scalar, which would be a second place for the two to disagree.
+    Fewer than two parts hands the scalar straight back, so a one-solid build
+    takes the route it has always taken and a directory that answers nothing
+    degrades to it rather than raising. A forge candidate needs no special case:
+    its parts sit beside its own scalar.
+    """
+    found = exported_parts(Path(stl_path).parent, "stl")
+    if len(found) < 2:
+        return stl_path
+    return [str(part) for part in found]
 
 
 def _candidate_dir(export_dir: str | None, idx: int) -> str | None:
