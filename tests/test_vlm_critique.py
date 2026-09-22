@@ -305,12 +305,17 @@ def test_a_multi_part_build_reaches_the_renderer_whole():
 
 
 def test_a_multi_part_build_costs_the_same_pictures_as_a_single_one():
-    """The frames are views, not parts, and that is what this turn costs.
+    """A build in several pieces is one critique, not one per piece.
 
     The hosted engine runs the review on every build turn against the visitor's
-    own key, so a change that drew one frame per part would multiply a bill
-    nobody is watching. One critique, one frame per configured view, whether the
-    build came back as one solid or five.
+    own key, so a change that asked for a frame per part would multiply a bill
+    nobody is watching.
+
+    What this holds is that *this class* does not multiply its own calls. The
+    renderer's own per-part behaviour is held separately, in the thumbnail
+    tests, because the stub here returns a frame per view by construction. The
+    pre-existing captures test cannot stand in for this one: it passes a single
+    path, so nothing multiplies for it either way.
     """
     cfg = Settings(vlm_critique_view_count=2)
     single = VlmCritic(renderer=_renderer(), provider=_provider("MATCH"), config=cfg).critique(
@@ -321,6 +326,32 @@ def test_a_multi_part_build_costs_the_same_pictures_as_a_single_one():
     )
 
     assert len(several.captures) == len(single.captures) == 2
+
+
+def test_the_question_names_a_multi_part_build_as_the_assembly_it_is():
+    """What the reviewer is told has to match what it is shown.
+
+    Handed separated bodies and told it is looking at one part, a reviewer has
+    every reason to call a perfectly good split wrong -- and a mismatch forces a
+    repair round on code that built and executed correctly, so the wrong-fail
+    direction costs a turn rather than merely reading oddly.
+    """
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique(
+        "a bracket", ["/tmp/model_p0.stl", "/tmp/model_p1.stl", "/tmp/model_p2.stl"]
+    )
+
+    question = provider.calls[0]["messages"][0].content[-1].text
+    assert "3-part assembly" in question
+    assert "one CAD part" not in question
+
+
+def test_the_question_still_calls_a_one_solid_build_a_part():
+    """The other half of the same rule: one solid is a part, and says so."""
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a cube", "/tmp/model.stl")
+
+    assert "one CAD part" in provider.calls[0]["messages"][0].content[-1].text
 
 
 def test_critic_names_the_views_it_sent():

@@ -448,8 +448,13 @@ def test_several_parts_render_as_the_one_model_they_form(tmp_path):
 
 
 def test_render_views_refuses_an_empty_set_of_parts():
-    """Nothing to draw is a refusal, not a blank frame filed against the model."""
-    with pytest.raises(ValueError):
+    """Nothing to draw is a refusal, not a blank frame filed against the model.
+
+    Matched on the message: numpy refuses to concatenate nothing on its own, so
+    an assertion that only asks for ``ValueError`` passes whether this module
+    refuses or merely falls through to the library.
+    """
+    with pytest.raises(ValueError, match="no mesh to render"):
         thumb.render_views([], ("iso",), size=64)
 
 

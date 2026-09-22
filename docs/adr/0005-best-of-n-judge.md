@@ -27,7 +27,11 @@ call per candidate would erase the benefit.
      since handed the pipeline's own reviewer, gated on the render-critique
      setting, so one switch governs both paths rather than this ladder keeping a
      second and invisible one. Each candidate is reviewed as the whole build it
-     is, not as its first exported part.
+     is, not as its first exported part. **The evaluation harness passes no
+     critic**, so a forge A/B measures this ladder with that rung absent — the
+     composition is still shared, but its dependencies are not, and a comparison
+     run before this change (when neither side had a critic) is not comparable
+     with one run after it on the live path.
   4. **llm** — a cheap-model comparison as the last resort.
   Ties fall back to input order, keeping the outcome deterministic. A rung whose
   dependency is absent is skipped, and a provider that cannot be reached for any

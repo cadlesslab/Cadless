@@ -38,7 +38,12 @@ from cadless.llm.types import ContentBlock, Message, StopReason, StreamEvent, Tu
 # are drawn together as the one model they form. Widened rather than replaced:
 # the count of pictures a critique sends is what it costs, and a caller handing
 # over one path must still get exactly the frames it got before.
-Renderer = Callable[[str | Sequence[str], Sequence[str]], list[tuple[str, bytes]]]
+#
+# `list[str]` and not `Sequence[str]`, because a `str` is itself a sequence of
+# `str`: that union says nothing, and an implementor who branched on
+# `isinstance(x, Sequence)` would iterate a path one character at a time. An
+# implementor must test the single-path case first whatever the annotation says.
+Renderer = Callable[[str | list[str], Sequence[str]], list[tuple[str, bytes]]]
 
 _MEDIA_TYPE = "image/png"
 
@@ -121,9 +126,14 @@ def _unwrap(line: str) -> tuple[str, str]:
 # what makes the feedback name the defect instead of restating the request.
 _MAX_TOKENS = 1000
 
+# "model" rather than "part": what is shown is one solid on most turns and a
+# whole assembly on a turn that produced several, and calling the second one a
+# part is the mistake this reviewer exists to catch, made in the prompt instead
+# of in the picture. Which of the two it is belongs in the per-turn question
+# below, where the count is known.
 _SYSTEM = (
-    "You are checking whether a CAD part matches what was asked for. "
-    "You are shown the same part rendered from several sides at one scale. "
+    "You are checking whether a CAD model matches what was asked for. "
+    "You are shown the same model rendered from several sides at one scale. "
     "Judge the shape, not the rendering: colour, lighting and image quality "
     "are not part of the question."
 )
@@ -139,13 +149,27 @@ class Critique:
     captures: list[tuple[str, bytes]] = field(default_factory=list)
 
 
-def _question(intent: str, views: Sequence[str]) -> str:
+def _question(intent: str, views: Sequence[str], parts: int = 1) -> str:
     # The verdict is asked for on a line of its own, at the end. Observed
     # against a real vision model: asked for "exactly MATCH" it still reasons
     # through the views first and reaches the word several sentences in, so a
     # reply is far more reliably *ended* with the token than *started* with it.
+    #
+    # A build that came back in several pieces is named as one. Told it was
+    # looking at a single part, a reviewer shown separated bodies has every
+    # reason to call a perfectly good split wrong -- and a mismatch here forces
+    # a repair round on code that built correctly, so the wrong-fail direction
+    # costs a turn rather than merely reading oddly.
+    subject = (
+        "one CAD part"
+        if parts < 2
+        else (
+            f"a {parts}-part assembly, its parts shown together in the "
+            f"positions they hold when assembled"
+        )
+    )
     return (
-        f"These are renders of one CAD part, viewed from {', '.join(views)}, "
+        f"These are renders of {subject}, viewed from {', '.join(views)}, "
         f"generated for the request:\n"
         f'"{intent}"\n\n'
         f"Does the geometry match the request? Think it through if you need to, "
@@ -185,7 +209,7 @@ class VlmCritic:
         count = int(self._cfg.vlm_critique_view_count)
         return VIEW_ORDER[: max(1, min(count, len(VIEW_ORDER)))]
 
-    def critique(self, intent: str, mesh_path: str | Sequence[str]) -> Critique:
+    def critique(self, intent: str, mesh_path: str | list[str]) -> Critique:
         provider = self.provider
         # The slug, not a resolved vendor id: every adapter resolves the slug
         # itself, and handing one a resolved id raises on every call. The
@@ -210,7 +234,15 @@ class VlmCritic:
         ]
         # Pictures before words: the request ends on the question, so anything
         # appended after it lands between the cue and the answer.
-        content.append(ContentBlock.of_text(_question(intent, [name for name, _ in shots])))
+        content.append(
+            ContentBlock.of_text(
+                _question(
+                    intent,
+                    [name for name, _ in shots],
+                    1 if isinstance(mesh_path, str) else len(mesh_path),
+                )
+            )
+        )
 
         parts: list[str] = []
         truncated = False

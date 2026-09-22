@@ -1386,11 +1386,10 @@ class Agent:
             # The pipeline gates its own setting, so an installation with the
             # review switched off pays nothing here either.
             # Read off the context rather than required of it: this pipeline is
-            # injectable, as the context's own docstring says, and a stand-in
-            # without a reviewer means there is no reviewer -- which a bare
-            # Pipeline is too. Asking for the attribute outright turned every
-            # stub into a failed forge turn. What keeps the property from going
-            # missing unnoticed is the wiring test, which holds a real one.
+            # injectable and loosely typed, and a stand-in with no reviewer means
+            # there is no reviewer, which a bare Pipeline is too. The pipeline
+            # gates its own setting, so an installation with the review off pays
+            # nothing here either.
             critic=getattr(context.pipeline, "critic", None),
         )
         win = judged.winner

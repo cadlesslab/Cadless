@@ -595,12 +595,13 @@ class Pipeline:
         # captures and verdict are thrown away the moment they are produced,
         # while the cost multiplies by the candidate count.
         #
-        # **So a forge turn currently gets no render critique at all.** The
-        # judge has a rung for exactly this — comparing candidates by vision —
-        # but the live call site supplies it no critic, so that rung does not
-        # fire either. Wiring it is where this signal belongs; until then this
-        # is a deliberate absence rather than an oversight, and it is worth
-        # knowing that turning forge on turns the reviewer off with it.
+        # The signal reaches a forge turn through the judge instead, whose own
+        # rung compares candidates by vision and is handed this pipeline's
+        # reviewer, gated on the same setting. So it is not absent from the
+        # turn, only from the attempt: a candidate is never repaired against a
+        # verdict, and the review happens once, on the field, where there is
+        # somebody to show it to. It runs when more than one candidate survives
+        # the hard filter — a race settled before then needs no tie broken.
 
         def _one(idx: int) -> GenerationResult:
             cand_dir = _candidate_dir(export_dir, idx)
@@ -821,6 +822,12 @@ def critique_subject(stl_path: str) -> str | list[str]:
     takes the route it has always taken and a directory that answers nothing
     degrades to it rather than raising. A forge candidate needs no special case:
     its parts sit beside its own scalar.
+
+    This leans on the export step clearing both namings before it writes: a
+    directory holding one build's ``model`` beside another's ``model_p*`` would
+    answer with the wrong set, and the answer would be a quiet fall back to the
+    fragment rather than an error. Whoever changes that clearing owes this a
+    look.
     """
     found = exported_parts(Path(stl_path).parent, "stl")
     if len(found) < 2:
