@@ -424,6 +424,35 @@ def test_render_views_rejects_an_unknown_view(tmp_path):
         thumb.render_views(stl, ("sideways",), size=64)
 
 
+def test_several_parts_render_as_the_one_model_they_form(tmp_path):
+    """Parts handed in together are one subject, drawn where they already sit.
+
+    The strong form of the claim: the pair must come out byte-for-byte as a
+    single file holding both, because a build exports its parts already
+    positioned. The second assertion is what stops the first passing vacuously
+    -- the two cubes are far apart, so part 0 alone cannot resemble the whole,
+    and a renderer that read only the first mesh would satisfy neither.
+    """
+    left = _cube_tris((0.0, 0.0, 0.0), 5.0)
+    right = _cube_tris((20.0, 0.0, 0.0), 5.0)
+    first = _write_binary_stl(tmp_path / "model_p0.stl", left)
+    second = _write_binary_stl(tmp_path / "model_p1.stl", right)
+    whole = _write_binary_stl(tmp_path / "whole.stl", left + right)
+
+    assert thumb.render_views([first, second], ("iso",), size=96) == thumb.render_views(
+        whole, ("iso",), size=96
+    )
+    assert thumb.render_views([first], ("iso",), size=96) != thumb.render_views(
+        whole, ("iso",), size=96
+    )
+
+
+def test_render_views_refuses_an_empty_set_of_parts():
+    """Nothing to draw is a refusal, not a blank frame filed against the model."""
+    with pytest.raises(ValueError):
+        thumb.render_views([], ("iso",), size=64)
+
+
 def test_top_and_bottom_are_not_degenerate(tmp_path):
     """A pure top view is where the naive basis divides by a zero cross product."""
     stl = _write_binary_stl(tmp_path / "tet.stl")

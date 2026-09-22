@@ -265,20 +265,35 @@ def render_bytes(
 
 
 def render_views(
-    mesh_path: Path,
+    mesh: Path | str | Sequence[Path | str],
     views: Sequence[str] = DEFAULT_VIEWS,
     size: int = DEFAULT_SIZE,
 ) -> list[tuple[str, bytes]]:
-    """Render ``mesh_path`` once per named view, as ``(view, PNG bytes)``.
+    """Render ``mesh`` once per named view, as ``(view, PNG bytes)``.
+
+    Several paths are drawn as **one subject**, not one picture each. The parts
+    of a multi-part build are exported in the positions they hold in the
+    assembled model, so their triangles concatenated *are* that model and
+    nothing here has to move any of them. That is also why this does not reach
+    for the assembly guide's composer, which offsets each mesh: this is its
+    zero-offset case, and that module is a consumer of this one.
 
     Every frame is fitted to one extent measured across the whole set, so a
     reader can compare them as one object; fitted per view each would fill its
-    own frame and the same edge would appear at a different size in each.
+    own frame and the same edge would appear at a different size in each. A set
+    of parts shares that extent as well, so none is sized against its own bounds
+    rather than the model's.
     Raises ``ValueError`` for an unknown view name or an unloadable mesh.
     """
-    tris = load_mesh(Path(mesh_path))
+    if isinstance(mesh, str | Path):
+        tris = load_mesh(Path(mesh))
+    else:
+        loaded = [load_mesh(Path(part)) for part in mesh]
+        if not loaded:
+            raise ValueError("no mesh to render")
+        tris = np.concatenate(loaded)
     if tris.size == 0:
-        raise ValueError(f"mesh has no triangles: {mesh_path}")
+        raise ValueError(f"mesh has no triangles: {mesh}")
     bases = [(name, _view_basis(name)) for name in views]
     if not bases:
         return []
