@@ -37,6 +37,23 @@ class _SpyCritic:
         return Critique(matches=self._verdicts.get(mesh_path, False), feedback="x")
 
 
+class _SubjectCritic:
+    """Records the subject it was handed; only the first candidate matches.
+
+    Separate from :class:`_SpyCritic`, which keys its verdicts by the subject and
+    so cannot be handed the several paths a multi-part candidate resolves to.
+    """
+
+    def __init__(self):
+        self.subjects: list = []
+
+    def critique(self, intent, mesh_path):
+        from cadless.vlm_critique import Critique
+
+        self.subjects.append(mesh_path)
+        return Critique(matches=len(self.subjects) == 1, feedback="x")
+
+
 class _SpyProvider:
     """Fake provider scoring a candidate; records every complete() call."""
 
@@ -189,6 +206,34 @@ def test_vlm_rung_reads_the_artifact_the_renderer_can_load():
     select_winner([a, b], intent="a bracket", critic=critic, provider=_NeverProvider())
 
     assert critic.calls == ["/a.stl", "/b.stl"]
+
+
+def test_a_multi_part_candidate_is_judged_on_all_of_its_parts(tmp_path):
+    """Ranking on one piece each compares fragments and calls it a choice of models.
+
+    The second candidate is a one-solid build, so the same resolution hands its
+    single path back unchanged -- which is what keeps the rungs above working on
+    paths that name nothing on disk, and a candidate whose parts were never
+    written judgeable at all rather than skipped.
+    """
+    split = tmp_path / "split"
+    split.mkdir()
+    for name in ("model_p0.stl", "model_p1.stl"):
+        (split / name).write_bytes(b"x")
+    whole = tmp_path / "whole"
+    whole.mkdir()
+    (whole / "model.stl").write_bytes(b"x")
+
+    a = _ok(code="A", stl_path=str(split / "model_p0.stl"))
+    b = _ok(code="B", stl_path=str(whole / "model.stl"))
+    critic = _SubjectCritic()
+
+    select_winner([a, b], intent="a bracket", critic=critic, provider=_NeverProvider())
+
+    assert critic.subjects == [
+        [str(split / "model_p0.stl"), str(split / "model_p1.stl")],
+        str(whole / "model.stl"),
+    ]
 
 
 def test_vlm_rung_skips_a_candidate_with_no_loadable_mesh():

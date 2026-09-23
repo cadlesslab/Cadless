@@ -1379,6 +1379,18 @@ class Agent:
             images=context.images,
             on_reading=context.on_reading,
             assembly=context.assembly,
+            # Without this the judge's render rung was unreachable: it runs only
+            # when handed a reviewer, and nothing ever handed it one, so a ladder
+            # rung that looked live had never decided anything. The same failure
+            # the chat route's own wiring assertion exists for, one seam over.
+            # The pipeline gates its own setting, so an installation with the
+            # review switched off pays nothing here either.
+            # Read off the context rather than required of it: this pipeline is
+            # injectable and loosely typed, and a stand-in with no reviewer means
+            # there is no reviewer, which a bare Pipeline is too. The pipeline
+            # gates its own setting, so an installation with the review off pays
+            # nothing here either.
+            critic=getattr(context.pipeline, "critic", None),
         )
         win = judged.winner
         payload = (

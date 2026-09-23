@@ -292,6 +292,68 @@ def test_critic_asks_for_the_configured_number_of_views():
     assert seen == [("/tmp/x.stl", VIEW_ORDER[:2])]
 
 
+def test_a_multi_part_build_reaches_the_renderer_whole():
+    """Every part is handed over, and as one call rather than one call each."""
+    seen: list = []
+    parts = ["/tmp/model_p0.stl", "/tmp/model_p1.stl", "/tmp/model_p2.stl"]
+    cfg = Settings(vlm_critique_view_count=2)
+    critic = VlmCritic(renderer=_renderer(seen), provider=_provider("MATCH"), config=cfg)
+
+    critic.critique("a bracket", parts)
+
+    assert seen == [(parts, VIEW_ORDER[:2])]
+
+
+def test_a_multi_part_build_costs_the_same_pictures_as_a_single_one():
+    """A build in several pieces is one critique, not one per piece.
+
+    The hosted engine runs the review on every build turn against the visitor's
+    own key, so a change that asked for a frame per part would multiply a bill
+    nobody is watching.
+
+    What this holds is that *this class* does not multiply its own calls. The
+    renderer's own per-part behaviour is held separately, in the thumbnail
+    tests, because the stub here returns a frame per view by construction. The
+    pre-existing captures test cannot stand in for this one: it passes a single
+    path, so nothing multiplies for it either way.
+    """
+    cfg = Settings(vlm_critique_view_count=2)
+    single = VlmCritic(renderer=_renderer(), provider=_provider("MATCH"), config=cfg).critique(
+        "a bracket", "/tmp/model.stl"
+    )
+    several = VlmCritic(renderer=_renderer(), provider=_provider("MATCH"), config=cfg).critique(
+        "a bracket", ["/tmp/model_p0.stl", "/tmp/model_p1.stl", "/tmp/model_p2.stl"]
+    )
+
+    assert len(several.captures) == len(single.captures) == 2
+
+
+def test_the_question_names_a_multi_part_build_as_the_assembly_it_is():
+    """What the reviewer is told has to match what it is shown.
+
+    Handed separated bodies and told it is looking at one part, a reviewer has
+    every reason to call a perfectly good split wrong -- and a mismatch forces a
+    repair round on code that built and executed correctly, so the wrong-fail
+    direction costs a turn rather than merely reading oddly.
+    """
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique(
+        "a bracket", ["/tmp/model_p0.stl", "/tmp/model_p1.stl", "/tmp/model_p2.stl"]
+    )
+
+    question = provider.calls[0]["messages"][0].content[-1].text
+    assert "3-part assembly" in question
+    assert "one CAD part" not in question
+
+
+def test_the_question_still_calls_a_one_solid_build_a_part():
+    """The other half of the same rule: one solid is a part, and says so."""
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a cube", "/tmp/model.stl")
+
+    assert "one CAD part" in provider.calls[0]["messages"][0].content[-1].text
+
+
 def test_critic_names_the_views_it_sent():
     """The verdict can only cite a view the request named."""
     provider = _provider("MATCH")
@@ -679,6 +741,62 @@ def test_the_chat_route_is_the_one_place_a_critic_is_injected():
     # vision — the eval's baseline and the legacy generate route both build
     # their pipeline with no arguments.
     assert Pipeline()._critic is None
+
+
+def _capture_judge_kwargs(monkeypatch) -> dict:
+    """Stand in for the race so the forge path's own wiring is what is read."""
+    from cadless.judge import JudgeResult, Rung
+
+    seen: dict = {}
+
+    def _race(pipeline, intent, **kw):
+        seen.update(kw)
+        return JudgeResult(winner=None, rung=Rung.FILTER, ranking=[], no_winner=True), []
+
+    monkeypatch.setattr("cadless.forge.race_and_judge", _race)
+    return seen
+
+
+def test_the_forge_path_hands_the_judge_a_reviewer(monkeypatch):
+    """The same wiring failure as above, one seam over.
+
+    The judge's render rung runs only when it is handed a reviewer, and nothing
+    ever handed it one -- so a rung that looked live had never decided anything,
+    which is indistinguishable from one that always agreed.
+    """
+    from cadless.agent import Agent, ToolContext
+
+    seen = _capture_judge_kwargs(monkeypatch)
+    critic = VlmCritic(renderer=_renderer(), provider=_provider("MATCH"))
+    pipeline = Pipeline(critic=critic, config=Settings(vlm_critique_enabled=True))
+
+    Agent(provider=FakeChatProvider(), model="fake-model")._forge_generate(
+        "a bracket", ToolContext(pipeline=pipeline)
+    )
+
+    assert seen["critic"] is critic
+
+
+def test_the_forge_path_hands_over_nothing_while_the_review_is_off(monkeypatch):
+    """One setting, both paths. The judge's rung asks only whether it got one.
+
+    Handed a reviewer the pipeline itself would not run, an installation with
+    the review switched off would pay for vision on the one path that fans out
+    to N candidates -- the expensive one.
+    """
+    from cadless.agent import Agent, ToolContext
+
+    seen = _capture_judge_kwargs(monkeypatch)
+    pipeline = Pipeline(
+        critic=VlmCritic(renderer=_renderer(), provider=_provider("MATCH")),
+        config=Settings(vlm_critique_enabled=False),
+    )
+
+    Agent(provider=FakeChatProvider(), model="fake-model")._forge_generate(
+        "a bracket", ToolContext(pipeline=pipeline)
+    )
+
+    assert seen["critic"] is None
 
 
 def test_the_setting_ships_on():

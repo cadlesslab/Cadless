@@ -424,6 +424,62 @@ def test_render_views_rejects_an_unknown_view(tmp_path):
         thumb.render_views(stl, ("sideways",), size=64)
 
 
+def test_several_parts_render_as_the_one_model_they_form(tmp_path):
+    """Parts handed in together are one subject, drawn where they already sit.
+
+    The strong form of the claim: the pair must come out byte-for-byte as a
+    single file holding both, because a build exports its parts already
+    positioned. The second assertion is what stops the first passing vacuously
+    -- the two cubes are far apart, so part 0 alone cannot resemble the whole,
+    and a renderer that read only the first mesh would satisfy neither.
+    """
+    left = _cube_tris((0.0, 0.0, 0.0), 5.0)
+    right = _cube_tris((20.0, 0.0, 0.0), 5.0)
+    first = _write_binary_stl(tmp_path / "model_p0.stl", left)
+    second = _write_binary_stl(tmp_path / "model_p1.stl", right)
+    whole = _write_binary_stl(tmp_path / "whole.stl", left + right)
+
+    assert thumb.render_views([first, second], ("iso",), size=96) == thumb.render_views(
+        whole, ("iso",), size=96
+    )
+    assert thumb.render_views([first], ("iso",), size=96) != thumb.render_views(
+        whole, ("iso",), size=96
+    )
+
+
+def test_render_views_refuses_an_empty_set_of_parts():
+    """Nothing to draw is a refusal, not a blank frame filed against the model.
+
+    Matched on the message: numpy refuses to concatenate nothing on its own, so
+    an assertion that only asks for ``ValueError`` passes whether this module
+    refuses or merely falls through to the library.
+    """
+    with pytest.raises(ValueError, match="no mesh to render"):
+        thumb.render_views([], ("iso",), size=64)
+
+
+def test_render_views_refuses_more_parts_than_it_will_draw_together(tmp_path):
+    """The ceiling is stated here rather than left to the export budget to imply.
+
+    None of these paths exists, which is the assertion: the count is taken before
+    anything is read, so a refusal costs nothing and reads nothing. A ceiling
+    applied after loading would raise about a missing file instead.
+    """
+    too_many = [tmp_path / f"model_p{i}.stl" for i in range(thumb.MAX_COMPOSITE_PARTS + 1)]
+    with pytest.raises(ValueError, match="too many parts"):
+        thumb.render_views(too_many, ("iso",), size=64)
+
+
+def test_render_views_draws_right_up_to_the_ceiling(tmp_path):
+    """Off by one here is a review that silently declines on a legitimate split."""
+    parts = [
+        _write_binary_stl(tmp_path / f"model_p{i}.stl", _cube_tris((i * 2.0, 0.0, 0.0), 0.5))
+        for i in range(thumb.MAX_COMPOSITE_PARTS)
+    ]
+
+    assert [name for name, _ in thumb.render_views(parts, ("iso",), size=64)] == ["iso"]
+
+
 def test_top_and_bottom_are_not_degenerate(tmp_path):
     """A pure top view is where the naive basis divides by a zero cross product."""
     stl = _write_binary_stl(tmp_path / "tet.stl")

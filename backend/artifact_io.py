@@ -6,8 +6,9 @@ call site deciding that order for itself is another chance for a part to be file
 under a number its filename does not match -- a mismatch nothing raises on,
 because both halves are individually well formed.
 
-The build writes its files and this reads them back; the naming contract they
-share lives in :mod:`cadless.exporters`, next to the writer.
+The build writes its files and :func:`cadless.exporters.exported_parts` reads them
+back; both the naming contract and that reader live next to the writer, and this
+module re-exports it for the callers that have always reached it through here.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import re
 import shutil
 from pathlib import Path
 
-from cadless.exporters import EXPORTERS, part_index
+from cadless.exporters import EXPORTERS, exported_parts
 from cadless.scoped_store import AnyStore
 
 #: The kind guide frames are filed under. Deliberately **not** an ``EXPORTERS``
@@ -31,32 +32,6 @@ GUIDE_KIND = "guide"
 #: way, for the same reason: the order these are read in is the ordinal each is
 #: filed under, and a lexicographic sort would file frame ten as frame one.
 _GUIDE_STEM = re.compile(r"^guide_f(\d+)$")
-
-
-def exported_parts(src_dir: Path, kind: str) -> list[Path]:
-    """Every file of ``kind`` this build wrote, in part order.
-
-    Ordered on the number parsed out of the name, never on the name itself: as
-    text ``model_p10`` sorts before ``model_p2``, and since this order decides the
-    ordinal each file is filed under, a lexicographic sort would quietly file part
-    ten as part one. A file whose stem carries no number is skipped rather than
-    guessed at.
-
-    A one-solid build wrote ``model.{kind}`` and is returned as the single part it
-    is. Finding the plain name settles the question, so the two namings sharing a
-    directory would be a build written on top of another's leftovers -- which the
-    export step is responsible for not leaving. What this does in that case is
-    pinned by a test rather than left to the reader.
-    """
-    single = src_dir / f"model.{kind}"
-    if single.exists():
-        return [single]
-    numbered: list[tuple[int, Path]] = []
-    for path in src_dir.glob(f"model_p*.{kind}"):
-        index = part_index(path.stem)
-        if index is not None:
-            numbered.append((index, path))
-    return [path for _, path in sorted(numbered)]
 
 
 def guide_frames(src_dir: Path) -> list[Path]:

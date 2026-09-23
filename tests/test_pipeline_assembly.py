@@ -6,6 +6,7 @@ measurement, which ``tests/test_assembly_measure.py`` covers against real solids
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -14,9 +15,10 @@ from cadless.assembly_check import AssemblyMeasurements
 from cadless.config import Settings
 from cadless.llm.providers.fake import FakeChatProvider
 from cadless.llm.types import ContentBlock
-from cadless.pipeline import STAGE_PHASES, Pipeline
+from cadless.pipeline import STAGE_PHASES, Pipeline, critique_subject
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import CodeGenerator, _assembly_edit_rules, _assembly_rules
+from cadless.vlm_critique import Critique
 from cadless.worker import ExecResult
 
 GOOD = "from build123d import *\nresult = Box(10, 10, 10)\n"
@@ -581,3 +583,85 @@ def test_the_same_split_is_accepted_when_the_turn_did_not_ask_for_an_assembly():
     )
     assert result.ok, result.error
     assert result.assembly is None
+
+
+# --- what the render reviewer is shown ------------------------------------
+
+
+class _RecordingCritic:
+    """Agrees with everything, and keeps whatever it was asked to look at."""
+
+    def __init__(self):
+        self.subjects: list = []
+
+    def critique(self, intent, mesh_path):
+        self.subjects.append(mesh_path)
+        return Critique(True, "")
+
+
+def _names_shown(subject) -> list[str]:
+    """The filenames one critique was given, however many it was handed."""
+    paths = [subject] if isinstance(subject, str) else list(subject)
+    return sorted(Path(p).name for p in paths)
+
+
+@pytest.mark.build123d
+def test_the_reviewer_is_shown_the_whole_assembly_rather_than_one_part(tmp_path):
+    """The one check asking "is this the shape requested" has to see all of it.
+
+    Handed the first part alone, the reviewer answers about a fragment while the
+    verdict is filed against the model -- so a wrong split can pass, and a sound
+    one can be repaired against a mismatch nobody built.
+    """
+    critic = _RecordingCritic()
+    result = Pipeline(
+        generator=FakeGen(CLEARED),
+        config=Settings(vlm_critique_enabled=True, repair_max_attempts=1),
+        critic=critic,
+    ).run("a two-part bracket", export_dir=str(tmp_path), assembly=SPEC)
+
+    assert result.ok, result.error
+    written = sorted(p.name for p in tmp_path.glob("model_p*.stl"))
+    assert written == ["model_p0.stl", "model_p1.stl"], written
+    assert critic.subjects, "the reviewer never ran"
+    assert _names_shown(critic.subjects[0]) == written, (
+        f"shown {_names_shown(critic.subjects[0])} of a {len(written)}-part build"
+    )
+
+
+@pytest.mark.build123d
+def test_a_multi_solid_build_is_reviewed_whole_with_the_option_off_too(tmp_path):
+    """The defect was never gated on the assembly option, so neither is the fix.
+
+    Exporting splits on the solid count alone and the option gates only the
+    measurement, so a turn that never asked for an assembly still writes parts
+    and still had its review filed against the first of them.
+    """
+    critic = _RecordingCritic()
+    result = Pipeline(
+        generator=FakeGen(CLEARED),
+        config=Settings(vlm_critique_enabled=True, repair_max_attempts=1),
+        critic=critic,
+    ).run("two blocks", export_dir=str(tmp_path), assembly=None)
+
+    assert result.ok, result.error
+    assert result.assembly is None, "the option was off, so nothing was measured"
+    assert critic.subjects, "the reviewer never ran"
+    assert _names_shown(critic.subjects[0]) == ["model_p0.stl", "model_p1.stl"]
+
+
+def test_a_build_with_nothing_to_widen_to_hands_back_the_one_file(tmp_path):
+    """One part, or a directory that names none, is reviewed as it always was.
+
+    The second half is what keeps a caller holding a path to nothing working --
+    raising there would take out a review that manages perfectly well with the
+    one file it was handed.
+    """
+    single = tmp_path / "model.stl"
+    single.write_bytes(b"x")
+    assert critique_subject(str(single)) == str(single)
+
+    bare = tmp_path / "nowhere"
+    bare.mkdir()
+    missing = bare / "model_p0.stl"
+    assert critique_subject(str(missing)) == str(missing)

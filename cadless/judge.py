@@ -45,7 +45,7 @@ from cadless.assertions import (
     evaluate_assertions,
 )
 from cadless.config import Settings, settings
-from cadless.pipeline import GenerationResult
+from cadless.pipeline import GenerationResult, critique_subject
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +139,17 @@ def select_winner(
         # triangles and has no GLB loader, so a candidate is only judgeable
         # here when it exported one. The guard and the call name the same
         # artifact on purpose — split, this rung stops firing with no error.
+        #
+        # The candidate's whole build is reviewed, not the scalar, which on a
+        # multi-part candidate is its first piece: ranking several candidates on
+        # one piece each compares fragments and calls the answer a choice between
+        # models. Resolved by the pipeline's own rule rather than a second copy
+        # of it, and it hands back the scalar unchanged for a candidate whose
+        # parts are not on disk.
         matched = [
-            c for c in contenders if c.stl_path and critic.critique(intent, c.stl_path).matches
+            c
+            for c in contenders
+            if c.stl_path and critic.critique(intent, critique_subject(c.stl_path)).matches
         ]
         if len(matched) == 1:
             return JudgeResult(winner=matched[0], rung=Rung.VLM, ranking=contenders)

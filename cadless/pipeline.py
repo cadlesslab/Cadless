@@ -45,6 +45,7 @@ from cadless.assertions import (
     evaluate_assertions,
 )
 from cadless.config import Settings, settings
+from cadless.exporters import exported_parts
 from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
 from cadless.printer_profile import AssemblySpec
@@ -188,6 +189,17 @@ class Pipeline:
         different settings — the split this snapshot exists to prevent.
         """
         return self._cfg
+
+    @property
+    def critic(self):
+        """The reviewer this pipeline would use, or ``None`` where it would not.
+
+        Gated on the setting as well as on injection, because the forge judge's
+        rung asks only whether it was given one. Handing it a reviewer this
+        pipeline would not itself run would leave the setting off for one path
+        and on for the other, and the one it was on for is the expensive one.
+        """
+        return self._critic if self._cfg.vlm_critique_enabled else None
 
     def run(
         self,
@@ -583,12 +595,13 @@ class Pipeline:
         # captures and verdict are thrown away the moment they are produced,
         # while the cost multiplies by the candidate count.
         #
-        # **So a forge turn currently gets no render critique at all.** The
-        # judge has a rung for exactly this — comparing candidates by vision —
-        # but the live call site supplies it no critic, so that rung does not
-        # fire either. Wiring it is where this signal belongs; until then this
-        # is a deliberate absence rather than an oversight, and it is worth
-        # knowing that turning forge on turns the reviewer off with it.
+        # The signal reaches a forge turn through the judge instead, whose own
+        # rung compares candidates by vision and is handed this pipeline's
+        # reviewer, gated on the same setting. So it is not absent from the
+        # turn, only from the attempt: a candidate is never repaired against a
+        # verdict, and the review happens once, on the field, where there is
+        # somebody to show it to. It runs when more than one candidate survives
+        # the hard filter — a race settled before then needs no tie broken.
 
         def _one(idx: int) -> GenerationResult:
             cand_dir = _candidate_dir(export_dir, idx)
@@ -647,10 +660,15 @@ class Pipeline:
         Reported rather than swallowed. A reviewer that never ran looks exactly
         like one that always agreed, and that is the version of this failure
         nobody would notice.
+
+        What it is shown is the whole build rather than the scalar path, which on
+        a multi-part build names one piece. Parts the renderer cannot read raise
+        and land in the guard below, which is a review that did not happen --
+        never one that passed.
         """
         _emit_stage(on_progress, "critique", "begin", n)
         try:
-            crit = self._critic.critique(intent, res.stl_path)
+            crit = self._critic.critique(intent, critique_subject(res.stl_path))
             # Publishing sits inside the guard as well. It reads the verdict's
             # captures, so a critic composed outside this tree that returns
             # something shaped differently would otherwise raise here — past the
@@ -727,7 +745,12 @@ class Pipeline:
             from cadless.assembly_guide import guide_frames  # noqa: PLC0415
             from cadless.catalog.thumbnail import load_mesh  # noqa: PLC0415
 
-            meshes = [load_mesh(directory / f"model_p{index}.stl") for index in range(len(order))]
+            # Through the shared reader rather than by spelling the part names
+            # here: a second spelling drifts from the writer's quietly, and a
+            # guide drawn from the wrong files describes a model nobody built.
+            # A count that disagrees with the order draws nothing, which
+            # ``guide_frames`` already treats as an ordinary answer.
+            meshes = [load_mesh(part) for part in exported_parts(directory, "stl")]
             drawn = guide_frames(meshes, order, releases)
             # Writing is inside the guard too. Reading and drawing are not the
             # only halves that can fail -- a full disk gives up part-way through
@@ -779,6 +802,37 @@ class Pipeline:
         )
         _emit_stage(on_progress, "repair", "ok", n)
         return repaired
+
+
+def critique_subject(stl_path: str) -> str | list[str]:
+    """What the reviewer is shown for a build: the whole of it.
+
+    Public because the forge judge reviews candidates through the same rung and
+    must resolve them the same way. One definition rather than the same rule
+    spelled twice, for the reason the reader it calls gives.
+
+    ``stl_path`` is the *first* part of a multi-part build -- for one solid that
+    is the model, and for an assembly it is a fragment. Reviewing that alone asks
+    about a piece while the verdict is filed against the model, so a wrong split
+    can pass and a sound one can be repaired against a mismatch nobody built.
+
+    Multiplicity is read off the directory rather than carried in a second field
+    beside the scalar, which would be a second place for the two to disagree.
+    Fewer than two parts hands the scalar straight back, so a one-solid build
+    takes the route it has always taken and a directory that answers nothing
+    degrades to it rather than raising. A forge candidate needs no special case:
+    its parts sit beside its own scalar.
+
+    This leans on the export step clearing both namings before it writes: a
+    directory holding one build's ``model`` beside another's ``model_p*`` would
+    answer with the wrong set, and the answer would be a quiet fall back to the
+    fragment rather than an error. Whoever changes that clearing owes this a
+    look.
+    """
+    found = exported_parts(Path(stl_path).parent, "stl")
+    if len(found) < 2:
+        return stl_path
+    return [str(part) for part in found]
 
 
 def _candidate_dir(export_dir: str | None, idx: int) -> str | None:

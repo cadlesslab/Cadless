@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 from cadless.config import settings
 
@@ -47,6 +48,38 @@ def part_index(stem: str) -> int | None:
     """The part number carried by an exported file's stem, or ``None``."""
     match = _PART_STEM.match(stem)
     return int(match.group(1)) if match else None
+
+
+def exported_parts(src_dir: Path, kind: str) -> list[Path]:
+    """Every file of ``kind`` this build wrote, in part order.
+
+    Beside the writer and the pattern on purpose: a reader kept elsewhere is a
+    second place the naming can be spelled, and the two drifting apart is not a
+    failure anything raises on -- each half stays individually well formed while
+    a part is dropped or filed under another's number. Everything that asks what
+    a build wrote asks here, so they cannot disagree.
+
+    Ordered on the number parsed out of the name, never on the name itself: as
+    text ``model_p10`` sorts before ``model_p2``, and since this order decides the
+    ordinal each file is filed under, a lexicographic sort would quietly file part
+    ten as part one. A file whose stem carries no number is skipped rather than
+    guessed at.
+
+    A one-solid build wrote ``model.{kind}`` and is returned as the single part it
+    is. Finding the plain name settles the question, so the two namings sharing a
+    directory would be a build written on top of another's leftovers -- which the
+    export step is responsible for not leaving. What this does in that case is
+    pinned by a test rather than left to the reader.
+    """
+    single = src_dir / f"model.{kind}"
+    if single.exists():
+        return [single]
+    numbered: list[tuple[int, Path]] = []
+    for path in src_dir.glob(f"model_p*.{kind}"):
+        index = part_index(path.stem)
+        if index is not None:
+            numbered.append((index, path))
+    return [path for _, path in sorted(numbered)]
 
 
 def export_step(result, out_dir: str, name: str = "model") -> str:
