@@ -1,5 +1,5 @@
-import { act, fireEvent } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../api";
 import { ToastProvider } from "../components";
@@ -71,6 +71,12 @@ describe("ChatMessage", () => {
     expect(avatar).not.toBeNull();
     expect(avatar?.querySelector("svg path")).not.toBeNull();
     expect(avatar?.textContent).not.toContain("◆");
+  });
+
+  it("offers no way to open the code from a result card", () => {
+    const { container, queryByText } = renderMsg({ kind: "assistant", id: "a7", version: okVersion() });
+    expect(queryByText(/code/i)).toBeNull();
+    expect(container.innerHTML).not.toContain("result=...");
   });
 
   it("renders an assistant text block as markdown", () => {
@@ -276,67 +282,107 @@ describe("ChatMessage", () => {
   });
 
   describe("codegen status", () => {
-    const code = "from build123d import *\nresult = Box(1, 1, 1)";
-    const codegenMsg = (done: boolean): Msg => ({
-      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen: code, done }),
+    // A streamed reply: a fence, then commented code, the newest comment
+    // indented, closed by a full stop and trailed by spaces.
+    const code = [
+      "```python",
+      "from build123d import *",
+      "# Base plate with rounded corners",
+      "plate = Box(40, 40, 4)",
+      "    # Mounting holes through the plate.  ",
+      "result = plate",
+      "",
+    ].join("\n");
+    const codegenMsg = (codegen: string, done = false): Msg => ({
+      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen, done }),
     });
+    const phrase = (el: Element) => el.querySelector(".codegen-phrase")?.textContent;
 
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    // Attributes included: the code must not reach the DOM at all, not merely
+    // Attributes included: no line of code may reach the DOM at all, not merely
     // stay out of the visible text.
     const holdsCode = (el: Element) =>
-      el.innerHTML.includes("Box(1, 1, 1)") || el.innerHTML.includes("build123d");
+      ["build123d", "Box(40", "result =", "```"].some((s) => el.innerHTML.includes(s));
 
-    it("shows one status line while codegen streams, never the code", () => {
-      const { container } = renderMsg(codegenMsg(false));
+    it("shows one status line while codegen streams", () => {
+      const { container } = renderMsg(codegenMsg(code));
       // The "Thinking…" placeholder must not sit beside it as a second line.
       const lines = container.querySelectorAll('[role="status"]');
       expect(lines).toHaveLength(1);
       expect(lines[0]).toHaveClass("codegen-status");
-      expect(holdsCode(container)).toBe(false);
       expect(lines[0].querySelector("button")).toBeNull();
     });
 
-    it("announces one fixed phrase and keeps the rotating one from assistive technology", () => {
-      const { container, getByText } = renderMsg(codegenMsg(false));
-      expect(getByText("Writing code")).toHaveClass("visually-hidden");
-      expect(container.querySelector(".codegen-phrase")?.getAttribute("aria-hidden")).toBe("true");
+    it("keeps every line of the streamed code out of the DOM", () => {
+      const { container } = renderMsg(codegenMsg(code));
+      expect(holdsCode(container)).toBe(false);
     });
 
-    it("rotates the phrase every three seconds and wraps round the list", () => {
-      vi.useFakeTimers();
-      const { container } = renderMsg(codegenMsg(false));
-      const phrase = () => container.querySelector(".codegen-phrase")?.textContent ?? "";
-      const first = phrase();
-      expect(first).not.toBe("");
-      act(() => vi.advanceTimersByTime(2999));
-      expect(phrase()).toBe(first);
-      act(() => vi.advanceTimersByTime(1));
-      expect(phrase()).not.toBe(first);
-      // Keep going: the list is finite, so the first phrase comes round again.
-      let wrapped = false;
-      for (let i = 0; i < 50 && !wrapped; i++) {
-        act(() => vi.advanceTimersByTime(3000));
-        wrapped = phrase() === first;
-      }
-      expect(wrapped).toBe(true);
+    it("says what is being built in the model's words, from its newest comment", () => {
+      const { container } = renderMsg(codegenMsg(code));
+      expect(phrase(container)).toBe("Mounting holes through the plate");
     });
 
-    // The same instance going from streaming to settled, as a live turn does.
-    function settle(live: ReturnType<typeof renderMsg>) {
+    it("reads a wrapped comment from its first line", () => {
+      const wrapped = `${code}# Crank web joining the journals,\n# offset 5 mm from the pin\nweb = plate\n`;
+      const { container } = renderMsg(codegenMsg(wrapped));
+      expect(phrase(container)).toBe("Crank web joining the journals");
+    });
+
+    it("reads a ruled heading for its words, not its rules", () => {
+      const ruled = `${code}# ----------\n# --- Ledge tabs ---\n# ----------\ntabs = plate\n`;
+      const { container } = renderMsg(codegenMsg(ruled));
+      expect(phrase(container)).toBe("Ledge tabs");
+    });
+
+    it("reads a heading drawn with box-drawing rules for its words", () => {
+      const ruled = `${code}# ──────────\n# ── Tablet rest faces ────────\ntabs = plate\n`;
+      const { container } = renderMsg(codegenMsg(ruled));
+      expect(phrase(container)).toBe("Tablet rest faces");
+    });
+
+    it("keeps a comment block whole across a bare # separator", () => {
+      const parted = `${code}# Hinge knuckle\n#\n# offset 2 mm for clearance\nknuckle = plate\n`;
+      const { container } = renderMsg(codegenMsg(parted));
+      expect(phrase(container)).toBe("Hinge knuckle");
+    });
+
+    it("leaves a comment out until its line is finished", () => {
+      const { container } = renderMsg(codegenMsg(`${code}# Fillet the to`));
+      expect(phrase(container)).toBe("Mounting holes through the plate");
+    });
+
+    it("says it is writing code until the model writes a comment", () => {
+      const { container } = renderMsg(codegenMsg("```python\nfrom build123d import *\n"));
+      expect(phrase(container)).toBe("Writing code");
+    });
+
+    // The same instance taking the next stretch of the stream, as a live turn does.
+    function advance(live: ReturnType<typeof renderMsg>, msg: Msg) {
       live.rerender(
         <StoreProvider store={live.store}>
-          <ToastProvider>{msgElement(codegenMsg(true))}</ToastProvider>
+          <ToastProvider>{msgElement(msg)}</ToastProvider>
         </StoreProvider>,
       );
     }
 
+    it("follows the stream as the next comment arrives", () => {
+      const live = renderMsg(codegenMsg(code));
+      advance(live, codegenMsg(`${code}# Fillet the top edges\n`));
+      expect(phrase(live.container)).toBe("Fillet the top edges");
+    });
+
+    it("announces one fixed phrase in the live region and keeps the changing one from it", () => {
+      const { container } = renderMsg(codegenMsg(code));
+      const live = container.querySelector('[role="status"]');
+      expect(live?.querySelector(".visually-hidden")?.textContent).toBe("Writing code");
+      expect(live?.querySelector(".codegen-phrase")?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    const settled = "from build123d import *\nresult = Box(1, 1, 1)";
+
     it("settles to a fixed line count with no way to open the code", () => {
-      const live = renderMsg(codegenMsg(false));
-      settle(live);
+      const live = renderMsg(codegenMsg(code));
+      advance(live, codegenMsg(settled, true));
       const status = live.container.querySelector(".codegen-status");
       expect(status?.textContent).toBe("Wrote 2 lines");
       expect(status?.querySelector("button")).toBeNull();
@@ -345,12 +391,12 @@ describe("ChatMessage", () => {
       expect(holdsCode(live.container)).toBe(false);
     });
 
-    it("stops the phrase timer once the turn settles", () => {
-      vi.useFakeTimers();
-      const live = renderMsg(codegenMsg(false));
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
-      settle(live);
-      expect(vi.getTimerCount()).toBe(0);
+    it("announces the settled count from the live region already on screen", () => {
+      // A region that appears with its text already in it is often not read out.
+      const live = renderMsg(codegenMsg(code));
+      const region = live.container.querySelector('[role="status"]');
+      advance(live, codegenMsg(settled, true));
+      expect(live.container.querySelector('[role="status"]')).toBe(region);
     });
   });
 

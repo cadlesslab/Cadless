@@ -256,8 +256,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .result-top { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .result-metrics { font-size: var(--text-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
 .result-error { font-size: var(--text-sm); color: var(--bad); overflow: hidden; text-overflow: ellipsis; }
-.result-actions { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border); }
-.result-actions .btn { margin-right: auto; }
+.result-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-1); padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border); }
 
 /* Read-only catalog item: the composer below is disabled, so the reason it is
    disabled and the way out sit directly on top of it. */
@@ -391,6 +390,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   border-left: 2px solid var(--border);
   padding: var(--space-1) 0 var(--space-1) var(--space-3);
 }
+
+/* The codegen status line can carry a long phrase: it stays one line, and the
+   phrase is cut short rather than the line, so the dots after it stay in view
+   and keep moving. The dots hold their full width while they animate, so the cut
+   does not shift with them. */
+.codegen-status { display: flex; }
+.codegen-phrase { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codegen-status .chat-thinking-dots { flex: none; width: 1.5em; }
 
 /* Read by assistive technology, not drawn. */
 .visually-hidden {
