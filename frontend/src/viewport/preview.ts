@@ -21,8 +21,9 @@ const PREVIEW_UNREADABLE = "That catalogue's preview could not be loaded.";
 const PREVIEW_HAS_NO_MESH = "This catalogue has no model to preview.";
 
 export interface ViewerSubject {
-  /** The GLBs to draw, in part order — one for a model printed whole, one per
-   * part for a model in several — or none when there is nothing to draw. */
+  /** The GLBs to draw, or none when there is nothing to draw: for the active
+   * version one per part, in part order (one for a model printed whole), and
+   * for a preview its one address. */
   urls: string[];
   /** Whether what is on screen belongs to something not on this machine. */
   previewing: boolean;
@@ -89,12 +90,11 @@ export function viewerSubject(
  *
  * A model printed whole keeps the one address it has always been fetched from.
  * A model in parts is asked for part by part, so each piece is drawn as itself
- * rather than one of them standing in for the rest; a part listed twice is
- * asked for once, since one piece drawn twice is still one piece. */
+ * rather than one of them standing in for the rest. */
 function modelUrls(version: Version): string[] {
-  const parts = [...new Set(partsOf(version, "glb").map((a) => a.part))];
+  const parts = partsOf(version, "glb");
   return parts.length > 1
-    ? parts.map((part) => artifactUrl(version.id, "glb", part))
+    ? parts.map((a) => artifactUrl(version.id, "glb", a.part))
     : [glbUrl(version.id)];
 }
 

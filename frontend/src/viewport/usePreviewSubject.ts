@@ -23,12 +23,12 @@ export function usePreviewSubject(
   // The list is built afresh on every render, so it is compared by what it
   // holds. Compared as an array, every render would be a new attempt, and a
   // failure would be undone the moment it was reported.
-  const addresses = attempt.urls.join("\n");
+  const addresses = JSON.stringify(attempt.urls);
 
-  // A new set of addresses is a new attempt, and so is asking for the same one
-  // again — which is what opening the same card twice is. Without the second, a
-  // preview that failed once could never be shown again: the address has not
-  // changed, so nothing would tell this to try.
+  // A new set of addresses is a new attempt, and so is a preview handed over
+  // again at the same address — which is what opening the same card twice is.
+  // Without the second, a preview that failed once could never be shown again:
+  // its address has not changed, so nothing would tell this to try.
   useEffect(() => setFailed(false), [addresses, preview]);
 
   const onFailed = useCallback(() => {
@@ -36,7 +36,7 @@ export function usePreviewSubject(
     // hands the stored one back on every later render for that key. Clearing
     // every part is what makes trying again an actual attempt rather than a
     // replay of the one that failed beside parts that did not.
-    for (const url of addresses ? addresses.split("\n") : []) useGLTF.clear(url);
+    for (const url of JSON.parse(addresses) as string[]) useGLTF.clear(url);
     setFailed(true);
   }, [addresses]);
 

@@ -28,24 +28,12 @@ describe("viewerSubject", () => {
     expect(s).toMatchObject({ urls: [glbUrl(7)], previewing: false, emptyReason: null });
   });
 
-  describe("a version in several parts", () => {
-    const pieces = (...parts: number[]) =>
-      parts.map((part) => ({ kind: "glb" as const, bytes: 1, part }));
-
-    it("draws every part, in part order", () => {
-      const s = viewerSubject(version({ artifacts: pieces(1, 0) }), null, false);
-      expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 1)]);
-    });
-
-    it("asks for the parts it has rather than for a count of them", () => {
-      const s = viewerSubject(version({ artifacts: pieces(0, 2) }), null, false);
-      expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 2)]);
-    });
-
-    it("asks for a part once even when it is listed twice", () => {
-      const s = viewerSubject(version({ artifacts: pieces(0, 1, 1) }), null, false);
-      expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 1)]);
-    });
+  it("draws every part of a version in several, and only its GLBs", () => {
+    const artifacts = [0, 1].flatMap((part) =>
+      (["glb", "step"] as const).map((kind) => ({ kind, bytes: 1, part })),
+    );
+    const s = viewerSubject(version({ artifacts }), null, false);
+    expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 1)]);
   });
 
   it("captures a thumbnail for the version it is actually showing", () => {

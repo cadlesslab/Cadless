@@ -2,7 +2,7 @@
  *
  * GLB load + grid/axes + orbit.: ViewCube, named-view presets,
  * fit/reset, ortho/perspective (CameraRig + ViewCommands + the overlay toolbar). */
-import { Bounds, GizmoHelper, GizmoViewcube, Grid, Html, useGLTF } from "@react-three/drei";
+import { Bounds, GizmoHelper, GizmoViewcube, Grid, Html } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Component, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
@@ -13,13 +13,13 @@ import { useActiveVersion, useStoreSelector } from "../state";
 import { CameraRig } from "./CameraRig";
 import { Appearance, Ground, SceneEnvironment } from "./effects";
 import { Measure, SectionPlane, TriangleCounter } from "./inspectionScene";
+import { ModelParts } from "./ModelParts";
 import { PreviewBanner } from "./PreviewBanner";
 import { Readout } from "./Readout";
 import { usePreviewSubject } from "./usePreviewSubject";
 import { ViewCommands } from "./ViewCommands";
 import { ViewportToolbar } from "./ViewportToolbar";
 import { useViewport, viewportStore } from "./viewportStore";
-import { weldModel } from "./weld";
 import type { ThreeEvent } from "@react-three/fiber";
 
 /** Read a CSS custom property, recomputed whenever the theme changes. */
@@ -56,14 +56,6 @@ class GltfErrorBoundary extends Component<
   render() {
     return this.state.failed ? null : this.props.children;
   }
-}
-
-function Model({ url }: { url: string }) {
-  const gltf = useGLTF(url);
-  // OCCT GLBs arrive as one primitive per B-Rep face; unwelded seams shimmer
-  // as dark cracks while orbiting (#14). weldModel is idempotent on the cache.
-  weldModel(gltf.scene);
-  return <primitive object={gltf.scene} />;
 }
 
 /** Capture a thumbnail of the framed model a few frames after it loads. */
@@ -137,7 +129,7 @@ export function Viewport() {
               {/* Ground + Measure add non-model geometry (shadow plane, marker
                   spheres); they live OUTSIDE Bounds so the observe refit that
                   fires on every canvas resize measures the model alone (#16). */}
-              <Bounds key={urls.join("\n")} fit clip observe margin={1.25}>
+              <Bounds key={JSON.stringify(urls)} fit clip observe margin={1.25}>
                 <group
                   ref={modelRef}
                   onPointerDown={(e: ThreeEvent<PointerEvent>) => {
@@ -146,11 +138,7 @@ export function Viewport() {
                     viewportStore.addMeasurePoint([e.point.x, e.point.y, e.point.z]);
                   }}
                 >
-                  {/* One object per part rather than one merged mesh, so each
-                      piece of an assembly stays a piece. */}
-                  {urls.map((url) => (
-                    <Model key={url} url={url} />
-                  ))}
+                  <ModelParts urls={urls} />
                 </group>
                 <ViewCommands modelRef={modelRef} />
                 <Appearance modelRef={modelRef} />

@@ -78,8 +78,14 @@ describe("usePreviewSubject", () => {
 
     beforeEach(() => vi.mocked(useGLTF.clear).mockClear());
 
-    it("clears every part from the loader after a failure, so trying again loads them all", () => {
-      const { result } = renderHook(() => usePreviewSubject(twoParts(), null));
+    it("clears every part on screen after a failure, so trying again loads them all", () => {
+      // Opened on nothing, then given the parts: a failure clears what is on
+      // screen now, not what was there when the hook first rendered.
+      const { result, rerender } = renderHook(
+        ({ v }: { v: Version | null }) => usePreviewSubject(v, null),
+        { initialProps: { v: null as Version | null } },
+      );
+      rerender({ v: twoParts() });
       act(() => result.current.onFailed());
       expect(vi.mocked(useGLTF.clear).mock.calls).toEqual([
         [artifactUrl(7, "glb", 0)],
@@ -88,10 +94,10 @@ describe("usePreviewSubject", () => {
     });
 
     it("does not take the same parts, asked for again, as a new attempt", () => {
-      // The active version arrives as a new object on every refresh. Taking its
-      // freshly built list as a new address would undo a failure as soon as it
-      // was reported, and the loader would fail, clear and fetch again for as
-      // long as the page stays open.
+      // A fresh object holding the same parts must not count as a new attempt:
+      // counted as one, it would undo a failure as soon as it was reported, and
+      // the loader would fail, clear and fetch again for as long as the page
+      // stays open.
       const { result, rerender } = renderHook(
         ({ v }: { v: Version }) => usePreviewSubject(v, null),
         { initialProps: { v: twoParts() } },
