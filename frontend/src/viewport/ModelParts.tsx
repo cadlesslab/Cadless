@@ -9,7 +9,7 @@ import { weldModel } from "./weld";
 function Model({ url }: { url: string }) {
   const gltf = useGLTF(url);
   // OCCT GLBs arrive as one primitive per B-Rep face; unwelded seams shimmer
-  // as dark cracks while orbiting (#14). weldModel is idempotent on the cache.
+  // as dark cracks while orbiting. weldModel is idempotent on the cache.
   weldModel(gltf.scene);
   return <primitive object={gltf.scene} />;
 }

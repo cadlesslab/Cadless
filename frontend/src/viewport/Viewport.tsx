@@ -128,7 +128,7 @@ export function Viewport() {
                   model (fitting an empty scene yields a NaN camera). */}
               {/* Ground + Measure add non-model geometry (shadow plane, marker
                   spheres); they live OUTSIDE Bounds so the observe refit that
-                  fires on every canvas resize measures the model alone (#16). */}
+                  fires on every canvas resize measures the model alone. */}
               <Bounds key={JSON.stringify(urls)} fit clip observe margin={1.25}>
                 <group
                   ref={modelRef}
