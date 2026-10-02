@@ -47,6 +47,21 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+describe("the visually hidden utility", () => {
+  it("takes its text out of the drawn line", () => {
+    // Drawn, the hidden wording runs straight into the phrase beside it.
+    mount(`
+      <p class="chat-thinking codegen-status" role="status">
+        <span class="visually-hidden">Writing code</span><span>Sketching</span>
+      </p>`);
+    const hidden = computed(".visually-hidden");
+    expect(hidden.position).toBe("absolute");
+    expect(hidden.width).toBe("1px");
+    expect(hidden.height).toBe("1px");
+    expect(hidden.overflow).toBe("hidden");
+  });
+});
+
 describe("the views of a critique round", () => {
   it("puts a settled round's views two to a row", () => {
     mount(SETTLED);

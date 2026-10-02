@@ -392,16 +392,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   padding: var(--space-1) 0 var(--space-1) var(--space-3);
 }
 
-/* Live codegen pane (/3533): the build123d code streamed as it's written. */
-.codegen-pane { display: flex; flex-direction: column; gap: var(--space-2); }
-.codegen-code {
-  margin: 0; max-height: 220px; overflow: auto;
-  padding: var(--space-2); background: var(--panel-2);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-family: var(--font-mono); font-size: 0.82em; line-height: 1.45;
-  color: var(--muted); white-space: pre;
+/* Read by assistive technology, not drawn. */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
-.codegen-code code { background: none; padding: 0; font: inherit; }
 
 /* Render critique: the views the reviewer was shown on one repair round, with
    its verdict beneath them. Fixed at two to a row: this was a wrapping row of

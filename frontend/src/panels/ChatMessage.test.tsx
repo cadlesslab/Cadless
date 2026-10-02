@@ -1,7 +1,9 @@
-import { fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../api";
+import { ToastProvider } from "../components";
+import { StoreProvider } from "../state";
 import type { AppState } from "../store";
 import { renderWithProviders } from "../test/utils";
 import { ChatMessage } from "./ChatMessage";
@@ -18,11 +20,12 @@ function okVersion(): Version {
 // The component only invokes `app` inside event handlers we never trigger here.
 const app = {} as Parameters<typeof ChatMessage>[0]["app"];
 
+function msgElement(msg: Msg) {
+  return <ChatMessage msg={msg} app={app} onRetry={() => {}} onEdit={() => {}} />;
+}
+
 function renderMsg(msg: Msg, state: Partial<AppState> = {}) {
-  return renderWithProviders(
-    <ChatMessage msg={msg} app={app} onRetry={() => {}} onEdit={() => {}} />,
-    state,
-  );
+  return renderWithProviders(msgElement(msg), state);
 }
 
 function imageMsg(over: Partial<Extract<Msg, { kind: "image" }>> = {}): Msg {
@@ -272,27 +275,83 @@ describe("ChatMessage", () => {
     expect(settled.container.querySelector(".stream-cursor")).toBeNull();
   });
 
-  it("streams codegen live then collapses it once the turn settles", () => {
+  describe("codegen status", () => {
     const code = "from build123d import *\nresult = Box(1, 1, 1)";
-    const live = renderMsg({
-      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen: code, done: false }),
+    const codegenMsg = (done: boolean): Msg => ({
+      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen: code, done }),
     });
-    // In flight: the codegen pane is open and the streamed code is visible.
-    expect(live.container.querySelector(".codegen-pane")).not.toBeNull();
-    expect(live.getByText(/Writing code/)).toBeInTheDocument();
-    expect(live.container.querySelector(".codegen-code")?.textContent).toContain("Box(1, 1, 1)");
-    live.unmount(); // avoid cross-render query bleed (RTL queries bind to document.body)
 
-    // Settled: the pane collapses to a summary and the code is no longer rendered.
-    const done = renderMsg({
-      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen: code, done: true }),
+    afterEach(() => {
+      vi.useRealTimers();
     });
-    expect(done.queryByText(/Writing code/)).toBeNull();
-    expect(done.getByText(/Wrote 2 lines/)).toBeInTheDocument();
-    expect(done.container.querySelector(".codegen-code")).toBeNull();
-    // Re-expandable: clicking the summary shows the code again.
-    fireEvent.click(done.getByText(/Wrote 2 lines/));
-    expect(done.container.querySelector(".codegen-code")?.textContent).toContain("Box(1, 1, 1)");
+
+    // Attributes included: the code must not reach the DOM at all, not merely
+    // stay out of the visible text.
+    const holdsCode = (el: Element) =>
+      el.innerHTML.includes("Box(1, 1, 1)") || el.innerHTML.includes("build123d");
+
+    it("shows one status line while codegen streams, never the code", () => {
+      const { container } = renderMsg(codegenMsg(false));
+      // The "Thinking…" placeholder must not sit beside it as a second line.
+      const lines = container.querySelectorAll('[role="status"]');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toHaveClass("codegen-status");
+      expect(holdsCode(container)).toBe(false);
+      expect(lines[0].querySelector("button")).toBeNull();
+    });
+
+    it("announces one fixed phrase and keeps the rotating one from assistive technology", () => {
+      const { container, getByText } = renderMsg(codegenMsg(false));
+      expect(getByText("Writing code")).toHaveClass("visually-hidden");
+      expect(container.querySelector(".codegen-phrase")?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("rotates the phrase every three seconds and wraps round the list", () => {
+      vi.useFakeTimers();
+      const { container } = renderMsg(codegenMsg(false));
+      const phrase = () => container.querySelector(".codegen-phrase")?.textContent ?? "";
+      const first = phrase();
+      expect(first).not.toBe("");
+      act(() => vi.advanceTimersByTime(2999));
+      expect(phrase()).toBe(first);
+      act(() => vi.advanceTimersByTime(1));
+      expect(phrase()).not.toBe(first);
+      // Keep going: the list is finite, so the first phrase comes round again.
+      let wrapped = false;
+      for (let i = 0; i < 50 && !wrapped; i++) {
+        act(() => vi.advanceTimersByTime(3000));
+        wrapped = phrase() === first;
+      }
+      expect(wrapped).toBe(true);
+    });
+
+    // The same instance going from streaming to settled, as a live turn does.
+    function settle(live: ReturnType<typeof renderMsg>) {
+      live.rerender(
+        <StoreProvider store={live.store}>
+          <ToastProvider>{msgElement(codegenMsg(true))}</ToastProvider>
+        </StoreProvider>,
+      );
+    }
+
+    it("settles to a fixed line count with no way to open the code", () => {
+      const live = renderMsg(codegenMsg(false));
+      settle(live);
+      const status = live.container.querySelector(".codegen-status");
+      expect(status?.textContent).toBe("Wrote 2 lines");
+      expect(status?.querySelector("button")).toBeNull();
+      expect(holdsCode(live.container)).toBe(false);
+      fireEvent.click(status as Element);
+      expect(holdsCode(live.container)).toBe(false);
+    });
+
+    it("stops the phrase timer once the turn settles", () => {
+      vi.useFakeTimers();
+      const live = renderMsg(codegenMsg(false));
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      settle(live);
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   it("fetches an attached picture from the attachment route, not from the block", () => {

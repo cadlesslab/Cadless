@@ -169,50 +169,58 @@ function ThinkingPane({ text, streaming = false }: { text: string; streaming?: b
   );
 }
 
-/** The codegen model's build123d code, streamed live as it is written, in a
- * collapsible pane that auto-collapses once the turn settles (/3533).
- * Mirrors {@link ThinkingPane}: while live it shows the intermediate output; when
- * done it folds away to a one-line summary, re-expandable. A plain `<pre>` re-
- * renders cheaply per delta (no markdown parse), so the only streaming concern is
- * keeping the latest line in view — handled by the auto-scroll effect. */
-function CodegenPane({ code, streaming }: { code: string; streaming: boolean }) {
-  const [open, setOpen] = useState(streaming);
-  const wasStreaming = useRef(streaming);
-  const bodyRef = useRef<HTMLPreElement>(null);
+/** What the status line says while the codegen model writes, one at a time. */
+const CODEGEN_PHRASES = [
+  "Sketching",
+  "Extruding",
+  "Measuring twice",
+  "Filleting edges",
+  "Chamfering corners",
+  "Squaring up",
+  "Checking tolerances",
+  "Drilling holes",
+  "Sanding it down",
+  "Tightening the bolts",
+];
+const CODEGEN_PHRASE_MS = 3000;
+
+/** Stands in for the build123d code the codegen model streams, which the chat
+ * deliberately does not show: the code is reachable from the result card's
+ * "View code", and in the conversation it was noise. While live it is one line
+ * whose phrase rotates; once the turn settles it is a fixed line count with no
+ * way to open the code from here. Only the line count is read from `code`, so the
+ * code itself never reaches the DOM.
+ *
+ * The rotating phrase is `aria-hidden` inside the live region, so a screen reader
+ * hears "Writing code" once instead of a new announcement every few seconds. */
+function CodegenStatus({ code, streaming }: { code: string; streaming: boolean }) {
+  const [phrase, setPhrase] = useState(0);
 
   useEffect(() => {
-    if (wasStreaming.current && !streaming) setOpen(false); // collapse when done
-    wasStreaming.current = streaming;
+    if (!streaming) return;
+    const id = setInterval(
+      () => setPhrase((i) => (i + 1) % CODEGEN_PHRASES.length),
+      CODEGEN_PHRASE_MS,
+    );
+    return () => clearInterval(id);
   }, [streaming]);
 
-  useEffect(() => {
-    if (open && streaming && bodyRef.current) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight; // follow the stream
-    }
-  }, [code, open, streaming]);
-
-  const lines = code ? code.split("\n").length : 0;
-  const label = streaming ? "Writing code…" : `Wrote ${lines} line${lines === 1 ? "" : "s"}`;
-
+  if (!streaming) {
+    const lines = code ? code.split("\n").length : 0;
+    return (
+      <p className="chat-thinking codegen-status" role="status">
+        Wrote {lines} line{lines === 1 ? "" : "s"}
+      </p>
+    );
+  }
   return (
-    <div className={`codegen-pane ${open ? "open" : ""}`}>
-      <button
-        type="button"
-        className="thinking-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="thinking-caret" aria-hidden>
-          {open ? "▾" : "▸"}
-        </span>
-        {label}
-      </button>
-      {open && (
-        <pre ref={bodyRef} className="codegen-code">
-          <code>{code}</code>
-        </pre>
-      )}
-    </div>
+    <p className="chat-thinking codegen-status" role="status">
+      <span className="visually-hidden">Writing code</span>
+      <span className="codegen-phrase" aria-hidden>
+        {CODEGEN_PHRASES[phrase]}
+      </span>
+      <span className="chat-thinking-dots" aria-hidden />
+    </p>
   );
 }
 
@@ -412,7 +420,7 @@ function LiveChat({
   return (
     <>
       {turn.thinking && <ThinkingPane text={turn.thinking} streaming={!turn.done} />}
-      {turn.codegen && <CodegenPane code={turn.codegen} streaming={!turn.done} />}
+      {turn.codegen && <CodegenStatus code={turn.codegen} streaming={!turn.done} />}
       {turn.text && (
         <div className="live-text">
           <Markdown text={turn.text} />
