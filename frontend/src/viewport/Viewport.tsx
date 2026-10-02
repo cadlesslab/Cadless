@@ -94,7 +94,7 @@ export function Viewport() {
 
   const preview = useViewport((s) => s.preview);
   const { subject, onFailed } = usePreviewSubject(version, preview);
-  const url = subject.url;
+  const urls = subject.urls;
   const gridVisible = useViewport((s) => s.gridVisible);
   const axesVisible = useViewport((s) => s.axesVisible);
 
@@ -123,7 +123,7 @@ export function Viewport() {
         )}
         {axesVisible && <axesHelper args={[20]} />}
 
-        {url && (
+        {urls.length > 0 && (
           <GltfErrorBoundary onFailed={onFailed}>
             <Suspense
               fallback={
@@ -137,7 +137,7 @@ export function Viewport() {
               {/* Ground + Measure add non-model geometry (shadow plane, marker
                   spheres); they live OUTSIDE Bounds so the observe refit that
                   fires on every canvas resize measures the model alone (#16). */}
-              <Bounds key={url} fit clip observe margin={1.25}>
+              <Bounds key={urls.join("\n")} fit clip observe margin={1.25}>
                 <group
                   ref={modelRef}
                   onPointerDown={(e: ThreeEvent<PointerEvent>) => {
@@ -146,7 +146,11 @@ export function Viewport() {
                     viewportStore.addMeasurePoint([e.point.x, e.point.y, e.point.z]);
                   }}
                 >
-                  <Model url={url} />
+                  {/* One object per part rather than one merged mesh, so each
+                      piece of an assembly stays a piece. */}
+                  {urls.map((url) => (
+                    <Model key={url} url={url} />
+                  ))}
                 </group>
                 <ViewCommands modelRef={modelRef} />
                 <Appearance modelRef={modelRef} />

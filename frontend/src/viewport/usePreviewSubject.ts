@@ -20,20 +20,25 @@ export function usePreviewSubject(
   // failure is applied afterwards, so this stays the thing a retry is measured
   // against rather than disappearing along with the model it names.
   const attempt = viewerSubject(version, preview, false);
+  // The list is built afresh on every render, so it is compared by what it
+  // holds. Compared as an array, every render would be a new attempt, and a
+  // failure would be undone the moment it was reported.
+  const addresses = attempt.urls.join("\n");
 
-  // A new address is a new attempt, and so is asking for the same one again —
-  // which is what opening the same card twice is. Without the second, a preview
-  // that failed once could never be shown again: the address has not changed,
-  // so nothing would tell this to try.
-  useEffect(() => setFailed(false), [attempt.url, preview]);
+  // A new set of addresses is a new attempt, and so is asking for the same one
+  // again — which is what opening the same card twice is. Without the second, a
+  // preview that failed once could never be shown again: the address has not
+  // changed, so nothing would tell this to try.
+  useEffect(() => setFailed(false), [addresses, preview]);
 
   const onFailed = useCallback(() => {
     // The loader keeps its answers by address, including the rejections, and
-    // hands the stored one back on every later render for that key. Clearing it
-    // is what makes trying again an actual attempt rather than a replay.
-    if (attempt.url) useGLTF.clear(attempt.url);
+    // hands the stored one back on every later render for that key. Clearing
+    // every part is what makes trying again an actual attempt rather than a
+    // replay of the one that failed beside parts that did not.
+    for (const url of addresses ? addresses.split("\n") : []) useGLTF.clear(url);
     setFailed(true);
-  }, [attempt.url]);
+  }, [addresses]);
 
   return { subject: failed ? viewerSubject(version, preview, true) : attempt, onFailed };
 }

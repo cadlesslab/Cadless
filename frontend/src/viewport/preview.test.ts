@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { glbUrl, type Version } from "../api";
+import { artifactUrl, glbUrl, type Version } from "../api";
 import { readoutFor, viewerSubject } from "./preview";
 
 function version(over: Partial<Version> = {}): Version {
@@ -17,7 +17,7 @@ function version(over: Partial<Version> = {}): Version {
     parameters: {},
     parent_version_id: null,
     plan_step: null,
-    artifacts: [{ kind: "glb", path: "x.glb", size_bytes: 1 }],
+    artifacts: [{ kind: "glb", bytes: 1, part: 0 }],
     ...over,
   } as Version;
 }
@@ -25,7 +25,27 @@ function version(over: Partial<Version> = {}): Version {
 describe("viewerSubject", () => {
   it("draws the active version's mesh when nothing is being previewed", () => {
     const s = viewerSubject(version(), null, false);
-    expect(s).toMatchObject({ url: glbUrl(7), previewing: false, emptyReason: null });
+    expect(s).toMatchObject({ urls: [glbUrl(7)], previewing: false, emptyReason: null });
+  });
+
+  describe("a version in several parts", () => {
+    const pieces = (...parts: number[]) =>
+      parts.map((part) => ({ kind: "glb" as const, bytes: 1, part }));
+
+    it("draws every part, in part order", () => {
+      const s = viewerSubject(version({ artifacts: pieces(1, 0) }), null, false);
+      expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 1)]);
+    });
+
+    it("asks for the parts it has rather than for a count of them", () => {
+      const s = viewerSubject(version({ artifacts: pieces(0, 2) }), null, false);
+      expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 2)]);
+    });
+
+    it("asks for a part once even when it is listed twice", () => {
+      const s = viewerSubject(version({ artifacts: pieces(0, 1, 1) }), null, false);
+      expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 1)]);
+    });
   });
 
   it("captures a thumbnail for the version it is actually showing", () => {
@@ -43,12 +63,12 @@ describe("viewerSubject", () => {
 
   it("a preview wins over the active version's mesh", () => {
     const s = viewerSubject(version(), { url: "/depot/artifacts/c/v/a", title: "Bracket" }, false);
-    expect(s).toMatchObject({ url: "/depot/artifacts/c/v/a", previewing: true });
+    expect(s).toMatchObject({ urls: ["/depot/artifacts/c/v/a"], previewing: true });
   });
 
   it("says why when the previewed catalogue has no mesh to show", () => {
     const s = viewerSubject(null, { url: null, title: "Gearbox", note: "Nothing baked" }, false);
-    expect(s).toMatchObject({ url: null, previewing: true, emptyReason: "Nothing baked" });
+    expect(s).toMatchObject({ urls: [], previewing: true, emptyReason: "Nothing baked" });
   });
 
   it("has something to say even when the preview came without a note", () => {
@@ -58,13 +78,13 @@ describe("viewerSubject", () => {
 
   it("says why when a preview could not be loaded, rather than going blank", () => {
     const s = viewerSubject(null, { url: "/depot/artifacts/c/v/gone", title: "Gearbox" }, true);
-    expect(s.url).toBeNull();
+    expect(s.urls).toEqual([]);
     expect(s.emptyReason).toMatch(/could not|failed/i);
   });
 
   it("says why when the active version's own mesh could not be loaded", () => {
     const s = viewerSubject(version(), null, true);
-    expect(s.url).toBeNull();
+    expect(s.urls).toEqual([]);
     expect(s.emptyReason).toMatch(/could not|failed/i);
   });
 
@@ -79,7 +99,7 @@ describe("viewerSubject", () => {
 
   it("shows nothing for a version that finished without a mesh", () => {
     const s = viewerSubject(version({ artifacts: [] }), null, false);
-    expect(s).toMatchObject({ url: null, captureVersionId: null });
+    expect(s).toMatchObject({ urls: [], captureVersionId: null });
   });
 });
 
