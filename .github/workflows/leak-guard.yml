@@ -14,7 +14,12 @@ name: leak-guard
 on:
   push:
     branches: [main]
+  # `edited` as well as the default three: a body changed after a green run is
+  # published as it now stands. A release pull request's body, which becomes the
+  # release notes, is rewritten after the push whose run would otherwise be the
+  # last to read it.
   pull_request:
+    types: [opened, edited, reopened, synchronize]
   workflow_dispatch:
 
 jobs:

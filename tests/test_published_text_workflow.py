@@ -39,6 +39,15 @@ def test_the_body_is_not_taken_from_the_event_payload():
     )
 
 
+def test_an_edited_body_is_scanned_again():
+    """A body edited after a green run is published as it now stands.
+
+    That includes the release pull request's, which becomes the release notes and
+    is rewritten after the push whose run would otherwise be the last to read it.
+    """
+    assert "types: [opened, edited, reopened, synchronize]" in _wiring()
+
+
 def test_the_body_is_fetched_from_the_api():
     text = _text()
     assert "gh api" in text and "/pulls/$PR_NUMBER" in text
