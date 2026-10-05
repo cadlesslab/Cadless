@@ -1,7 +1,10 @@
 """Toolchain smoke test — verifies the package imports and the test runner works."""
 
+import re
+
 import cadless
 
 
 def test_package_imports():
-    assert cadless.__version__ == "1.0.0"
+    # A shape rather than a number: every release pull request moves the number.
+    assert re.fullmatch(r"\d+\.\d+\.\d+", cadless.__version__)

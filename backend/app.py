@@ -20,6 +20,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import cadless
 from cadless.config import settings
 from cadless.identity import has_principal_resolver
 from cadless.store import Store, get_store
@@ -178,7 +179,7 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Cadless",
-        version="1.0.0",
+        version=cadless.__version__,
         lifespan=lifespan,
         root_path=settings.root_path,
     )
