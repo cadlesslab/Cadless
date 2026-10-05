@@ -80,6 +80,46 @@ Exits non-zero on any failure.
 For a PoC, isolation is "good enough", not hardened: shared-kernel
 containers, no gVisor/Firecracker. Do not expose this to untrusted users as-is.
 
+## Cutting a release
+A release is cut by merging the release pull request
+([ADR-0010](docs/adr/0010-release-pull-request.md)):
+
+1. Once a change that releases has landed on `main` (see the table in
+   [CONTRIBUTING.md](CONTRIBUTING.md#pull-request-titles)), the release workflow
+   opens one pull request titled `chore(main): release X.Y.Z`, carrying the next
+   version and the changelog since the last release, and refreshes it whenever
+   that version or changelog would change.
+2. A maintainer reads the changelog — it is built from the merged pull
+   requests, whose text their authors can still edit — and squash-merges the
+   pull request when the release should ship.
+3. The run that merge starts tags `vX.Y.Z` and publishes the GitHub Release with
+   that changelog.
+
+Never create or push a tag by hand: a tag the workflow did not create is a
+release nobody merged.
+
+The workflow depends on repository settings that live outside this tree. Set
+them up once, before the release workflow first runs — that is, before the
+change that adds it is merged:
+
+- **A GitHub App** for the release automation, installed on this repository
+  only, with Contents and Pull requests set to read and write, and not listed
+  as able to bypass the protection on `main`. Its bot signs the release commit
+  off; `signoff` in `release-please-config.json` names it.
+- **An environment named `release`** whose deployment branches are limited to
+  `main`, holding the App's client ID as the variable `RELEASE_APP_CLIENT_ID`
+  and its private key as the secret `RELEASE_APP_PRIVATE_KEY`. Kept out of the
+  repository's own secrets, the key cannot be read by a workflow pushed on any
+  other branch. Create it before the workflow runs: GitHub would otherwise
+  create it on the first run, with no branch limit.
+- **Merging**: squash merging only, with the pull request title as the squash
+  commit title — otherwise a one-commit pull request lands under its commit's
+  subject, which the title check never sees.
+- **Required checks on `main`** include `pr-title`, so a title that fails the
+  convention cannot be merged.
+- **A tag ruleset** that lets only the release App create `v*` tags, so the
+  rule above is enforced rather than observed.
+
 ## Troubleshooting
 - **Generation fails with credential errors** → check your provider's credentials
   in `.env` (default `ANTHROPIC_API_KEY`; for Bedrock, AWS keys / region); the api

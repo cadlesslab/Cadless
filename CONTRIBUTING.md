@@ -164,17 +164,46 @@ git config blame.ignoreRevsFile .git-blame-ignore-revs
 ## Submitting a pull request
 
 Open the pull request against `main`. The template asks for a summary, how
-you tested it, and a short checklist. Four CI checks must pass:
+you tested it, and a short checklist. Five CI checks must pass:
 
 | Check | What it checks |
 |---|---|
-| `ci` | `ruff` lint + format check + the unit suite + a full Docker build |
+| `ci` | `ruff` lint + format check + the unit suite, the frontend's lint, type check and tests, and a full Docker build |
 | `leak-guard` | No internal references or credential shapes in the tree |
 | `leak-guard / dco` | Every commit carries a `Signed-off-by` trailer |
 | `leak-guard / attribution` | No AI-assistant attribution in a commit message or the PR body |
+| `pr-title` | The title follows the convention below and carries no internal reference or assistant attribution |
 
 Maintainers review and squash-merge. One logical change per PR keeps review
 fast; large or speculative changes are worth an issue first.
+
+## Pull request titles
+
+Pull requests are squash-merged, and the title becomes the commit subject on
+`main`. The release pull request computes the next version from those subjects
+and lists the ones that release in its changelog
+([ADR-0010](./docs/adr/0010-release-pull-request.md)), so a title says what kind
+of change it is:
+
+```text
+type(scope)!: description
+```
+
+| Type | What it does to the next release |
+|---|---|
+| `feat` | a new minor version |
+| `fix`, `improve`, `perf`, `revert` | a new patch version |
+| any type followed by `!` | a new major version — the change breaks something that worked |
+| `refactor`, `docs`, `test`, `build`, `ci`, `chore` | no release on its own, and no changelog line |
+
+The scope is optional and names the part touched — `fix(worker): …`. Use `!`
+only for a change that breaks something that worked. Write the description as
+you would want it to read in the changelog. You can check a title locally:
+
+```bash
+printf '%s\n' 'fix(worker): stop the export scale leaking' > title.txt
+python tools/check_pr_title.py title.txt
+```
 
 ## Developer Certificate of Origin
 

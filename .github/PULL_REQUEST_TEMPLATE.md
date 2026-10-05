@@ -8,6 +8,7 @@
 
 ## Checklist
 
+- [ ] The title reads `type: description` — `(scope)` optional, `!` only for a breaking change (see [CONTRIBUTING.md](../CONTRIBUTING.md#pull-request-titles))
 - [ ] `make test` passes locally
 - [ ] `make lint` is clean
 - [ ] Every commit is signed off (`git commit -s` — see [CONTRIBUTING.md](../CONTRIBUTING.md))
