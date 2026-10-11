@@ -1,15 +1,14 @@
 /** Renders one chat turn: a user bubble, an assistant result card, or the live
  * in-flight assistant turn (streaming staged progress). Reuses the version
- * thumbnail cache, CodePanel, and the version actions from the History panel. */
+ * thumbnail cache and the version actions from the History panel. */
 import { useEffect, useRef, useState } from "react";
 
 import { attachmentUrl, guideFrameUrl } from "../api";
 import type { ClarificationQuestion, Version } from "../api";
-import { Button, IconButton, CadlessIcon } from "../components";
+import { IconButton, CadlessIcon } from "../components";
 import { useStoreSelector } from "../state";
 import type { useApp } from "../useApp";
 import type { CritiqueRound, LiveTurn, ChatMessage as Msg } from "./chatModel";
-import { CodePanel } from "./CodePanel";
 import { Markdown } from "./markdown";
 import { StagedProgress } from "./StagedProgress";
 import { useThumbnail } from "./thumbnails";
@@ -37,7 +36,6 @@ function metricsLine(v: Version): string {
 }
 
 function AssistantResult({ v, app }: { v: Version; app: App }) {
-  const [showCode, setShowCode] = useState(false);
   // Catalog items are read-only: re-running would overwrite baked artifacts at
   // the wrong scale (#31), and the backend refuses it with a 403.
   const isCatalog = useStoreSelector(
@@ -68,12 +66,9 @@ function AssistantResult({ v, app }: { v: Version; app: App }) {
         </span>
       </button>
 
+      {/* No code here: the chat keeps to the conversation, and the code is
+          reachable outside it. */}
       <div className="result-actions">
-        {v.code && (
-          <Button size="sm" variant="ghost" onClick={() => setShowCode((s) => !s)}>
-            {showCode ? "Hide code" : "View code"}
-          </Button>
-        )}
         <IconButton label={`Use v${v.id} prompt`} onClick={() => app.recallPrompt(v.prompt)}>
           ↩
         </IconButton>
@@ -83,8 +78,6 @@ function AssistantResult({ v, app }: { v: Version; app: App }) {
           </IconButton>
         )}
       </div>
-
-      {showCode && v.code && <CodePanel code={v.code} error={v.error} />}
     </div>
   );
 }
@@ -169,50 +162,64 @@ function ThinkingPane({ text, streaming = false }: { text: string; streaming?: b
   );
 }
 
-/** The codegen model's build123d code, streamed live as it is written, in a
- * collapsible pane that auto-collapses once the turn settles (/3533).
- * Mirrors {@link ThinkingPane}: while live it shows the intermediate output; when
- * done it folds away to a one-line summary, re-expandable. A plain `<pre>` re-
- * renders cheaply per delta (no markdown parse), so the only streaming concern is
- * keeping the latest line in view — handled by the auto-scroll effect. */
-function CodegenPane({ code, streaming }: { code: string; streaming: boolean }) {
-  const [open, setOpen] = useState(streaming);
-  const wasStreaming = useRef(streaming);
-  const bodyRef = useRef<HTMLPreElement>(null);
-
-  useEffect(() => {
-    if (wasStreaming.current && !streaming) setOpen(false); // collapse when done
-    wasStreaming.current = streaming;
-  }, [streaming]);
-
-  useEffect(() => {
-    if (open && streaming && bodyRef.current) {
-      bodyRef.current.scrollTop = bodyRef.current.scrollHeight; // follow the stream
+/** What the newest block of `# comment` lines in streamed code says, or null
+ * before the model has written one. A block is read from its first line with any
+ * words in it: a comment wrapped over several lines would otherwise show its tail,
+ * often mid-sentence, and a `# ----------` rule above a heading would show as
+ * dashes. Decoration (ASCII or box-drawing rules, a leading bullet) and closing
+ * punctuation are trimmed, since the status line's dots already end the phrase.
+ * The line still being streamed is left out, so the status does not spell out
+ * half-written words. */
+function latestComment(code: string): string | null {
+  const finished = code.split("\n").slice(0, -1);
+  let latest: string | null = null;
+  let inBlock = false;
+  let taken = false;
+  for (const line of finished) {
+    const comment = /^[ \t]*#(?:[ \t]+(.*))?$/.exec(line);
+    if (!comment) {
+      inBlock = false;
+      continue;
     }
-  }, [code, open, streaming]);
+    if (!inBlock) [inBlock, taken] = [true, false];
+    const words = (comment[1] ?? "").replace(
+      /^[-=*#~_\u2022\u2500-\u257F\s]+|[-=*#~_\u2500-\u257F\s.,;:…]+$/g,
+      "",
+    );
+    if (!taken && words) [latest, taken] = [words, true];
+  }
+  return latest;
+}
 
-  const lines = code ? code.split("\n").length : 0;
-  const label = streaming ? "Writing code…" : `Wrote ${lines} line${lines === 1 ? "" : "s"}`;
-
+/** Stands in for the build123d code the codegen model streams, which the chat
+ * deliberately does not show: in the conversation it would be noise, and the code
+ * stays reachable outside the chat. While live it is one line saying what is being
+ * built in the model's own words — its newest code comment, or "Writing code"
+ * until it writes one — rather than phrases kept here, which would be a list to
+ * maintain and would say nothing about this part. Once the turn settles it is a
+ * fixed line count with no way to open the code from here. Only comment lines and
+ * the line count are read from `code`; no statement of the code reaches the DOM.
+ *
+ * The changing phrase is `aria-hidden` inside the live region, so a screen reader
+ * hears "Writing code" at most once rather than an announcement per comment, and
+ * the same element carries "Wrote N lines" once the turn settles. */
+function CodegenStatus({ code, streaming }: { code: string; streaming: boolean }) {
+  if (!streaming) {
+    const lines = code ? code.split("\n").length : 0;
+    return (
+      <p className="chat-thinking codegen-status" role="status">
+        Wrote {lines} line{lines === 1 ? "" : "s"}
+      </p>
+    );
+  }
   return (
-    <div className={`codegen-pane ${open ? "open" : ""}`}>
-      <button
-        type="button"
-        className="thinking-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="thinking-caret" aria-hidden>
-          {open ? "▾" : "▸"}
-        </span>
-        {label}
-      </button>
-      {open && (
-        <pre ref={bodyRef} className="codegen-code">
-          <code>{code}</code>
-        </pre>
-      )}
-    </div>
+    <p className="chat-thinking codegen-status" role="status">
+      <span className="visually-hidden">Writing code</span>
+      <span className="codegen-phrase" aria-hidden>
+        {latestComment(code) ?? "Writing code"}
+      </span>
+      <span className="chat-thinking-dots" aria-hidden />
+    </p>
   );
 }
 
@@ -412,7 +419,7 @@ function LiveChat({
   return (
     <>
       {turn.thinking && <ThinkingPane text={turn.thinking} streaming={!turn.done} />}
-      {turn.codegen && <CodegenPane code={turn.codegen} streaming={!turn.done} />}
+      {turn.codegen && <CodegenStatus code={turn.codegen} streaming={!turn.done} />}
       {turn.text && (
         <div className="live-text">
           <Markdown text={turn.text} />

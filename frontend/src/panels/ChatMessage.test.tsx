@@ -2,6 +2,8 @@ import { fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../api";
+import { ToastProvider } from "../components";
+import { StoreProvider } from "../state";
 import type { AppState } from "../store";
 import { renderWithProviders } from "../test/utils";
 import { ChatMessage } from "./ChatMessage";
@@ -18,11 +20,12 @@ function okVersion(): Version {
 // The component only invokes `app` inside event handlers we never trigger here.
 const app = {} as Parameters<typeof ChatMessage>[0]["app"];
 
+function msgElement(msg: Msg) {
+  return <ChatMessage msg={msg} app={app} onRetry={() => {}} onEdit={() => {}} />;
+}
+
 function renderMsg(msg: Msg, state: Partial<AppState> = {}) {
-  return renderWithProviders(
-    <ChatMessage msg={msg} app={app} onRetry={() => {}} onEdit={() => {}} />,
-    state,
-  );
+  return renderWithProviders(msgElement(msg), state);
 }
 
 function imageMsg(over: Partial<Extract<Msg, { kind: "image" }>> = {}): Msg {
@@ -68,6 +71,12 @@ describe("ChatMessage", () => {
     expect(avatar).not.toBeNull();
     expect(avatar?.querySelector("svg path")).not.toBeNull();
     expect(avatar?.textContent).not.toContain("◆");
+  });
+
+  it("offers no way to open the code from a result card", () => {
+    const { container, queryByText } = renderMsg({ kind: "assistant", id: "a7", version: okVersion() });
+    expect(queryByText(/code/i)).toBeNull();
+    expect(container.innerHTML).not.toContain("result=...");
   });
 
   it("renders an assistant text block as markdown", () => {
@@ -272,27 +281,123 @@ describe("ChatMessage", () => {
     expect(settled.container.querySelector(".stream-cursor")).toBeNull();
   });
 
-  it("streams codegen live then collapses it once the turn settles", () => {
-    const code = "from build123d import *\nresult = Box(1, 1, 1)";
-    const live = renderMsg({
-      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen: code, done: false }),
+  describe("codegen status", () => {
+    // A streamed reply: a fence, then commented code, the newest comment
+    // indented, closed by a full stop and trailed by spaces.
+    const code = [
+      "```python",
+      "from build123d import *",
+      "# Base plate with rounded corners",
+      "plate = Box(40, 40, 4)",
+      "    # Mounting holes through the plate.  ",
+      "result = plate",
+      "",
+    ].join("\n");
+    const codegenMsg = (codegen: string, done = false): Msg => ({
+      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen, done }),
     });
-    // In flight: the codegen pane is open and the streamed code is visible.
-    expect(live.container.querySelector(".codegen-pane")).not.toBeNull();
-    expect(live.getByText(/Writing code/)).toBeInTheDocument();
-    expect(live.container.querySelector(".codegen-code")?.textContent).toContain("Box(1, 1, 1)");
-    live.unmount(); // avoid cross-render query bleed (RTL queries bind to document.body)
+    const phrase = (el: Element) => el.querySelector(".codegen-phrase")?.textContent;
 
-    // Settled: the pane collapses to a summary and the code is no longer rendered.
-    const done = renderMsg({
-      kind: "live-chat", id: "live-chat", turn: liveTurn({ codegen: code, done: true }),
+    // Attributes included: no line of code may reach the DOM at all, not merely
+    // stay out of the visible text.
+    const holdsCode = (el: Element) =>
+      ["build123d", "Box(40", "result =", "```"].some((s) => el.innerHTML.includes(s));
+
+    it("shows one status line while codegen streams", () => {
+      const { container } = renderMsg(codegenMsg(code));
+      // The "Thinking…" placeholder must not sit beside it as a second line.
+      const lines = container.querySelectorAll('[role="status"]');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toHaveClass("codegen-status");
+      expect(lines[0].querySelector("button")).toBeNull();
     });
-    expect(done.queryByText(/Writing code/)).toBeNull();
-    expect(done.getByText(/Wrote 2 lines/)).toBeInTheDocument();
-    expect(done.container.querySelector(".codegen-code")).toBeNull();
-    // Re-expandable: clicking the summary shows the code again.
-    fireEvent.click(done.getByText(/Wrote 2 lines/));
-    expect(done.container.querySelector(".codegen-code")?.textContent).toContain("Box(1, 1, 1)");
+
+    it("keeps every line of the streamed code out of the DOM", () => {
+      const { container } = renderMsg(codegenMsg(code));
+      expect(holdsCode(container)).toBe(false);
+    });
+
+    it("says what is being built in the model's words, from its newest comment", () => {
+      const { container } = renderMsg(codegenMsg(code));
+      expect(phrase(container)).toBe("Mounting holes through the plate");
+    });
+
+    it("reads a wrapped comment from its first line", () => {
+      const wrapped = `${code}# Crank web joining the journals,\n# offset 5 mm from the pin\nweb = plate\n`;
+      const { container } = renderMsg(codegenMsg(wrapped));
+      expect(phrase(container)).toBe("Crank web joining the journals");
+    });
+
+    it("reads a ruled heading for its words, not its rules", () => {
+      const ruled = `${code}# ----------\n# --- Ledge tabs ---\n# ----------\ntabs = plate\n`;
+      const { container } = renderMsg(codegenMsg(ruled));
+      expect(phrase(container)).toBe("Ledge tabs");
+    });
+
+    it("reads a heading drawn with box-drawing rules for its words", () => {
+      const ruled = `${code}# ──────────\n# ── Tablet rest faces ────────\ntabs = plate\n`;
+      const { container } = renderMsg(codegenMsg(ruled));
+      expect(phrase(container)).toBe("Tablet rest faces");
+    });
+
+    it("keeps a comment block whole across a bare # separator", () => {
+      const parted = `${code}# Hinge knuckle\n#\n# offset 2 mm for clearance\nknuckle = plate\n`;
+      const { container } = renderMsg(codegenMsg(parted));
+      expect(phrase(container)).toBe("Hinge knuckle");
+    });
+
+    it("leaves a comment out until its line is finished", () => {
+      const { container } = renderMsg(codegenMsg(`${code}# Fillet the to`));
+      expect(phrase(container)).toBe("Mounting holes through the plate");
+    });
+
+    it("says it is writing code until the model writes a comment", () => {
+      const { container } = renderMsg(codegenMsg("```python\nfrom build123d import *\n"));
+      expect(phrase(container)).toBe("Writing code");
+    });
+
+    // The same instance taking the next stretch of the stream, as a live turn does.
+    function advance(live: ReturnType<typeof renderMsg>, msg: Msg) {
+      live.rerender(
+        <StoreProvider store={live.store}>
+          <ToastProvider>{msgElement(msg)}</ToastProvider>
+        </StoreProvider>,
+      );
+    }
+
+    it("follows the stream as the next comment arrives", () => {
+      const live = renderMsg(codegenMsg(code));
+      advance(live, codegenMsg(`${code}# Fillet the top edges\n`));
+      expect(phrase(live.container)).toBe("Fillet the top edges");
+    });
+
+    it("announces one fixed phrase in the live region and keeps the changing one from it", () => {
+      const { container } = renderMsg(codegenMsg(code));
+      const live = container.querySelector('[role="status"]');
+      expect(live?.querySelector(".visually-hidden")?.textContent).toBe("Writing code");
+      expect(live?.querySelector(".codegen-phrase")?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    const settled = "from build123d import *\nresult = Box(1, 1, 1)";
+
+    it("settles to a fixed line count with no way to open the code", () => {
+      const live = renderMsg(codegenMsg(code));
+      advance(live, codegenMsg(settled, true));
+      const status = live.container.querySelector(".codegen-status");
+      expect(status?.textContent).toBe("Wrote 2 lines");
+      expect(status?.querySelector("button")).toBeNull();
+      expect(holdsCode(live.container)).toBe(false);
+      fireEvent.click(status as Element);
+      expect(holdsCode(live.container)).toBe(false);
+    });
+
+    it("announces the settled count from the live region already on screen", () => {
+      // A region that appears with its text already in it is often not read out.
+      const live = renderMsg(codegenMsg(code));
+      const region = live.container.querySelector('[role="status"]');
+      advance(live, codegenMsg(settled, true));
+      expect(live.container.querySelector('[role="status"]')).toBe(region);
+    });
   });
 
   it("fetches an attached picture from the attachment route, not from the block", () => {

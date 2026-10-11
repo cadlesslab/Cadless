@@ -47,6 +47,61 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+describe("a chat result card", () => {
+  it("keeps its action icons at the right end of the row", () => {
+    mount(`
+      <div class="chat-thread">
+        <div class="msg msg-assistant"><div class="msg-body">
+          <div class="result-card"><div class="result-actions">
+            <button class="icon-btn">↩</button><button class="icon-btn">↻</button>
+          </div></div>
+        </div></div>
+      </div>`);
+    expect(computed(".result-actions").justifyContent).toBe("flex-end");
+  });
+});
+
+describe("the codegen status line", () => {
+  // The markup the live turn renders, ancestors included.
+  const STATUS = `
+    <div class="chat-thread">
+      <div class="msg msg-assistant"><div class="msg-body">
+        <p class="chat-thinking codegen-status" role="status">
+          <span class="visually-hidden">Writing code</span>
+          <span class="codegen-phrase" aria-hidden="true">Mounting holes through the plate</span>
+          <span class="chat-thinking-dots" aria-hidden="true"></span>
+        </p>
+      </div></div>
+    </div>`;
+
+  it("takes the fixed wording out of the drawn line", () => {
+    // Drawn, the hidden wording runs straight into the phrase beside it.
+    mount(STATUS);
+    const hidden = computed(".visually-hidden");
+    expect(hidden.position).toBe("absolute");
+    expect(hidden.width).toBe("1px");
+    expect(hidden.height).toBe("1px");
+    expect(hidden.overflow).toBe("hidden");
+  });
+
+  it("cuts the phrase short on one line, rather than the line and its dots", () => {
+    mount(STATUS);
+    expect(computed(".codegen-status").display).toBe("flex");
+    const phrase = computed(".codegen-phrase");
+    expect(phrase.whiteSpace).toBe("nowrap");
+    expect(phrase.overflow).toBe("hidden");
+    expect(phrase.textOverflow).toBe("ellipsis");
+    expect(phrase.minWidth).toBe("0");
+  });
+
+  it("keeps the dots their full width beside a long phrase", () => {
+    mount(STATUS);
+    const dots = computed(".codegen-status .chat-thinking-dots");
+    expect(dots.flexShrink).toBe("0");
+    expect(dots.width).toBe("1.5em");
+  });
+});
+
 describe("the views of a critique round", () => {
   it("puts a settled round's views two to a row", () => {
     mount(SETTLED);
