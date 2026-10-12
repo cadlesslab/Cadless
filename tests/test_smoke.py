@@ -6,5 +6,5 @@ import cadless
 
 
 def test_package_imports():
-    # A shape rather than a number: every release pull request moves the number.
+    # A shape rather than a number: every backend release pull request moves it.
     assert re.fullmatch(r"\d+\.\d+\.\d+", cadless.__version__)

@@ -1,10 +1,11 @@
 # Pull-request title check.
 #
-# Pull requests are squash-merged with the title as the commit subject, and the
-# release pull request computes the next version from those subjects. A title
-# that is not `type(scope)!: description` with a known type is refused here,
-# before a merge makes it permanent. The title is published text in its own
-# right, so it is scanned for assistant attribution and internal references too.
+# Pull requests are squash-merged with the title as the commit subject, and each
+# component's release pull request computes its next version from those
+# subjects. A title that is not `type(scope)!: description` with a known type is
+# refused here, before a merge makes it permanent. The title is published text in
+# its own right, so it is scanned for assistant attribution and internal
+# references too.
 name: pr-title
 
 on:

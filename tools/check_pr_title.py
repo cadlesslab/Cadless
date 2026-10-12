@@ -2,8 +2,8 @@
 """Pull-request title check.
 
 Pull requests here are squash-merged with the title as the commit subject, and
-the release pull request computes the next version from those subjects. A title
-therefore has to say what kind of change it is:
+each component's release pull request computes its next version from those
+subjects. A title therefore has to say what kind of change it is:
 
     type(scope)!: description
 

@@ -1,15 +1,16 @@
-# Release pull request.
+# Release pull requests.
 #
-# A push to main that carries a releasing change opens or refreshes one pull
-# request holding the next version and the changelog since the last release,
-# both computed from the squash-merged subjects. Merging that pull request is
-# the act of releasing: the run it starts tags the version and publishes the
-# GitHub Release. Nothing here publishes a release on its own
-# (docs/adr/0010-release-pull-request.md).
+# The backend and the frontend are versioned and released separately. A push to
+# main that carries a releasing change opens or refreshes a pull request for
+# each component it touches, holding that component's next version and its
+# changelog since its last release, both computed from the squash-merged
+# subjects. Merging one is the act of releasing that component: the run it
+# starts tags the version and publishes the GitHub Release. Nothing here
+# publishes a release on its own (docs/adr/0010-release-pull-request.md).
 #
 # It runs on a GitHub App's token rather than GITHUB_TOKEN. This repository does
 # not let Actions open pull requests with GITHUB_TOKEN, and a pull request opened
-# with it would start none of the required checks, so the release pull request
+# with it would start none of the required checks, so a release pull request
 # could never be merged as checked. The App's key is held by the `release`
 # environment rather than the repository, so that a workflow pushed on another
 # branch cannot mint the token, and both actions are pinned to a commit because

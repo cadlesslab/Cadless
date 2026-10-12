@@ -1,8 +1,9 @@
-"""The engine's version is written once, and everything that reports it reads it.
+"""The backend's version is written once, and everything that reports it reads it.
 
-A release moves ``cadless.__version__``. Any copy of the number the release does
-not know about would keep the old one through every release that followed, and
-nothing would fail to say so.
+A backend release moves ``cadless.__version__``. Any copy of the number the
+release does not know about would keep the old one through every release that
+followed, and nothing would fail to say so. The frontend is released on its own
+and keeps its version in one file of its own, never in the npm package.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def test_the_built_package_takes_its_version_from_the_source():
     assert project["tool"]["hatch"]["version"]["path"] == "cadless/__init__.py"
 
 
-def test_the_frontend_package_carries_no_version_of_its_own():
+def test_the_npm_package_carries_no_copy_of_the_frontend_version():
     package = json.loads((ROOT / "frontend/package.json").read_text(encoding="utf-8"))
     lock = json.loads((ROOT / "frontend/package-lock.json").read_text(encoding="utf-8"))
     assert "version" not in package

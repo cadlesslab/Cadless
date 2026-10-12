@@ -17,7 +17,7 @@ ACCEPTED = {
     "breaking": "feat!: drop the old provider registry",
     "scope and breaking": "fix(catalog)!: rename the artifact key",
     "this repository's own type": "improve: say why a part was refused",
-    "the release pull request": "chore(main): release 1.1.0",
+    "a component's release pull request": "chore(main): release backend 1.1.0",
 }
 
 REFUSED = {
