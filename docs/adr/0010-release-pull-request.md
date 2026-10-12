@@ -72,12 +72,14 @@ This is that decision.
 
 - **`v1.0.0` stays the one release cut before the split.** Both components count
   on from `1.0.0`, and their first release pull requests start their changelogs
-  after it.
+  after it. Its commit is also tagged `backend-v1.0.0` and `frontend-v1.0.0`, by
+  hand and once, so that each first changelog compares against a tag that
+  exists.
 - **A merged title is public text twice over** — as the subject on `main` and as a
   line in a changelog. The title check is where a wrong one is caught; after the
   merge it is history.
-- **Tags are never created or pushed by hand.** A tag the workflow did not create
-  is a release nobody merged.
+- **Tags are never created or pushed by hand**, those two baseline tags apart. A
+  tag the workflow did not create is a release nobody merged.
 - **Squash merging is the only merge method, and the squash subject is the
   pull-request title.** Otherwise a one-commit pull request's subject would be its
   commit message, which the title check never sees.

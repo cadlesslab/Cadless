@@ -99,12 +99,14 @@ backend; a change touching both releases both.
    publishes the GitHub Release with that changelog.
 
 `v1.0.0` is the one release cut before the components were split. Both count on
-from it: `bootstrap-sha` in `release-please-config.json` points at its commit so
-that the first release pull requests do not reach back past it, and is no longer
-read once both components have released.
+from it: its commit also carries `backend-v1.0.0` and `frontend-v1.0.0`, so that
+each component's first changelog compares against a tag that exists, and
+`bootstrap-sha` in `release-please-config.json` points at the same commit so
+that the first release pull requests do not reach back past it.
 
-Never create or push a tag by hand: a tag the workflow did not create is a
-release nobody merged.
+Those two are the only tags made by hand, once, before the tag ruleset below.
+Never create or push any other: a tag the workflow did not create is a release
+nobody merged.
 
 The workflow depends on repository settings that live outside this tree. Set
 them up once, before the release workflow first runs — that is, before the
@@ -125,6 +127,9 @@ change that adds it is merged:
   subject, which the title check never sees.
 - **Required checks on `main`** include `pr-title`, so a title that fails the
   convention cannot be merged.
+- **The two baseline tags**, before the tag ruleset exists:
+  `git tag backend-v1.0.0 v1.0.0 && git tag frontend-v1.0.0 v1.0.0 &&
+  git push origin backend-v1.0.0 frontend-v1.0.0`.
 - **A tag ruleset** over every tag, `v1.0.0` included, that lets only the release
   App create, move or delete one — with no bypass for administrators — so the
   rule above is enforced rather than observed.
