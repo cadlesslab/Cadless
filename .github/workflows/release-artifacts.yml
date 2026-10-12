@@ -1,0 +1,69 @@
+# Release artifacts.
+#
+# Builds the files one component's release carries from one commit, checks them
+# and keeps them as this run's artifact; nothing here can publish. The release
+# workflows call it on a release's tag before attaching what it built, and CI
+# calls it on every pull request, so a release runs the same build its pull
+# requests' dry runs ran.
+name: release-artifacts
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        description: backend or frontend
+        type: string
+        required: true
+      ref:
+        description: The commit to build, or a release tag as refs/tags/NAME
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# `bash` named explicitly runs every step with pipefail.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      # The sdist first and the wheel from it, as a Python build does: a wheel
+      # the sdist could not rebuild would not be the one its source describes.
+      # The build tools are installed by hash, being part of what a release is.
+      - name: Build the sdist, and the wheel from it
+        if: inputs.component == 'backend'
+        run: |
+          pip install --require-hashes --only-binary=:all: -r tools/release-build-requirements.txt
+          python -m hatchling build -t sdist -d dist
+          mkdir "$RUNNER_TEMP/sdist"
+          tar -xzf dist/cadless-*.tar.gz -C "$RUNNER_TEMP/sdist"
+          cd "$RUNNER_TEMP"/sdist/cadless-*/
+          python -m hatchling build -t wheel -d "$GITHUB_WORKSPACE/dist"
+
+      - name: Pack the release
+        env:
+          COMPONENT: ${{ inputs.component }}
+        run: python tools/release_artifacts.py pack "$COMPONENT" dist
+
+      - name: No internal references found in what the release carries
+        run: python tools/release_artifacts.py scan dist
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ inputs.component }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
