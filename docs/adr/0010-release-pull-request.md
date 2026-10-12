@@ -44,9 +44,13 @@ This is that decision.
   changelog since its last release, both computed from the squash-merged
   subjects, and refreshes it whenever either would change. Merging one is the act
   of releasing that component: the run it starts tags `backend-vX.Y.Z` or
-  `frontend-vX.Y.Z` and publishes the GitHub Release. Nothing is tagged or
-  released that a maintainer did not merge into `main`, and a release pull
-  request left open publishes nothing.
+  `frontend-vX.Y.Z` and publishes the GitHub Release, then builds what the
+  release carries from the tagged commit. It attaches the backend's packages
+  and catalog, or the frontend's source, once the tag is checked against the
+  version that commit carries and the leak guard's patterns find nothing in
+  them, and it pushes the backend's container images from the same commit,
+  attaching their digests. Nothing is tagged or released that a maintainer did
+  not merge into `main`, and a release pull request left open publishes nothing.
 - **A subject says what kind of change it is.** Pull-request titles follow
   `type(scope)!: description`, and a required check refuses a title that does not,
   or that carries an internal reference or assistant attribution: the title
@@ -62,11 +66,13 @@ This is that decision.
 - **The automation names no consumer**, exactly as ADR-0007 requires. A release is
   published here for anyone; what takes it, and which frontend runs with which
   backend, is not this repository's concern and is not named in it.
-- **The workflow runs on a GitHub App's token, scoped to this repository, and the
-  App's key is held by an environment only `main` can use.** The default token
-  may not open pull requests here, and a pull request it opened would start none
-  of the required checks; a key the repository's own secrets held could be read
-  by a workflow pushed on any branch.
+- **The release pull request and the tag come from a GitHub App's token, scoped
+  to this repository, and the App's key is held by an environment only `main`
+  can use.** The default token may not open pull requests here, and a pull
+  request it opened would start none of the required checks; a key the
+  repository's own secrets held could be read by a workflow pushed on any
+  branch. Attaching artifacts and pushing images open no pull request, so they
+  run on the default token, in the same environment.
 
 ## Consequences
 
