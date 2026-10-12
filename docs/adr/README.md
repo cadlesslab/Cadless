@@ -15,4 +15,4 @@ older ones only when they say so explicitly.
 | [0007](./0007-engine-and-implementations.md) | This repository is the engine and its seams; what plugs into them is not published (supersedes one bullet of 0004; its publication bullet is amended by 0010) |
 | [0008](./0008-provider-entry-point.md) | A model backend can be installed beside the engine, and the seam stays identity-free (extends 0001) |
 | [0009](./0009-images-are-additive.md) | Images are additive on the seam, but a provider that cannot see is refused rather than skipped (extends 0001, inverts 0002's contract) |
-| [0010](./0010-release-pull-request.md) | A release is cut by merging the release pull request, which a workflow keeps up to date (amends one bullet of 0007) |
+| [0010](./0010-release-pull-request.md) | The backend and the frontend are each released by merging a release pull request, which a workflow keeps up to date (amends one bullet of 0007) |

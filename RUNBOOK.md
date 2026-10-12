@@ -81,19 +81,27 @@ For a PoC, isolation is "good enough", not hardened: shared-kernel
 containers, no gVisor/Firecracker. Do not expose this to untrusted users as-is.
 
 ## Cutting a release
-A release is cut by merging the release pull request
-([ADR-0010](docs/adr/0010-release-pull-request.md)):
+The backend and the frontend are released separately, each by merging its own
+release pull request ([ADR-0010](docs/adr/0010-release-pull-request.md)). A
+change under `frontend/` releases the frontend; any other change releases the
+backend; a change touching both releases both.
 
 1. Once a change that releases has landed on `main` (see the table in
    [CONTRIBUTING.md](CONTRIBUTING.md#pull-request-titles)), the release workflow
-   opens one pull request titled `chore(main): release X.Y.Z`, carrying the next
-   version and the changelog since the last release, and refreshes it whenever
-   that version or changelog would change.
+   opens a pull request for each component it touched — titled
+   `chore(main): release backend X.Y.Z` or `chore(main): release frontend X.Y.Z`
+   — carrying that component's next version and its changelog since its last
+   release, and refreshes it whenever either would change.
 2. A maintainer reads the changelog — it is built from the merged pull
    requests, whose text their authors can still edit — and squash-merges the
-   pull request when the release should ship.
-3. The run that merge starts tags `vX.Y.Z` and publishes the GitHub Release with
-   that changelog.
+   pull request when that release should ship.
+3. The run that merge starts tags `backend-vX.Y.Z` or `frontend-vX.Y.Z` and
+   publishes the GitHub Release with that changelog.
+
+`v1.0.0` is the one release cut before the components were split. Both count on
+from it: `bootstrap-sha` in `release-please-config.json` points at its commit so
+that the first release pull requests do not reach back past it, and is no longer
+read once both components have released.
 
 Never create or push a tag by hand: a tag the workflow did not create is a
 release nobody merged.
@@ -117,8 +125,16 @@ change that adds it is merged:
   subject, which the title check never sees.
 - **Required checks on `main`** include `pr-title`, so a title that fails the
   convention cannot be merged.
-- **A tag ruleset** that lets only the release App create `v*` tags, so the
+- **A tag ruleset** over every tag, `v1.0.0` included, that lets only the release
+  App create, move or delete one — with no bypass for administrators — so the
   rule above is enforced rather than observed.
+- **A branch ruleset** over `release*` and `release*/**/*` that lets only the
+  release App create or update such a branch, so ordinary branch names must not
+  start with `release`. The workflow tags a merged pull request from a branch
+  named that way once it carries the release label, which anyone who can push
+  may add. The ruleset keeps such branches out of this repository; one pushed to
+  a fork is caught only by a reviewer reading the pull request's head branch
+  before merging.
 
 ## Troubleshooting
 - **Generation fails with credential errors** → check your provider's credentials

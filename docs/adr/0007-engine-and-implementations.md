@@ -11,9 +11,9 @@ This record is itself amended once:
 
 - The **publication bullet alone is amended by
   [ADR-0010](./0010-release-pull-request.md)**: a workflow now keeps a release pull
-  request up to date as releasing changes land on `main`, and a maintainer
-  merging it is the act of publishing a release. The bullet is marked in place
-  below.
+  request for each component — the backend and the frontend — up to date as
+  releasing changes land on `main`, and a maintainer merging one is the act of
+  publishing that component's release. The bullet is marked in place below.
 
 ## Context
 
@@ -79,9 +79,10 @@ nobody reads, which is a worse promise to a contributor than a plain repository.
   stands, by a person who decided to. ~~There is no automation that pushes here on
   a schedule or on a merge, and adding one is a separate decision that this
   record does not take.~~ **Amended by [ADR-0010](./0010-release-pull-request.md).**
-  A workflow now prepares a release pull request as releasing changes land on
-  `main`, and tags and publishes the release once it is merged; the act is still
-  a person's — the maintainer who merges it.
+  A workflow now prepares release pull requests — one for the backend and one
+  for the frontend — as releasing changes land on `main`, and tags and publishes
+  each release once it is merged; the act is still a person's — the maintainer
+  who merges it.
 
 ## Consequences
 

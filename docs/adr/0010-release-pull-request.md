@@ -1,4 +1,4 @@
-# ADR-0010: A release is cut by merging the release pull request
+# ADR-0010: The backend and the frontend are each released by merging a release pull request
 
 ## Status
 
@@ -22,20 +22,31 @@ unbumped takes no decision at all. Yet everything it needs is already in the log
 every pull request here is squash-merged under a title that says what kind of
 change it is.
 
+The engine is two things that are taken separately. The backend — the `cadless`
+package with the API and the worker — can be built on without the frontend, and
+the frontend is built from source by whoever places their own panels in it. One
+version for both would move whenever either changed, so every release would also
+announce the changes made only to the other.
+
 [ADR-0007](./0007-engine-and-implementations.md) recorded that publication is an
 act, not a pipeline, and that adding automation would be a decision of its own.
 This is that decision.
 
 ## Decision
 
+- **Two components, each with its own version.** The backend is everything outside
+  `frontend/`, the documentation and the repository's tooling with it; the
+  frontend is `frontend/`. A change releases the component whose paths it
+  touches, and a change touching both releases both.
 - **The version is computed; a person decides when it ships.** Once a change that
-  releases has landed on `main`, a workflow opens one *release pull request*
-  carrying the next version and the changelog since the last release, both
-  computed from the squash-merged subjects, and refreshes it whenever either
-  would change. Merging that pull request is the act of releasing: the run it starts
-  tags `vX.Y.Z` and publishes the GitHub Release. Nothing is tagged or released
-  that a maintainer did not merge into `main`, and a release pull request left
-  open publishes nothing.
+  releases has landed on `main`, a workflow opens a *release pull request* for
+  each component it touched, carrying that component's next version and its
+  changelog since its last release, both computed from the squash-merged
+  subjects, and refreshes it whenever either would change. Merging one is the act
+  of releasing that component: the run it starts tags `backend-vX.Y.Z` or
+  `frontend-vX.Y.Z` and publishes the GitHub Release. Nothing is tagged or
+  released that a maintainer did not merge into `main`, and a release pull
+  request left open publishes nothing.
 - **A subject says what kind of change it is.** Pull-request titles follow
   `type(scope)!: description`, and a required check refuses a title that does not,
   or that carries an internal reference or assistant attribution: the title
@@ -43,12 +54,14 @@ This is that decision.
   raises the minor version, a `!` raises the major, and `fix`, `improve`, `perf`
   and `revert` the patch; `refactor`, `docs`, `test`, `build`, `ci` and `chore`
   cause no release and print no line on their own.
-- **The version is written once**, as `__version__` in `cadless/__init__.py`. The
-  build, the API and the worker read it there; the release pull request bumps it
-  there and in the manifest it counts from, and a test holds the two equal.
+- **Each version is written once.** The backend's is `__version__` in
+  `cadless/__init__.py`, which the build, the API and the worker read. The
+  frontend's is `frontend/version.txt`; the npm package carries none. A release
+  pull request bumps its component's file and the manifest it counts from, and a
+  test holds each pair equal.
 - **The automation names no consumer**, exactly as ADR-0007 requires. A release is
-  published here for anyone; what takes it is not this repository's concern and
-  is not named in it.
+  published here for anyone; what takes it, and which frontend runs with which
+  backend, is not this repository's concern and is not named in it.
 - **The workflow runs on a GitHub App's token, scoped to this repository, and the
   App's key is held by an environment only `main` can use.** The default token
   may not open pull requests here, and a pull request it opened would start none
@@ -57,8 +70,11 @@ This is that decision.
 
 ## Consequences
 
+- **`v1.0.0` stays the one release cut before the split.** Both components count
+  on from `1.0.0`, and their first release pull requests start their changelogs
+  after it.
 - **A merged title is public text twice over** — as the subject on `main` and as a
-  line in the changelog. The title check is where a wrong one is caught; after the
+  line in a changelog. The title check is where a wrong one is caught; after the
   merge it is history.
 - **Tags are never created or pushed by hand.** A tag the workflow did not create
   is a release nobody merged.
@@ -70,5 +86,5 @@ This is that decision.
   App's key in its environment. The runbook lists them; until they are set, the
   title check advises rather than refuses.
 - **Contributing is otherwise unchanged** ([ADR-0007](./0007-engine-and-implementations.md)):
-  the DCO, the leak guard and the review stay as they were, and the release
-  pull request's commit is signed off by the release bot like any other.
+  the DCO, the leak guard and the review stay as they were, and a release pull
+  request's commit is signed off by the release bot like any other.

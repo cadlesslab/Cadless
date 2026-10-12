@@ -6,9 +6,10 @@ the execution boundary are the ones we care about most.
 
 ## Supported versions
 
-There is no backport channel. Fixes land on `main` and ship in the next release,
-and the latest release is the only supported version. If you are running an
-older release, update before reporting.
+There is no backport channel. Fixes land on `main` and ship in the next release
+of the component they touch — the backend or the frontend — and the latest
+release of each is the only supported version. If you are running an older
+release, update before reporting.
 
 ## Reporting a vulnerability
 

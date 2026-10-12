@@ -64,7 +64,7 @@ immediately — no restart. You can also set them as environment variables (see
 
 Generation quality differs by provider — build123d is less represented in
 pretraining than some CAD languages, so results vary. Measured pass rates per
-provider are published with each release.
+provider are published with each backend release.
 
 **Current measurement** — 12-prompt mechanical benchmark, temperature 0, two
 runs (results identical across runs):

@@ -180,10 +180,12 @@ fast; large or speculative changes are worth an issue first.
 ## Pull request titles
 
 Pull requests are squash-merged, and the title becomes the commit subject on
-`main`. The release pull request computes the next version from those subjects
-and lists the ones that release in its changelog
-([ADR-0010](./docs/adr/0010-release-pull-request.md)), so a title says what kind
-of change it is:
+`main`. The backend and the frontend are released separately: each component's
+release pull request computes its next version from those subjects and lists
+the ones that release in its changelog
+([ADR-0010](./docs/adr/0010-release-pull-request.md)). A change under `frontend/`
+counts toward the frontend, any other change toward the backend, and a pull
+request touching both moves both. So a title says what kind of change it is:
 
 ```text
 type(scope)!: description
