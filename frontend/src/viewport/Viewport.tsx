@@ -2,7 +2,7 @@
  *
  * GLB load + grid/axes + orbit.: ViewCube, named-view presets,
  * fit/reset, ortho/perspective (CameraRig + ViewCommands + the overlay toolbar). */
-import { Bounds, GizmoHelper, GizmoViewcube, Grid, Html, useGLTF } from "@react-three/drei";
+import { Bounds, GizmoHelper, GizmoViewcube, Grid, Html } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Component, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
@@ -13,13 +13,13 @@ import { useActiveVersion, useStoreSelector } from "../state";
 import { CameraRig } from "./CameraRig";
 import { Appearance, Ground, SceneEnvironment } from "./effects";
 import { Measure, SectionPlane, TriangleCounter } from "./inspectionScene";
+import { ModelParts } from "./ModelParts";
 import { PreviewBanner } from "./PreviewBanner";
 import { Readout } from "./Readout";
 import { usePreviewSubject } from "./usePreviewSubject";
 import { ViewCommands } from "./ViewCommands";
 import { ViewportToolbar } from "./ViewportToolbar";
 import { useViewport, viewportStore } from "./viewportStore";
-import { weldModel } from "./weld";
 import type { ThreeEvent } from "@react-three/fiber";
 
 /** Read a CSS custom property, recomputed whenever the theme changes. */
@@ -58,14 +58,6 @@ class GltfErrorBoundary extends Component<
   }
 }
 
-function Model({ url }: { url: string }) {
-  const gltf = useGLTF(url);
-  // OCCT GLBs arrive as one primitive per B-Rep face; unwelded seams shimmer
-  // as dark cracks while orbiting (#14). weldModel is idempotent on the cache.
-  weldModel(gltf.scene);
-  return <primitive object={gltf.scene} />;
-}
-
 /** Capture a thumbnail of the framed model a few frames after it loads. */
 function ThumbnailCapture({ versionId }: { versionId: number }) {
   const gl = useThree((s) => s.gl);
@@ -94,7 +86,7 @@ export function Viewport() {
 
   const preview = useViewport((s) => s.preview);
   const { subject, onFailed } = usePreviewSubject(version, preview);
-  const url = subject.url;
+  const urls = subject.urls;
   const gridVisible = useViewport((s) => s.gridVisible);
   const axesVisible = useViewport((s) => s.axesVisible);
 
@@ -123,7 +115,7 @@ export function Viewport() {
         )}
         {axesVisible && <axesHelper args={[20]} />}
 
-        {url && (
+        {urls.length > 0 && (
           <GltfErrorBoundary onFailed={onFailed}>
             <Suspense
               fallback={
@@ -136,8 +128,8 @@ export function Viewport() {
                   model (fitting an empty scene yields a NaN camera). */}
               {/* Ground + Measure add non-model geometry (shadow plane, marker
                   spheres); they live OUTSIDE Bounds so the observe refit that
-                  fires on every canvas resize measures the model alone (#16). */}
-              <Bounds key={url} fit clip observe margin={1.25}>
+                  fires on every canvas resize measures the model alone. */}
+              <Bounds key={JSON.stringify(urls)} fit clip observe margin={1.25}>
                 <group
                   ref={modelRef}
                   onPointerDown={(e: ThreeEvent<PointerEvent>) => {
@@ -146,7 +138,7 @@ export function Viewport() {
                     viewportStore.addMeasurePoint([e.point.x, e.point.y, e.point.z]);
                   }}
                 >
-                  <Model url={url} />
+                  <ModelParts urls={urls} />
                 </group>
                 <ViewCommands modelRef={modelRef} />
                 <Appearance modelRef={modelRef} />

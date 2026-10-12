@@ -10,7 +10,8 @@
  * different objects. Answers that used to agree by construction have to be
  * decided together, so they are decided here, where they can be tested without
  * a Canvas. */
-import { glbUrl, type Version } from "../api";
+import { artifactUrl, glbUrl, type Version } from "../api";
+import { partsOf } from "../panels/exportFormats";
 import type { Preview } from "./viewportStore";
 
 const NOTHING_OPEN = "Generate a part to see it here.";
@@ -20,8 +21,10 @@ const PREVIEW_UNREADABLE = "That catalogue's preview could not be loaded.";
 const PREVIEW_HAS_NO_MESH = "This catalogue has no model to preview.";
 
 export interface ViewerSubject {
-  /** The GLB to draw, or null when there is nothing to draw. */
-  url: string | null;
+  /** The GLBs to draw, or none when there is nothing to draw: for the active
+   * version one per part, in part order (one for a model printed whole), and
+   * for a preview its one address. */
+  urls: string[];
   /** Whether what is on screen belongs to something not on this machine. */
   previewing: boolean;
   /** The version to save a thumbnail of, or null to save none. */
@@ -47,7 +50,7 @@ export function viewerSubject(
     // transcript, and for as long as the entry survives.
     if (preview.url == null) {
       return {
-        url: null,
+        urls: [],
         previewing: true,
         captureVersionId: null,
         emptyReason: preview.note ?? PREVIEW_HAS_NO_MESH,
@@ -55,19 +58,19 @@ export function viewerSubject(
     }
     if (failed) {
       return {
-        url: null,
+        urls: [],
         previewing: true,
         captureVersionId: null,
         emptyReason: PREVIEW_UNREADABLE,
       };
     }
-    return { url: preview.url, previewing: true, captureVersionId: null, emptyReason: null };
+    return { urls: [preview.url], previewing: true, captureVersionId: null, emptyReason: null };
   }
 
   const hasModel = version?.ok === true && version.artifacts.some((a) => a.kind === "glb");
   if (hasModel && !failed) {
     return {
-      url: glbUrl(version.id),
+      urls: modelUrls(version),
       previewing: false,
       captureVersionId: version.id,
       emptyReason: null,
@@ -80,7 +83,19 @@ export function viewerSubject(
     : version && !version.ok
       ? GENERATION_FAILED
       : NOTHING_OPEN;
-  return { url: null, previewing: false, captureVersionId: null, emptyReason };
+  return { urls: [], previewing: false, captureVersionId: null, emptyReason };
+}
+
+/** Every GLB a version's model is drawn from, in part order.
+ *
+ * A model printed whole keeps the one address it has always been fetched from.
+ * A model in parts is asked for part by part, so each piece is drawn as itself
+ * rather than one of them standing in for the rest. */
+function modelUrls(version: Version): string[] {
+  const parts = partsOf(version, "glb");
+  return parts.length > 1
+    ? parts.map((a) => artifactUrl(version.id, "glb", a.part))
+    : [glbUrl(version.id)];
 }
 
 export interface ReadoutFields {

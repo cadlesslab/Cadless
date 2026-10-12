@@ -1,7 +1,8 @@
+import { useGLTF } from "@react-three/drei";
 import { renderHook, act } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Version } from "../api";
+import { artifactUrl, type Version } from "../api";
 import { usePreviewSubject } from "./usePreviewSubject";
 import type { Preview } from "./viewportStore";
 
@@ -13,7 +14,7 @@ function version(over: Partial<Version> = {}): Version {
     ok: true,
     volume: 120,
     bbox: [10, 20, 30],
-    artifacts: [{ kind: "glb", path: "x.glb", size_bytes: 1 }],
+    artifacts: [{ kind: "glb", bytes: 1, part: 0 }],
     ...over,
   } as Version;
 }
@@ -35,7 +36,7 @@ describe("usePreviewSubject", () => {
   it("says why after a failure instead of leaving the viewport blank", () => {
     const { result } = renderHook(() => usePreviewSubject(version(), SOMEWHERE));
     act(() => result.current.onFailed());
-    expect(result.current.subject.url).toBeNull();
+    expect(result.current.subject.urls).toEqual([]);
     expect(result.current.subject.emptyReason).toBeTruthy();
   });
 
@@ -47,10 +48,10 @@ describe("usePreviewSubject", () => {
       { initialProps: { preview: SOMEWHERE } },
     );
     act(() => result.current.onFailed());
-    expect(result.current.subject.url).toBeNull();
+    expect(result.current.subject.urls).toEqual([]);
 
     rerender({ preview: { ...SOMEWHERE } });
-    expect(result.current.subject.url).toBe(SOMEWHERE.url);
+    expect(result.current.subject.urls).toEqual([SOMEWHERE.url]);
   });
 
   it("does not hold a failure against the next catalogue", () => {
@@ -61,13 +62,62 @@ describe("usePreviewSubject", () => {
     act(() => result.current.onFailed());
 
     rerender({ preview: { url: "/depot/artifacts/c2/v2/a2", title: "Gearbox" } });
-    expect(result.current.subject.url).toBe("/depot/artifacts/c2/v2/a2");
+    expect(result.current.subject.urls).toEqual(["/depot/artifacts/c2/v2/a2"]);
   });
 
   it("keeps its answers stable when nothing has happened", () => {
     const { result, rerender } = renderHook(() => usePreviewSubject(version(), null));
-    const first = result.current.subject.url;
+    const first = result.current.subject.urls;
     rerender();
-    expect(result.current.subject.url).toBe(first);
+    expect(result.current.subject.urls).toEqual(first);
+  });
+
+  describe("a version in several parts", () => {
+    const twoParts = (id = 7) =>
+      version({ id, artifacts: [0, 1].map((part) => ({ kind: "glb" as const, bytes: 1, part })) });
+
+    beforeEach(() => vi.mocked(useGLTF.clear).mockClear());
+
+    it("clears every part on screen after a failure, so trying again loads them all", () => {
+      // Opened on nothing, then given the parts: a failure clears what is on
+      // screen now, not what was there when the hook first rendered.
+      const { result, rerender } = renderHook(
+        ({ v }: { v: Version | null }) => usePreviewSubject(v, null),
+        { initialProps: { v: null as Version | null } },
+      );
+      rerender({ v: twoParts() });
+      act(() => result.current.onFailed());
+      expect(vi.mocked(useGLTF.clear).mock.calls).toEqual([
+        [artifactUrl(7, "glb", 0)],
+        [artifactUrl(7, "glb", 1)],
+      ]);
+    });
+
+    it("does not take the same parts, asked for again, as a new attempt", () => {
+      // A fresh object holding the same parts must not count as a new attempt:
+      // counted as one, it would undo a failure as soon as it was reported, and
+      // the loader would fail, clear and fetch again for as long as the page
+      // stays open.
+      const { result, rerender } = renderHook(
+        ({ v }: { v: Version }) => usePreviewSubject(v, null),
+        { initialProps: { v: twoParts() } },
+      );
+      act(() => result.current.onFailed());
+      rerender({ v: twoParts() });
+      expect(result.current.subject.urls).toEqual([]);
+    });
+
+    it("tries again for a version with other parts", () => {
+      const { result, rerender } = renderHook(
+        ({ v }: { v: Version }) => usePreviewSubject(v, null),
+        { initialProps: { v: twoParts() } },
+      );
+      act(() => result.current.onFailed());
+      rerender({ v: twoParts(8) });
+      expect(result.current.subject.urls).toEqual([
+        artifactUrl(8, "glb", 0),
+        artifactUrl(8, "glb", 1),
+      ]);
+    });
   });
 });
