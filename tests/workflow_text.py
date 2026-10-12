@@ -1,8 +1,8 @@
 """Reading a workflow file the way its tests need it, without a YAML parser.
 
-PyYAML is not a dependency of this package, and the tests ask two narrow
-questions of a workflow: what its wiring says once the comments are gone, and
-what one step's shell script is, so it can be run.
+PyYAML is not a dependency of this package, and the tests ask narrow questions
+of a workflow: what its wiring says once the comments are gone, and what one
+step's shell script, id and environment are, so the step can be run.
 """
 
 from __future__ import annotations
@@ -26,25 +26,88 @@ def job(path: Path, name: str) -> str:
     return match.group(1)
 
 
-def step_script(path: Path, name: str) -> str:
-    """The `run:` script of the step named `name`, dedented and ready for bash."""
+def step_names(path: Path) -> list[str]:
+    """The names of the workflow's steps, in the order they are written."""
+    return [
+        line.strip()[len("- name: ") :]
+        for line in wiring(path).splitlines()
+        if line.strip().startswith("- name: ")
+    ]
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _step(path: Path, name: str) -> list[str]:
+    """The lines of the step named `name`, from its `- name:` line to the next at its indent."""
     lines = wiring(path).splitlines()
     starts = [i for i, line in enumerate(lines) if line.strip() == f"- name: {name}"]
     if len(starts) != 1:
         raise LookupError(f"{len(starts)} steps named {name!r} in {path.name}")
-    step_indent = len(lines[starts[0]]) - len(lines[starts[0]].lstrip())
-    for i in range(starts[0] + 1, len(lines)):
-        line = lines[i]
-        indent = len(line) - len(line.lstrip())
-        if line.strip() and indent <= step_indent:
+    end = starts[0] + 1
+    while end < len(lines) and not (
+        lines[end].strip() and _indent(lines[end]) <= _indent(lines[starts[0]])
+    ):
+        end += 1
+    return lines[starts[0] : end]
+
+
+def _keys(step: list[str]) -> dict[str, int]:
+    """Where each of the step's own keys starts, by line, keyed by name."""
+    indent = _indent(step[0]) + 2
+    return {
+        line.strip().split(":", 1)[0]: i
+        for i, line in enumerate(step[1:], start=1)
+        if _indent(line) == indent and ":" in line
+    }
+
+
+def step_keys(path: Path, name: str) -> set[str]:
+    """The keys the step named `name` sets besides its name."""
+    return set(_keys(_step(path, name)))
+
+
+def step_script(path: Path, name: str) -> str:
+    """The `run:` script of the step named `name`, dedented and ready for bash."""
+    step = _step(path, name)
+    run = _keys(step).get("run")
+    if run is None:
+        raise LookupError(f"step {name!r} in {path.name} has no run script")
+    value = step[run].strip()[len("run: ") :]
+    if value[:1] in ("|", ">") and value != "|":
+        raise LookupError(f"step {name!r} in {path.name} has a {value!r} script, not read here")
+    if value != "|":
+        return value + "\n"
+    body = []
+    for line in step[run + 1 :]:
+        if line.strip() and _indent(line) <= _indent(step[run]):
             break
-        if line.strip() == "run: |":
-            body = []
-            for following in lines[i + 1 :]:
-                if following.strip() and len(following) - len(following.lstrip()) <= indent:
-                    break
-                body.append(following)
-            return textwrap.dedent("\n".join(body)) + "\n"
-        if line.strip().startswith("run: "):
-            return line.strip()[len("run: ") :] + "\n"
-    raise LookupError(f"step {name!r} in {path.name} has no run script")
+        body.append(line)
+    return textwrap.dedent("\n".join(body)) + "\n"
+
+
+def step_id(path: Path, name: str) -> str | None:
+    """The `id:` of the step named `name`, which its outputs are read by."""
+    step = _step(path, name)
+    line = _keys(step).get("id")
+    return None if line is None else step[line].strip()[len("id: ") :]
+
+
+def step_env(path: Path, name: str) -> dict[str, str]:
+    """The `env:` of the step named `name`, each value as written."""
+    step = _step(path, name)
+    start = _keys(step).get("env")
+    if start is None:
+        return {}
+    env = {}
+    for line in step[start + 1 :]:
+        if not line.strip():
+            continue
+        if _indent(line) <= _indent(step[start]):
+            break
+        key, _, value = line.strip().partition(": ")
+        if not value or value[:1] in ("|", ">"):
+            raise LookupError(f"step {name!r} in {path.name} sets {key} other than on one line")
+        env[key] = value
+    return env

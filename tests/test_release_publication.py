@@ -10,16 +10,29 @@ wiring decides, the wiring is read, comments excluded.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
 import cadless
-from tests.workflow_text import job, step_script, wiring
+from tests.git_env import isolated_git_env
+from tests.workflow_text import (
+    job,
+    step_env,
+    step_id,
+    step_keys,
+    step_names,
+    step_script,
+    wiring,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
@@ -38,7 +51,7 @@ def _bash(script: str, tmp_path: Path, **env: str) -> subprocess.CompletedProces
     python = bin_dir / "python"
     if not python.exists():
         python.symlink_to(sys.executable)
-    full_env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", **env)
+    full_env = isolated_git_env(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", **env)
     return subprocess.run(
         ["bash", "-eo", "pipefail", "-c", script],
         cwd=env.get("CWD", ROOT),
@@ -64,7 +77,7 @@ def test_the_build_cannot_publish():
     text = wiring(ARTIFACTS)
     assert "permissions:\n  contents: read" in text
     assert "write" not in text
-    assert "gh release" not in text and "docker push" not in text
+    assert "gh release" not in text and "gh api" not in text and "docker push" not in text
 
 
 def test_the_build_installs_its_tools_by_hash():
@@ -137,15 +150,61 @@ def test_a_tag_is_checked_out_as_a_tag_on_main(workflow):
     text = wiring(workflow)
     assert "ref: refs/tags/${{ inputs.tag }}" in text
     assert "fetch-depth: 0" in text, "the check below needs main's history"
-    assert text.index("git merge-base --is-ancestor HEAD origin/main") < text.index(
-        "release_artifacts.py"
+    names = step_names(workflow)
+    assert names.index("The tagged commit is on main") < names.index(
+        "The tag names the version its tree carries"
     )
+
+
+def _git(repo: Path, *args: str) -> str:
+    """Git in `repo` under a throwaway identity, with no signing asked of it."""
+    return subprocess.run(
+        ["git", "-c", "user.name=r", "-c", "user.email=r@example.com"]
+        + ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
+        cwd=repo,
+        env=isolated_git_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _checkout(tmp_path: Path, on_main: bool) -> Path:
+    """A tag checked out the way actions/checkout leaves it: main fetched as
+    origin/main, every tag fetched too, and HEAD detached at the tagged commit.
+
+    On main, main has moved on past that commit. Off main, the commit also
+    carries a tag named origin/main, which a bare `origin/main` resolves to
+    before the remote-tracking branch.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "first")
+    first = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "second")
+    second = _git(repo, "rev-parse", "HEAD")
+    if on_main:
+        _git(repo, "update-ref", "refs/remotes/origin/main", second)
+    else:
+        _git(repo, "update-ref", "refs/remotes/origin/main", first)
+        _git(repo, "tag", "origin/main", second)
+    _git(repo, "switch", "-q", "--detach", first if on_main else second)
+    return repo
 
 
 @pytest.mark.parametrize("workflow", [IMAGES, ATTACH])
 def test_a_tagged_commit_off_main_stops_the_job(tmp_path, workflow):
-    _fake(tmp_path, "git", "exit 1\n")
-    assert _bash(step_script(workflow, "The tagged commit is on main"), tmp_path).returncode != 0
+    repo = _checkout(tmp_path, on_main=False)
+    script = step_script(workflow, "The tagged commit is on main")
+    assert _bash(script, tmp_path, CWD=str(repo)).returncode != 0
+
+
+@pytest.mark.parametrize("workflow", [IMAGES, ATTACH])
+def test_a_tagged_commit_on_main_passes(tmp_path, workflow):
+    repo = _checkout(tmp_path, on_main=True)
+    result = _bash(step_script(workflow, "The tagged commit is on main"), tmp_path, CWD=str(repo))
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("workflow", [IMAGES, ATTACH])
@@ -290,52 +349,6 @@ def test_the_images_carry_the_release_version(tmp_path):
     assert all("org.opencontainers.image.version=1.2.3" in b for b in builds)
 
 
-def _attach(
-    tmp_path: Path, attached_bytes: bytes
-) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Run the attach step against a draft release already holding the sdist as `attached_bytes`.
-
-    The fake answers only the release list, as GitHub does for a draft: the
-    lookup by tag knows only published releases.
-    """
-    log = tmp_path / "gh.log"
-    digest = hashlib.sha256(attached_bytes).hexdigest()
-    _fake(
-        tmp_path,
-        "gh",
-        f'echo "$*" >> "{log}"\n'
-        'if [ "$1" = api ] && [[ "$*" == *"repos/o/r/releases --jq"* ]]; then\n'
-        f'  echo "cadless-1.2.3.tar.gz sha256:{digest}"\n'
-        "fi\n",
-    )
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    (dist / "cadless-1.2.3.tar.gz").write_bytes(b"sdist")
-    (dist / "cadless-1.2.3-py3-none-any.whl").write_bytes(b"wheel")
-    script = step_script(ATTACH, "Attach what is not attached yet")
-    env = {"TAG": "backend-v1.2.3", "GH_TOKEN": "t", "REPOSITORY": "o/r"}
-    result = _bash(script, tmp_path, CWD=str(tmp_path), **env)
-    uploads = [
-        c for c in log.read_text(encoding="utf-8").splitlines() if c.startswith("release upload")
-    ]
-    return result, uploads
-
-
-def test_only_what_is_missing_is_attached(tmp_path):
-    result, uploads = _attach(tmp_path, attached_bytes=b"sdist")
-    assert result.returncode == 0, result.stderr
-    assert uploads == [
-        "release upload backend-v1.2.3 dist/cadless-1.2.3-py3-none-any.whl --repo o/r"
-    ]
-
-
-def test_an_attached_asset_with_other_bytes_stops_the_run_and_stays(tmp_path):
-    result, uploads = _attach(tmp_path, attached_bytes=b"something else")
-    assert result.returncode != 0
-    assert "other bytes" in result.stdout
-    assert all("cadless-1.2.3.tar.gz" not in upload for upload in uploads)
-
-
 def test_files_for_another_version_stop_the_job(tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -346,24 +359,172 @@ def test_files_for_another_version_stop_the_job(tmp_path):
 
 
 def test_what_is_attached_is_verified_and_scanned_first():
-    text = wiring(ATTACH)
-    upload = text.index("gh release upload")
-    assert text.index("release_artifacts.py verify") < upload
-    assert text.index("release_artifacts.py scan dist") < upload
+    names = step_names(ATTACH)
+    attach = names.index("Attach what is not attached yet")
+    assert names.index("The files are the ones this release carries") < attach
+    assert names.index("No internal references found in what is attached") < attach
 
 
-def test_the_release_is_published_once_everything_is_attached(tmp_path):
-    """A failed step ends the job, so a step after the attaching one runs only once it passed."""
-    text = wiring(ATTACH)
-    assert text.index("gh release upload") < text.index("- name: Publish the release")
-    log = tmp_path / "gh.log"
-    _fake(tmp_path, "gh", f'echo "$*" >> "{log}"\n')
-    script = step_script(ATTACH, "Publish the release")
-    env = {"TAG": "backend-v1.2.3", "GH_TOKEN": "t", "REPOSITORY": "o/r"}
-    assert _bash(script, tmp_path, **env).returncode == 0
-    assert log.read_text(encoding="utf-8").splitlines() == [
-        "release edit backend-v1.2.3 --draft=false --repo o/r"
-    ]
+# The release itself -----------------------------------------------------------
+
+
+FAKE_GITHUB = ROOT / "tests/fake_github.py"
+SDIST = "cadless-1.2.3.tar.gz"
+WHEEL = "cadless-1.2.3-py3-none-any.whl"
+BUILT = {SDIST: b"sdist", WHEEL: b"wheel"}
+
+# The fake answers gh's --jq through the real jq, which every GitHub runner
+# carries; only a machine without it skips these, and CI never does.
+needs_jq = pytest.mark.skipif(
+    shutil.which("jq") is None and not os.environ.get("CI"), reason="jq is not installed"
+)
+
+
+def _release(
+    release_id: int,
+    *,
+    tag: str = "backend-v1.2.3",
+    draft: bool = True,
+    assets: dict[str, bytes] | None = None,
+) -> dict:
+    return {
+        "id": release_id,
+        "tag_name": tag,
+        "draft": draft,
+        "assets": [
+            {"name": name, "digest": f"sha256:{hashlib.sha256(data).hexdigest()}"}
+            for name, data in (assets or {}).items()
+        ],
+    }
+
+
+class _Run(NamedTuple):
+    failed: str | None
+    said: str
+    releases: list[dict]
+    calls: list[str]
+
+
+def _resolve(value: str, context: dict[str, str]) -> str:
+    """An env value with each `${{ … }}` read from `context`; one it lacks is an error."""
+    return re.sub(r"\$\{\{ *([\w.-]+) *\}\}", lambda found: context[found[1]], value)
+
+
+def _publish(tmp_path: Path, releases: list[dict], stored_bytes: bytes | None = None) -> _Run:
+    """Run the steps after the scan, as the runner does, with BUILT downloaded into dist.
+
+    The steps and their order are read from the job. Each step gets the env its
+    own `env:` names, the outputs of the steps before it included, and the run
+    stops at the first step that fails, keeping what that step said. With
+    `stored_bytes`, GitHub keeps every upload as those bytes instead.
+    """
+    state = tmp_path / "github"
+    state.mkdir()
+    (state / "releases.json").write_text(json.dumps(releases), encoding="utf-8")
+    (state / "calls.log").touch()
+    (state / "token").write_text("t", encoding="utf-8")
+    if stored_bytes is not None:
+        (state / "stored-bytes").write_bytes(stored_bytes)
+    _fake(tmp_path, "gh", f'exec "{sys.executable}" "{FAKE_GITHUB}" "{state}" "$@"\n')
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    for name, data in BUILT.items():
+        (dist / name).write_bytes(data)
+    names = step_names(ATTACH)
+    steps = names[names.index("No internal references found in what is attached") + 1 :]
+    # A key this loop does not act on, `if:` or `continue-on-error:`, would let the
+    # runner go on where this stops — on any of the steps, including those it never
+    # reaches.
+    for name in steps:
+        assert step_keys(ATTACH, name) <= {"id", "env", "run"}, name
+    context = {"github.token": "t", "github.repository": "o/r", "inputs.tag": "backend-v1.2.3"}
+    failed, said = None, ""
+    for name in steps:
+        output = tmp_path / "output"
+        output.write_text("", encoding="utf-8")
+        env = {key: _resolve(value, context) for key, value in step_env(ATTACH, name).items()}
+        script = step_script(ATTACH, name)
+        result = _bash(script, tmp_path, CWD=str(tmp_path), GITHUB_OUTPUT=str(output), **env)
+        if result.returncode != 0:
+            failed, said = name, result.stdout + result.stderr
+            break
+        for line in output.read_text(encoding="utf-8").splitlines():
+            key, equals, value = line.partition("=")
+            assert equals and "<<" not in key, f"{name} wrote an output not read here: {line!r}"
+            context[f"steps.{step_id(ATTACH, name)}.outputs.{key}"] = value
+    return _Run(
+        failed,
+        said,
+        json.loads((state / "releases.json").read_text(encoding="utf-8")),
+        (state / "calls.log").read_text(encoding="utf-8").splitlines(),
+    )
+
+
+@needs_jq
+def test_only_what_is_missing_is_attached(tmp_path):
+    run = _publish(
+        tmp_path, [_release(3, tag="frontend-v1.2.3"), _release(7, assets={SDIST: b"sdist"})]
+    )
+    assert run.failed is None
+    uploads = [call for call in run.calls if call.startswith("api --method POST")]
+    assert len(uploads) == 1
+    assert uploads[0].endswith(f"/repos/o/r/releases/7/assets?name={WHEEL}")
+
+
+@needs_jq
+def test_a_release_that_holds_what_was_built_is_published(tmp_path):
+    run = _publish(
+        tmp_path, [_release(3, tag="frontend-v1.2.3"), _release(7, assets={SDIST: b"sdist"})]
+    )
+    assert [release["draft"] for release in run.releases] == [True, False]
+
+
+@needs_jq
+def test_an_attached_asset_with_other_bytes_stops_the_run_and_stays(tmp_path):
+    run = _publish(tmp_path, [_release(7, assets={SDIST: b"something else"})])
+    assert run.failed == "Attach what is not attached yet"
+    assert "is attached with other bytes" in run.said
+    changes = [call for call in run.calls if "--method" in call]
+    assert not [call for call in changes if SDIST in call or "DELETE" in call]
+
+
+@needs_jq
+def test_an_asset_with_no_digest_is_named_for_what_it_is(tmp_path):
+    """Not "other bytes": there are none to compare, and the maintainer looks elsewhere."""
+    release = _release(7, assets={SDIST: b"sdist"})
+    release["assets"].append({"name": WHEEL, "digest": None})
+    run = _publish(tmp_path, [release])
+    assert run.failed == "Attach what is not attached yet"
+    assert "no digest" in run.said
+
+
+@needs_jq
+@pytest.mark.parametrize(
+    "releases",
+    [[], [_release(7), _release(8, draft=False)]],
+    ids=["no release", "two releases"],
+)
+def test_a_tag_that_names_no_release_or_two_stops_the_job(tmp_path, releases):
+    run = _publish(tmp_path, releases)
+    assert run.failed == "Find the release"
+    assert "expected exactly one release" in run.said
+
+
+@needs_jq
+def test_an_asset_nobody_built_keeps_the_release_a_draft(tmp_path):
+    run = _publish(tmp_path, [_release(7, assets={**BUILT, "notes.txt": b"added by hand"})])
+    assert run.releases[0]["draft"] is True
+    assert run.failed == "The release holds exactly what was built"
+    assert "does not hold exactly what was built" in run.said
+
+
+@needs_jq
+def test_an_upload_kept_as_other_bytes_keeps_the_release_a_draft(tmp_path):
+    """Every name matches, so only the digests can tell."""
+    run = _publish(tmp_path, [_release(7, assets={SDIST: b"sdist"})], stored_bytes=b"other")
+    assert run.releases[0]["draft"] is True
+    assert run.failed == "The release holds exactly what was built"
+    assert "does not hold exactly what was built" in run.said
 
 
 # The wiring -------------------------------------------------------------------
