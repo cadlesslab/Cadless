@@ -113,12 +113,15 @@ nothing in it — every file read byte by byte, binary ones included.
 | `backend-vX.Y.Z` | `cadless-X.Y.Z-py3-none-any.whl`; `cadless-X.Y.Z.tar.gz`, the sdist the wheel is built from, carrying `tools/leak_guard.py`; `cadless-X.Y.Z-constraints.txt`, the exact resolution the images install; `cadless-catalog-X.Y.Z.tar.gz`, the bundled catalog; `cadless-X.Y.Z-images.txt`, each image by its digest | `ghcr.io/cadlesslab/cadless-api:X.Y.Z` and `ghcr.io/cadlesslab/cadless-worker:X.Y.Z`, labelled with their version, source and commit — pin them by the digests the release lists |
 | `frontend-vX.Y.Z` | `cadless-frontend-X.Y.Z.tar.gz`, the `frontend/` source, to be built with whatever panels its builder adds | — |
 
-An attached asset is never replaced, and an image version is never pushed
-twice. If a release run stopped partway, dispatch the `release-backfill`
-workflow from `main` with the release's tag: it builds from that tag's commit
-and adds only what is missing, stopping if something already attached differs
-from what it built. A release whose tagged commit predates these workflows —
-`v1.0.0` among them — carries nothing and cannot be backfilled.
+A release stays a draft, seen by maintainers alone, until everything it carries
+is attached; only then is it published, and with immutable releases on, neither
+it nor its assets change after that. An image version is never pushed twice.
+If a release run stopped partway, the release is still a draft: dispatch the
+`release-backfill` workflow from `main` with its tag. It builds from that tag's
+commit, adds only what is missing, stops if something already attached differs
+from what it built, and publishes the release. A release whose tagged commit
+predates these workflows — `v1.0.0` among them — carries nothing and cannot be
+backfilled.
 
 `v1.0.0` is the one release cut before the components were split. Both count on
 from it: its commit also carries `backend-v1.0.0` and `frontend-v1.0.0`, so that
@@ -162,9 +165,9 @@ change that adds it is merged:
   may add. The ruleset keeps such branches out of this repository; one pushed to
   a fork is caught only by a reviewer reading the pull request's head branch
   before merging.
-- **Immutable releases off.** The run attaches a release's artifacts after
-  release-please has published it, which GitHub refuses once a release is
-  immutable.
+- **Immutable releases on.** A release is attached to while it is a draft and
+  published after, so locking it at publication costs the run nothing and keeps
+  a published release, its tag and its assets as they were published.
 - **The write role kept to maintainers**, with contributors working from forks.
   The `release` environment keeps these workflows' publishing jobs to `main`,
   but GitHub lets any workflow on any branch ask for a token that changes

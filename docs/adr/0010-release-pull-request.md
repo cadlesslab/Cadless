@@ -44,13 +44,15 @@ This is that decision.
   changelog since its last release, both computed from the squash-merged
   subjects, and refreshes it whenever either would change. Merging one is the act
   of releasing that component: the run it starts tags `backend-vX.Y.Z` or
-  `frontend-vX.Y.Z` and publishes the GitHub Release, then builds what the
-  release carries from the tagged commit. It attaches the backend's packages
-  and catalog, or the frontend's source, once the tag is checked against the
+  `frontend-vX.Y.Z` and drafts the GitHub Release, then builds what the release
+  carries from the tagged commit. It attaches the backend's packages and
+  catalog, or the frontend's source, once the tag is checked against the
   version that commit carries and the leak guard's patterns find nothing in
-  them, and it pushes the backend's container images from the same commit,
-  attaching their digests. Nothing is tagged or released that a maintainer did
-  not merge into `main`, and a release pull request left open publishes nothing.
+  them; it pushes the backend's container images from the same commit,
+  attaching their digests; and only then publishes the release, which GitHub
+  keeps immutable from that point. Nothing is tagged or released that a
+  maintainer did not merge into `main`, and a release pull request left open
+  publishes nothing.
 - **A subject says what kind of change it is.** Pull-request titles follow
   `type(scope)!: description`, and a required check refuses a title that does not,
   or that carries an internal reference or assistant attribution: the title
