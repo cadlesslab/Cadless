@@ -10,12 +10,14 @@ wiring decides, the wiring is read, comments excluded.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tomllib
 from pathlib import Path
 from typing import NamedTuple
@@ -96,6 +98,32 @@ def test_the_build_fails_when_the_scan_finds_something(tmp_path):
     script = step_script(ARTIFACTS, "No internal references found in what the release carries")
     script = script.replace("tools/release_artifacts.py", str(ROOT / "tools/release_artifacts.py"))
     assert _bash(script, tmp_path, CWD=str(tmp_path)).returncode != 0
+
+
+def test_the_frontend_release_is_built_into_its_image_from_itself_alone(tmp_path):
+    """The build context is the unpacked asset and nothing else, so a file the image
+    needs from elsewhere in the repository fails here as it would for whoever takes
+    the release; and the prefix is not the default, so the stage rewriting the
+    server's config for it runs."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    with tarfile.open(dist / "cadless-frontend-1.2.3.tar.gz", "w:gz") as archive:
+        for name, data in {
+            "frontend/Dockerfile": b"FROM x\n",
+            "frontend/nginx.conf": b"{}\n",
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    log = tmp_path / "docker.log"
+    _fake(tmp_path, "docker", f'echo "$*" >> "{log}"\nls "${{@: -1}}" >> "{log}"\n')
+    script = step_script(ARTIFACTS, "The frontend release builds its image from itself alone")
+    assert _bash(script, tmp_path, CWD=str(tmp_path)).returncode == 0
+    build, *context_holds = log.read_text(encoding="utf-8").splitlines()
+    context = build.split()[-1]
+    assert build.startswith(f"build -f {context}/frontend/Dockerfile ")
+    assert "--build-arg BASE_PATH=/apps/release-check/" in build
+    assert context_holds == ["frontend"]
 
 
 def _planted() -> str:

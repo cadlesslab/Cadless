@@ -61,6 +61,18 @@ jobs:
       - name: No internal references found in what the release carries
         run: python tools/release_artifacts.py scan dist
 
+      # Whoever takes the frontend release builds its image from that file and
+      # nothing else, so it is built here the same way: unpacked into an empty
+      # directory and built there, under a prefix other than the default so the
+      # stage that rewrites the server's config for it runs too. Built, never
+      # pushed or kept.
+      - name: The frontend release builds its image from itself alone
+        if: inputs.component == 'frontend'
+        run: |
+          context="$(mktemp -d)"
+          tar -xzf dist/cadless-frontend-*.tar.gz -C "$context"
+          docker build -f "$context/frontend/Dockerfile" --build-arg BASE_PATH=/apps/release-check/ "$context"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ inputs.component }}

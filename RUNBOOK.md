@@ -66,7 +66,7 @@ prompt (configured provider → worker → STEP/GLB), and verifies both artifact
 Exits non-zero on any failure.
 
 ## Architecture / isolation
-- `frontend` (nginx) serves the SPA and proxies `/api/*` → `api`.
+- `frontend` (nginx) serves the SPA; the bundled Caddy routes `/api/*` to `api`.
 - `api` (FastAPI) orchestrates: calls the configured LLM provider for code-gen, delegates **execution**
   to the worker via `CADLESS_WORKER_URL`, persists projects/versions/artifacts.
 - `worker` runs the LLM-generated build123d code. It is on an **internal-only**
@@ -112,7 +112,7 @@ included.
 | Release | Attached to the GitHub Release | Pushed to the registry |
 |---|---|---|
 | `backend-vX.Y.Z` | `cadless-X.Y.Z-py3-none-any.whl`; `cadless-X.Y.Z.tar.gz`, the sdist the wheel is built from, carrying `tools/leak_guard.py`; `cadless-X.Y.Z-constraints.txt`, the exact resolution the images install; `cadless-catalog-X.Y.Z.tar.gz`, the bundled catalog; `cadless-X.Y.Z-images.txt`, each image by its digest | `ghcr.io/cadlesslab/cadless-api:X.Y.Z` and `ghcr.io/cadlesslab/cadless-worker:X.Y.Z`, labelled with their version, source and commit — pin them by the digests the release lists |
-| `frontend-vX.Y.Z` | `cadless-frontend-X.Y.Z.tar.gz`, the `frontend/` source, to be built with whatever panels its builder adds | — |
+| `frontend-vX.Y.Z` | `cadless-frontend-X.Y.Z.tar.gz`, the `frontend/` source — everything its image is built from, its nginx config included — to be built with whatever panels its builder adds: unpack it and run `docker build -f frontend/Dockerfile --build-arg BASE_PATH=<prefix>/ .` where it was unpacked | — |
 
 A release stays a draft, seen by maintainers alone, until it holds exactly what
 it carries — every file, with the bytes that were built, and nothing else; only

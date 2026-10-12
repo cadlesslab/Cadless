@@ -109,7 +109,7 @@ def test_compose_pins_project_name():
 
 
 def test_proxy_path_renamed():
-    for rel in ("infra/proxy/Caddyfile", "infra/nginx.conf", "docker-compose.yml", "start.sh"):
+    for rel in ("infra/proxy/Caddyfile", "frontend/nginx.conf", "docker-compose.yml", "start.sh"):
         text = (_ROOT / rel).read_text()
         assert _OLD_PATH not in text, f"{rel} still routes the old path"
     assert "/apps/cadless" in (_ROOT / "infra" / "proxy" / "Caddyfile").read_text()
