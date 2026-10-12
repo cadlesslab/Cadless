@@ -96,32 +96,38 @@ backend; a change touching both releases both.
    requests, whose text their authors can still edit — and squash-merges the
    pull request when that release should ship.
 3. The run that merge starts tags `backend-vX.Y.Z` or `frontend-vX.Y.Z`,
-   publishes the GitHub Release with that changelog, and attaches what the
-   release carries (below).
+   creates its GitHub Release as a draft with that changelog, attaches what the
+   release carries (below), and only then publishes it.
 
 ### What a release carries
 
 Every release is built from the commit its tag names: its files by the workflow
 that builds both components as a dry run on every pull request, and the
-backend's images when the release is published. Nothing is attached or pushed
-until the tag is a release tag on a commit of `main` and names the version its
-tree carries, and nothing is attached until the leak guard's patterns find
-nothing in it — every file read byte by byte, binary ones included.
+backend's images while the release is still a draft. Nothing is attached or
+pushed until the tag is a release tag on a commit of `main` and names the
+version its tree carries, and nothing is attached until the leak guard's
+patterns find nothing in it — every file read byte by byte, binary ones
+included.
 
 | Release | Attached to the GitHub Release | Pushed to the registry |
 |---|---|---|
 | `backend-vX.Y.Z` | `cadless-X.Y.Z-py3-none-any.whl`; `cadless-X.Y.Z.tar.gz`, the sdist the wheel is built from, carrying `tools/leak_guard.py`; `cadless-X.Y.Z-constraints.txt`, the exact resolution the images install; `cadless-catalog-X.Y.Z.tar.gz`, the bundled catalog; `cadless-X.Y.Z-images.txt`, each image by its digest | `ghcr.io/cadlesslab/cadless-api:X.Y.Z` and `ghcr.io/cadlesslab/cadless-worker:X.Y.Z`, labelled with their version, source and commit — pin them by the digests the release lists |
 | `frontend-vX.Y.Z` | `cadless-frontend-X.Y.Z.tar.gz`, the `frontend/` source, to be built with whatever panels its builder adds | — |
 
-A release stays a draft, seen by maintainers alone, until everything it carries
-is attached; only then is it published, and with immutable releases on, neither
-it nor its assets change after that. An image version is never pushed twice.
+A release stays a draft, seen by maintainers alone, until it holds exactly what
+it carries — every file, with the bytes that were built, and nothing else; only
+then is it published, and with immutable releases on, neither it nor its assets
+change after that. An image version is never pushed twice.
+
 If a release run stopped partway, the release is still a draft: dispatch the
 `release-backfill` workflow from `main` with its tag. It builds from that tag's
-commit, adds only what is missing, stops if something already attached differs
-from what it built, and publishes the release. A release whose tagged commit
-predates these workflows — `v1.0.0` among them — carries nothing and cannot be
-backfilled.
+commit, adds only what is missing, and publishes the release once it holds
+exactly what was built. It stops and leaves the draft as it is when no release
+or more than one carries the tag, or when the draft holds an asset that differs
+from what it built or that it did not build: find out where that came from
+before removing it from the draft by hand and dispatching the backfill again. A
+release whose tagged commit predates these workflows — `v1.0.0` among them —
+carries nothing and cannot be backfilled.
 
 `v1.0.0` is the one release cut before the components were split. Both count on
 from it: its commit also carries `backend-v1.0.0` and `frontend-v1.0.0`, so that

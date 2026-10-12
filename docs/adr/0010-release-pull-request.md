@@ -49,10 +49,10 @@ This is that decision.
   catalog, or the frontend's source, once the tag is checked against the
   version that commit carries and the leak guard's patterns find nothing in
   them; it pushes the backend's container images from the same commit,
-  attaching their digests; and only then publishes the release, which GitHub
-  keeps immutable from that point. Nothing is tagged or released that a
-  maintainer did not merge into `main`, and a release pull request left open
-  publishes nothing.
+  attaching their digests; and only once the draft holds exactly what was
+  built, and nothing else, publishes the release, which GitHub keeps immutable
+  from that point. Nothing is tagged or released that a maintainer did not
+  merge into `main`, and a release pull request left open publishes nothing.
 - **A subject says what kind of change it is.** Pull-request titles follow
   `type(scope)!: description`, and a required check refuses a title that does not,
   or that carries an internal reference or assistant attribution: the title
