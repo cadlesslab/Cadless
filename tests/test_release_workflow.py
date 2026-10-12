@@ -16,9 +16,11 @@ import re
 from pathlib import Path
 
 import cadless
+from tests.workflow_text import wiring
 
 ROOT = Path(__file__).resolve().parent.parent
-WORKFLOW = ROOT / ".github/workflows/release.yml"
+WORKFLOWS = ROOT / ".github/workflows"
+WORKFLOW = WORKFLOWS / "release.yml"
 CONFIG = ROOT / "release-please-config.json"
 MANIFEST = ROOT / ".release-please-manifest.json"
 FRONTEND_VERSION = ROOT / "frontend/version.txt"
@@ -26,10 +28,8 @@ FRONTEND_VERSION = ROOT / "frontend/version.txt"
 _USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)", re.MULTILINE)
 
 
-def _wiring() -> str:
-    """The workflow with its comment lines removed, so prose cannot satisfy an assertion."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+def _wiring(path: Path = WORKFLOW) -> str:
+    return wiring(path)
 
 
 def _config() -> dict:
@@ -37,12 +37,20 @@ def _config() -> dict:
 
 
 def test_every_action_is_pinned_to_a_full_commit():
-    """The job holds a token that can push here, and a tag runs whatever it points at today."""
-    actions = _USES.findall(_wiring())
-    assert actions, "no `uses:` line found, so the check below would pass on nothing"
-    for ref in actions:
+    """These jobs hold tokens that can push, tag and publish here, and a tag runs
+    whatever it points at today. A workflow of this repository's own is the
+    exception: it is read from the same commit. Every release workflow is found
+    by its name, so a new one cannot slip past this check."""
+    refs = [
+        (workflow.name, ref)
+        for workflow in sorted(WORKFLOWS.glob("release*.yml"))
+        for ref in _USES.findall(wiring(workflow))
+        if not ref.startswith("./")
+    ]
+    assert refs, "no action found, so the check below would pass on nothing"
+    for workflow, ref in refs:
         name, _, rev = ref.partition("@")
-        assert re.fullmatch(r"[0-9a-f]{40}", rev), f"{name} is referenced by {rev!r}, not a commit"
+        assert re.fullmatch(r"[0-9a-f]{40}", rev), f"{workflow}: {name} is referenced by {rev!r}"
 
 
 def test_only_main_can_reach_the_key():

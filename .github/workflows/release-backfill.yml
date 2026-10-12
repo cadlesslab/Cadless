@@ -1,0 +1,77 @@
+# Release backfill.
+#
+# Finishes a release's artifacts by hand when a release run stopped partway:
+# whatever is already attached or pushed is left as it is, and only what is
+# missing is built and added. Dispatched from main with the release's tag. A
+# release whose tagged commit predates these workflows cannot be backfilled:
+# the checks it runs live in that commit's tree.
+name: release-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag, backend-vX.Y.Z or frontend-vX.Y.Z
+        required: true
+
+permissions:
+  contents: read
+
+# The release workflow's own group, so a backfill never runs beside a release
+# run: both would find the same image missing and both would push it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# `bash` named explicitly runs every step with pipefail.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    # Only main reaches the `release` environment the later jobs run in, so a
+    # dispatch from anywhere else is skipped here rather than failed later.
+    if: github.repository == 'cadlesslab/Cadless' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      component: ${{ steps.tag.outputs.component }}
+    steps:
+      # The input is checked as text, and nothing from the repository runs here.
+      - name: The tag is a release tag
+        id: tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^(backend|frontend)-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not a release tag"
+            exit 1
+          fi
+          echo "component=${TAG%%-v*}" >> "$GITHUB_OUTPUT"
+
+  artifacts:
+    needs: resolve
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      component: ${{ needs.resolve.outputs.component }}
+      ref: refs/tags/${{ inputs.tag }}
+
+  images:
+    needs: [resolve, artifacts]
+    if: needs.resolve.outputs.component == 'backend'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-images.yml
+    with:
+      tag: ${{ inputs.tag }}
+
+  attach:
+    needs: [artifacts, images]
+    # The frontend has no images, so their job is skipped rather than failed.
+    if: ${{ !cancelled() && needs.artifacts.result == 'success' && (needs.images.result == 'success' || needs.images.result == 'skipped') }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-attach.yml
+    with:
+      tag: ${{ inputs.tag }}
