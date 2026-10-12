@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import isolated_git_env
 from tools import release_artifacts as ra
 
 
@@ -24,9 +25,10 @@ def _tree(root: Path, backend: str = "1.2.3", frontend: str = "4.5.6") -> Path:
     (root / "catalog" / "parts" / "bracket.json").write_text('{"name": "bracket"}\n')
     (root / "constraints.txt").write_text("pillow==12.3.0\n")
     git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com"]
-    subprocess.run([*git, "init", "-q"], check=True)
-    subprocess.run([*git, "add", "-A"], check=True)
-    subprocess.run([*git, "commit", "-q", "-m", "tree"], check=True)
+    env = isolated_git_env()
+    subprocess.run([*git, "init", "-q"], check=True, env=env)
+    subprocess.run([*git, "add", "-A"], check=True, env=env)
+    subprocess.run([*git, "commit", "-q", "-m", "tree"], check=True, env=env)
     return root
 
 
@@ -199,10 +201,61 @@ def test_the_scan_refuses_a_link_it_would_not_read(tmp_path):
         ra.scan(tmp_path)
 
 
-def test_the_scan_refuses_a_member_outside_its_archive(tmp_path):
-    _targz(tmp_path / "cadless-catalog-1.2.3.tar.gz", {"../escaped.md": b"x\n"})
-    with pytest.raises(tarfile.OutsideDestinationError):
+@pytest.mark.parametrize("second", ["catalog/notes.md", "./catalog/notes.md"])
+def test_the_scan_refuses_a_member_carried_twice(tmp_path, second):
+    """Extracting keeps one copy, so the other would ship unread."""
+    with tarfile.open(tmp_path / "cadless-catalog-1.2.3.tar.gz", "w:gz") as archive:
+        for name, data in [("catalog/notes.md", PLANTED), (second, b"clean\n")]:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    with pytest.raises(ValueError, match="more than once"):
         ra.scan(tmp_path)
+
+
+def test_the_scan_refuses_a_wheel_member_carried_twice(tmp_path):
+    with zipfile.ZipFile(tmp_path / "cadless-1.2.3-py3-none-any.whl", "w") as archive:
+        archive.writestr("cadless/notes.txt", PLANTED)
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            archive.writestr("cadless/notes.txt", b"clean\n")
+    with pytest.raises(ValueError, match="more than once"):
+        ra.scan(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("artifact", "name"),
+    [
+        ("cadless-catalog-1.2.3.tar.gz", "../escaped.md"),
+        ("cadless-catalog-1.2.3.tar.gz", "/catalog/notes.md"),
+        ("cadless-1.2.3-py3-none-any.whl", "../cadless/notes.txt"),
+        ("cadless-1.2.3-py3-none-any.whl", "/cadless/notes.txt"),
+    ],
+)
+def test_the_scan_refuses_a_member_named_outside_its_root(tmp_path, artifact, name):
+    """Extraction rewrites such a name onto a path inside, where another member may be."""
+    if artifact.endswith(".whl"):
+        with zipfile.ZipFile(tmp_path / artifact, "w") as archive:
+            archive.writestr(name, PLANTED)
+    else:
+        _targz(tmp_path / artifact, {name: PLANTED})
+    with pytest.raises(ValueError, match="outside its root"):
+        ra.scan(tmp_path)
+
+
+def test_the_scan_refuses_a_link_a_later_member_would_be_written_through(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with tarfile.open(tmp_path / "cadless-catalog-1.2.3.tar.gz", "w:gz") as archive:
+        link = tarfile.TarInfo("catalog/out")
+        link.type = tarfile.SYMTYPE
+        link.linkname = str(outside)
+        archive.addfile(link)
+        member = tarfile.TarInfo("catalog/out/escaped.md")
+        member.size = len(PLANTED)
+        archive.addfile(member, io.BytesIO(PLANTED))
+    with pytest.raises(tarfile.FilterError):
+        ra.scan(tmp_path)
+    assert not (outside / "escaped.md").exists()
 
 
 def test_the_scan_finds_a_reference_written_in_big_endian_utf16(tmp_path):

@@ -24,6 +24,7 @@ Exit code 0 means done, 1 a refusal or an error, 2 bad usage.
 
 from __future__ import annotations
 
+import posixpath
 import re
 import shutil
 import subprocess
@@ -31,6 +32,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -170,12 +172,30 @@ def pack(component: str, outdir: Path, root: Path = ROOT) -> list[Path]:
     return sorted(p for p in outdir.iterdir() if p.is_file())
 
 
+def _one_path_each(artifact: Path, names: list[str]) -> None:
+    """Refuse members that extraction would not give a path of their own.
+
+    Two members can land on one path, and then only one of them is read: a name
+    carried twice, or one that extraction rewrites — zipfile drops a leading
+    slash and `..`, the tar data filter a leading slash — onto another's path.
+    """
+    outside = sorted(n for n in names if posixpath.isabs(n) or ".." in n.split("/"))
+    if outside:
+        raise ValueError(f"{artifact.name} carries members named outside its root: {outside}")
+    counts = Counter(posixpath.normpath(name) for name in names)
+    repeated = sorted(name for name, count in counts.items() if count > 1)
+    if repeated:
+        raise ValueError(f"{artifact.name} carries members more than once: {repeated}")
+
+
 def _unpack(artifact: Path, into: Path) -> None:
     if artifact.suffix == ".whl":
         with zipfile.ZipFile(artifact) as archive:
+            _one_path_each(artifact, archive.namelist())
             archive.extractall(into)
     elif artifact.name.endswith(".tar.gz"):
         with tarfile.open(artifact) as archive:
+            _one_path_each(artifact, archive.getnames())
             archive.extractall(into, filter="data")
     else:
         shutil.copyfile(artifact, into / artifact.name)
