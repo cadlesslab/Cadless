@@ -293,14 +293,20 @@ def test_the_images_carry_the_release_version(tmp_path):
 def _attach(
     tmp_path: Path, attached_bytes: bytes
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    """Run the attach step against a release already holding the sdist as `attached_bytes`."""
+    """Run the attach step against a draft release already holding the sdist as `attached_bytes`.
+
+    The fake answers only the release list, as GitHub does for a draft: the
+    lookup by tag knows only published releases.
+    """
     log = tmp_path / "gh.log"
     digest = hashlib.sha256(attached_bytes).hexdigest()
     _fake(
         tmp_path,
         "gh",
         f'echo "$*" >> "{log}"\n'
-        f'if [ "$1" = api ]; then echo "cadless-1.2.3.tar.gz sha256:{digest}"; fi\n',
+        'if [ "$1" = api ] && [[ "$*" == *"repos/o/r/releases --jq"* ]]; then\n'
+        f'  echo "cadless-1.2.3.tar.gz sha256:{digest}"\n'
+        "fi\n",
     )
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -344,6 +350,20 @@ def test_what_is_attached_is_verified_and_scanned_first():
     upload = text.index("gh release upload")
     assert text.index("release_artifacts.py verify") < upload
     assert text.index("release_artifacts.py scan dist") < upload
+
+
+def test_the_release_is_published_once_everything_is_attached(tmp_path):
+    """A failed step ends the job, so a step after the attaching one runs only once it passed."""
+    text = wiring(ATTACH)
+    assert text.index("gh release upload") < text.index("- name: Publish the release")
+    log = tmp_path / "gh.log"
+    _fake(tmp_path, "gh", f'echo "$*" >> "{log}"\n')
+    script = step_script(ATTACH, "Publish the release")
+    env = {"TAG": "backend-v1.2.3", "GH_TOKEN": "t", "REPOSITORY": "o/r"}
+    assert _bash(script, tmp_path, **env).returncode == 0
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "release edit backend-v1.2.3 --draft=false --repo o/r"
+    ]
 
 
 # The wiring -------------------------------------------------------------------

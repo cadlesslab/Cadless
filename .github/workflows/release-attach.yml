@@ -1,9 +1,11 @@
 # Release attachments.
 #
 # Attaches what release-artifacts built — and, for the backend, the file of image
-# digests release-images wrote — to the GitHub Release its tag names. An asset
-# already attached is left as it is and never replaced, so running this a second
-# time only attaches what the first left out.
+# digests release-images wrote — to the GitHub Release its tag names, which is
+# still a draft, and then publishes it. With immutable releases on, nothing about
+# the release changes after that, so no release is ever public without what it
+# carries. An asset already attached is left as it is and never replaced, so
+# running this a second time only attaches what the first left out.
 name: release-attach
 
 on:
@@ -82,14 +84,16 @@ jobs:
 
       # A rebuild of the same commit with the same tools is byte for byte the
       # same, so an asset already attached is either these bytes, and skipped,
-      # or something else, and the run stops with the asset left as it is.
+      # or something else, and the run stops with the asset left as it is. The
+      # release is found in the list rather than by its tag: a draft has none
+      # the tag lookup answers for.
       - name: Attach what is not attached yet
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          assets="$(gh api "repos/$REPOSITORY/releases/tags/$TAG" --jq '.assets[] | "\(.name) \(.digest)"')"
+          assets="$(gh api --paginate "repos/$REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .assets[] | \"\(.name) \(.digest)\"")"
           for file in dist/*; do
             name="$(basename "$file")"
             digest="sha256:$(sha256sum "$file" | cut -d ' ' -f 1)"
@@ -103,3 +107,12 @@ jobs:
               exit 1
             fi
           done
+
+      # Only now, with everything attached, does the release become public, and
+      # with immutable releases on it cannot change after this.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: gh release edit "$TAG" --draft=false --repo "$REPOSITORY"

@@ -5,9 +5,9 @@
 # each component it touches, holding that component's next version and its
 # changelog since its last release, both computed from the squash-merged
 # subjects. Merging one is the act of releasing that component: the run it
-# starts tags the version, publishes the GitHub Release, then builds what the
-# release carries from the tag and attaches it. Nothing here publishes a
-# release on its own (docs/adr/0010-release-pull-request.md).
+# starts tags the version and drafts the GitHub Release, then builds what the
+# release carries from the tag, attaches it and publishes the release. Nothing
+# here publishes a release on its own (docs/adr/0010-release-pull-request.md).
 #
 # The release pull request and the tag come from a GitHub App's token rather
 # than GITHUB_TOKEN. This repository does not let Actions open pull requests

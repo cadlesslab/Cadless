@@ -114,6 +114,17 @@ def test_each_component_has_its_own_release_pull_request():
     assert _config().get("separate-pull-requests") is True
 
 
+def test_a_release_stays_a_draft_until_its_artifacts_are_attached():
+    """With immutable releases on, nothing can be attached to a published release.
+
+    Published at once, a release could never carry its artifacts. As a draft it
+    would have no tag unless one is forced, and the build checks out the tag.
+    """
+    config = _config()
+    assert config.get("draft") is True
+    assert config.get("force-tag-creation") is True
+
+
 def test_the_release_commit_is_signed_off():
     """The DCO check is required on main and has no exemption for a bot."""
     assert re.fullmatch(r"[^<>]+<[^<>\s]+>", _config().get("signoff", ""))

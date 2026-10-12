@@ -1,10 +1,11 @@
 # Release backfill.
 #
-# Finishes a release's artifacts by hand when a release run stopped partway:
-# whatever is already attached or pushed is left as it is, and only what is
-# missing is built and added. Dispatched from main with the release's tag. A
-# release whose tagged commit predates these workflows cannot be backfilled:
-# the checks it runs live in that commit's tree.
+# Finishes a release by hand when a release run stopped partway, leaving it a
+# draft: whatever is already attached or pushed is left as it is, only what is
+# missing is built and added, and the release is then published. Dispatched
+# from main with the release's tag. A release whose tagged commit predates
+# these workflows cannot be backfilled: the checks it runs live in that
+# commit's tree.
 name: release-backfill
 
 on:
