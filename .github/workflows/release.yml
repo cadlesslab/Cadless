@@ -1,0 +1,55 @@
+# Release pull requests.
+#
+# The backend and the frontend are versioned and released separately. A push to
+# main that carries a releasing change opens or refreshes a pull request for
+# each component it touches, holding that component's next version and its
+# changelog since its last release, both computed from the squash-merged
+# subjects. Merging one is the act of releasing that component: the run it
+# starts tags the version and publishes the GitHub Release. Nothing here
+# publishes a release on its own (docs/adr/0010-release-pull-request.md).
+#
+# It runs on a GitHub App's token rather than GITHUB_TOKEN. This repository does
+# not let Actions open pull requests with GITHUB_TOKEN, and a pull request opened
+# with it would start none of the required checks, so a release pull request
+# could never be merged as checked. The App's key is held by the `release`
+# environment rather than the repository, so that a workflow pushed on another
+# branch cannot mint the token, and both actions are pinned to a commit because
+# this job holds it.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two merges in quick succession must not race to rewrite the same pull request.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    # A fork has neither the App nor its key, and a dispatch from another branch
+    # must not cut a release from it: both are skipped rather than failed.
+    if: github.repository == 'cadlesslab/Cadless' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.token.outputs.token }}
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

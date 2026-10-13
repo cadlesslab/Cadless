@@ -1,0 +1,51 @@
+# Pull-request title check.
+#
+# Pull requests are squash-merged with the title as the commit subject, and each
+# component's release pull request computes its next version from those
+# subjects. A title that is not `type(scope)!: description` with a known type is
+# refused here, before a merge makes it permanent. The title is published text in
+# its own right, so it is scanned for assistant attribution and internal
+# references too.
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Fetched rather than taken from the event payload: a re-run replays the
+      # payload, so a corrected title would never be seen by a re-run of the job
+      # that refused it. Fetching also keeps the title out of every shell line.
+      - name: Collect the title
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.title' > pr_title.txt
+
+      - name: The title says what kind of change it is
+        run: python tools/check_pr_title.py pr_title.txt
+
+      - name: No assistant attribution in the title
+        run: python tools/attribution_guard.py pr_title.txt
+
+      - name: No internal references in the title
+        run: |
+          python tools/leak_guard.py --text pr_title.txt || {
+            echo "::error::Edit the title (gh pr edit --title). Merging makes it the commit subject on main, where it cannot be taken back."
+            exit 1
+          }

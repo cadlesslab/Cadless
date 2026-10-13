@@ -14,10 +14,11 @@ from dataclasses import asdict
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+import cadless
 from cadless.config import Settings
 from cadless.worker import run_code
 
-app = FastAPI(title="Cadless Worker", version="1.0.0")
+app = FastAPI(title="Cadless Worker", version=cadless.__version__)
 
 
 class RunRequest(BaseModel):

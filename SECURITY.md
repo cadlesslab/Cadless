@@ -6,9 +6,10 @@ the execution boundary are the ones we care about most.
 
 ## Supported versions
 
-Cadless is pre-1.0 and there is no backport channel. Fixes land on `main`, and
-`main` is the only supported version. If you are running an older tag, update
-before reporting.
+There is no backport channel. Fixes land on `main` and ship in the next release
+of the component they touch — the backend or the frontend — and the latest
+release of each is the only supported version. If you are running an older
+release, update before reporting.
 
 ## Reporting a vulnerability
 
@@ -26,8 +27,8 @@ A useful report includes:
 - the exact input: the prompt, the generated or catalog step code, or the HTTP
   request;
 - which layer you got past (see the scope table below);
-- the commit you tested and how you were running the stack (`docker compose`
-  or a local process).
+- the release you tested — or the commit, if you built from `main` — and how
+  you were running the stack (`docker compose` or a local process).
 
 What to expect:
 
@@ -35,7 +36,7 @@ What to expect:
 |---|---|
 | Acknowledgement | 5 business days |
 | Initial assessment, with a scope decision | 10 business days |
-| Fix on `main` and a published advisory | negotiated with you, based on severity |
+| A release carrying the fix, and a published advisory | negotiated with you, based on severity |
 
 This is a small project. If a deadline slips, the advisory thread is where we
 say so.
@@ -97,9 +98,10 @@ already published, so they will be closed as out of scope:
 
 ## Disclosure
 
-We work with you on a coordinated disclosure. Once a fix is on `main` we
-publish a GitHub Security Advisory describing the issue and the affected
-commits. Reporters are credited by name unless you ask us not to.
+We work with you on a coordinated disclosure. Once a release carrying the fix is
+published, we publish a GitHub Security Advisory describing the issue, the
+affected releases and the release that fixes it. Reporters are credited by name
+unless you ask us not to.
 
 ## If you are deploying Cadless for other people
 

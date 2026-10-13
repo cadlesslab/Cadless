@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cadless"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Cadless — natural-language-driven CAD PoC (text to build123d to B-Rep)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -75,6 +75,12 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["cadless"]
+
+# The version is written once, in cadless/__init__.py, and the build reads it
+# from there. A second copy here would have to be kept in step by hand, and the
+# day it was not, the wheel would carry one number and the code another.
+[tool.hatch.version]
+path = "cadless/__init__.py"
 
 [tool.ruff]
 line-length = 100
