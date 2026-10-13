@@ -42,7 +42,7 @@ This is that decision.
   releases has landed on `main`, a workflow opens a *release pull request* for
   each component it touched, carrying that component's next version and its
   changelog since its last release, both computed from the squash-merged
-  subjects, and refreshes it whenever either would change. Merging one is the act
+  subjects, and rebuilds it from `main` on every run. Merging one is the act
   of releasing that component: the run it starts tags `backend-vX.Y.Z` or
   `frontend-vX.Y.Z` and drafts the GitHub Release, then builds what the release
   carries from the tagged commit. It attaches the backend's packages and

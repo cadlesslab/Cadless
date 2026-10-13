@@ -3,6 +3,7 @@
   "include-v-in-tag": true,
   "include-component-in-tag": true,
   "separate-pull-requests": true,
+  "always-update": true,
   "draft": true,
   "force-tag-creation": true,
   "bootstrap-sha": "0e612275263ddcfad0145ad8cec1596fa4900f26",
