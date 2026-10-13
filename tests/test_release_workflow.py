@@ -15,8 +15,10 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 import cadless
-from tests.workflow_text import wiring
+from tests.workflow_text import job, wiring
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
@@ -53,15 +55,38 @@ def test_every_action_is_pinned_to_a_full_commit():
         assert re.fullmatch(r"[0-9a-f]{40}", rev), f"{workflow}: {name} is referenced by {rev!r}"
 
 
-def test_only_main_can_reach_the_key():
+_GUARD = "if: github.repository == 'cadlesslab/Cadless' && github.ref == 'refs/heads/main'"
+
+
+@pytest.mark.parametrize(
+    ("workflow", "entry"), [("release.yml", "release-please"), ("release-backfill.yml", "resolve")]
+)
+def test_only_main_here_starts_a_release_run(workflow, entry):
     """A run from another branch could mint the token, or cut a release nobody merged to main.
 
     A fork's run has neither the App nor its key, so it is skipped rather than
-    left to fail at minting the token.
+    left to fail at minting the token. Every other job of the run waits on this
+    one, so its condition is held as the whole line: one widened around it, by
+    an `||` or a negation, fails here as surely as one with a half missing. And
+    no other job of the file names the release environment itself.
     """
-    wiring = _wiring()
-    assert "github.repository == 'cadlesslab/Cadless' && github.ref == 'refs/heads/main'" in wiring
-    assert "environment: release" in wiring
+    path = WORKFLOWS / workflow
+    conditions = [
+        line.strip() for line in job(path, entry).splitlines() if line.startswith("    if:")
+    ]
+    assert conditions == [_GUARD], conditions
+    jobs = re.findall(r"^  ([\w-]+):$", _wiring(path).split("\njobs:\n", 1)[1], re.M)
+    named = [name for name in jobs if "    environment: release" in job(path, name).splitlines()]
+    assert named in ([entry], []), named
+
+    def waits_on(name: str) -> set[str]:
+        lines = [line for line in job(path, name).splitlines() if line.startswith("    needs:")]
+        return set(re.findall(r"[\w-]+", lines[0].partition(":")[2])) if lines else set()
+
+    reached = {entry}
+    while more := {name for name in jobs if waits_on(name) & reached} - reached:
+        reached |= more
+    assert reached == set(jobs), sorted(set(jobs) - reached)
 
 
 def test_the_release_manifest_agrees_with_both_components():
