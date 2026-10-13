@@ -77,7 +77,8 @@ _STATUS_CONDITIONS = {
 }
 
 _ENVIRONMENT = re.compile(r"^    environment:(?: release|\n      name: release)$", re.M)
-_STATUS = re.compile(r"\b(always|cancelled|failure|success)\(\)")
+# GitHub reads expression function names in any case.
+_STATUS = re.compile(r"\b(always|cancelled|failure|success)\(\)", re.I)
 
 
 def _triggers(path: Path) -> set[str]:
@@ -134,8 +135,9 @@ def test_only_main_here_starts_a_release_run(workflow, entry, environment):
     an `||` or a negation, fails here as surely as one with a half missing. Every
     other job of the run waits on the entry and uses no status function the set
     above does not hold, read with the lines a condition continues onto, so none
-    runs once the entry is skipped; and no job but the entry names an
-    environment at all, so none reaches the environment's secrets past it.
+    runs once the entry is skipped; and no job of this file but the entry names
+    an environment at all, so the release environment is otherwise reached only
+    through the workflows these jobs call, and so only after the entry.
     """
     path = WORKFLOWS / workflow
     conditions = [
