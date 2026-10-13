@@ -46,9 +46,13 @@ def test_every_action_is_pinned_to_a_full_commit():
 
 
 def test_only_main_can_reach_the_key():
-    """A run from another branch could mint the token, or cut a release nobody merged to main."""
+    """A run from another branch could mint the token, or cut a release nobody merged to main.
+
+    A fork's run has neither the App nor its key, so it is skipped rather than
+    left to fail at minting the token.
+    """
     wiring = _wiring()
-    assert "github.ref == 'refs/heads/main'" in wiring
+    assert "github.repository == 'cadlesslab/Cadless' && github.ref == 'refs/heads/main'" in wiring
     assert "environment: release" in wiring
 
 
