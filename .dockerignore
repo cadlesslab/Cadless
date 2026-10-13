@@ -1,0 +1,5 @@
+# Every image is built with the repository root as its context. The git
+# directory and a local build's dist/ have no place in an image, whatever a
+# later COPY line names.
+.git
+dist

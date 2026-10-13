@@ -89,3 +89,17 @@ jobs:
         run: |
           mkdir -p catalog
           docker compose build
+
+  # Each component's release, built and checked from this commit by the same
+  # workflow a release runs, and published nowhere.
+  release-artifacts-backend:
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      component: backend
+      ref: ${{ github.sha }}
+
+  release-artifacts-frontend:
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      component: frontend
+      ref: ${{ github.sha }}

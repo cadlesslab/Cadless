@@ -4,8 +4,8 @@
  * has a unique id; this reflects the active one in the address bar as
  * `<base><id>` (e.g. https://example.com/apps/cadless/2), so every project is
  * deep-linkable and shareable. The SPA server already falls back to index.html
- * for these paths (infra/nginx.conf `try_files … /apps/cadless/index.html`), so a
- * hard navigation to `/apps/cadless/2` boots the app, which then opens project 2.
+ * for these paths, so a hard navigation to `/apps/cadless/2` boots the app, which
+ * then opens project 2.
  */
 
 /** The build-time base path the SPA is served under — "/apps/cadless/" in prod,

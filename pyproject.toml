@@ -76,6 +76,15 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["cadless"]
 
+# The sdist is the backend's source as released: the package, the API, the worker
+# and the repository's tools, the leak guard among them. An allowlist, because
+# the default takes the whole tree — the catalog and the frontend ship as release
+# artifacts of their own — so besides what is named here the archive carries
+# only what hatchling puts in every sdist: the project file, the readme, the
+# licence, .gitignore and its own metadata.
+[tool.hatch.build.targets.sdist]
+only-include = ["cadless", "backend", "worker", "tools", "constraints.txt", "CREDITS.md"]
+
 # The version is written once, in cadless/__init__.py, and the build reads it
 # from there. A second copy here would have to be kept in step by hand, and the
 # day it was not, the wheel would carry one number and the code another.

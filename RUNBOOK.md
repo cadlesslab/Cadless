@@ -66,7 +66,7 @@ prompt (configured provider → worker → STEP/GLB), and verifies both artifact
 Exits non-zero on any failure.
 
 ## Architecture / isolation
-- `frontend` (nginx) serves the SPA and proxies `/api/*` → `api`.
+- `frontend` (nginx) serves the SPA; the bundled Caddy routes `/api/*` to `api`.
 - `api` (FastAPI) orchestrates: calls the configured LLM provider for code-gen, delegates **execution**
   to the worker via `CADLESS_WORKER_URL`, persists projects/versions/artifacts.
 - `worker` runs the LLM-generated build123d code. It is on an **internal-only**
@@ -95,8 +95,39 @@ backend; a change touching both releases both.
 2. A maintainer reads the changelog — it is built from the merged pull
    requests, whose text their authors can still edit — and squash-merges the
    pull request when that release should ship.
-3. The run that merge starts tags `backend-vX.Y.Z` or `frontend-vX.Y.Z` and
-   publishes the GitHub Release with that changelog.
+3. The run that merge starts tags `backend-vX.Y.Z` or `frontend-vX.Y.Z`,
+   creates its GitHub Release as a draft with that changelog, attaches what the
+   release carries (below), and only then publishes it.
+
+### What a release carries
+
+Every release is built from the commit its tag names: its files by the workflow
+that builds both components as a dry run on every pull request, and the
+backend's images while the release is still a draft. Nothing is attached or
+pushed until the tag is a release tag on a commit of `main` and names the
+version its tree carries, and nothing is attached until the leak guard's
+patterns find nothing in it — every file read byte by byte, binary ones
+included.
+
+| Release | Attached to the GitHub Release | Pushed to the registry |
+|---|---|---|
+| `backend-vX.Y.Z` | `cadless-X.Y.Z-py3-none-any.whl`; `cadless-X.Y.Z.tar.gz`, the sdist the wheel is built from, carrying `tools/leak_guard.py`; `cadless-X.Y.Z-constraints.txt`, the exact resolution the images install; `cadless-catalog-X.Y.Z.tar.gz`, the bundled catalog; `cadless-X.Y.Z-images.txt`, each image by its digest | `ghcr.io/cadlesslab/cadless-api:X.Y.Z` and `ghcr.io/cadlesslab/cadless-worker:X.Y.Z`, labelled with their version, source and commit — pin them by the digests the release lists |
+| `frontend-vX.Y.Z` | `cadless-frontend-X.Y.Z.tar.gz`, the `frontend/` source — everything its image is built from, its nginx config included — to be built with whatever panels its builder adds: unpack it and run `docker build -f frontend/Dockerfile --build-arg BASE_PATH=<prefix>/ .` where it was unpacked | — |
+
+A release stays a draft, seen by maintainers alone, until it holds exactly what
+it carries — every file, with the bytes that were built, and nothing else; only
+then is it published, and with immutable releases on, neither it nor its assets
+change after that. An image version is never pushed twice.
+
+If a release run stopped partway, the release is still a draft: dispatch the
+`release-backfill` workflow from `main` with its tag. It builds from that tag's
+commit, adds only what is missing, and publishes the release once it holds
+exactly what was built. It stops and leaves the draft as it is when no release
+or more than one carries the tag, or when the draft holds an asset that differs
+from what it built or that it did not build: find out where that came from
+before removing it from the draft by hand and dispatching the backfill again. A
+release whose tagged commit predates these workflows — `v1.0.0` among them —
+carries nothing and cannot be backfilled.
 
 `v1.0.0` is the one release cut before the components were split. Both count on
 from it: its commit also carries `backend-v1.0.0` and `frontend-v1.0.0`, so that
@@ -140,6 +171,24 @@ change that adds it is merged:
   may add. The ruleset keeps such branches out of this repository; one pushed to
   a fork is caught only by a reviewer reading the pull request's head branch
   before merging.
+- **Immutable releases on.** A release is attached to while it is a draft and
+  published after, so locking it at publication costs the run nothing and keeps
+  a published release, its tag and its assets as they were published.
+- **The write role kept to maintainers**, with contributors working from forks.
+  The `release` environment keeps these workflows' publishing jobs to `main`,
+  but GitHub lets any workflow on any branch ask for a token that changes
+  releases and packages, so the write role decides who can change what a
+  release carries.
+- **Actions settings**: the default workflow token read-only, and approval
+  required before a workflow from an outside contributor runs.
+
+Two more settings can only be made once the first backend release has pushed
+its images:
+
+- **The two image packages made public**: GitHub creates `cadless-api` and
+  `cadless-worker` private, and only their package settings can change that.
+- **Their access**: Actions write access for this repository alone, and
+  deleting a version kept to administrators.
 
 ## Troubleshooting
 - **Generation fails with credential errors** → check your provider's credentials

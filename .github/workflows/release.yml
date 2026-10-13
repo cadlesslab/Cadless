@@ -5,16 +5,19 @@
 # each component it touches, holding that component's next version and its
 # changelog since its last release, both computed from the squash-merged
 # subjects. Merging one is the act of releasing that component: the run it
-# starts tags the version and publishes the GitHub Release. Nothing here
-# publishes a release on its own (docs/adr/0010-release-pull-request.md).
+# starts tags the version and drafts the GitHub Release, then builds what the
+# release carries from the tag, attaches it and publishes the release. Nothing
+# here publishes a release on its own (docs/adr/0010-release-pull-request.md).
 #
-# It runs on a GitHub App's token rather than GITHUB_TOKEN. This repository does
-# not let Actions open pull requests with GITHUB_TOKEN, and a pull request opened
-# with it would start none of the required checks, so a release pull request
-# could never be merged as checked. The App's key is held by the `release`
-# environment rather than the repository, so that a workflow pushed on another
-# branch cannot mint the token, and both actions are pinned to a commit because
-# this job holds it.
+# The release pull request and the tag come from a GitHub App's token rather
+# than GITHUB_TOKEN. This repository does not let Actions open pull requests
+# with GITHUB_TOKEN, and a pull request opened with it would start none of the
+# required checks, so a release pull request could never be merged as checked.
+# The App's key is held by the `release` environment rather than the repository,
+# so that a workflow pushed on another branch cannot mint the token, and every
+# action in these workflows is pinned to a commit because they hold tokens that
+# write. Attaching and pushing images run on GITHUB_TOKEN, in the same
+# environment: they open no pull request, and only main reaches them.
 name: release
 
 on:
@@ -37,6 +40,11 @@ jobs:
     if: github.repository == 'cadlesslab/Cadless' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: release
+    # The tag of each release this run created, empty when it created none. The
+    # root package's outputs carry no prefix; the frontend's carry its path.
+    outputs:
+      backend: ${{ steps.release.outputs.release_created == 'true' && steps.release.outputs.tag_name || '' }}
+      frontend: ${{ steps.release.outputs['frontend--release_created'] == 'true' && steps.release.outputs['frontend--tag_name'] || '' }}
     steps:
       - id: token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -53,3 +61,46 @@ jobs:
           target-branch: main
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # Each release this run created is built from its tag, then the backend's
+  # images are pushed, then everything is attached.
+  backend-artifacts:
+    needs: release-please
+    if: needs.release-please.outputs.backend != ''
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      component: backend
+      ref: refs/tags/${{ needs.release-please.outputs.backend }}
+
+  backend-images:
+    needs: [release-please, backend-artifacts]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-images.yml
+    with:
+      tag: ${{ needs.release-please.outputs.backend }}
+
+  backend-attach:
+    needs: [release-please, backend-images]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-attach.yml
+    with:
+      tag: ${{ needs.release-please.outputs.backend }}
+
+  frontend-artifacts:
+    needs: release-please
+    if: needs.release-please.outputs.frontend != ''
+    uses: ./.github/workflows/release-artifacts.yml
+    with:
+      component: frontend
+      ref: refs/tags/${{ needs.release-please.outputs.frontend }}
+
+  frontend-attach:
+    needs: [release-please, frontend-artifacts]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-attach.yml
+    with:
+      tag: ${{ needs.release-please.outputs.frontend }}

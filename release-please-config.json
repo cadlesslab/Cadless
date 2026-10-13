@@ -3,9 +3,11 @@
   "include-v-in-tag": true,
   "include-component-in-tag": true,
   "separate-pull-requests": true,
+  "draft": true,
+  "force-tag-creation": true,
   "bootstrap-sha": "0e612275263ddcfad0145ad8cec1596fa4900f26",
   "signoff": "cadless-release[bot] <cadless-release[bot]@users.noreply.github.com>",
-  "pull-request-header": "Merging this pull request cuts the release below: it tags the version and publishes the GitHub Release with this changelog.",
+  "pull-request-header": "Merging this pull request cuts the release below: it tags the version and drafts the GitHub Release with this changelog, then attaches the release's artifacts built from the tagged commit — for the backend, after pushing its container images — and publishes the release.",
   "changelog-sections": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Fixes" },

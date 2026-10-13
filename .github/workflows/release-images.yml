@@ -1,0 +1,119 @@
+# Release images.
+#
+# Builds the backend's API and worker images from a release's tagged commit,
+# pushes them under the release's version, and records each image's digest in a
+# file the release then attaches, so that a consumer can pin the image itself
+# rather than a tag. A version already pushed is never pushed again: it is kept,
+# and its digest recorded, only when its revision label names the release's own
+# commit, so running this a second time only finishes what the first left undone.
+name: release-images
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The backend release tag, backend-vX.Y.Z
+        type: string
+        required: true
+
+# `bash` named explicitly runs every step with pipefail, so a failed query in a
+# pipeline fails its step instead of handing an empty value on.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    # Its branch rule keeps a run from any branch but main out of this job. The
+    # token's write scope is GitHub's to grant, not the environment's: who may
+    # push to the registry at all is the repository's write role (RUNBOOK).
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Before anything from the repository runs: the input is checked as text.
+      - name: The tag is a backend release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^backend-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$TAG is not a backend release tag"
+            exit 1
+          fi
+
+      # The tag in full: a bare name would check out a branch of the same name.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The remote-tracking ref in full: a tag or a local branch named origin/main
+      # would otherwise answer first.
+      - name: The tagged commit is on main
+        run: git merge-base --is-ancestor HEAD refs/remotes/origin/main
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: The tag names the version its tree carries
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          component="$(python tools/release_artifacts.py check-tag "$TAG")"
+          test "$component" = backend
+
+      - name: Push the API and worker images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          version="${TAG#backend-v}"
+          revision="$(git rev-parse HEAD)"
+          digests="cadless-$version-images.txt"
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          : > "$digests"
+          refusal="$(mktemp)"
+          for image in api:backend/Dockerfile worker:worker/Dockerfile; do
+            repo="ghcr.io/$OWNER/cadless-${image%%:*}"
+            # Present already: kept only if its revision label names this very
+            # commit. That tells a rerun from a stray push; it proves nothing about
+            # where the image came from, since whoever can push writes the label.
+            # The registry refusing the name means it is not there yet. Anything
+            # else, a server or network error, cannot tell, so nothing is pushed
+            # over what might be there.
+            if found="$(docker buildx imagetools inspect "$repo:$version" --format '{{json .Image}}' 2> "$refusal")"; then
+              built_from="$(jq -r '(if has("config") then . else .["linux/amd64"] end).config.Labels["org.opencontainers.image.revision"] // empty' <<< "$found")"
+              if [ "$built_from" != "$revision" ]; then
+                echo "::error::$repo:$version was built from ${built_from:-an unlabelled commit}, not $revision; it is left as it is"
+                exit 1
+              fi
+              echo "already pushed from this commit: $repo:$version"
+            elif grep -qiE 'not found|manifest unknown|name unknown|denied|403' "$refusal"; then
+              docker build -f "${image#*:}" -t "$repo:$version" \
+                --label "org.opencontainers.image.version=$version" \
+                --label "org.opencontainers.image.revision=$revision" \
+                --label "org.opencontainers.image.source=https://github.com/$REPOSITORY" \
+                .
+              docker push "$repo:$version"
+            else
+              echo "::error::cannot tell whether $repo:$version exists: $(cat "$refusal")"
+              exit 1
+            fi
+            digest="$(docker buildx imagetools inspect "$repo:$version" --format '{{json .Manifest}}' | jq -r .digest)"
+            echo "$repo:$version@$digest" >> "$digests"
+          done
+          docker logout ghcr.io
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-backend-images
+          path: cadless-*-images.txt
+          if-no-files-found: error
+          retention-days: 1

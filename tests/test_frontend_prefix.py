@@ -15,7 +15,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DOCKERFILE = (_ROOT / "frontend" / "Dockerfile").read_text()
-_NGINX = (_ROOT / "infra" / "nginx.conf").read_text()
+_NGINX = (_ROOT / "frontend" / "nginx.conf").read_text()
 _COMPOSE = (_ROOT / "docker-compose.yml").read_text()
 _DEFAULT_PREFIX = "/apps/cadless/"
 

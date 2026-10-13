@@ -23,7 +23,7 @@ ARG BASE_PATH=/apps/cadless/
 # They were four separate literals, so serving anywhere else meant editing
 # files and hoping none was missed.
 COPY --from=build /app/dist /usr/share/nginx/html${BASE_PATH}
-COPY infra/nginx.conf /etc/nginx/conf.d/default.conf
+COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 # nginx.conf carries the default prefix so it stays a valid config to read on
 # its own; a non-default BASE_PATH is substituted in here rather than becoming
 # another place the prefix is written down.
