@@ -33,6 +33,15 @@ def _config() -> dict:
     return json.loads(CONFIG.read_text(encoding="utf-8"))
 
 
+def _release_workflows() -> list[Path]:
+    """Every release workflow by its name, under either extension GitHub reads."""
+    return sorted(
+        path
+        for path in WORKFLOWS.iterdir()
+        if path.name.startswith("release") and path.suffix in {".yml", ".yaml"}
+    )
+
+
 def test_every_action_is_pinned_to_a_full_commit():
     """These jobs hold tokens that can push, tag and publish here, and a tag runs
     whatever it points at today. A workflow of this repository's own is the
@@ -40,7 +49,7 @@ def test_every_action_is_pinned_to_a_full_commit():
     by its name, so a new one cannot slip past this check."""
     refs = [
         (workflow.name, ref)
-        for workflow in sorted(WORKFLOWS.glob("release*.yml"))
+        for workflow in _release_workflows()
         for ref in _USES.findall(wiring(workflow))
         if not ref.startswith("./")
     ]
@@ -68,28 +77,49 @@ _STATUS_CONDITIONS = {
 }
 
 _ENVIRONMENT = re.compile(r"^    environment:(?: release|\n      name: release)$", re.M)
-_STATUS = re.compile(r"\b(always|cancelled|failure)\(\)")
+_STATUS = re.compile(r"\b(always|cancelled|failure|success)\(\)")
 
 
 def _triggers(path: Path) -> set[str]:
-    """The events under the workflow's `on:` key, read from the lines indented under it."""
+    """The events under the workflow's `on:` key, read from the lines indented under it.
+
+    A line there that is not an event key, or no event read at all, is refused
+    rather than read as no trigger: a workflow this cannot read is one it would
+    otherwise leave out of the entries.
+    """
     on = wiring(path).split("\njobs:\n", 1)[0].split("\non:\n", 1)[1]
     keys = set()
     for line in on.splitlines():
         if line and not line.startswith(" "):
             break
-        if match := re.fullmatch(r"  ([\w-]+):.*", line):
+        if re.match(r"  \S", line):
+            match = re.fullmatch(r"  ([\w-]+):.*", line)
+            assert match, f"{path.name}: a trigger line not read: {line!r}"
             keys.add(match.group(1))
+    assert keys, f"{path.name}: no trigger read"
     return keys
+
+
+def _job_conditions(block: str) -> list[str]:
+    """Each job-level `if:` of a job's block, with any lines it continues onto."""
+    lines = block.splitlines()
+    conditions = []
+    for at, line in enumerate(lines):
+        if line.startswith("    if:"):
+            value = [line.strip()]
+            for following in lines[at + 1 :]:
+                if following.strip() and len(following) - len(following.lstrip()) <= 4:
+                    break
+                value.append(following.strip())
+            conditions.append(" ".join(part for part in value if part))
+    return conditions
 
 
 def test_every_workflow_a_release_run_starts_from_is_checked_below():
     """A release workflow that something other than another workflow can start is
     an entry, and an entry missing from the list would go unchecked. Found by
     name, as the action pins are, so a new one fails here until it is listed."""
-    entries = {
-        path.name for path in WORKFLOWS.glob("release*.yml") if _triggers(path) - {"workflow_call"}
-    }
+    entries = {path.name for path in _release_workflows() if _triggers(path) - {"workflow_call"}}
     assert entries == set(_ENTRIES), sorted(entries)
 
 
@@ -103,8 +133,9 @@ def test_only_main_here_starts_a_release_run(workflow, entry, environment):
     So the entry's condition is held as the whole line: one widened around it, by
     an `||` or a negation, fails here as surely as one with a half missing. Every
     other job of the run waits on the entry and uses no status function the set
-    above does not hold, so none runs once the entry is skipped; and no job but
-    the entry names the release environment itself.
+    above does not hold, read with the lines a condition continues onto, so none
+    runs once the entry is skipped; and no job but the entry names an
+    environment at all, so none reaches the environment's secrets past it.
     """
     path = WORKFLOWS / workflow
     conditions = [
@@ -118,17 +149,18 @@ def test_only_main_here_starts_a_release_run(workflow, entry, environment):
     assert unread == [], unread
     jobs = [line.strip()[:-1] for line in keys]
 
-    named = [name for name in jobs if _ENVIRONMENT.search(job(path, name))]
-    assert named == ([entry] if environment else []), named
+    with_environment = [
+        name for name in jobs if re.search(r"^    environment:", job(path, name), re.M)
+    ]
+    assert with_environment == ([entry] if environment else []), with_environment
+    assert not environment or _ENVIRONMENT.search(job(path, entry)), job(path, entry)
 
     past_skips = [
-        line.strip()
+        condition
         for name in jobs
         if name != entry
-        for line in job(path, name).splitlines()
-        if line.startswith("    if:")
-        and _STATUS.search(line)
-        and line.strip() not in _STATUS_CONDITIONS
+        for condition in _job_conditions(job(path, name))
+        if _STATUS.search(condition) and condition not in _STATUS_CONDITIONS
     ]
     assert past_skips == [], past_skips
 
