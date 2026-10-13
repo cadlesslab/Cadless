@@ -22,16 +22,11 @@ from tests.workflow_text import job, wiring
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
-WORKFLOW = WORKFLOWS / "release.yml"
 CONFIG = ROOT / "release-please-config.json"
 MANIFEST = ROOT / ".release-please-manifest.json"
 FRONTEND_VERSION = ROOT / "frontend/version.txt"
 
 _USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)", re.MULTILINE)
-
-
-def _wiring(path: Path = WORKFLOW) -> str:
-    return wiring(path)
 
 
 def _config() -> dict:
@@ -57,27 +52,85 @@ def test_every_action_is_pinned_to_a_full_commit():
 
 _GUARD = "if: github.repository == 'cadlesslab/Cadless' && github.ref == 'refs/heads/main'"
 
+# Each workflow a release run can start from, with its entry job and whether
+# that job itself runs in the release environment.
+_ENTRIES = {
+    "release.yml": ("release-please", True),
+    "release-backfill.yml": ("resolve", False),
+}
+
+# A status function lets a job run after the jobs it needs were skipped, so each
+# condition that uses one is held whole. The backfill's attach runs when the
+# images were skipped for the frontend, and only after its artifacts succeeded.
+_STATUS_CONDITIONS = {
+    "if: ${{ !cancelled() && needs.artifacts.result == 'success' && "
+    "(needs.images.result == 'success' || needs.images.result == 'skipped') }}"
+}
+
+_ENVIRONMENT = re.compile(r"^    environment:(?: release|\n      name: release)$", re.M)
+_STATUS = re.compile(r"\b(always|cancelled|failure)\(\)")
+
+
+def _triggers(path: Path) -> set[str]:
+    """The events under the workflow's `on:` key, read from the lines indented under it."""
+    on = wiring(path).split("\njobs:\n", 1)[0].split("\non:\n", 1)[1]
+    keys = set()
+    for line in on.splitlines():
+        if line and not line.startswith(" "):
+            break
+        if match := re.fullmatch(r"  ([\w-]+):.*", line):
+            keys.add(match.group(1))
+    return keys
+
+
+def test_every_workflow_a_release_run_starts_from_is_checked_below():
+    """A release workflow that something other than another workflow can start is
+    an entry, and an entry missing from the list would go unchecked. Found by
+    name, as the action pins are, so a new one fails here until it is listed."""
+    entries = {
+        path.name for path in WORKFLOWS.glob("release*.yml") if _triggers(path) - {"workflow_call"}
+    }
+    assert entries == set(_ENTRIES), sorted(entries)
+
 
 @pytest.mark.parametrize(
-    ("workflow", "entry"), [("release.yml", "release-please"), ("release-backfill.yml", "resolve")]
+    ("workflow", "entry", "environment"), [(name, *entry) for name, entry in _ENTRIES.items()]
 )
-def test_only_main_here_starts_a_release_run(workflow, entry):
-    """A run from another branch could mint the token, or cut a release nobody merged to main.
+def test_only_main_here_starts_a_release_run(workflow, entry, environment):
+    """A run from anywhere but this repository's main is skipped at its entry job,
+    rather than failing later where it reaches the release environment or its key.
 
-    A fork's run has neither the App nor its key, so it is skipped rather than
-    left to fail at minting the token. Every other job of the run waits on this
-    one, so its condition is held as the whole line: one widened around it, by
-    an `||` or a negation, fails here as surely as one with a half missing. And
-    no other job of the file names the release environment itself.
+    So the entry's condition is held as the whole line: one widened around it, by
+    an `||` or a negation, fails here as surely as one with a half missing. Every
+    other job of the run waits on the entry and uses no status function the set
+    above does not hold, so none runs once the entry is skipped; and no job but
+    the entry names the release environment itself.
     """
     path = WORKFLOWS / workflow
     conditions = [
         line.strip() for line in job(path, entry).splitlines() if line.startswith("    if:")
     ]
     assert conditions == [_GUARD], conditions
-    jobs = re.findall(r"^  ([\w-]+):$", _wiring(path).split("\njobs:\n", 1)[1], re.M)
-    named = [name for name in jobs if "    environment: release" in job(path, name).splitlines()]
-    assert named in ([entry], []), named
+
+    section = wiring(path).split("\njobs:\n", 1)[1]
+    keys = [line for line in section.splitlines() if re.match(r"  \S", line)]
+    unread = [line for line in keys if not re.fullmatch(r"  [\w-]+:", line)]
+    assert unread == [], unread
+    jobs = [line.strip()[:-1] for line in keys]
+
+    named = [name for name in jobs if _ENVIRONMENT.search(job(path, name))]
+    assert named == ([entry] if environment else []), named
+
+    past_skips = [
+        line.strip()
+        for name in jobs
+        if name != entry
+        for line in job(path, name).splitlines()
+        if line.startswith("    if:")
+        and _STATUS.search(line)
+        and line.strip() not in _STATUS_CONDITIONS
+    ]
+    assert past_skips == [], past_skips
 
     def waits_on(name: str) -> set[str]:
         lines = [line for line in job(path, name).splitlines() if line.startswith("    needs:")]
