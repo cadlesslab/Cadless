@@ -226,6 +226,18 @@ def test_each_component_has_its_own_release_pull_request():
     assert _config().get("separate-pull-requests") is True
 
 
+def test_every_run_rebuilds_each_open_release_pull_request():
+    """Both release pull requests edit the manifest, so merging one leaves the other
+    in conflict until it is rebuilt from main.
+
+    By default release-please rewrites an open release pull request only when its
+    description would change, and a release of the other component does not change
+    it. The branch is the release App's alone, so nobody else can resolve the
+    conflict.
+    """
+    assert _config().get("always-update") is True
+
+
 def test_a_release_stays_a_draft_until_its_artifacts_are_attached():
     """With immutable releases on, nothing can be attached to a published release.
 

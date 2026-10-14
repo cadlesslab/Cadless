@@ -91,7 +91,9 @@ backend; a change touching both releases both.
    opens a pull request for each component it touched — titled
    `chore(main): release backend X.Y.Z` or `chore(main): release frontend X.Y.Z`
    — carrying that component's next version and its changelog since its last
-   release, and refreshes it whenever either would change.
+   release, and rebuilds it from `main` on every run — so merging one
+   component's release pull request never leaves the other's in conflict on the
+   manifest.
 2. A maintainer reads the changelog — it is built from the merged pull
    requests, whose text their authors can still edit — and squash-merges the
    pull request when that release should ship.
