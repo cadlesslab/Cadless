@@ -813,6 +813,27 @@ def test_a_pin_bulging_past_its_bore_is_not_settled_by_the_bore():
     assert _rule([pin, block], 0, (down.X, down.Y, down.Z)) == BLOCKED
 
 
+def test_a_bore_whose_floor_the_distance_misses_does_not_settle_its_pin(monkeypatch):
+    # Make the distance to the axis report the blind hole as an open 5.05 mm bore,
+    # as a search that misses the hole's floor would. The floor still sits inside
+    # the test cylinder, so the volume proof refuses the pair, and the pin pushed
+    # down into the floor is still stopped by it.
+    from build123d import Edge
+
+    import cadless.assembly_check as module
+
+    block, pin = _pin_in_a_blind_hole()
+    real = module._distance
+
+    def missing_the_floor(first, second):
+        if first is block and isinstance(second, Edge):
+            return 5 + PIN_CLEARANCE
+        return real(first, second)
+
+    monkeypatch.setattr(module, "_distance", missing_the_floor)
+    assert _rule([block, pin], 1, (0, 0, -1)) == BLOCKED
+
+
 def test_a_part_whose_box_cannot_be_taken_is_not_read_as_clear(monkeypatch):
     # The channel rising meets the bar. With no box for the bar, the channel's own
     # sweep cannot be checked against it, and that must not read as nothing met.
