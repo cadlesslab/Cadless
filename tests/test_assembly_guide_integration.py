@@ -71,6 +71,18 @@ def test_a_real_two_part_build_comes_back_with_a_guide_and_one_exploded_drawing(
     assert drawn[0].read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_a_real_two_part_build_writes_the_motion_the_viewport_plays(tmp_path):
+    import json
+
+    result = _build(2, tmp_path)
+
+    assert result.ok, result.error
+    motion = json.loads((tmp_path / "assembly.json").read_text())
+    # Every part once, and a heading slot for each of them.
+    assert sorted(motion["order"]) == [0, 1]
+    assert len(motion["releases"]) == 2
+
+
 def test_a_real_four_part_build_is_drawn_a_step_at_a_time(tmp_path):
     assert STEP_FRAME_MIN_PARTS == 4, "this fixture is sized to sit on the threshold"
     result = _build(4, tmp_path)

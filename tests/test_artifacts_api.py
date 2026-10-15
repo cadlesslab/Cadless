@@ -227,6 +227,43 @@ def test_guide_frame_served_inline_as_png(client, store):
     assert r.content == b"\x89PNG\r\n\x1a\n" + bytes([1])
 
 
+def _seed_with_motion(store, body: bytes | None):
+    async def go():
+        p = await store.create_project("P")
+        v = await store.add_version(p.id, "x", "result=1", ok=True)
+        if body is not None:
+            f = Path(store.version_artifact_dir(v.id)) / "assembly.json"
+            f.write_bytes(body)
+            await store.add_artifact(v.id, "assembly", str(f))
+        return v.id
+
+    return asyncio.run(go())
+
+
+def test_the_assembly_motion_is_served_inline_as_json(client, store):
+    """The viewport reads it as data, so it is handed over in place as JSON
+    rather than offered as a file to save, and on a fixed address of its own
+    like the thumbnail's: there is one per version, not one per part."""
+    body = b'{"order": [1, 0], "releases": [[0.0, 0.0, 1.0], []], "explode_fraction": 0.35}'
+    vid = _seed_with_motion(store, body)
+    r = client.get(f"/versions/{vid}/artifacts/assembly")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/json"
+    assert "attachment" not in r.headers.get("content-disposition", "")
+    assert r.content == body
+
+
+def test_a_version_with_no_assembly_motion_is_not_found(client, store):
+    # Most versions have none -- one part, or no assembly asked for -- and the
+    # viewport takes a miss to mean there is nothing to play, not that the
+    # server failed.
+    vid = _seed_with_motion(store, None)
+    r = client.get(f"/versions/{vid}/artifacts/assembly")
+    assert r.status_code == 404
+    # The route's own answer, which an address nothing serves would not give.
+    assert r.json()["detail"] == "assembly artifact not found"
+
+
 def test_the_wire_says_which_part_each_artifact_is(client, store):
     """Without this a client can see three files and name none of them."""
     vid = _seed_with_stl_parts(store, 3)

@@ -36,6 +36,25 @@ describe("viewerSubject", () => {
     expect(s.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 1)]);
   });
 
+  it("names the part each address draws, in the order the addresses are drawn", () => {
+    // Listed out of order on purpose: the rows arrive however the server
+    // stored them, and an assembly names its parts by ordinal, not by position.
+    const artifacts = [2, 0, 1].map((part) => ({ kind: "glb" as const, bytes: 1, part }));
+    const s = viewerSubject(version({ artifacts }), null, false);
+    expect(s.urls).toEqual([0, 1, 2].map((p) => artifactUrl(7, "glb", p)));
+    expect(s.parts).toEqual([0, 1, 2]);
+  });
+
+  it("names no parts for a model drawn whole", () => {
+    expect(viewerSubject(version(), null, false).parts).toEqual([]);
+  });
+
+  it("names no parts for a preview, even with a version in parts behind it", () => {
+    const artifacts = [0, 1].map((part) => ({ kind: "glb" as const, bytes: 1, part }));
+    const preview = { url: "/depot/artifacts/c/v/a", title: "Bracket" };
+    expect(viewerSubject(version({ artifacts }), preview, false).parts).toEqual([]);
+  });
+
   it("captures a thumbnail for the version it is actually showing", () => {
     expect(viewerSubject(version(), null, false).captureVersionId).toBe(7);
   });

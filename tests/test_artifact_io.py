@@ -151,3 +151,42 @@ def test_guide_frames_reach_the_store_though_guide_is_not_an_exported_kind(store
     assert [a.part for a in guide] == [0, 1, 2]
     assert [Path(a.path).name for a in guide] == [f"guide_f{i}.png" for i in range(3)]
     assert written == 4  # the one stl part plus the three guide frames
+
+
+def _copy_in(store, src: Path) -> tuple[int, list]:
+    async def _run() -> tuple[int, list]:
+        project = await store.create_project("P")
+        version = await store.add_version(project.id, "a shelf", "result=1", ok=True)
+        written = await copy_and_register(store, version.id, src)
+        return written, await store.list_artifacts(version.id)
+
+    return asyncio.run(_run())
+
+
+def test_the_assembly_motion_reaches_the_store_as_one_file_of_its_own_kind(store, tmp_path):
+    """One file for the whole build, filed as part 0 of its own kind.
+
+    It is no more an exported format than a guide frame is, so the exporters'
+    loop never visits it; without a step of its own it would be written beside
+    the exports and then never registered, and the viewport would find nothing
+    to play.
+    """
+    src = tmp_path / "staging"
+    src.mkdir()
+    _touch(src, "model_p0.stl", "model_p1.stl", "assembly.json")
+
+    written, rows = _copy_in(store, src)
+
+    motion = [(a.part, Path(a.path).name) for a in rows if a.kind == "assembly"]
+    assert motion == [(0, "assembly.json")]
+    assert written == 3  # the two stl parts plus the motion
+
+
+def test_a_build_with_no_assembly_motion_registers_none(store, tmp_path):
+    src = tmp_path / "staging"
+    src.mkdir()
+    _touch(src, "model.stl")
+
+    _, rows = _copy_in(store, src)
+
+    assert [a for a in rows if a.kind == "assembly"] == []

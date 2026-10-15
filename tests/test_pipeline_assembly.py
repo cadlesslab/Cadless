@@ -130,7 +130,15 @@ def _stages(events):
 
 
 def _run(
-    gen, measurements, monkeypatch, *, assembly=SPEC, tries=3, captured=None, guide_writer=None
+    gen,
+    measurements,
+    monkeypatch,
+    *,
+    assembly=SPEC,
+    tries=3,
+    captured=None,
+    guide_writer=None,
+    export_dir=None,
 ):
     _stub_run_code(monkeypatch, measurements, captured)
     events = []
@@ -138,7 +146,12 @@ def _run(
         generator=gen,
         config=Settings(repair_max_attempts=tries),
         guide_writer=guide_writer,
-    ).run("a bracket", on_progress=events.append, assembly=assembly)
+    ).run(
+        "a bracket",
+        on_progress=events.append,
+        assembly=assembly,
+        export_dir=None if export_dir is None else str(export_dir),
+    )
     return result, events
 
 
@@ -481,6 +494,127 @@ def test_the_writer_is_given_the_measured_order_and_joints(monkeypatch):
     _run(FakeGen(), _sound(), monkeypatch, guide_writer=_Spy())
     assert seen["order"] == [0, 1]
     assert seen["joints"] == [[1], [0]]
+
+
+# --- the motion beside the guide ------------------------------------------
+#
+# The viewport plays an accepted split from a file written beside the exports:
+# the order the parts go together in, the heading each one came out along, and
+# how far to move them. The stub builds write no model files, so the guide in
+# these runs draws nothing; the file does not depend on the drawing.
+
+MOTION = "assembly.json"
+
+
+def _motion(directory: Path) -> dict:
+    return json.loads((directory / MOTION).read_text())
+
+
+def test_an_accepted_split_writes_its_order_and_headings_beside_the_exports(monkeypatch, tmp_path):
+    _run(FakeGen(), _sound(), monkeypatch, export_dir=tmp_path)
+    assert _motion(tmp_path) == {
+        "order": [0, 1],
+        "releases": [[0.0, 0.0, 1.0], []],
+        "stretch": [1, 1],
+        "explode_fraction": 0.35,
+    }
+
+
+def test_a_verdict_that_did_not_pass_writes_no_motion(tmp_path):
+    # Called directly for the reason the guide's own test of this is: no run
+    # reaches the guide stage with a failed verdict today.
+    Pipeline(generator=FakeGen())._guide(
+        None,
+        "a bracket",
+        GOOD,
+        {
+            "ok": False,
+            "order": [0, 1],
+            "joints": [[1], [0]],
+            "releases": [[0.0, 0.0, 1.0], []],
+            "measured": True,
+        },
+        str(tmp_path),
+        1,
+    )
+    assert not (tmp_path / MOTION).exists()
+
+
+def test_a_single_part_build_writes_no_motion(monkeypatch, tmp_path):
+    lone = AssemblyMeasurements(part_bboxes=[[10.0, 10.0, 10.0]], gaps=[], order=[0])
+    _run(FakeGen(), lone, monkeypatch, export_dir=tmp_path)
+    assert not (tmp_path / MOTION).exists()
+
+
+def test_a_build_with_nowhere_to_export_to_writes_no_motion_and_says_nothing(
+    monkeypatch, tmp_path, caplog
+):
+    # No export directory is an ordinary run -- an evaluation, a dry run -- and
+    # not a failure to report on every one of them, nor a reason to write into
+    # whatever directory the process happens to be in.
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level("WARNING", logger="cadless.pipeline"):
+        result, _ = _run(FakeGen(), _sound(), monkeypatch)
+    assert result.guide is not None
+    assert list(tmp_path.iterdir()) == []
+    assert caplog.records == []
+
+
+def test_a_build_that_writes_no_motion_sweeps_the_last_one_s(monkeypatch, tmp_path):
+    # Callers reuse one export directory across the builds of a turn, and the
+    # file is taken up from whatever the directory holds when a build finishes.
+    # Left in place, an earlier build's order would play over a later model.
+    (tmp_path / MOTION).write_text('{"order": [1, 0], "releases": [[], []]}')
+    lone = AssemblyMeasurements(part_bboxes=[[10.0, 10.0, 10.0]], gaps=[], order=[0])
+    _run(FakeGen(), lone, monkeypatch, export_dir=tmp_path)
+    assert not (tmp_path / MOTION).exists()
+
+
+def test_a_writer_that_fails_costs_the_guide_and_keeps_the_motion(monkeypatch, tmp_path):
+    # The motion is the measured order and headings, not anything said about
+    # them, so losing the prose is no reason to lose the play.
+    class _AngryWriter:
+        def write(self, *a, **kw):
+            raise RuntimeError("no provider")
+
+    result, _ = _run(
+        FakeGen(), _sound(), monkeypatch, export_dir=tmp_path, guide_writer=_AngryWriter()
+    )
+    assert result.guide is None
+    assert _motion(tmp_path)["order"] == [0, 1]
+
+
+def test_a_motion_that_cannot_be_written_costs_the_motion_and_not_the_guide(monkeypatch, tmp_path):
+    # A full disk fails part-way through a write. What is left would be filed
+    # against the version as its motion, and read back as broken JSON.
+    real = Path.write_text
+
+    def full_disk(self, data, *args, **kwargs):
+        if self.name == MOTION:
+            real(self, data[: len(data) // 2], *args, **kwargs)
+            raise OSError("no space left on device")
+        return real(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", full_disk)
+    result, _ = _run(FakeGen(), _sound(), monkeypatch, export_dir=tmp_path)
+    monkeypatch.undo()
+    assert result.guide is not None
+    assert not (tmp_path / MOTION).exists()
+
+
+def test_a_heading_that_is_not_a_number_writes_no_motion(tmp_path):
+    # Python writes an infinite float as ``Infinity``, which is not JSON: the
+    # browser's parser would throw on the whole file. Refused here, it costs the
+    # motion the way a failed write does, rather than filing a file nothing reads.
+    Pipeline._write_motion(tmp_path, [1, 0], [[float("inf"), 0.0, 0.0], []])
+    assert not (tmp_path / MOTION).exists()
+
+
+def test_a_heading_that_is_nan_is_written_as_a_part_that_stays_put(tmp_path):
+    # NaN is no direction, so it is not refused like an infinity: its part is
+    # filed the way the one left standing is, and the rest of the motion stands.
+    Pipeline._write_motion(tmp_path, [1, 0], [[float("nan"), 0.0, 0.0], [0.0, 0.0, 1.0]])
+    assert _motion(tmp_path)["releases"] == [[], [0.0, 0.0, 1.0]]
 
 
 def test_an_unrunnable_check_refuses_rather_than_passing(monkeypatch):

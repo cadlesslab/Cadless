@@ -14,6 +14,7 @@ uniformly.
 
 from __future__ import annotations
 
+import copy
 import os
 import re
 from pathlib import Path
@@ -92,6 +93,36 @@ def export_step(result, out_dir: str, name: str = "model") -> str:
     return path
 
 
+def _location_as_a_child(shape):
+    """`shape` with any Location of its own moved one level down, as a child's.
+
+    build123d turns a Z-up model into glTF's Y-up by multiplying the rotation
+    onto the right of the exported shape's own Location. That is the right
+    side for the geometry and the wrong side for the Location: a shape that sits
+    where it is because of its Location keeps its geometry turned but has its
+    placement written unturned, so it is drawn somewhere else -- and the parts
+    of a split build each carry one, so they are drawn apart from each other.
+    Inside a compound with no Location of its own, the turn lands on the
+    compound and the shape's Location is composed beneath it, which is the
+    order a viewer needs.
+
+    A shape already at the identity is handed back as it is. Its file is then
+    the one it has always been, and a level of nesting added to every build
+    would change files nothing was wrong with.
+
+    The compound holds a deep copy, never the caller's object. build123d moves
+    a child into the compound that adopts it, which would take the shape out of
+    any assembly it belongs to; and a shallow copy shares the caller's
+    underlying OCCT shape, which OCCT freezes once it is put into a compound,
+    after which nothing can be added to it or taken out.
+    """
+    from build123d import Compound
+
+    if shape.location.wrapped.IsIdentity():
+        return shape
+    return Compound(children=[copy.deepcopy(shape)])
+
+
 def export_glb(
     result,
     out_dir: str,
@@ -109,7 +140,7 @@ def export_glb(
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{name}.glb")
     export_gltf(
-        result,
+        _location_as_a_child(result),
         path,
         binary=True,
         linear_deflection=deflection if deflection is not None else settings.gltf_deflection,

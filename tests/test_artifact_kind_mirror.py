@@ -12,12 +12,13 @@ quiet in its own way:
 * a kind in ``ArtifactKind`` and not ``ORDER`` type-checks and still never
   appears, because the menu renders that list rather than the union.
 
-``_MEDIA`` is deliberately *not* required to equal the rest. ``thumbnail`` and
-``guide`` are served but never exported: they are pictures the engine made about
-a build rather than formats the build was converted to, and keeping them out of
-``EXPORTERS`` is what keeps them out of the export menu and out of the per-part
-``model_p*`` naming that ``backend.artifact_io.exported_parts`` reads. So the
-containment below is the contract, and an equality here would forbid the design.
+``_MEDIA`` is deliberately *not* required to equal the rest. ``thumbnail``,
+``guide`` and ``assembly`` are served but never exported: they are things the
+engine made about a build rather than formats the build was converted to, and
+keeping them out of ``EXPORTERS`` is what keeps them out of the export menu and
+out of the per-part ``model_p*`` naming that ``backend.artifact_io.exported_parts``
+reads. So the containment below is the contract, and an equality here would
+forbid the design.
 """
 
 from __future__ import annotations
@@ -80,8 +81,9 @@ def test_every_exported_kind_has_a_media_type():
 
 
 def test_a_kind_served_without_being_exported_is_allowed():
-    # The other direction is open on purpose, and this is what says so: thumbnail
-    # and guide are pictures of a build rather than formats it was converted to.
+    # The other direction is open on purpose, and this is what says so: thumbnail,
+    # guide and assembly are things made about a build rather than formats it was
+    # converted to.
     # Were this to start failing, the containment above had been tightened into
     # an equality and the design went with it.
     served_only = set(_MEDIA) - set(EXPORTERS)

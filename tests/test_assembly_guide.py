@@ -13,6 +13,7 @@ from PIL import Image
 
 from cadless.assembly_guide import (
     STEP_FRAME_MIN_PARTS,
+    _frame_offsets,
     compose,
     guide_frames,
 )
@@ -86,6 +87,42 @@ def test_a_part_with_no_recorded_heading_does_not_move():
     # Nothing to assert on pixels here; the movement is checked through compose
     # above. What this pins is that an empty heading is accepted at all rather
     # than raising, which is the shape every anchor arrives in.
+
+
+# A beam split end to end: part 2 stays, and parts 1 and then 0 were slid on
+# along +X, so both come off along -X, part 0 first.
+_CHAIN_ORDER = [2, 1, 0]
+_CHAIN_RELEASES = [[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], []]
+
+
+def test_an_exploded_chain_opens_every_joint_rather_than_rejoining_its_pieces():
+    # Sent the same distance, the two pieces that leave the same way would be
+    # drawn joined again, and three pieces would look like two.
+    offsets = _frame_offsets(_CHAIN_ORDER, _CHAIN_ORDER, _CHAIN_RELEASES, {0, 1, 2}, 10.0)
+    assert offsets == [[0.0, 0.0, 0.0], [-10.0, 0.0, 0.0], [-20.0, 0.0, 0.0]]
+
+
+def test_parts_leaving_in_different_directions_each_go_one_distance():
+    # A lid lifted off and a side panel slid out already part company; pushing
+    # the later one further would only shrink every frame to fit it.
+    order, releases = [0, 1, 2], [[], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
+    offsets = _frame_offsets(order, order, releases, {0, 1, 2}, 10.0)
+    assert offsets == [[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]]
+
+
+def test_the_motion_says_how_far_each_part_goes_once_all_are_apart():
+    # The viewport spaces the parts by these counts rather than deciding again
+    # which headings match, so its chain opens exactly as the exploded frame's.
+    from cadless.assembly_guide import motion_payload
+
+    assert motion_payload(_CHAIN_ORDER, _CHAIN_RELEASES)["stretch"] == [2, 1, 1]
+
+
+def test_a_part_moved_alone_in_its_frame_goes_one_distance():
+    # A step frame moves only the part going on; the pieces placed before it are
+    # at rest, so there is nothing to keep clear of.
+    offsets = _frame_offsets(_CHAIN_ORDER, _CHAIN_ORDER, _CHAIN_RELEASES, {0}, 10.0)
+    assert offsets[2] == [-10.0, 0.0, 0.0]
 
 
 # --- how many frames ------------------------------------------------------
@@ -181,3 +218,25 @@ def test_an_order_that_does_not_name_every_part_draws_nothing():
     # Drawing it anyway would put a picture to a sequence nothing established.
     parts = [_cube(), _cube((0.0, 0.0, 10.2))]
     assert guide_frames(parts, order=[0], releases=[[], []]) == []
+
+
+# --- the motion the viewport plays ----------------------------------------
+
+
+def test_the_motion_has_a_heading_slot_for_every_part_even_with_none_measured():
+    # An engine that measured the order but recorded no headings hands over an
+    # empty list. The viewport reads one entry per part, so each part gets an
+    # empty one -- no heading, stays put -- rather than the list running short.
+    from cadless.assembly_guide import motion_payload
+
+    assert motion_payload([1, 0], [])["releases"] == [[], []]
+
+
+def test_each_heading_is_filed_under_its_part_not_its_place_in_the_order():
+    # The viewport moves part i along releases[i]. Filed by position in the
+    # order instead, an order that is not 0, 1, 2 would send each part off along
+    # another part's heading -- and the identity order hides that completely.
+    from cadless.assembly_guide import motion_payload
+
+    releases = [[0.0, 0.0, 1.0], [], [1.0, 0.0, 0.0]]
+    assert motion_payload([2, 0, 1], releases)["releases"] == releases

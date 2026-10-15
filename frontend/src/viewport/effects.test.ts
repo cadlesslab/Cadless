@@ -37,4 +37,25 @@ describe("groundConfig", () => {
   it("returns null for a degenerate (zero-footprint) box", () => {
     expect(groundConfig(boxAround([0, 5, 0]))).toBeNull();
   });
+
+  describe("with an assembly taken apart", () => {
+    // The model spans -1..1 on every axis; one part leaves 4 units along +x.
+    const model = boxAround([2, 2, 2]);
+    const sideways = new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(5, 1, 1));
+
+    it("spreads under the parts that left, not just the assembled model", () => {
+      const cfg = groundConfig(model, sideways)!;
+      expect(cfg.pos[0]).toBeCloseTo(2, 6); // centred on -1..5
+      expect(cfg.scale).toBeGreaterThanOrEqual(6);
+    });
+
+    it("stays under the assembled model when a part leaves downward", () => {
+      // Lowered to the part that left, the plane would hang below the model at
+      // rest -- the view most readers see -- with the shadow detached from it.
+      const below = new THREE.Box3(new THREE.Vector3(-1, -3, -1), new THREE.Vector3(1, 1, 1));
+      const y = groundConfig(model, below)!.pos[1];
+      expect(y).toBeLessThan(-1);
+      expect(y).toBeGreaterThan(-1.1);
+    });
+  });
 });

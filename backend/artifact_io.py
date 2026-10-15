@@ -17,6 +17,7 @@ import re
 import shutil
 from pathlib import Path
 
+from cadless.assembly_guide import MOTION_FILE
 from cadless.exporters import EXPORTERS, exported_parts
 from cadless.scoped_store import AnyStore
 
@@ -27,6 +28,14 @@ from cadless.scoped_store import AnyStore
 #: then silently not found. It reaches a reader by a media type on the download
 #: route and nothing else.
 GUIDE_KIND = "guide"
+
+#: The kind an assembly's motion is filed under: the measured order and headings
+#: the viewport plays the parts apart and together from. Kept out of
+#: ``EXPORTERS`` for the reason ``GUIDE_KIND`` is: it is not a format the model
+#: was exported to, and one file for the whole build does not meet the per-part
+#: naming :func:`exported_parts` reads -- so it would be written and then never
+#: found. It reaches a reader on its own route.
+ASSEMBLY_KIND = "assembly"
 
 #: ``guide_f0.png``, ``guide_f1.png``. Numbered like the parts and parsed the same
 #: way, for the same reason: the order these are read in is the ordinal each is
@@ -75,5 +84,14 @@ async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Pat
         target = dest / path.name
         shutil.copy(path, target)
         await store.add_artifact(version_id, GUIDE_KIND, str(target))
+        written += 1
+    # The motion through the same funnel too, as the one file of its kind: part
+    # 0. A build that left none registers none, rather than a row for a file
+    # that is not there.
+    motion = src / MOTION_FILE
+    if motion.is_file():
+        target = dest / motion.name
+        shutil.copy(motion, target)
+        await store.add_artifact(version_id, ASSEMBLY_KIND, str(target))
         written += 1
     return written

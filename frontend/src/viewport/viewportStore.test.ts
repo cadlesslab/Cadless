@@ -85,6 +85,94 @@ describe("ViewportStore", () => {
     expect(s.get().preview).toBeNull();
   });
 
+  describe("assembly play", () => {
+    /** A store holding a model with `k` joints, `apart` of the way through. */
+    function playing(k: number, apart = 0): ViewportStore {
+      const s = new ViewportStore();
+      s.setAssemblySteps(k);
+      s.setAssemblyPosition(apart);
+      return s;
+    }
+
+    it("offers nothing to play until a model says it has joints", () => {
+      expect(new ViewportStore().get()).toMatchObject({
+        assemblySteps: 0,
+        assemblyPosition: 0,
+        assemblyPlay: null,
+      });
+    });
+
+    it("keeps the position between assembled and every joint apart", () => {
+      const s = playing(3);
+      s.setAssemblyPosition(5);
+      expect(s.get().assemblyPosition).toBe(3);
+      s.setAssemblyPosition(-1);
+      expect(s.get().assemblyPosition).toBe(0);
+    });
+
+    it("steps to the next whole joint, finishing one that is part way", () => {
+      const s = playing(3, 1.3);
+      s.stepAssembly(1);
+      expect(s.get().assemblyPosition).toBe(2);
+      s.setAssemblyPosition(1.3);
+      s.stepAssembly(-1);
+      expect(s.get().assemblyPosition).toBe(1);
+    });
+
+    it("steps no further than either end", () => {
+      const s = playing(3, 3);
+      s.stepAssembly(1);
+      expect(s.get().assemblyPosition).toBe(3);
+      s.setAssemblyPosition(0);
+      s.stepAssembly(-1);
+      expect(s.get().assemblyPosition).toBe(0);
+    });
+
+    it("stops playing when stepped, so the step is where it stays", () => {
+      const s = playing(3);
+      s.playAssembly("apart");
+      s.stepAssembly(1);
+      expect(s.get().assemblyPlay).toBeNull();
+    });
+
+    it("starts a new model assembled and still", () => {
+      const s = playing(3, 2);
+      s.playAssembly("apart");
+      s.setAssemblySteps(4);
+      expect(s.get()).toMatchObject({ assemblySteps: 4, assemblyPosition: 0, assemblyPlay: null });
+    });
+
+    it.each(["measure", "section"] as const)(
+      "puts the parts back together when %s is chosen",
+      (tool) => {
+        // Both work on the model as it is assembled: a section box measured
+        // around parts that are apart, or a distance between two of them, is a
+        // reading of a shape that does not exist.
+        const s = playing(3, 2);
+        s.playAssembly("apart");
+        s.setTool(tool);
+        expect(s.get()).toMatchObject({ tool, assemblyPosition: 0, assemblyPlay: null });
+      },
+    );
+
+    it("leaves the parts where they are when orbiting is chosen", () => {
+      const s = playing(3, 2);
+      s.setTool("none");
+      expect(s.get().assemblyPosition).toBe(2);
+    });
+
+    it.each(["measure", "section"] as const)(
+      "leaves %s when the parts start to come apart",
+      (tool) => {
+        const s = playing(3);
+        s.setTool(tool);
+        s.addMeasurePoint([0, 0, 0]);
+        s.setAssemblyPosition(0.5);
+        expect(s.get()).toMatchObject({ tool: "none", measurePoints: [], assemblyPosition: 0.5 });
+      },
+    );
+  });
+
   it("clearing a preview nobody is showing tells nobody", () => {
     // Every return to this machine's work calls it, and most of those times
     // there was nothing to end.

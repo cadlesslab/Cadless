@@ -50,6 +50,47 @@ EXPLODE_FRACTION = 0.35
 #: it somewhere.
 _HEADING_EPSILON = 1e-9
 
+#: How close two unit headings have to be to count as one direction.
+_SAME_HEADING_TOLERANCE = 1e-6
+
+#: The file a checked assembly's motion is written to, beside its exports.
+MOTION_FILE = "assembly.json"
+
+
+def motion_payload(order: Sequence[int], releases: Sequence[Sequence[float]]) -> dict:
+    """The measured order and headings, in the form the viewport plays them from.
+
+    The same facts the frames are drawn from, handed on rather than drawn, and
+    carrying the fraction the frames are drawn with: a player that moves each
+    part by it moves it as far as a frame does, from one number rather than a
+    second copy of it that could drift.
+
+    ``releases`` comes back with one entry per part, filed under the part's own
+    index rather than its place in the order. A part with no heading -- the one
+    left standing, or every part when the engine that measured the build did not
+    record headings -- gets an empty entry, which means "stays put", rather than
+    a direction nobody measured or a list that runs short of the parts.
+
+    ``stretch`` is, per part index, how many of those travels the part goes out
+    once every part is apart: the spacing of an exploded view with every part
+    moving, which is what a frame showing them all is drawn with, handed on for
+    the same reason as the fraction, so the player does not decide again which
+    headings match.
+    """
+    headings = [
+        [float(c) for c in releases[index]]
+        if index < len(releases) and _is_heading(releases[index])
+        else []
+        for index in range(len(order))
+    ]
+    everything = set(order)
+    return {
+        "order": [int(index) for index in order],
+        "releases": headings,
+        "stretch": [_stretch(index, order, headings, everything) for index in range(len(order))],
+        "explode_fraction": EXPLODE_FRACTION,
+    }
+
 
 def compose(meshes: Sequence[np.ndarray], offsets: Sequence[Sequence[float]]) -> np.ndarray:
     """The meshes as one triangle array, each moved by its own offset."""
@@ -93,7 +134,7 @@ def guide_frames(
     drawings = [
         compose(
             [part_meshes[index] for index in shown],
-            [_offset(index, releases, moving, distance) for index in shown],
+            _frame_offsets(shown, order, releases, moving, distance),
         )
         for _, shown, moving in plans
     ]
@@ -123,6 +164,46 @@ def _frame_plans(count: int, order: Sequence[int]) -> list[tuple[str, list[int],
     ]
 
 
+def _frame_offsets(
+    shown: Sequence[int],
+    order: Sequence[int],
+    releases: Sequence[Sequence[float]],
+    moving: set[int],
+    distance: float,
+) -> list[list[float]]:
+    """Where each shown part sits in one frame, in the order they are shown.
+
+    A moved part goes one ``distance`` out, plus one more for every other part
+    moved in the same frame that comes off after it along the same heading --
+    one placed before it in the order. Sent the same distance, parts released
+    the same way would be drawn joined again, so a beam split end to end into
+    three would look like two. Parts leaving in different directions part
+    company anyway, and a part moved alone has nothing to keep clear of.
+    """
+    return [
+        _offset(index, releases, moving, distance * _stretch(index, order, releases, moving))
+        for index in shown
+    ]
+
+
+def _stretch(
+    index: int, order: Sequence[int], releases: Sequence[Sequence[float]], moving: set[int]
+) -> int:
+    """How many distances a moved part goes out; see :func:`_frame_offsets`."""
+    if index not in moving or index >= len(releases) or not _is_heading(releases[index]):
+        return 1
+    heading = _unit(releases[index])
+    placed_before = list(order)[: list(order).index(index)]
+    return 1 + sum(
+        1
+        for other in placed_before
+        if other in moving
+        and other < len(releases)
+        and _is_heading(releases[other])
+        and float(np.dot(_unit(releases[other]), heading)) >= 1 - _SAME_HEADING_TOLERANCE
+    )
+
+
 def _offset(
     index: int, releases: Sequence[Sequence[float]], moving: set[int], distance: float
 ) -> list[float]:
@@ -134,8 +215,12 @@ def _offset(
         # The part left standing has no heading, and neither has any part when an
         # older engine measured the build. Both belong where they are.
         return [0.0, 0.0, 0.0]
+    return list(_unit(heading) * distance)
+
+
+def _unit(heading: Sequence[float]) -> np.ndarray:
     vector = np.asarray(heading, dtype=np.float64)
-    return list(vector / float(np.linalg.norm(vector)) * distance)
+    return vector / float(np.linalg.norm(vector))
 
 
 def _is_heading(heading: Sequence[float]) -> bool:

@@ -1,4 +1,4 @@
-"""Artifact serving: STEP/STL/OBJ download, GLB and thumbnail fetch."""
+"""Artifact serving: STEP/STL/OBJ download, GLB, thumbnail and assembly fetch."""
 
 from __future__ import annotations
 
@@ -22,13 +22,18 @@ _MEDIA = {
     # A drawing of how the parts go together. Served like a thumbnail and, like
     # one, absent from EXPORTERS: it is not a format the model was exported to.
     "guide": "image/png",
+    # The order and headings an assembly is played from. Data for the viewport
+    # rather than a file for the user, and for the same reason as the guide not
+    # an exported format.
+    "assembly": "application/json",
 }
 
 
 #: Kinds a browser consumes in place rather than saving: the viewport loads a
-#: mesh and an ``<img>`` tag loads a thumbnail. Named here rather than left to
-#: each route, so every route serves a given kind the same way.
-_INLINE = {"glb", "thumbnail", "guide"}
+#: mesh and reads an assembly's motion, and an ``<img>`` tag loads a thumbnail.
+#: Named here rather than left to each route, so every route serves a given
+#: kind the same way.
+_INLINE = {"glb", "thumbnail", "guide", "assembly"}
 
 #: The largest value SQLite stores as an integer. Anything above it raises out of
 #: the driver at bind time rather than answering, so it is refused at the edge.
@@ -77,6 +82,16 @@ async def get_glb(version_id: int, store: ScopedStore = Depends(get_store)):
 async def get_thumbnail(version_id: int, store: ScopedStore = Depends(get_store)):
     """The baked catalog thumbnail PNG (#21)."""
     return await _download(version_id, "thumbnail", store)
+
+
+@router.get("/assembly")
+async def get_assembly(version_id: int, store: ScopedStore = Depends(get_store)):
+    """How a checked assembly's parts go together, as the viewport plays them.
+
+    A fixed address rather than a part of ``/{kind}/{part}``: a version has one
+    of these or none, so a part number would only be one more thing to get wrong.
+    """
+    return await _download(version_id, "assembly", store)
 
 
 @router.get("/{kind}/{part}")
