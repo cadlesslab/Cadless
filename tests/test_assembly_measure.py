@@ -769,12 +769,61 @@ def test_a_pin_with_a_head_wider_than_its_bore_is_not_settled_by_the_bore():
 
 
 def test_a_part_of_two_solids_is_not_settled_by_a_bore_one_of_them_sits_in():
-    # The second solid sits clear of the bore's cylinder, so nothing connects it
-    # to the one inside -- and pushed down, it lands on the block.
+    # The second solid sits outside the bore's cylinder, so the part is not inside
+    # the bore though one of its solids is -- and pushed down, it lands on the block.
     from build123d import Compound
 
     pin = Compound([Cylinder(5, 40), Pos(12, 0, 15) * Box(2, 2, 2)])
     assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1)) == BLOCKED
+
+
+def _pin_bulging_past_its_bore():
+    """A lofted pin whose middle bulges 0.01 mm past its bore, above a bored block.
+
+    The pin's faces are B-splines, and at this orientation a distance query
+    between it and the bore's cylinder misses where its face crosses the cylinder
+    away from every edge -- reporting a gap of about 0.015 mm that is not there.
+    Returns the pin, the block and the heading that pushes the pin into the bore.
+    """
+    from build123d import BuildPart, BuildSketch, Circle, Locations, Plane, loft
+
+    bore = 5 + PIN_CLEARANCE
+    turn = Rot(16.178, 258.639, 119.143)
+    with BuildPart() as made:
+        for level in range(5):
+            plane = Plane.XY.offset(-20 + 10 * level).rotated((0, 0, 221.232))
+            with BuildSketch(plane):
+                with Locations((0, bore + 0.01 - 5 if level == 2 else 0)):
+                    Circle(5)
+        loft()
+    pin = turn * (Pos(0, 0, 31) * made.part)
+    block = turn * (Box(30, 30, 20) - Cylinder(bore, 22))
+    down = Vector((turn * Pos(0, 0, -1)).position).normalized()
+    return pin, block, down
+
+
+def test_a_pin_bulging_past_its_bore_is_not_settled_by_the_bore():
+    from build123d import Location
+
+    from cadless.assembly_check import OVERLAP_EPSILON_MM3, _shared_volume
+
+    pin, block, down = _pin_bulging_past_its_bore()
+    deepest = max(_shared_volume(pin.moved(Location(down * t)), block) for t in (21, 25, 31))
+    assert deepest > OVERLAP_EPSILON_MM3, "the fixture lost its clash"
+    assert _rule([pin, block], 0, (down.X, down.Y, down.Z)) == BLOCKED
+
+
+def test_a_part_whose_box_cannot_be_taken_is_not_read_as_clear(monkeypatch):
+    # The channel rising meets the bar. With no box for the bar, the channel's own
+    # sweep cannot be checked against it, and that must not read as nothing met.
+    import cadless.assembly_check as module
+
+    channel, bar = _channel_and_bar()
+    real = module._box_of
+    monkeypatch.setattr(
+        module, "_box_of", lambda shape: None if shape is bar.wrapped else real(shape)
+    )
+    assert _rule([channel, bar], 0, (0, 0, 1)) == BLOCKED
 
 
 def test_a_walk_never_steps_over_a_clash_shorter_than_the_smallest_step():

@@ -1171,8 +1171,9 @@ _HEADING_KEY_DECIMALS = 12
 #: line, so the cylinders of one bore -- split at a seam or by a cut -- share one.
 _AXIS_KEY_DECIMALS = 6
 
-#: How far past a part's ends the bore test's axis segment and tube reach, in
-#: millimetres. Any positive margin does; it only keeps both clear of the ends.
+#: How far past a part's ends the bore test's axis segment, tube and cylinder
+#: reach, in millimetres. Any positive margin does; it only keeps them clear of
+#: the ends.
 _SPAN_MARGIN_MM = 1.0
 
 #: The tolerance the bore test's tube is built with -- the kernel's own confusion
@@ -1223,15 +1224,20 @@ def _bore_lines(axes, direction):
 
 
 def _one_inside_the_other(parts, first, second, line, budget) -> bool:
-    """Whether one part lies strictly inside a round bore, about ``line``, of the other.
+    """Whether one part lies inside a round bore, about ``line``, of the other.
 
-    The outer part's nearest approach to the axis is its bore. The inner part lies
-    inside that bore if it comes nearer the axis and never reaches the cylinder of
-    the bore's radius: a solid is connected, so a piece of it outside the cylinder
-    would mean a piece of it on the cylinder. Each distance is taken over a
-    stretch of axis or cylinder spanning the part measured, which holds every point
-    that part's points are nearest to. Their shadows across the line -- one inside
-    a circle, the other outside it -- then never meet, however far either slides.
+    Distances only place a test cylinder: the outer part's nearest approach to the
+    axis is its bore, and the cylinder goes halfway across the gap the inner part
+    leaves to it. The proof is by volume -- none of the inner part outside the
+    cylinder, none of the outer part inside it, over a stretch of axis spanning
+    both. Their shadows across the line, one inside a circle and the other
+    outside it, then never meet however far either slides.
+
+    By volume rather than by distance because a distance search can miss the
+    point where a curved face crosses a cylinder away from any of its edges, and
+    so report a gap that is not there; a boolean does not depend on finding that
+    point. A distance that misleads only misplaces the cylinder, and a misplaced
+    cylinder fails one of the two booleans rather than passing both.
     """
     point, heading, _ = line
     spans = {index: _span(parts[index], heading) for index in (first, second)}
@@ -1246,14 +1252,26 @@ def _one_inside_the_other(parts, first, second, line, budget) -> bool:
             return False
     inner, outer = sorted((first, second), key=lambda index: reach[index])
     bore = reach[outer]
-    if reach[inner] >= bore - _CONTACT_MM or not _is_one_solid(parts[inner]):
+    if reach[inner] >= bore - _CONTACT_MM:
         return False
     tube = _tube(point, heading, bore, spans[inner])
     if tube is None:
         return False
     budget.spend()
     gap = _distance(parts[inner], tube)
-    return gap is not None and gap > _CONTACT_MM
+    if gap is None or gap <= _CONTACT_MM:
+        return False
+    both = (min(spans[first][0], spans[second][0]), max(spans[first][1], spans[second][1]))
+    rod = _rod(point, heading, bore - gap / 2, both)
+    if rod is None:
+        return False
+    budget.spend()
+    outside = _cut_volume(parts[inner], rod)
+    if outside is None or outside > OVERLAP_EPSILON_MM3:
+        return False
+    budget.spend()
+    inside = _shared_volume(parts[outer], rod)
+    return inside is not None and inside <= OVERLAP_EPSILON_MM3
 
 
 def _line_key(direction) -> tuple[float, float, float]:
@@ -1310,12 +1328,41 @@ def _tube(point, heading, radius, span):
     return Face(maker.Face())
 
 
-def _is_one_solid(part) -> bool:
-    """Whether ``part`` is a single solid, so one connected piece of material."""
+def _rod(point, heading, radius, span):
+    """A solid cylinder of ``radius`` about the axis, over ``span``, or ``None``."""
+    from build123d import Plane, Solid
+
+    if span is None or radius <= _CONTACT_MM:
+        return None
     try:
-        return len(part.solids()) == 1
-    except Exception:  # noqa: BLE001 - not known to be one solid, so not treated as one
-        return False
+        base = point + heading * span[0]
+        return Solid.make_cylinder(radius, span[1] - span[0], Plane(origin=base, z_dir=heading))
+    except Exception:  # noqa: BLE001 - no cylinder, no proof: the caller declines
+        return None
+
+
+def _cut_volume(part, tool) -> float | None:
+    """The volume of ``part`` left outside ``tool``, or ``None`` if it could not be cut."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    try:
+        cut = BRepAlgoAPI_Cut(part.wrapped, tool.wrapped)
+        if not cut.IsDone():
+            return None
+        total = 0.0
+        explorer = TopExp_Explorer(cut.Shape(), TopAbs_SOLID)
+        while explorer.More():
+            props = GProp_GProps()
+            BRepGProp.VolumeProperties_s(explorer.Current(), props)
+            total += abs(props.Mass())
+            explorer.Next()
+        return total
+    except Exception:  # noqa: BLE001 - same: report rather than guess
+        return None
 
 
 def _walk(parts, windows, index, direction, look_ahead, budget):
