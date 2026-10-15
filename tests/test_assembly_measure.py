@@ -470,11 +470,20 @@ def test_a_prism_boolean_that_cannot_run_blocks_rather_than_clears(monkeypatch):
     assert _rule(_channel_and_bar(), 0, (1, 0, 0))
 
 
-def test_a_sweep_that_cannot_be_built_blocks_rather_than_clears(monkeypatch):
+def test_a_sweep_the_kernel_will_not_build_leaves_the_pair_to_the_walk(monkeypatch):
+    # A refused sweep is no clash, so blocking on it refuses a part that comes
+    # out freely; the pair is walked instead, which measures it another way.
     import cadless.assembly_check as module
 
-    assert not _rule(_channel_and_bar(), 0, (1, 0, 0))
     monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
+    assert not _rule(_channel_and_bar(), 0, (1, 0, 0))
+
+
+def test_a_pair_that_can_be_neither_swept_nor_measured_blocks_rather_than_clears(monkeypatch):
+    import cadless.assembly_check as module
+
+    monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
+    monkeypatch.setattr(module, "_distance", lambda first, second: None)
     assert _rule(_channel_and_bar(), 0, (1, 0, 0))
 
 

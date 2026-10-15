@@ -698,8 +698,8 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene
 
     Only the relative motion matters: the part meeting another while it moves
     along the heading is the other meeting the part while it moves back along it.
-    So where the moving part has a face with no exact sweep, the other part is
-    swept backwards instead, and only a pair where neither can be swept exactly is
+    So where the moving part has no exact sweep to use, the other part is swept
+    backwards instead, and only a pair where neither can be swept exactly is
     walked.
 
     A pair where one part sits strictly inside a round bore of the other, about an
@@ -725,21 +725,19 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene
         if scene.nested(index, other, direction, budget):
             continue
         at_rest = scene.shared_at_rest(index, other, budget)
+        if at_rest is None or at_rest > OVERLAP_EPSILON_MM3:
+            # A clash where they stand, or a probe the kernel refused. Blocked
+            # either way: a part freed on a measurement that did not happen is
+            # how a bad order gets out.
+            return _BLOCKED
         if own is _UNBUILT:
             own = _sweep(parts[index], direction, length, budget)
-        if at_rest is None or at_rest > OVERLAP_EPSILON_MM3 or own is None:
-            # A clash where they stand, or a refusal -- of the probe or of the
-            # sweep. Blocked either way: a part freed on a measurement that did
-            # not happen is how a bad order gets out.
-            return _BLOCKED
-        if own is not _INEXACT:
+        if own is not None:
             if _sweep_meets(own, parts[other], budget):
                 return _BLOCKED
             continue
         theirs = _sweep(parts[other], -direction, length, budget)
         if theirs is None:
-            return _BLOCKED
-        if theirs is _INEXACT:
             walked.append(other)
         elif _sweep_meets(theirs, parts[index], budget):
             return _BLOCKED
@@ -751,10 +749,6 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene
     scene.undecided.update((index, other) for other in undecided)
     return verdict
 
-
-#: What :func:`_sweep` answers for a part with a face it has no exact sweep for --
-#: an answer to route around, unlike ``None``, which is a refusal.
-_INEXACT = object()
 
 #: A sweep not built yet: built on first need, since a heading every other part
 #: is excluded from needs none.
@@ -801,12 +795,17 @@ class _Scene:
 
 
 def _sweep(part, direction, length, budget):
-    """The pieces of the part's sweep, ``None`` when the kernel refused, or ``_INEXACT``."""
+    """The pieces of the part's sweep, or ``None`` where there is no exact one to use.
+
+    A surface this module has no exact cut for and a sweep the kernel would not
+    build come to the same thing here: not a clash, and not a clear path either,
+    only a pair to rule another way -- by sweeping the other part, or by walking.
+    """
     budget.spend()
     try:
         return _sweep_pieces(part, direction, length)
     except _NoExactSweep:
-        return _INEXACT
+        return None
 
 
 def _sweep_meets(pieces, part, budget) -> bool:
