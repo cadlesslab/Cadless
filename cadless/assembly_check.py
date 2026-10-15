@@ -31,6 +31,7 @@ not be checked".
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -393,8 +394,8 @@ def _size1(value: float) -> str:
 #: The model is asked to sweep each joint profile along an axis lying in the build
 #: plane, so a correct interlock comes apart along one of these. They are not
 #: relied on alone -- :func:`_candidate_directions` adds directions derived from
-#: the geometry, because a candidate that turns out to be blocked costs one probe
-#: while a missing one costs a false refusal.
+#: the geometry, because a candidate that turns out to be blocked costs a few
+#: kernel calls while a missing one costs a false refusal.
 _AXES = (
     (1.0, 0.0, 0.0),
     (-1.0, 0.0, 0.0),
@@ -404,16 +405,16 @@ _AXES = (
     (0.0, 0.0, -1.0),
 )
 
-#: How many kernel calls the measurement may spend.
+#: How many units of kernel work the measurement may spend.
 #:
-#: Each counts one: a pairwise overlap or distance, building a sweep, one boolean
-#: of a sweep's piece against a part, a bore test's distance, a walk's probe.
-#: The executor's wall clock covers the build, this measurement and the export
-#: together, and a blown clock returns no summary at all rather than a partial
-#: one -- so the search needs a bound of its own rather than borrowing that one.
-#: Sized from the measured cost of a probe. It bounds the *number* of kernel
-#: calls and nothing else -- ``MEASUREMENT_TIME_BUDGET_SECONDS`` beside it is
-#: what bounds their duration. Running out is reported as an unestablished
+#: Each of these counts one: a pairwise overlap or distance, building a sweep,
+#: one boolean of a sweep's piece against a part, a bore test's distance, a
+#: walk's probe. The executor's wall clock covers the build, this measurement and
+#: the export together, and a blown clock returns no summary at all rather than a
+#: partial one -- so the search needs a bound of its own rather than borrowing
+#: that one. It bounds the *number* of those and nothing else, and they differ
+#: widely in cost -- ``MEASUREMENT_TIME_BUDGET_SECONDS`` beside it is what bounds
+#: their duration. Running out is reported as an unestablished
 #: check, never as a pass: work that stopped early has shown nothing.
 #:
 #: One budget covers the whole measurement, the pairwise comparisons included.
@@ -453,7 +454,7 @@ MEASUREMENT_TIME_BUDGET_SECONDS = 10.0
 #: of half the thinnest dimension samples either side of that and calls the part
 #: free. The interval a grazing contact occupies has nothing to do with how thick
 #: either part is, so no fraction of a part's size bounds it.
-_MIN_STEP_FRACTION = 0.02
+_LOOK_AHEAD_FRACTION = 0.02
 
 #: Separation at or below which two solids count as touching rather than apart.
 #:
@@ -584,16 +585,17 @@ def _disassembly_order(parts, budget, scene=None):
     when it says yes.
 
     A round that frees nothing names its parts as trapped only when every heading
-    was blocked by a measured clash. Where some heading stopped at a contact the
-    search could not see past, nothing was shown trapped, so it says which parts
-    touch and what would let it rule instead.
+    was blocked -- by a measured clash, or by a probe the kernel refused. Where
+    some heading stopped at a contact the search could not see past, nothing was
+    shown trapped, so it says which parts touch and what would let it rule
+    instead.
     """
     if len(parts) < 2:
         return list(range(len(parts))), [], [], []
 
     spheres = [_sphere(part) for part in parts]
-    floor = _min_step(parts)
-    if floor is None:
+    look_ahead = _look_ahead(parts)
+    if look_ahead is None:
         return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
     scene = scene or _Scene(parts)
@@ -613,7 +615,7 @@ def _disassembly_order(parts, budget, scene=None):
                 freed = index
                 break
             try:
-                direction = _can_be_freed(parts, spheres, index, others, floor, budget, scene)
+                direction = _can_be_freed(parts, spheres, index, others, look_ahead, budget, scene)
             except _BudgetSpent:
                 return (
                     None,
@@ -654,7 +656,7 @@ def _touching_reason(pairs) -> str:
     )
 
 
-def _can_be_freed(parts, spheres, index, others, floor, budget, scene=None):
+def _can_be_freed(parts, spheres, index, others, look_ahead, budget, scene=None):
     """The heading this part comes out along, or ``None`` if none does.
 
     Returns the direction rather than a yes, because the one that worked is the
@@ -663,27 +665,23 @@ def _can_be_freed(parts, spheres, index, others, floor, budget, scene=None):
     releases along one axis only.
     """
     for direction in _candidate_directions(spheres, index, others):
-        verdict = _rule_heading(parts, spheres, index, others, direction, floor, budget, scene)
+        verdict = _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, scene)
         if verdict == _FREE:
             return direction
     return None
 
 
-def _blocked_along(parts, spheres, index, others, direction, floor, budget) -> bool:
-    """Whether sliding one part along ``direction`` runs it into any other."""
-    return _rule_heading(parts, spheres, index, others, direction, floor, budget) != _FREE
-
-
 #: What ruling one heading can come to. Three answers rather than a yes or no,
 #: because "proved clear" and "not proved clear" are the only two a search that
 #: is never wrong when it says yes can hand on, and "not proved" splits again into
-#: a clash it measured and a contact it could not see past.
+#: blocked -- a clash it measured, or a probe the kernel refused, which no answer
+#: may treat as clear -- and a contact it could not see past.
 _FREE = "free"
 _BLOCKED = "blocked"
 _UNDECIDED = "undecided"
 
 
-def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene=None) -> str:
+def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, scene=None) -> str:
     """Rule whether one part slides along ``direction`` clear of every other.
 
     Decided on the volume the part sweeps over its whole travel rather than on
@@ -744,7 +742,7 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene
     if not walked:
         return _FREE
     verdict, undecided = _walk(
-        parts, {other: windows[other] for other in walked}, index, direction, floor, budget
+        parts, {other: windows[other] for other in walked}, index, direction, look_ahead, budget
     )
     scene.undecided.update((index, other) for other in undecided)
     return verdict
@@ -758,9 +756,11 @@ _UNBUILT = object()
 class _Scene:
     """What the order search works out once per measurement and reuses.
 
-    A heading and its reverse share a line of travel, and the same pair comes up
-    in every round of the search, so a verdict about a pair along a line is kept
-    rather than paid for again.
+    Three things: the volume each pair shares where it stands, which the pairwise
+    phase has already asked; whether one of a pair sits inside a bore of the other
+    along a line, which a heading and its reverse share and every round asks
+    again; and the pairs a walk stopped at undecided in the current round, which
+    is what that round reports if it frees nothing.
     """
 
     def __init__(self, parts) -> None:
@@ -828,13 +828,16 @@ class _NoExactSweep(Exception):
     """Raised for a face whose sweep this module cannot build exactly."""
 
 
-#: Below this, a face's normal counts as square to the heading: the face slides
-#: along itself and its prism is a sheet with no volume. It absorbs the rounding a
-#: rotation leaves in a direction meant to be exact, and nothing more.
+#: Below this, the cosine or sine of an angle between unit vectors counts as zero:
+#: a planar face whose normal is this near square to the heading slides along
+#: itself and sweeps no volume, and an axis this near the heading counts as
+#: running along it. It absorbs the rounding a rotation leaves in a direction
+#: meant to be exact, and nothing more.
 _PARALLEL_COSINE = 1e-9
 
-#: How far each enclosing box is grown before two are compared, in millimetres.
-#: A prefilter only, so erring wide costs a boolean and never an answer.
+#: How far each enclosing box is grown, in millimetres. The boxes prefilter a
+#: sweep's booleans and set how far the bore test reaches along its axis, and in
+#: both erring wide costs a little work and never an answer.
 _BOX_MARGIN_MM = 0.01
 
 
@@ -856,8 +859,9 @@ def _sweep_pieces(part, direction, length):
     trailing piece's prism still lies inside the sweep, so keeping it costs a
     boolean and never an answer.
 
-    ``None`` when the kernel could not build a piece; :class:`_NoExactSweep` for a
-    surface this has no exact cut for.
+    ``None`` when there is no sweep to trust -- a part with no faces, a face that
+    cannot be read, or a piece the kernel would not build; :class:`_NoExactSweep`
+    for a surface this has no exact cut for.
     """
     from build123d import GeomType
     from OCP.BRepCheck import BRepCheck_Analyzer
@@ -968,8 +972,6 @@ def _silhouette_planes(surface, direction):
     A torus at any other angle has a silhouette that lies in no plane, and raises
     :class:`_NoExactSweep` like every other surface.
     """
-    import math
-
     from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder, GeomAbs_Sphere, GeomAbs_Torus
     from OCP.gp import gp_Vec
 
@@ -1003,13 +1005,13 @@ def _silhouette_planes(surface, direction):
 
     x, y = gp_Vec(frame.XDirection()), gp_Vec(frame.YDirection())
     dx, dy = heading.Dot(x), heading.Dot(y)
-    dz = heading.Dot(gp_Vec(frame.Direction()))
+    along = heading.Dot(gp_Vec(frame.Direction()))
     across = math.hypot(dx, dy)
     if across <= _PARALLEL_COSINE:
         # Heading along the axis: a cylinder slides along itself, and a cone's
         # normal keeps one sign all round. Either way there is no ruling to cut at.
         return None if half_angle == 0.0 else []
-    ratio = math.tan(half_angle) * dz / across
+    ratio = math.tan(half_angle) * along / across
     if abs(ratio) >= 1.0:
         return []
     phi = math.atan2(dy, dx)
@@ -1018,7 +1020,7 @@ def _silhouette_planes(surface, direction):
     for u in (phi + spread, phi - spread):
         normal = x * -math.sin(u) + y * math.cos(u)
         # A cylinder's two rulings lie in one plane; cutting by it twice is waste.
-        if not any(abs(abs(normal.Dot(seen)) - 1.0) < 1e-12 for seen in normals):
+        if not any(abs(abs(normal.Dot(seen)) - 1.0) <= _PARALLEL_COSINE for seen in normals):
             normals.append(normal)
     return [(frame.Location(), normal) for normal in normals]
 
@@ -1090,8 +1092,9 @@ def _box_of(shape):
 def _prism_overlap(prism, other) -> float | None:
     """The volume one prism of a sweep shares with another part, or ``None``.
 
-    Straight to the kernel rather than through :func:`_shared_volume`, whose
-    clean-up pass costs more than the boolean itself on a sweep of many pieces.
+    Straight to the kernel rather than through :func:`_shared_volume`, skipping
+    the clean-up pass that function runs, which a sweep of many pieces would pay
+    for once per piece.
     """
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
     from OCP.BRepGProp import BRepGProp
@@ -1115,8 +1118,25 @@ def _prism_overlap(prism, other) -> float | None:
         return None
 
 
+#: Digits a heading is rounded to before it keys a line: rounding noise in a
+#: direction meant to be exact must not split one line into two.
+_HEADING_KEY_DECIMALS = 12
+
+#: Digits, in millimetres, an axis's position is rounded to before it keys a
+#: line, so the cylinders of one bore -- split at a seam or by a cut -- share one.
+_AXIS_KEY_DECIMALS = 6
+
+#: How far past a part's ends the bore test's axis segment and tube reach, in
+#: millimetres. Any positive margin does; it only keeps both clear of the ends.
+_SPAN_MARGIN_MM = 1.0
+
+#: The tolerance the bore test's tube is built with -- the kernel's own confusion
+#: distance, below which it treats two points as one.
+_TUBE_TOLERANCE_MM = 1e-7
+
+
 def _bore_lines(parts, first, second, direction):
-    """The axes of either part's round faces that run along the heading.
+    """The axes of either part's cylindrical faces that run along the heading.
 
     Each comes as ``(point, heading, key)``: a point on the axis, the heading with
     its sign fixed, and a key a heading and its reverse share -- which way along a
@@ -1144,7 +1164,8 @@ def _bore_lines(parts, first, second, direction):
             spot = axis.Location()
             point = Vector(spot.X(), spot.Y(), spot.Z())
             point = point - heading * point.dot(heading)
-            key = (_line_key(heading), tuple(round(v, 6) for v in (point.X, point.Y, point.Z)))
+            spot_key = tuple(round(v, _AXIS_KEY_DECIMALS) for v in (point.X, point.Y, point.Z))
+            key = (_line_key(heading), spot_key)
             lines.setdefault(key, (point, heading, key))
     return list(lines.values())
 
@@ -1186,11 +1207,13 @@ def _one_inside_the_other(parts, first, second, line, budget) -> bool:
 def _line_key(direction) -> tuple[float, float, float]:
     """``direction`` with its sign fixed, so a heading and its reverse share a key."""
     values = (float(direction.X), float(direction.Y), float(direction.Z))
-    sign = next((1.0 if value > 0 else -1.0 for value in values if abs(value) > 1e-12), 1.0)
-    return tuple(round(sign * value, 12) for value in values)
+    sign = next(
+        (1.0 if value > 0 else -1.0 for value in values if abs(value) > _PARALLEL_COSINE), 1.0
+    )
+    return tuple(round(sign * value, _HEADING_KEY_DECIMALS) for value in values)
 
 
-def _span(part, heading, margin: float = 1.0):
+def _span(part, heading, margin: float = _SPAN_MARGIN_MM):
     """How far along ``heading`` the part reaches, with ``margin`` beyond each end."""
     box = _box_of(getattr(part, "wrapped", None))
     if box is None:
@@ -1216,8 +1239,6 @@ def _axis_segment(point, heading, span):
 
 def _tube(point, heading, radius, span):
     """A closed cylindrical face of ``radius`` about the axis, over ``span``."""
-    import math
-
     from build123d import Face
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
     from OCP.Geom import Geom_CylindricalSurface
@@ -1229,7 +1250,9 @@ def _tube(point, heading, radius, span):
     surface = Geom_CylindricalSurface(
         gp_Ax3(gp_Pnt(base.X, base.Y, base.Z), gp_Dir(heading.X, heading.Y, heading.Z)), radius
     )
-    maker = BRepBuilderAPI_MakeFace(surface, 0.0, 2.0 * math.pi, 0.0, span[1] - span[0], 1e-7)
+    maker = BRepBuilderAPI_MakeFace(
+        surface, 0.0, 2.0 * math.pi, 0.0, span[1] - span[0], _TUBE_TOLERANCE_MM
+    )
     if not maker.IsDone():
         return None
     return Face(maker.Face())
@@ -1258,7 +1281,7 @@ def _walk(parts, windows, index, direction, look_ahead, budget):
 
     Walks against several others advance in turn, so one that blocks near the
     start ends the heading before a long walk past another is paid for. Returns
-    the verdict and the other parts the walk stopped at undecided.
+    the verdict and, when it is undecided, the other parts the walk stopped at.
     """
     from build123d import Location
 
@@ -1333,7 +1356,7 @@ def _candidate_directions(spheres, index, others):
     The geometry-derived ones cover a joint whose slide axis is not aligned to an
     axis. Adding a candidate can only remove a false refusal, never create a false
     pass: every direction offered is still checked against the solids, so one that
-    is not really free is rejected on the probe.
+    is not really free is rejected when it is ruled.
     """
     from build123d import Vector
 
@@ -1358,7 +1381,7 @@ def _sphere(part):
     return (float(centre.X), float(centre.Y), float(centre.Z)), float(radius)
 
 
-def _min_step(parts) -> float | None:
+def _look_ahead(parts) -> float | None:
     """How far past a contact the walk looks for a clash, from the thinnest part.
 
     ``None`` for a part with no measurable size, which stops the search.
@@ -1371,11 +1394,11 @@ def _min_step(parts) -> float | None:
             thinnest = smallest
     if thinnest is None or thinnest <= 0.0:
         return None
-    return thinnest * _MIN_STEP_FRACTION
+    return thinnest * _LOOK_AHEAD_FRACTION
 
 
 class _BudgetSpent(Exception):
-    """Raised when the order search has used every probe it was allowed."""
+    """Raised when the measurement has used all the kernel work it was allowed."""
 
 
 class _Budget:

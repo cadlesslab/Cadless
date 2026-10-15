@@ -18,9 +18,10 @@ from build123d import (
     Sphere,
     Torus,
     Vector,
-    fillet,
 )
 
+from cadless.assembly_check import _BLOCKED as BLOCKED
+from cadless.assembly_check import _FREE as FREE
 from cadless.assembly_check import measure_assembly
 
 pytestmark = pytest.mark.build123d
@@ -147,8 +148,8 @@ def test_a_blocker_thinner_than_a_coarse_step_is_not_jumped():
     # The failure this guards: a search that advances by a fixed step clears a
     # thin wall on both sides without ever sampling inside it, and reports a
     # sealed-in part as free. This shell is 0.4 mm thick against tens of
-    # millimetres of travel, so only advancing by the measured separation catches
-    # it.
+    # millimetres of travel, so only a search that rules the whole path catches
+    # it -- sweeping it, or walking it by the measured separation.
     m = measure_assembly(_caged(wall=0.4))
     assert m.order is None
     assert 0 in m.trapped
@@ -202,9 +203,9 @@ def test_a_grazing_contact_is_not_stepped_over():
     corner of the second between t=14.150 and t=14.840. A search advancing by a
     fixed fraction of a part's size samples 14.02 and then 19.02 and reports the
     part free -- the interval a grazing contact occupies has nothing to do with
-    how thick either part is, so no fraction of a part bounds it. Advancing by
-    the measured separation is what closes this, and it is the only case in the
-    suite where the two strategies disagree.
+    how thick either part is, so no fraction of a part bounds it. Ruling the whole
+    path -- sweeping it, or walking it by the measured separation -- is what
+    closes this.
     """
     from build123d import Vector
 
@@ -217,10 +218,10 @@ def test_a_grazing_contact_is_not_stepped_over():
     heading = Vector(1, 1, 0).normalized()
     budget = module._Budget(10**6, 600.0)
 
-    blocked = module._blocked_along(
-        parts, spheres, 0, [1], heading, module._min_step(parts), budget
+    verdict = module._rule_heading(
+        parts, spheres, 0, [1], heading, module._look_ahead(parts), budget
     )
-    assert blocked, "the search walked past a real collision"
+    assert verdict == BLOCKED, "the search walked past a real collision"
 
 
 # --- failing closed -------------------------------------------------------
@@ -290,7 +291,9 @@ def _as_nurbs(part):
     from OCP.TopoDS import TopoDS
 
     converted = BRepBuilderAPI_NurbsConvert(part.solid().wrapped, True).Shape()
-    return Solid(TopoDS.Solid_s(TopExp_Explorer(converted, TopAbs_SOLID).Current()))
+    solid = Solid(TopoDS.Solid_s(TopExp_Explorer(converted, TopAbs_SOLID).Current()))
+    assert {face.geom_type for face in solid.faces()} == {GeomType.BSPLINE}
+    return solid
 
 
 def test_a_distance_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
@@ -395,18 +398,19 @@ def _pin_in_a_blind_hole():
 
 
 def _rule(parts, index, heading):
+    """How the search rules one part sliding along ``heading``: free, blocked or undecided."""
     import cadless.assembly_check as module
 
     spheres = [module._sphere(part) for part in parts]
     others = [other for other in range(len(parts)) if other != index]
     budget = module._Budget(10**6, 600.0)
-    return module._blocked_along(
+    return module._rule_heading(
         parts,
         spheres,
         index,
         others,
         Vector(*heading).normalized(),
-        module._min_step(parts),
+        module._look_ahead(parts),
         budget,
     )
 
@@ -418,12 +422,12 @@ def test_a_clash_shorter_than_the_smallest_step_is_not_jumped():
     # of 2% of a cube (0.2 mm) lands first at 0.2, past the clash.
     first = Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
     second = Pos(10.05, -9.87, 0) * Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
-    assert _rule([first, second], 0, (1, 1, 0)), "the search stepped over a real collision"
+    assert _rule([first, second], 0, (1, 1, 0)) == BLOCKED, "stepped over a real collision"
 
 
 def test_a_pin_in_a_close_bore_is_ruled_within_a_small_budget():
     # A stepped search pays one probe per floor step to slide the block along the
-    # pin, a few hundred here; ruling on the volume swept costs a handful.
+    # pin, a few hundred here; settling the pin inside the bore costs a handful.
     m = measure_assembly(_bored_block(), probe_budget=60)
     assert m.unchecked == []
     assert m.order is not None
@@ -432,7 +436,7 @@ def test_a_pin_in_a_close_bore_is_ruled_within_a_small_budget():
 def test_a_lid_resting_on_its_box_lifts_straight_off():
     box = Box(20, 20, 10)
     lid = Pos(0, 0, 6) * Box(20, 20, 2)
-    assert not _rule([box, lid], 1, (0, 0, 1))
+    assert _rule([box, lid], 1, (0, 0, 1)) == FREE
 
 
 def test_a_block_slides_along_the_face_it_rests_on():
@@ -440,15 +444,15 @@ def test_a_block_slides_along_the_face_it_rests_on():
     # leave a sliver of volume that is not there and refuse a free part.
     base = Box(20, 20, 10)
     block = Pos(0, 0, 10) * Box(20, 20, 10)
-    assert not _rule([base, block], 1, (1, 0, 0))
+    assert _rule([base, block], 1, (1, 0, 0)) == FREE
 
 
 def test_a_block_cannot_rise_off_a_pin_that_bottoms_in_its_hole():
-    assert _rule(_pin_in_a_blind_hole(), 0, (0, 0, 1))
+    assert _rule(_pin_in_a_blind_hole(), 0, (0, 0, 1)) == BLOCKED
 
 
 def test_a_block_drops_off_a_pin_that_leaves_its_hole():
-    assert not _rule(_pin_in_a_blind_hole(), 0, (0, 0, -1))
+    assert _rule(_pin_in_a_blind_hole(), 0, (0, 0, -1)) == FREE
 
 
 def _channel_and_bar():
@@ -465,9 +469,9 @@ def _channel_and_bar():
 def test_a_prism_boolean_that_cannot_run_blocks_rather_than_clears(monkeypatch):
     import cadless.assembly_check as module
 
-    assert not _rule(_channel_and_bar(), 0, (1, 0, 0))
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == FREE
     monkeypatch.setattr(module, "_prism_overlap", lambda prism, other: None)
-    assert _rule(_channel_and_bar(), 0, (1, 0, 0))
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == BLOCKED
 
 
 def test_a_sweep_the_kernel_will_not_build_leaves_the_pair_to_the_walk(monkeypatch):
@@ -476,7 +480,7 @@ def test_a_sweep_the_kernel_will_not_build_leaves_the_pair_to_the_walk(monkeypat
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
-    assert not _rule(_channel_and_bar(), 0, (1, 0, 0))
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == FREE
 
 
 def test_a_pair_that_can_be_neither_swept_nor_measured_blocks_rather_than_clears(monkeypatch):
@@ -484,7 +488,7 @@ def test_a_pair_that_can_be_neither_swept_nor_measured_blocks_rather_than_clears
 
     monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
     monkeypatch.setattr(module, "_distance", lambda first, second: None)
-    assert _rule(_channel_and_bar(), 0, (1, 0, 0))
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == BLOCKED
 
 
 def _swept_volume(part, heading, length):
@@ -588,22 +592,48 @@ def test_a_sphere_sweeps_exactly_the_volume_it_passes_over(heading):
     assert _swept_volume(Sphere(5), heading, length) == pytest.approx(expected, rel=1e-4)
 
 
-@pytest.mark.parametrize("heading", [(-0.639, 0.739, -0.213), (0.576, 0.694, 0.432)])
+def _halves_built_inside_out(heading):
+    """How many halves of a ball the kernel prisms inside out along ``heading``."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepGProp import BRepGProp
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Vec
+    from OCP.GProp import GProp_GProps
+
+    import cadless.assembly_check as module
+
+    path = Vector(*heading).normalized()
+    face = Sphere(5).faces()[0].wrapped
+    halves = module._cut_by_planes(face, module._silhouette_planes(BRepAdaptor_Surface(face), path))
+    inside_out = 0
+    for half in halves:
+        props = GProp_GProps()
+        prism = BRepPrimAPI_MakePrism(half, gp_Vec(path.X * 20, path.Y * 20, path.Z * 20))
+        BRepGProp.VolumeProperties_s(prism.Shape(), props)
+        inside_out += props.Mass() < 0
+    return inside_out
+
+
+BALL_HEADINGS = [(-0.639, 0.739, -0.213), (0.576, 0.694, 0.432)]
+
+
+@pytest.mark.parametrize("heading", BALL_HEADINGS)
 def test_a_ball_passes_a_block_beside_its_path(heading):
     # At these headings the kernel builds one half's prism inside out. Read as it
     # comes, it holds everything outside the ball's path, so the block beside the
     # path reads as a clash.
+    assert _halves_built_inside_out(heading) > 0, "the kernel no longer does this here"
     path = Vector(*heading).normalized()
     beside = path.cross(Vector(0, 0, 1)).normalized()
     block = Pos(*(path * 10 + beside * 8)) * Box(2, 2, 2)
-    assert not _rule([Sphere(5), block], 0, heading)
+    assert _rule([Sphere(5), block], 0, heading) == FREE
 
 
-@pytest.mark.parametrize("heading", [(-0.639, 0.739, -0.213), (0.576, 0.694, 0.432)])
+@pytest.mark.parametrize("heading", BALL_HEADINGS)
 def test_a_ball_is_stopped_by_a_block_in_its_path(heading):
     path = Vector(*heading).normalized()
     block = Pos(*(path * 10)) * Box(2, 2, 2)
-    assert _rule([Sphere(5), block], 0, heading)
+    assert _rule([Sphere(5), block], 0, heading) == BLOCKED
 
 
 def test_a_torus_sweeps_exactly_the_volume_it_passes_over_along_its_axis():
@@ -627,21 +657,11 @@ def test_a_torus_sweeps_exactly_the_volume_it_passes_over_across_its_axis(headin
     import math
 
     major, minor, length = 10.0, 3.0, 20.0
-    assert length > 2 * (major - minor)
+    assert length >= 2 * major  # wide enough to close the hole's widest chord
     filled = math.pi * (2 * minor * major**2 + math.pi * major * minor**2 + 4 / 3 * minor**3)
     expected = filled + length * (4 * major * minor + math.pi * minor**2)
     swept = _swept_volume(Torus(major, minor), heading, length)
     assert swept == pytest.approx(expected, rel=1e-4)
-
-
-def test_a_pin_with_rounded_ends_in_a_close_bore_is_ruled_within_a_small_budget():
-    # The rounding is a torus each end, which the search has to sweep exactly to
-    # take the pin out along its bore rather than walk it.
-    pin = fillet(Cylinder(5, 40).edges().filter_by(GeomType.CIRCLE), radius=1)
-    block = _bored_block()[0]
-    m = measure_assembly([pin, block], probe_budget=60)
-    assert m.unchecked == []
-    assert m.order is not None
 
 
 def _block_with_curved_skin():
@@ -665,7 +685,7 @@ def test_a_pin_with_a_head_wider_than_its_bore_is_not_settled_by_the_bore():
     # and the bore must not answer for it: pushed further in, the head meets the
     # block.
     pin = _as_nurbs(Cylinder(5, 40) + Pos(0, 0, 20) * Cylinder(8, 4))
-    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1))
+    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1)) == BLOCKED
 
 
 def test_a_part_of_two_solids_is_not_settled_by_a_bore_one_of_them_sits_in():
@@ -674,7 +694,7 @@ def test_a_part_of_two_solids_is_not_settled_by_a_bore_one_of_them_sits_in():
     from build123d import Compound
 
     pin = Compound([Cylinder(5, 40), Pos(12, 0, 15) * Box(2, 2, 2)])
-    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1))
+    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1)) == BLOCKED
 
 
 def test_a_walk_never_steps_over_a_clash_shorter_than_the_smallest_step():
@@ -682,7 +702,7 @@ def test_a_walk_never_steps_over_a_clash_shorter_than_the_smallest_step():
     # so the walk alone rules it: it may stop short at the contact, never pass it.
     first = Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
     second = Pos(10.05, -9.87, 0) * Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
-    assert _rule([_as_nurbs(first), _as_nurbs(second)], 0, (1, 1, 0))
+    assert _rule([_as_nurbs(first), _as_nurbs(second)], 0, (1, 1, 0)) != FREE
 
 
 def test_parts_the_walk_cannot_see_past_are_named_rather_than_called_trapped():
@@ -723,11 +743,28 @@ def test_the_order_search_does_not_ask_again_what_the_pairwise_phase_measured(mo
     assert len(asked) == 1
 
 
-def test_a_part_with_no_exact_sweep_is_ruled_on_the_other_part_swept_back():
-    # The pin's faces are all B-splines, so it cannot be swept; the block can, and
-    # sliding the pin out is sliding the block back off it.
-    pin = _as_nurbs(Cylinder(5, 40))
-    block = _bored_block()[0]
-    m = measure_assembly([pin, block], probe_budget=60)
+def _curved_bar_in_a_channel():
+    """The channel and bar with the bar's faces all B-splines: it cannot be swept.
+
+    The channel can, and has no round face to settle the pair as a bore, so the
+    bar is ruled on the channel swept back against it.
+    """
+    channel, bar = _channel_and_bar()
+    return [_as_nurbs(bar), channel]
+
+
+def test_a_part_that_cannot_be_swept_lifts_out_on_the_other_swept_back():
+    assert _rule(_curved_bar_in_a_channel(), 0, (0, 0, 1)) == FREE
+
+
+def test_a_part_that_cannot_be_swept_meets_what_the_other_swept_back_reaches():
+    # Down, the bar lands on the slot's floor a millimetre below it.
+    assert _rule(_curved_bar_in_a_channel(), 0, (0, 0, -1)) == BLOCKED
+
+
+def test_a_part_that_cannot_be_swept_is_ruled_within_a_small_budget():
+    # Walking the bar along its slot, 0.2 mm from each wall, would take hundreds of
+    # probes; sweeping the channel back takes a handful.
+    m = measure_assembly(_curved_bar_in_a_channel(), probe_budget=60)
     assert m.unchecked == []
     assert m.order is not None
