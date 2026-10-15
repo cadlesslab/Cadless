@@ -687,6 +687,33 @@ def test_parts_the_walk_cannot_see_past_are_named_rather_than_called_trapped():
     assert any("part 1 and part 2 touch" in reason for reason in m.unchecked)
 
 
+def test_a_heading_away_from_a_part_that_is_already_an_axis_is_tried_once():
+    # The hinge's case: the leaf sits straight along -X from the pin, so leading
+    # away from it is +X, which the axes already hold.
+    import cadless.assembly_check as module
+
+    spheres = [((0.0, 0.0, 0.0), 1.0), ((-5.0, 0.0, 0.0), 1.0)]
+    headings = module._candidate_directions(spheres, 0, [1])
+    assert sum(1 for heading in headings if (heading - Vector(1, 0, 0)).length < 1e-9) == 1
+
+
+def test_the_order_search_does_not_ask_again_what_the_pairwise_phase_measured(monkeypatch):
+    # Two blocks that sweep exactly: their shared volume where they stand is asked
+    # once, by the pairwise phase, and not again for every heading tried.
+    import cadless.assembly_check as module
+
+    asked = []
+    real = module._shared_volume
+
+    def counted(first, second):
+        asked.append(1)
+        return real(first, second)
+
+    monkeypatch.setattr(module, "_shared_volume", counted)
+    assert measure_assembly(_mated_pair()).order is not None
+    assert len(asked) == 1
+
+
 def test_a_part_with_no_exact_sweep_is_ruled_on_the_other_part_swept_back():
     # The pin's faces are all B-splines, so it cannot be swept; the block can, and
     # sliding the pin out is sliding the block back off it.

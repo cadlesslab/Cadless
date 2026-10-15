@@ -404,8 +404,10 @@ _AXES = (
     (0.0, 0.0, -1.0),
 )
 
-#: How many solid-to-solid collision probes the order search may spend.
+#: How many kernel calls the measurement may spend.
 #:
+#: Each counts one: a pairwise overlap or distance, building a sweep, one boolean
+#: of a sweep's piece against a part, a bore test's distance, a walk's probe.
 #: The executor's wall clock covers the build, this measurement and the export
 #: together, and a blown clock returns no summary at all rather than a partial
 #: one -- so the search needs a bound of its own rather than borrowing that one.
@@ -437,18 +439,18 @@ MEASUREMENT_TIME_SHARE = 1.0 / 3.0
 #: to divide -- a direct call in a test, and nothing on the pipeline's path.
 MEASUREMENT_TIME_BUDGET_SECONDS = 10.0
 
-#: Smallest travel step, as a fraction of the thinnest part dimension.
+#: How far past a contact the walk looks for a clash, as a fraction of the thinnest
+#: part dimension.
 #:
-#: The search advances by however far apart the two solids currently are, which
-#: is what makes it safe rather than sampled -- moving less than the present
-#: separation cannot bring them into contact, so no collision can be stepped
-#: over. This floor exists only for the case that argument does not cover: two
-#: parts already touching, where the separation is zero and advancing by it
-#: would not progress at all.
+#: Only the walk uses it, and only the pairs it walks -- those neither part of
+#: which can be swept exactly. The walk advances by however far apart the two
+#: solids are, which is what makes it safe rather than sampled. At a contact the
+#: separation is zero and bounds nothing, and the walk stops there: a probe this
+#: far on can turn the heading into a measured clash, never into a clear one.
 #:
-#: A fixed step was tried first and is unsound. Measured: two 10 mm cubes offset
-#: 0.5 mm across an oblique heading graze for 0.69 mm of travel, and a step of
-#: half the thinnest dimension samples either side of that and calls the part
+#: It is not a step. A fixed step was tried first and is unsound: two 10 mm cubes
+#: offset 0.5 mm across an oblique heading graze for 0.69 mm of travel, and a step
+#: of half the thinnest dimension samples either side of that and calls the part
 #: free. The interval a grazing contact occupies has nothing to do with how thick
 #: either part is, so no fraction of a part's size bounds it.
 _MIN_STEP_FRACTION = 0.02
@@ -458,7 +460,8 @@ _MIN_STEP_FRACTION = 0.02
 #: Not a tolerance on the answer but on the arithmetic: a distance query on two
 #: faces that meet returns a value at kernel noise rather than exactly zero, and
 #: advancing by that would crawl. Whether touching is a *clash* is decided by
-#: shared volume, never by this.
+#: shared volume, never by this. The bore test demands the same margin before it
+#: calls a part clear of a bore's cylinder.
 _CONTACT_MM = 1e-6
 
 
@@ -478,6 +481,7 @@ def measure_assembly(
     overlaps: list[list[float]] = []
     gaps: list[list[float]] = []
     budget = _Budget(probe_budget, time_budget)
+    scene = _Scene(parts)
     done = 0
 
     for first in range(len(parts)):
@@ -500,6 +504,7 @@ def measure_assembly(
                     unchecked=unchecked,
                 )
             shared = _shared_volume(parts[first], parts[second])
+            scene.at_rest[(first, second)] = shared
             if shared is None:
                 unchecked.append(
                     f"shared volume between {_label(first)} and {_label(second)}: "
@@ -518,7 +523,7 @@ def measure_assembly(
             else:
                 gaps.append([first, second, distance])
 
-    order, trapped, order_unchecked, releases = _disassembly_order(parts, budget)
+    order, trapped, order_unchecked, releases = _disassembly_order(parts, budget, scene)
     unchecked.extend(order_unchecked)
     return AssemblyMeasurements(
         part_bboxes=boxes,
@@ -567,7 +572,7 @@ def _distance(first, second) -> float | None:
         return None
 
 
-def _disassembly_order(parts, budget):
+def _disassembly_order(parts, budget, scene=None):
     """An order in which the parts can be assembled, or why there is none.
 
     Found by taking the assembly apart: repeatedly free a part that can be
@@ -591,7 +596,7 @@ def _disassembly_order(parts, budget):
     if floor is None:
         return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
-    scene = _Scene(parts)
+    scene = scene or _Scene(parts)
     remaining = list(range(len(parts)))
     removed: list[int] = []
     releases: list[list[float]] = [[] for _ in parts]
@@ -719,8 +724,7 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene
     for other in windows:
         if scene.nested(index, other, direction, budget):
             continue
-        budget.spend()
-        at_rest = _shared_volume(parts[index], parts[other])
+        at_rest = scene.shared_at_rest(index, other, budget)
         if own is _UNBUILT:
             own = _sweep(parts[index], direction, length, budget)
         if at_rest is None or at_rest > OVERLAP_EPSILON_MM3 or own is None:
@@ -768,10 +772,22 @@ class _Scene:
     def __init__(self, parts) -> None:
         self.parts = parts
         self._nested: dict[tuple, bool] = {}
+        #: The volume each pair ``(i, j)``, ``i < j``, shares where it stands --
+        #: ``None`` where the kernel could not say. Filled by the pairwise phase,
+        #: which already asked, so no heading asks again.
+        self.at_rest: dict[tuple[int, int], float | None] = {}
         #: Pairs ``(moving, other)`` a walk stopped at undecided: touching where
         #: neither could be swept, so nothing showed the path past the contact
         #: clear or blocked.
         self.undecided: set[tuple[int, int]] = set()
+
+    def shared_at_rest(self, first, second, budget) -> float | None:
+        """The volume the two share where they stand, asked of the kernel once."""
+        key = (min(first, second), max(first, second))
+        if key not in self.at_rest:
+            budget.spend()
+            self.at_rest[key] = _shared_volume(self.parts[key[0]], self.parts[key[1]])
+        return self.at_rest[key]
 
     def nested(self, first, second, direction, budget) -> bool:
         """Whether one of the two sits strictly inside a round bore of the other along this line."""
@@ -1294,7 +1310,7 @@ def _travel_window(centre, radius, other_centre, other_radius, direction):
     Skipping on that answer is exact rather than an approximation, because a
     bounding sphere contains its solid -- spheres that miss guarantee solids that
     miss. The converse does not hold, which is why a window that exists is then
-    stepped through against the solids rather than believed.
+    ruled against the solids -- swept or walked -- rather than believed.
     """
     from build123d import Vector
 
@@ -1327,7 +1343,10 @@ def _candidate_directions(spheres, index, others):
     for other in others:
         away = centre - Vector(*spheres[other][0])
         if away.length > 1e-9:
-            directions.append(away.normalized())
+            away = away.normalized()
+            # A heading already listed would only be ruled a second time.
+            if all((away - known).length > 1e-9 for known in directions):
+                directions.append(away)
     return directions
 
 
@@ -1341,7 +1360,10 @@ def _sphere(part):
 
 
 def _min_step(parts) -> float | None:
-    """The smallest travel the search will take, from the thinnest part."""
+    """How far past a contact the walk looks for a clash, from the thinnest part.
+
+    ``None`` for a part with no measurable size, which stops the search.
+    """
     thinnest = None
     for part in parts:
         size = part.bounding_box().size
