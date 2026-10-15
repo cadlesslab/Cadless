@@ -668,6 +668,25 @@ def test_a_part_of_two_solids_is_not_settled_by_a_bore_one_of_them_sits_in():
     assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1))
 
 
+def test_a_walk_never_steps_over_a_clash_shorter_than_the_smallest_step():
+    # The same clip as the plain cubes', on cubes neither of which can be swept,
+    # so the walk alone rules it: it may stop short at the contact, never pass it.
+    first = Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
+    second = Pos(10.05, -9.87, 0) * Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
+    assert _rule([_as_nurbs(first), _as_nurbs(second)], 0, (1, 1, 0))
+
+
+def test_parts_the_walk_cannot_see_past_are_named_rather_than_called_trapped():
+    # Two blocks touching face to face, with no exact sweep on either: every way
+    # one moves either meets the other or stops at a contact nothing measured
+    # past. That is not a trapped part, and the line says which parts and why.
+    pair = [_as_nurbs(Box(20, 20, 10)), _as_nurbs(Pos(20, 0, 0) * Box(20, 20, 10))]
+    m = measure_assembly(pair)
+    assert m.order is None
+    assert m.trapped == []
+    assert any("part 1 and part 2 touch" in reason for reason in m.unchecked)
+
+
 def test_a_part_with_no_exact_sweep_is_ruled_on_the_other_part_swept_back():
     # The pin's faces are all B-splines, so it cannot be swept; the block can, and
     # sliding the pin out is sliding the block back off it.

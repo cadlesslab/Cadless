@@ -577,6 +577,11 @@ def _disassembly_order(parts, budget):
     apart along a curve, or by moving two parts at once, is refused here. That
     costs a repair attempt, and it is the price of an answer that is never wrong
     when it says yes.
+
+    A round that frees nothing names its parts as trapped only when every heading
+    was blocked by a measured clash. Where some heading stopped at a contact the
+    search could not see past, nothing was shown trapped, so it says which parts
+    touch and what would let it rule instead.
     """
     if len(parts) < 2:
         return list(range(len(parts))), [], [], []
@@ -592,6 +597,7 @@ def _disassembly_order(parts, budget):
     releases: list[list[float]] = [[] for _ in parts]
     while remaining:
         freed = None
+        scene.undecided.clear()
         for index in remaining:
             others = [other for other in remaining if other != index]
             if not others:
@@ -618,11 +624,29 @@ def _disassembly_order(parts, budget):
                 releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
                 break
         if freed is None:
+            if scene.undecided:
+                return None, [], [_touching_reason(scene.undecided)], []
             return None, sorted(remaining), [], []
         remaining.remove(freed)
         removed.append(freed)
     # Removing in this order works, so assembling in the reverse of it does.
     return list(reversed(removed)), [], [], releases
+
+
+def _touching_reason(pairs) -> str:
+    """The unchecked line for an order stopped at contacts it could not see past.
+
+    Names each touching pair once, whichever of the two was moving, and says what
+    would let the check rule: parts held apart by a gap are walked by the gap,
+    never across a contact.
+    """
+    unordered = sorted({tuple(sorted(pair)) for pair in pairs})
+    names = "; ".join(f"{_label(first)} and {_label(second)}" for first, second in unordered)
+    return (
+        f"{_ORDER_UNCHECKED_PREFIX} {names} touch along faces the check cannot sweep "
+        "exactly, so it could not prove they come apart; a small gap between them "
+        "lets it rule"
+    )
 
 
 def _can_be_freed(parts, spheres, index, others, floor, budget, scene=None):
@@ -715,9 +739,13 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene
             walked.append(other)
         elif _sweep_meets(theirs, parts[index], budget):
             return _BLOCKED
-    if walked and _walk_blocked(parts, spheres, index, walked, direction, floor, budget):
-        return _BLOCKED
-    return _FREE
+    if not walked:
+        return _FREE
+    verdict, undecided = _walk(
+        parts, {other: windows[other] for other in walked}, index, direction, floor, budget
+    )
+    scene.undecided.update((index, other) for other in undecided)
+    return verdict
 
 
 #: What :func:`_sweep` answers for a part with a face it has no exact sweep for --
@@ -740,6 +768,10 @@ class _Scene:
     def __init__(self, parts) -> None:
         self.parts = parts
         self._nested: dict[tuple, bool] = {}
+        #: Pairs ``(moving, other)`` a walk stopped at undecided: touching where
+        #: neither could be swept, so nothing showed the path past the contact
+        #: clear or blocked.
+        self.undecided: set[tuple[int, int]] = set()
 
     def nested(self, first, second, direction, budget) -> bool:
         """Whether one of the two sits strictly inside a round bore of the other along this line."""
@@ -1196,57 +1228,51 @@ def _is_one_solid(part) -> bool:
         return False
 
 
-def _walk_blocked(parts, spheres, index, others, direction, floor, budget) -> bool:
-    """The stepped walk, for a part whose sweep cannot be built exactly.
+def _walk(parts, windows, index, direction, look_ahead, budget):
+    """Walk one part along the heading past the others in ``windows``.
 
-    Advances by however far apart the two solids currently are, rather than by
-    a fixed step. Moving a solid less than its distance to another cannot bring
-    the two into contact, so a jump of that size passes over nothing.
+    For the pairs neither part of which can be swept exactly. It advances by the
+    measured separation and by nothing more: moving a solid less than its
+    distance to another cannot bring the two into contact, so a step that size
+    passes over nothing. At contact the separation bounds nothing and no fixed
+    step is safe -- a clash can begin and end inside any step -- so the walk never
+    steps across one. It looks for a clash at the contact and ``look_ahead`` past
+    it, and answers ``_BLOCKED`` if either probe finds one and ``_UNDECIDED`` if
+    neither does: the look-ahead can turn an open question into a measured clash,
+    never into a clear path.
 
-    A fixed step cannot promise that, and measurably did not: a grazing contact
-    occupies an interval unrelated to either part's size, so no fraction of a
-    part bounds it. ``floor`` applies only where the two are already touching,
-    which is the one case the separation argument cannot cover.
+    Walks against several others advance in turn, so one that blocks near the
+    start ends the heading before a long walk past another is paid for. Returns
+    the verdict and the other parts the walk stopped at undecided.
     """
     from build123d import Location
 
     part = parts[index]
-    centre, radius = spheres[index]
-    for other in others:
-        other_centre, other_radius = spheres[other]
-        window = _travel_window(centre, radius, other_centre, other_radius, direction)
-        if window is None:
-            # Their bounding spheres cannot meet along this direction, so the
-            # solids cannot either. Skipping is exact, not an approximation.
-            continue
-        start, stop = window
-        position = start
-        while position <= stop:
+    walks = [[start, stop, other] for other, (start, stop) in windows.items()]
+    undecided = []
+    while walks:
+        for walk in list(walks):
+            position, stop, other = walk
+            if position > stop:
+                walks.remove(walk)
+                continue
             budget.spend()
-            moved = part.moved(Location(direction * position))
-            separation = _distance(moved, parts[other])
+            separation = _distance(part.moved(Location(direction * position)), parts[other])
             if separation is None:
                 # A probe the kernel refused. Blocked: freeing a part on a
                 # measurement that did not happen is how a bad order gets out.
-                return True
+                return _BLOCKED, []
             if separation > _CONTACT_MM:
-                # They are apart, so no travel shorter than the gap can bring
-                # them together. Jumping the whole gap therefore skips nothing --
-                # this is the step that makes the search safe rather than sampled,
-                # and it is also what makes it quick, since most of a path is far
-                # from anything.
-                position += max(separation, floor)
+                walk[0] = position + separation
                 continue
-            budget.spend()
-            shared = _shared_volume(moved, parts[other])
-            if shared is None or shared > OVERLAP_EPSILON_MM3:
-                return True
-            # Touching but not interpenetrating: a part may slide along a face.
-            # Only here does the floor decide the step, and only here can a
-            # clash be missed -- one that both begins and ends within a floor's
-            # travel of a contact-free position.
-            position += floor
-    return False
+            for ahead in (position, position + look_ahead):
+                budget.spend()
+                shared = _shared_volume(part.moved(Location(direction * ahead)), parts[other])
+                if shared is None or shared > OVERLAP_EPSILON_MM3:
+                    return _BLOCKED, []
+            walks.remove(walk)
+            undecided.append(other)
+    return (_UNDECIDED if undecided else _FREE), undecided
 
 
 def _travel_window(centre, radius, other_centre, other_radius, direction):
