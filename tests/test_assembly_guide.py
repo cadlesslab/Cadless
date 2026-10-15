@@ -102,6 +102,14 @@ def test_an_exploded_chain_opens_every_joint_rather_than_rejoining_its_pieces():
     assert offsets == [[0.0, 0.0, 0.0], [-10.0, 0.0, 0.0], [-20.0, 0.0, 0.0]]
 
 
+def test_parts_leaving_in_different_directions_each_go_one_distance():
+    # A lid lifted off and a side panel slid out already part company; pushing
+    # the later one further would only shrink every frame to fit it.
+    order, releases = [0, 1, 2], [[], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
+    offsets = _frame_offsets(order, order, releases, {0, 1, 2}, 10.0)
+    assert offsets == [[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]]
+
+
 def test_a_part_moved_alone_in_its_frame_goes_one_distance():
     # A step frame moves only the part going on; the pieces placed before it are
     # at rest, so there is nothing to keep clear of.
