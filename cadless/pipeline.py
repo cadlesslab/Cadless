@@ -31,6 +31,7 @@ Consumers must ignore unknown event types and fields for forward compatibility.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 from collections.abc import Callable, Sequence
@@ -697,14 +698,21 @@ class Pipeline:
         export directory across the builds of a turn, so a build that draws
         nothing would otherwise leave the previous one's frames to be taken up as
         its own -- describing one model with pictures of another.
+
+        The motion the viewport plays is written the same way, swept the same
+        way, and before the description rather than inside it: it is the
+        measured order and headings, not anything said about them, so a writer
+        or a drawing that fails costs the guide and leaves the motion standing.
         """
         _clear_guide_frames(export_dir)
+        _clear_assembly_motion(export_dir)
         if not (verdict and verdict.get("ok") and verdict.get("order")):
             return None
         order = verdict["order"]
         if len(order) < 2:
             return None
 
+        self._write_motion(export_dir, order, verdict.get("releases") or [])
         try:
             _emit_stage(on_progress, "guide", "begin", n)
             from cadless.guide_writer import plain_guide  # noqa: PLC0415
@@ -727,6 +735,26 @@ class Pipeline:
             _clear_guide_frames(export_dir)
             _emit_stage(on_progress, "guide", "error", n, f"guide unavailable: {exc}")
             return None
+
+    @staticmethod
+    def _write_motion(export_dir, order, releases) -> None:
+        """Write the order and headings the viewport plays beside the exports.
+
+        Nowhere to write to is an ordinary answer, as it is for the frames. A
+        write that fails is logged and leaves no file: a disk that fills fails
+        part-way, and what was left would be taken up as this version's motion
+        and read back as something no build wrote.
+        """
+        if not export_dir:
+            return
+        try:
+            from cadless.assembly_guide import MOTION_FILE, motion_payload  # noqa: PLC0415
+
+            text = json.dumps(motion_payload(order, releases))
+            (Path(export_dir) / MOTION_FILE).write_text(text, encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — the motion, never the build
+            logger.warning("assembly motion: could not write: %s", exc, exc_info=True)
+            _clear_assembly_motion(export_dir)
 
     @staticmethod
     def _draw_guide(export_dir, order, releases) -> int:
@@ -883,6 +911,23 @@ def _clear_guide_frames(export_dir) -> None:
             frame.unlink()
         except OSError as exc:
             logger.warning("assembly guide: could not clear %s: %s", frame.name, exc)
+
+
+def _clear_assembly_motion(export_dir) -> None:
+    """Drop an earlier build's motion file from the export directory.
+
+    A file that will not go is logged, never raised, for the reason the frame
+    sweep above gives: this tidies so a later build cannot take up an earlier
+    one's file, and failing to tidy must not fail the build doing it.
+    """
+    if not export_dir:
+        return
+    from cadless.assembly_guide import MOTION_FILE  # noqa: PLC0415
+
+    try:
+        (Path(export_dir) / MOTION_FILE).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("assembly motion: could not clear %s: %s", MOTION_FILE, exc)
 
 
 def _emit(on_progress, event: dict) -> None:

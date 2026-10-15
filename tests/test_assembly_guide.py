@@ -181,3 +181,15 @@ def test_an_order_that_does_not_name_every_part_draws_nothing():
     # Drawing it anyway would put a picture to a sequence nothing established.
     parts = [_cube(), _cube((0.0, 0.0, 10.2))]
     assert guide_frames(parts, order=[0], releases=[[], []]) == []
+
+
+# --- the motion the viewport plays ----------------------------------------
+
+
+def test_the_motion_has_a_heading_slot_for_every_part_even_with_none_measured():
+    # An engine that measured the order but recorded no headings hands over an
+    # empty list. The viewport reads one entry per part, so each part gets an
+    # empty one -- no heading, stays put -- rather than the list running short.
+    from cadless.assembly_guide import motion_payload
+
+    assert motion_payload([1, 0], [])["releases"] == [[], []]

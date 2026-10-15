@@ -50,6 +50,35 @@ EXPLODE_FRACTION = 0.35
 #: it somewhere.
 _HEADING_EPSILON = 1e-9
 
+#: The file a checked assembly's motion is written to, beside its exports.
+MOTION_FILE = "assembly.json"
+
+
+def motion_payload(order: Sequence[int], releases: Sequence[Sequence[float]]) -> dict:
+    """The measured order and headings, in the form the viewport plays them from.
+
+    The same facts the frames are drawn from, handed on rather than drawn, and
+    carrying the fraction the frames are drawn with: a player that moves each
+    part by it moves it as far as a frame does, from one number rather than a
+    second copy of it that could drift.
+
+    ``releases`` comes back with one entry per part, filed under the part's own
+    index rather than its place in the order. A part with no heading -- the one
+    left standing, or every part when the engine that measured the build did not
+    record headings -- gets an empty entry, which means "stays put", rather than
+    a direction nobody measured or a list that runs short of the parts.
+    """
+    return {
+        "order": [int(index) for index in order],
+        "releases": [
+            [float(c) for c in releases[index]]
+            if index < len(releases) and _is_heading(releases[index])
+            else []
+            for index in range(len(order))
+        ],
+        "explode_fraction": EXPLODE_FRACTION,
+    }
+
 
 def compose(meshes: Sequence[np.ndarray], offsets: Sequence[Sequence[float]]) -> np.ndarray:
     """The meshes as one triangle array, each moved by its own offset."""
