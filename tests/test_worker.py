@@ -104,6 +104,34 @@ def test_export_writes_one_file_per_part(tmp_path):
         assert not (tmp_path / f"model.{kind}").exists()
 
 
+def test_each_part_of_a_split_build_is_drawn_where_it_is(tmp_path):
+    """Every part's GLB spans the same box as the OBJ written beside it.
+
+    The solids split out of one result each keep a Location of their own, which
+    is how they stay where they were built. The OBJ is written from the shape's
+    own tessellation, already in place, so it is the reference: a GLB that
+    disagrees with it draws that part away from its neighbours.
+    """
+    from cadless.catalog.thumbnail import load_mesh
+    from tests.glb_bounds import PLACEMENT_TOLERANCE_MM, glb_world_bounds
+
+    res = run_code(
+        "from build123d import *\n"
+        "with BuildPart() as built:\n"
+        "    with Locations((100, 0, 0), (0, 70, 50)):\n"
+        "        Box(10, 20, 30)\n"
+        "result = built.part\n",
+        export_dir=str(tmp_path),
+    )
+    assert res.ok, res.error
+    for index in (0, 1):
+        vertices = load_mesh(tmp_path / f"model_p{index}.obj").reshape(-1, 3)
+        low, high = glb_world_bounds(tmp_path / f"model_p{index}.glb")
+        assert [*low, *high] == pytest.approx(
+            [*vertices.min(axis=0), *vertices.max(axis=0)], abs=PLACEMENT_TOLERANCE_MM
+        ), f"part {index}"
+
+
 def test_a_single_solid_still_exports_under_the_plain_name(tmp_path):
     """The upgrade path. An installation that never asks for an assembly sees
     exactly the tree it has always had, which is what lets the re-run path go on
