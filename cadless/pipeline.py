@@ -743,14 +743,16 @@ class Pipeline:
         Nowhere to write to is an ordinary answer, as it is for the frames. A
         write that fails is logged and leaves no file: a disk that fills fails
         part-way, and what was left would be taken up as this version's motion
-        and read back as something no build wrote.
+        and read back as something no build wrote. A heading that is not a finite
+        number fails the same way rather than being written as ``Infinity`` or
+        ``NaN``, which are not JSON and would make the whole file unreadable.
         """
         if not export_dir:
             return
         try:
             from cadless.assembly_guide import MOTION_FILE, motion_payload  # noqa: PLC0415
 
-            text = json.dumps(motion_payload(order, releases))
+            text = json.dumps(motion_payload(order, releases), allow_nan=False)
             (Path(export_dir) / MOTION_FILE).write_text(text, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001 — the motion, never the build
             logger.warning("assembly motion: could not write: %s", exc, exc_info=True)

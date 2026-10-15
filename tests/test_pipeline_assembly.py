@@ -601,6 +601,14 @@ def test_a_motion_that_cannot_be_written_costs_the_motion_and_not_the_guide(monk
     assert not (tmp_path / MOTION).exists()
 
 
+def test_a_heading_that_is_not_a_number_writes_no_motion(tmp_path):
+    # Python writes an infinite float as ``Infinity``, which is not JSON: the
+    # browser's parser would throw on the whole file. Refused here, it costs the
+    # motion the way a failed write does, rather than filing a file nothing reads.
+    Pipeline._write_motion(tmp_path, [1, 0], [[float("inf"), 0.0, 0.0], []])
+    assert not (tmp_path / MOTION).exists()
+
+
 def test_an_unrunnable_check_refuses_rather_than_passing(monkeypatch):
     unchecked = AssemblyMeasurements(
         part_bboxes=[[100.0, 100.0, 50.0], [100.0, 100.0, 50.0]],

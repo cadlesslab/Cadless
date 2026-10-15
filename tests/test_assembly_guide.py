@@ -193,3 +193,13 @@ def test_the_motion_has_a_heading_slot_for_every_part_even_with_none_measured():
     from cadless.assembly_guide import motion_payload
 
     assert motion_payload([1, 0], [])["releases"] == [[], []]
+
+
+def test_each_heading_is_filed_under_its_part_not_its_place_in_the_order():
+    # The viewport moves part i along releases[i]. Filed by position in the
+    # order instead, an order that is not 0, 1, 2 would send each part off along
+    # another part's heading -- and the identity order hides that completely.
+    from cadless.assembly_guide import motion_payload
+
+    releases = [[0.0, 0.0, 1.0], [], [1.0, 0.0, 0.0]]
+    assert motion_payload([2, 0, 1], releases)["releases"] == releases
