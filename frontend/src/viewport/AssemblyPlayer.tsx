@@ -53,14 +53,29 @@ export function AssemblyPlayer({
     const assembled = new THREE.Box3().setFromObject(model);
     if (assembled.isEmpty()) return;
 
-    reduced.current = window.matchMedia(REDUCED_MOTION).matches;
+    // Where nothing can say, motion is not reduced: the player still runs.
+    reduced.current = globalThis.matchMedia?.(REDUCED_MOTION).matches ?? false;
     travel.current = travelFor(assembled, motion.explodeFraction);
     const steps = takeApartOrder(motion).length;
     apart.current = apartBox(groups, partOffsets(motion, steps, travel.current));
     framed.current = false;
     onApartBox(apart.current);
+
+    // The parts follow the position the moment it changes, from the store
+    // itself rather than on the next frame: whatever reacts to the same change
+    // -- a section chosen while the parts are apart sends them home and is
+    // measured right away -- has to find them where the position says.
+    const place = () => {
+      const offsets = partOffsets(motion, viewportStore.get().assemblyPosition, travel.current);
+      groups.forEach((group, part) => {
+        const offset = offsets[part];
+        if (offset) group.position.set(offset[0], offset[1], offset[2]);
+      });
+    };
+    const unsubscribe = viewportStore.subscribe(place);
     viewportStore.setAssemblySteps(steps);
     return () => {
+      unsubscribe();
       viewportStore.setAssemblySteps(0);
       onApartBox(null);
       rest(groups);
@@ -88,12 +103,6 @@ export function AssemblyPlayer({
       // A play started later begins with its first jump, not a wait.
       wait.current = 0;
     }
-
-    const offsets = partOffsets(motion, position, travel.current);
-    partGroups.current.forEach((group, part) => {
-      const offset = offsets[part];
-      if (offset) group.position.set(offset[0], offset[1], offset[2]);
-    });
 
     // Framed once, the first time the parts leave: the assembled framing
     // would cut off a part on its way out. Once, so a reader who has moved

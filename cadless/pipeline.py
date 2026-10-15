@@ -743,9 +743,11 @@ class Pipeline:
         Nowhere to write to is an ordinary answer, as it is for the frames. A
         write that fails is logged and leaves no file: a disk that fills fails
         part-way, and what was left would be taken up as this version's motion
-        and read back as something no build wrote. A heading that is not a finite
-        number fails the same way rather than being written as ``Infinity`` or
-        ``NaN``, which are not JSON and would make the whole file unreadable.
+        and read back as something no build wrote. A non-finite heading never
+        reaches the file as ``Infinity`` or ``NaN``, which are not JSON and would
+        make the whole file unreadable: an infinite one fails the write the same
+        way, and a NaN one is no direction at all, so its part is written as the
+        one that stays put.
         """
         if not export_dir:
             return
