@@ -639,7 +639,305 @@ def _can_be_freed(parts, spheres, index, others, floor, budget):
 
 
 def _blocked_along(parts, spheres, index, others, direction, floor, budget) -> bool:
-    """Whether sliding one part along ``direction`` runs it into any other.
+    """Whether sliding one part along ``direction`` runs it into any other."""
+    return _rule_heading(parts, spheres, index, others, direction, floor, budget) != _FREE
+
+
+#: What ruling one heading can come to. Three answers rather than a yes or no,
+#: because "proved clear" and "not proved clear" are the only two a search that
+#: is never wrong when it says yes can hand on, and "not proved" splits again into
+#: a clash it measured and a contact it could not see past.
+_FREE = "free"
+_BLOCKED = "blocked"
+_UNDECIDED = "undecided"
+
+
+def _rule_heading(parts, spheres, index, others, direction, floor, budget) -> str:
+    """Rule whether one part slides along ``direction`` clear of every other.
+
+    Decided on the volume the part sweeps over its whole travel rather than on
+    positions sampled along it. A clash at any instant puts the part's interior
+    inside another's at that instant, and that shared volume lies inside the
+    sweep -- so a sweep that shares no volume with a part proves that no instant
+    of the slide clashed with it, however briefly, which no stepped walk can
+    promise.
+
+    The sweep runs from where the part starts out to the farthest point any
+    bounding sphere could still be met, so it covers every travel window at once.
+    A part with a face whose sweep this module cannot build exactly is walked
+    instead.
+    """
+    centre, radius = spheres[index]
+    windows = {}
+    for other in others:
+        other_centre, other_radius = spheres[other]
+        window = _travel_window(centre, radius, other_centre, other_radius, direction)
+        if window is not None:
+            windows[other] = window
+    if not windows:
+        # No bounding sphere in the way anywhere along the heading, so no solid.
+        return _FREE
+
+    budget.spend()  # building the sweep
+    try:
+        pieces = _sweep_pieces(parts[index], direction, max(stop for _, stop in windows.values()))
+    except _NoExactSweep:
+        blocked = _walk_blocked(parts, spheres, index, list(windows), direction, floor, budget)
+        return _BLOCKED if blocked else _FREE
+    if pieces is None:
+        # The kernel could not build the sweep. Blocked, for the reason a refused
+        # probe is: a part freed on a measurement that did not happen is how a
+        # bad order gets out.
+        return _BLOCKED
+
+    for other in windows:
+        budget.spend()
+        at_rest = _shared_volume(parts[index], parts[other])
+        if at_rest is None or at_rest > OVERLAP_EPSILON_MM3:
+            return _BLOCKED
+        reach = _box_of(getattr(parts[other], "wrapped", None))
+        if reach is None:
+            return _BLOCKED
+        for prism, box in pieces:
+            if box.IsOut(reach):
+                # Disjoint enclosing boxes: the prism cannot share volume with it.
+                continue
+            budget.spend()
+            shared = _prism_overlap(prism, parts[other].wrapped)
+            if shared is None or shared > OVERLAP_EPSILON_MM3:
+                return _BLOCKED
+    return _FREE
+
+
+class _NoExactSweep(Exception):
+    """Raised for a face whose sweep this module cannot build exactly."""
+
+
+#: Below this, a face's normal counts as square to the heading: the face slides
+#: along itself and its prism is a sheet with no volume. It absorbs the rounding a
+#: rotation leaves in a direction meant to be exact, and nothing more.
+_PARALLEL_COSINE = 1e-9
+
+#: How far each enclosing box is grown before two are compared, in millimetres.
+#: A prefilter only, so erring wide costs a boolean and never an answer.
+_BOX_MARGIN_MM = 0.01
+
+
+def _sweep_pieces(part, direction, length):
+    """The prisms whose union, with the part where it starts, is the volume it sweeps.
+
+    Why these are enough: take any point the part passes over and the earliest
+    instant the part covers it. Either that instant is the start, or the point is
+    reached through the part's boundary at a spot that moves forward along the
+    heading -- a face whose outward normal leads. Every such point therefore lies
+    in the prism of a leading face, and every prism of a face lies inside the
+    sweep because the face lies inside the part. Nothing in that needs the part to
+    be convex: a bore or a pocket is covered like an outside wall.
+
+    A planar face's normal is the same all over it, so it is ruled once and a
+    trailing one dropped. A curved face can lead on one side and trail on the
+    other, and folded over itself its prism is no solid at all, so it is first cut
+    where its normal turns square to the heading, and every piece is kept -- a
+    trailing piece's prism still lies inside the sweep, so keeping it costs a
+    boolean and never an answer.
+
+    ``None`` when the kernel could not build a piece; :class:`_NoExactSweep` for a
+    surface this has no exact cut for.
+    """
+    from build123d import GeomType
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    from OCP.gp import gp_Vec
+
+    travel = gp_Vec(direction.X * length, direction.Y * length, direction.Z * length)
+    pieces = []
+    try:
+        faces = list(part.faces())
+        if not faces:
+            # Nothing bounds it, so nothing says where it goes: not a sweep of no
+            # volume but no sweep at all.
+            return None
+        for face in faces:
+            kind = face.geom_type
+            if kind == GeomType.PLANE:
+                if face.normal_at(face.center()).dot(direction) <= _PARALLEL_COSINE:
+                    continue
+                segments, curved = [face.wrapped], False
+            elif kind in (GeomType.CYLINDER, GeomType.CONE):
+                segments, curved = _split_at_silhouette(face.wrapped, direction), True
+                if segments is None:
+                    return None
+            else:
+                raise _NoExactSweep(str(kind))
+            for segment in segments:
+                prism = _prism(segment, travel)
+                if prism is None or (curved and not BRepCheck_Analyzer(prism).IsValid()):
+                    return None
+                box = _box_of(prism)
+                if box is None:
+                    return None
+                pieces.append((prism, box))
+    except _NoExactSweep:
+        raise
+    except Exception:  # noqa: BLE001 - geometry that cannot be read fails closed
+        return None
+    return pieces
+
+
+def _prism(face, travel):
+    """The solid ``face`` sweeps over ``travel``, or ``None`` if it is not one to trust.
+
+    Only a prism that encloses positive volume is used. A boolean reads an
+    inside-out solid as everything outside it, so a part sitting wholly inside
+    such a prism would share none of its volume with it and pass as clear -- and
+    a prism of no volume is no sweep at all. Either is refused rather than turned
+    round, because the face it came from is then not one this module understands.
+    """
+    from OCP.BRepGProp import BRepGProp
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.GProp import GProp_GProps
+
+    prism = BRepPrimAPI_MakePrism(face, travel).Shape()
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(prism, props)
+    return prism if props.Mass() > 0.0 else None
+
+
+def _split_at_silhouette(face, direction):
+    """A curved face cut where its normal turns square to ``direction``.
+
+    On a cylinder or a cone the normal at a point depends only on the angle round
+    the axis, ``cos(a) * radial - sin(a) * axis`` for half-angle ``a``. It is square
+    to the heading where ``cos(u - phi) = tan(a) * along / across``, and each such
+    ``u`` is a straight ruling lying in the plane through the axis with normal
+    ``tangent(u)`` -- so cutting by that plane is exact. A quadric meets a line at
+    most twice, once leading and once trailing, so a piece with no ruling inside
+    it projects onto the plane across the heading without folding, which is what
+    makes its prism a solid.
+
+    An empty list for a face that runs along the heading, whose prism has no
+    volume; ``None`` when the kernel could not cut it.
+    """
+    import math
+
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder
+    from OCP.gp import gp_Vec
+
+    surface = BRepAdaptor_Surface(face)
+    if surface.GetType() == GeomAbs_Cylinder:
+        frame, half_angle = surface.Cylinder().Position(), 0.0
+    elif surface.GetType() == GeomAbs_Cone:
+        cone = surface.Cone()
+        frame, half_angle = cone.Position(), cone.SemiAngle()
+    else:
+        raise _NoExactSweep("a curved face with no exact cut")
+
+    x, y = gp_Vec(frame.XDirection()), gp_Vec(frame.YDirection())
+    heading = gp_Vec(direction.X, direction.Y, direction.Z)
+    dx, dy = heading.Dot(x), heading.Dot(y)
+    dz = heading.Dot(gp_Vec(frame.Direction()))
+    across = math.hypot(dx, dy)
+    if across <= _PARALLEL_COSINE:
+        # Heading along the axis: a cylinder slides along itself, and a cone's
+        # normal keeps one sign all round. Either way there is no ruling to cut at.
+        return [] if half_angle == 0.0 else [face]
+    ratio = math.tan(half_angle) * dz / across
+    if abs(ratio) >= 1.0:
+        return [face]
+    phi = math.atan2(dy, dx)
+    spread = math.acos(ratio)
+    normals = []
+    for u in (phi + spread, phi - spread):
+        normal = x * -math.sin(u) + y * math.cos(u)
+        # A cylinder's two rulings lie in one plane; cutting by it twice is waste.
+        if not any(abs(abs(normal.Dot(seen)) - 1.0) < 1e-12 for seen in normals):
+            normals.append(normal)
+    return _cut_by_planes(face, [(frame.Location(), normal) for normal in normals])
+
+
+def _cut_by_planes(face, planes):
+    """``face`` cut by every ``(point, normal)`` plane, as a list of faces, or ``None``."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.gp import gp_Dir, gp_Pln
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopTools import TopTools_ListOfShape
+
+    tools = TopTools_ListOfShape()
+    for point, normal in planes:
+        tools.Append(BRepBuilderAPI_MakeFace(gp_Pln(point, gp_Dir(normal))).Face())
+    arguments = TopTools_ListOfShape()
+    arguments.Append(face)
+    splitter = BRepAlgoAPI_Splitter()
+    splitter.SetArguments(arguments)
+    splitter.SetTools(tools)
+    try:
+        splitter.Build()
+    except Exception:  # noqa: BLE001 - a cut that did not happen fails closed
+        return None
+    if not splitter.IsDone():
+        return None
+    out = []
+    explorer = TopExp_Explorer(splitter.Shape(), TopAbs_FACE)
+    while explorer.More():
+        out.append(explorer.Current())
+        explorer.Next()
+    return out or None
+
+
+def _box_of(shape):
+    """An enclosing box grown by the margin, or ``None`` if none could be taken.
+
+    Bounded from the exact geometry, never from a mesh the shape may carry: a mesh
+    cuts across a curved face, and a box taken from it could miss the face.
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    if shape is None:
+        return None
+    box = Bnd_Box()
+    try:
+        BRepBndLib.Add_s(shape, box, False)
+    except Exception:  # noqa: BLE001 - no box, no prefilter: the caller fails closed
+        return None
+    if box.IsVoid():
+        return None
+    box.Enlarge(_BOX_MARGIN_MM)
+    return box
+
+
+def _prism_overlap(prism, other) -> float | None:
+    """The volume one prism of a sweep shares with another part, or ``None``.
+
+    Straight to the kernel rather than through :func:`_shared_volume`, whose
+    clean-up pass costs more than the boolean itself on a sweep of many pieces.
+    """
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+
+    try:
+        common = BRepAlgoAPI_Common(other, prism)
+        if not common.IsDone():
+            return None
+        total = 0.0
+        explorer = TopExp_Explorer(common.Shape(), TopAbs_SOLID)
+        while explorer.More():
+            props = GProp_GProps()
+            BRepGProp.VolumeProperties_s(explorer.Current(), props)
+            total += abs(props.Mass())
+            explorer.Next()
+        return total
+    except Exception:  # noqa: BLE001 - same: report rather than guess
+        return None
+
+
+def _walk_blocked(parts, spheres, index, others, direction, floor, budget) -> bool:
+    """The stepped walk, for a part whose sweep cannot be built exactly.
 
     Advances by however far apart the two solids currently are, rather than by
     a fixed step. Moving a solid less than its distance to another cannot bring
