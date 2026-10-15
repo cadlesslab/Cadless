@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/cadlesslab/Cadless/compare/frontend-v1.1.0...frontend-v1.2.0) (2026-10-15)
+
+
+### Features
+
+* play an assembly apart and back together in the viewport ([#46](https://github.com/cadlesslab/Cadless/issues/46)) ([5ec014a](https://github.com/cadlesslab/Cadless/commit/5ec014adaf8664eb87fa94ef90ce324961b608b8))
+
 ## [1.1.0](https://github.com/cadlesslab/Cadless/compare/frontend-v1.0.0...frontend-v1.1.0) (2026-10-13)
 
 
