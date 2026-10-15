@@ -13,6 +13,7 @@ from PIL import Image
 
 from cadless.assembly_guide import (
     STEP_FRAME_MIN_PARTS,
+    _frame_offsets,
     compose,
     guide_frames,
 )
@@ -86,6 +87,26 @@ def test_a_part_with_no_recorded_heading_does_not_move():
     # Nothing to assert on pixels here; the movement is checked through compose
     # above. What this pins is that an empty heading is accepted at all rather
     # than raising, which is the shape every anchor arrives in.
+
+
+# A beam split end to end: part 2 stays, and parts 1 and then 0 were slid on
+# along +X, so both come off along -X, part 0 first.
+_CHAIN_ORDER = [2, 1, 0]
+_CHAIN_RELEASES = [[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], []]
+
+
+def test_an_exploded_chain_opens_every_joint_rather_than_rejoining_its_pieces():
+    # Sent the same distance, the two pieces that leave the same way would be
+    # drawn joined again, and three pieces would look like two.
+    offsets = _frame_offsets(_CHAIN_ORDER, _CHAIN_ORDER, _CHAIN_RELEASES, {0, 1, 2}, 10.0)
+    assert offsets == [[0.0, 0.0, 0.0], [-10.0, 0.0, 0.0], [-20.0, 0.0, 0.0]]
+
+
+def test_a_part_moved_alone_in_its_frame_goes_one_distance():
+    # A step frame moves only the part going on; the pieces placed before it are
+    # at rest, so there is nothing to keep clear of.
+    offsets = _frame_offsets(_CHAIN_ORDER, _CHAIN_ORDER, _CHAIN_RELEASES, {0}, 10.0)
+    assert offsets[2] == [-10.0, 0.0, 0.0]
 
 
 # --- how many frames ------------------------------------------------------
