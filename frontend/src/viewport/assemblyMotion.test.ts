@@ -145,8 +145,14 @@ describe("parseMotion", () => {
     ["an order naming a part twice", { ...PAYLOAD, order: [0, 1, 1] }, PARTS],
     ["an order naming a part not drawn", { ...PAYLOAD, order: [0, 1, 3] }, PARTS],
     ["an order of something other than whole numbers", { ...PAYLOAD, order: [0, 1, 1.5] }, PARTS],
-    ["fewer parts drawn than the order names", PAYLOAD, [0, 1]],
-    ["a model drawn whole", PAYLOAD, []],
+    // Slots sized to what is drawn, so these reach the check of the order
+    // against the drawn parts rather than stopping at a slot count.
+    [
+      "fewer parts drawn than the order names",
+      { ...PAYLOAD, releases: [[], [0, 0, 1]], stretch: [1, 1] },
+      [0, 1],
+    ],
+    ["a model drawn whole", { ...PAYLOAD, releases: [], stretch: [] }, []],
     ["a heading slot missing", { ...PAYLOAD, releases: [[], [0, 0, 1]] }, PARTS],
     [
       "more heading slots than drawn parts",
@@ -155,7 +161,7 @@ describe("parseMotion", () => {
     ],
     [
       "a drawn part with no heading slot",
-      { order: [1, 2], releases: [[0, 0, 1], [1, 0, 0]], explode_fraction: 0.35 },
+      { order: [1, 2], releases: [[0, 0, 1], [1, 0, 0]], stretch: [1, 1], explode_fraction: 0.35 },
       [1, 2],
     ],
     ["a heading that is not three numbers", { ...PAYLOAD, releases: [[], [0, 1], [1, 0, 0]] }, PARTS],

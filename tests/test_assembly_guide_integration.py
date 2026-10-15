@@ -78,8 +78,7 @@ def test_a_real_two_part_build_writes_the_motion_the_viewport_plays(tmp_path):
 
     assert result.ok, result.error
     motion = json.loads((tmp_path / "assembly.json").read_text())
-    # Every part once, in the order the search established, and a heading slot
-    # filed under each part's own index.
+    # Every part once, and a heading slot for each of them.
     assert sorted(motion["order"]) == [0, 1]
     assert len(motion["releases"]) == 2
 

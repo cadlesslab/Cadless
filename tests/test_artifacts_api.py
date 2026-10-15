@@ -258,7 +258,10 @@ def test_a_version_with_no_assembly_motion_is_not_found(client, store):
     # viewport takes a miss to mean there is nothing to play, not that the
     # server failed.
     vid = _seed_with_motion(store, None)
-    assert client.get(f"/versions/{vid}/artifacts/assembly").status_code == 404
+    r = client.get(f"/versions/{vid}/artifacts/assembly")
+    assert r.status_code == 404
+    # The route's own answer, which an address nothing serves would not give.
+    assert r.json()["detail"] == "assembly artifact not found"
 
 
 def test_the_wire_says_which_part_each_artifact_is(client, store):

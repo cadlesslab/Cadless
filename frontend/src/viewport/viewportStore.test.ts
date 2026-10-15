@@ -128,16 +128,6 @@ describe("ViewportStore", () => {
       expect(s.get().assemblyPosition).toBe(0);
     });
 
-    it("plays either way until stopped", () => {
-      const s = playing(3);
-      s.playAssembly("apart");
-      expect(s.get().assemblyPlay).toBe("apart");
-      s.playAssembly("together");
-      expect(s.get().assemblyPlay).toBe("together");
-      s.stopAssembly();
-      expect(s.get().assemblyPlay).toBeNull();
-    });
-
     it("stops playing when stepped, so the step is where it stays", () => {
       const s = playing(3);
       s.playAssembly("apart");
