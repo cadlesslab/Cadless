@@ -664,8 +664,12 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget) -> st
 
     The sweep runs from where the part starts out to the farthest point any
     bounding sphere could still be met, so it covers every travel window at once.
-    A part with a face whose sweep this module cannot build exactly is walked
-    instead.
+
+    Only the relative motion matters: the part meeting another while it moves
+    along the heading is the other meeting the part while it moves back along it.
+    So where the moving part has a face with no exact sweep, the other part is
+    swept backwards instead, and only a pair where neither can be swept exactly is
+    walked.
     """
     centre, radius = spheres[index]
     windows = {}
@@ -678,35 +682,61 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget) -> st
         # No bounding sphere in the way anywhere along the heading, so no solid.
         return _FREE
 
-    budget.spend()  # building the sweep
-    try:
-        pieces = _sweep_pieces(parts[index], direction, max(stop for _, stop in windows.values()))
-    except _NoExactSweep:
-        blocked = _walk_blocked(parts, spheres, index, list(windows), direction, floor, budget)
-        return _BLOCKED if blocked else _FREE
-    if pieces is None:
-        # The kernel could not build the sweep. Blocked, for the reason a refused
-        # probe is: a part freed on a measurement that did not happen is how a
-        # bad order gets out.
-        return _BLOCKED
-
+    length = max(stop for _, stop in windows.values())
+    own = _sweep(parts[index], direction, length, budget)
+    walked = []
     for other in windows:
         budget.spend()
         at_rest = _shared_volume(parts[index], parts[other])
-        if at_rest is None or at_rest > OVERLAP_EPSILON_MM3:
+        if at_rest is None or at_rest > OVERLAP_EPSILON_MM3 or own is None:
+            # A clash where they stand, or a refusal -- of the probe or of the
+            # sweep. Blocked either way: a part freed on a measurement that did
+            # not happen is how a bad order gets out.
             return _BLOCKED
-        reach = _box_of(getattr(parts[other], "wrapped", None))
-        if reach is None:
-            return _BLOCKED
-        for prism, box in pieces:
-            if box.IsOut(reach):
-                # Disjoint enclosing boxes: the prism cannot share volume with it.
-                continue
-            budget.spend()
-            shared = _prism_overlap(prism, parts[other].wrapped)
-            if shared is None or shared > OVERLAP_EPSILON_MM3:
+        if own is not _INEXACT:
+            if _sweep_meets(own, parts[other], budget):
                 return _BLOCKED
+            continue
+        theirs = _sweep(parts[other], -direction, length, budget)
+        if theirs is None:
+            return _BLOCKED
+        if theirs is _INEXACT:
+            walked.append(other)
+        elif _sweep_meets(theirs, parts[index], budget):
+            return _BLOCKED
+    if walked and _walk_blocked(parts, spheres, index, walked, direction, floor, budget):
+        return _BLOCKED
     return _FREE
+
+
+#: What :func:`_sweep` answers for a part with a face it has no exact sweep for --
+#: an answer to route around, unlike ``None``, which is a refusal.
+_INEXACT = object()
+
+
+def _sweep(part, direction, length, budget):
+    """The pieces of the part's sweep, ``None`` when the kernel refused, or ``_INEXACT``."""
+    budget.spend()
+    try:
+        return _sweep_pieces(part, direction, length)
+    except _NoExactSweep:
+        return _INEXACT
+
+
+def _sweep_meets(pieces, part, budget) -> bool:
+    """Whether any piece of a sweep shares volume with ``part``, or could not be told."""
+    reach = _box_of(getattr(part, "wrapped", None))
+    if reach is None:
+        return True
+    for prism, box in pieces:
+        if box.IsOut(reach):
+            # Disjoint enclosing boxes: the prism cannot share volume with it.
+            continue
+        budget.spend()
+        shared = _prism_overlap(prism, part.wrapped)
+        if shared is None or shared > OVERLAP_EPSILON_MM3:
+            return True
+    return False
 
 
 class _NoExactSweep(Exception):
@@ -762,7 +792,10 @@ def _sweep_pieces(part, direction, length):
                 if face.normal_at(face.center()).dot(direction) <= _PARALLEL_COSINE:
                     continue
                 segments, curved = [face.wrapped], False
-            elif kind in (GeomType.CYLINDER, GeomType.CONE):
+            elif kind == GeomType.EXTRUSION and _runs_along(face.wrapped, direction):
+                # A surface drawn straight along the heading slides along itself.
+                continue
+            elif kind in (GeomType.CYLINDER, GeomType.CONE, GeomType.SPHERE, GeomType.TORUS):
                 segments, curved = _split_at_silhouette(face.wrapped, direction), True
                 if segments is None:
                     return None
@@ -784,13 +817,13 @@ def _sweep_pieces(part, direction, length):
 
 
 def _prism(face, travel):
-    """The solid ``face`` sweeps over ``travel``, or ``None`` if it is not one to trust.
+    """The solid ``face`` sweeps over ``travel``, the right way out, or ``None``.
 
-    Only a prism that encloses positive volume is used. A boolean reads an
-    inside-out solid as everything outside it, so a part sitting wholly inside
-    such a prism would share none of its volume with it and pass as clear -- and
-    a prism of no volume is no sweep at all. Either is refused rather than turned
-    round, because the face it came from is then not one this module understands.
+    The kernel can hand a curved face's prism back inside out, and a boolean
+    reads an inside-out solid as everything outside it: a part sitting wholly
+    inside the prism would share none of its volume and pass as clear, while one
+    nowhere near it would be read as a clash. Turned so its volume is positive,
+    the prism means what it encloses. One with no volume is no sweep at all.
     """
     from OCP.BRepGProp import BRepGProp
     from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
@@ -799,51 +832,101 @@ def _prism(face, travel):
     prism = BRepPrimAPI_MakePrism(face, travel).Shape()
     props = GProp_GProps()
     BRepGProp.VolumeProperties_s(prism, props)
-    return prism if props.Mass() > 0.0 else None
+    volume = props.Mass()
+    if volume == 0.0:
+        return None
+    return prism.Reversed() if volume < 0.0 else prism
 
 
 def _split_at_silhouette(face, direction):
     """A curved face cut where its normal turns square to ``direction``.
 
-    On a cylinder or a cone the normal at a point depends only on the angle round
-    the axis, ``cos(a) * radial - sin(a) * axis`` for half-angle ``a``. It is square
-    to the heading where ``cos(u - phi) = tan(a) * along / across``, and each such
-    ``u`` is a straight ruling lying in the plane through the axis with normal
-    ``tangent(u)`` -- so cutting by that plane is exact. A quadric meets a line at
-    most twice, once leading and once trailing, so a piece with no ruling inside
-    it projects onto the plane across the heading without folding, which is what
-    makes its prism a solid.
+    Cut there, every piece leads or trails all over, so it projects onto the
+    plane across the heading without folding -- which is what makes its prism a
+    solid. On each surface handled here that silhouette lies in planes, so cutting
+    by those planes is exact, not an approximation of it.
 
-    An empty list for a face that runs along the heading, whose prism has no
-    volume; ``None`` when the kernel could not cut it.
+    An empty list for a face that slides along itself and sweeps nothing; ``None``
+    when the kernel could not cut it.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+
+    planes = _silhouette_planes(BRepAdaptor_Surface(face), direction)
+    if planes is None:
+        return []
+    if not planes:
+        return [face]
+    return _cut_by_planes(face, planes)
+
+
+def _silhouette_planes(surface, direction):
+    """The ``(point, normal)`` planes holding a surface's silhouette along ``direction``.
+
+    ``None`` for a surface that slides along itself; an empty list where the normal
+    never turns square to the heading. Per surface, with ``a`` a cone's half-angle:
+
+    * cylinder and cone -- the normal depends only on the angle round the axis,
+      ``cos(a) * radial - sin(a) * axis``, and is square to the heading where
+      ``cos(u - phi) = tan(a) * along / across``. Each such ``u`` is a straight
+      ruling lying in the plane through the axis with normal ``tangent(u)``.
+    * sphere -- the great circle in the plane through the centre square to the
+      heading.
+    * torus with its axis along the heading -- the normal is square to the axis
+      only on the two equators, both in the plane through the centre square to
+      the axis.
+    * torus with its axis square to the heading -- in the torus's angles the
+      normal's component along the heading is ``cos(v) * cos(u - phi)``, which
+      vanishes where ``cos(v) = 0`` -- the two circles a minor radius either side
+      of the centre plane -- or where ``u = phi +/- 90 degrees``, in the plane
+      through the axis square to the heading.
+
+    A torus at any other angle has a silhouette that lies in no plane, and raises
+    :class:`_NoExactSweep` like every other surface.
     """
     import math
 
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder
+    from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder, GeomAbs_Sphere, GeomAbs_Torus
     from OCP.gp import gp_Vec
 
-    surface = BRepAdaptor_Surface(face)
-    if surface.GetType() == GeomAbs_Cylinder:
+    heading = gp_Vec(direction.X, direction.Y, direction.Z)
+    kind = surface.GetType()
+    if kind == GeomAbs_Sphere:
+        return [(surface.Sphere().Location(), heading)]
+    if kind == GeomAbs_Torus:
+        torus = surface.Torus()
+        frame = torus.Position()
+        axis = gp_Vec(frame.Direction())
+        along = heading.Dot(axis)
+        if heading.Crossed(axis).Magnitude() <= _PARALLEL_COSINE:
+            return [(frame.Location(), axis)]
+        if abs(along) <= _PARALLEL_COSINE:
+            minor = torus.MinorRadius()
+            centre = frame.Location()
+            return [
+                (centre.Translated(axis * minor), axis),
+                (centre.Translated(axis * -minor), axis),
+                (centre, heading),
+            ]
+        raise _NoExactSweep("a torus oblique to the heading")
+    if kind == GeomAbs_Cylinder:
         frame, half_angle = surface.Cylinder().Position(), 0.0
-    elif surface.GetType() == GeomAbs_Cone:
+    elif kind == GeomAbs_Cone:
         cone = surface.Cone()
         frame, half_angle = cone.Position(), cone.SemiAngle()
     else:
         raise _NoExactSweep("a curved face with no exact cut")
 
     x, y = gp_Vec(frame.XDirection()), gp_Vec(frame.YDirection())
-    heading = gp_Vec(direction.X, direction.Y, direction.Z)
     dx, dy = heading.Dot(x), heading.Dot(y)
     dz = heading.Dot(gp_Vec(frame.Direction()))
     across = math.hypot(dx, dy)
     if across <= _PARALLEL_COSINE:
         # Heading along the axis: a cylinder slides along itself, and a cone's
         # normal keeps one sign all round. Either way there is no ruling to cut at.
-        return [] if half_angle == 0.0 else [face]
+        return None if half_angle == 0.0 else []
     ratio = math.tan(half_angle) * dz / across
     if abs(ratio) >= 1.0:
-        return [face]
+        return []
     phi = math.atan2(dy, dx)
     spread = math.acos(ratio)
     normals = []
@@ -852,7 +935,18 @@ def _split_at_silhouette(face, direction):
         # A cylinder's two rulings lie in one plane; cutting by it twice is waste.
         if not any(abs(abs(normal.Dot(seen)) - 1.0) < 1e-12 for seen in normals):
             normals.append(normal)
-    return _cut_by_planes(face, [(frame.Location(), normal) for normal in normals])
+    return [(frame.Location(), normal) for normal in normals]
+
+
+def _runs_along(face, direction) -> bool:
+    """Whether a linear-extrusion face is drawn straight along ``direction``."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.gp import gp_Vec
+
+    drawn = gp_Vec(BRepAdaptor_Surface(face).Direction())
+    return drawn.Crossed(gp_Vec(direction.X, direction.Y, direction.Z)).Magnitude() <= (
+        _PARALLEL_COSINE
+    )
 
 
 def _cut_by_planes(face, planes):

@@ -7,7 +7,19 @@ against synthetic values; here the numbers themselves come from real solids.
 from types import SimpleNamespace
 
 import pytest
-from build123d import Align, Box, Cone, Cylinder, Pos, Rot, Vector
+from build123d import (
+    Align,
+    Box,
+    Cone,
+    Cylinder,
+    GeomType,
+    Pos,
+    Rot,
+    Sphere,
+    Torus,
+    Vector,
+    fillet,
+)
 
 from cadless.assembly_check import measure_assembly
 
@@ -542,3 +554,80 @@ def test_a_cone_sweeps_exactly_the_volume_it_passes_over(heading):
     expected = frustum + length * _shadow_area(np.concatenate([_rim(6, -5), _rim(3, 5)]), heading)
     swept = _swept_volume(Cone(6, 3, 10), heading, length)
     assert swept == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("heading", [(1, 0, 0), (1, 1, 0)])
+def test_a_sphere_sweeps_exactly_the_volume_it_passes_over(heading):
+    # Headings the oracle's own fuse can take: at some oblique ones the kernel
+    # fuses the two halves' prisms to nothing, though each is right on its own.
+    import math
+
+    length = 20.0
+    expected = 4 / 3 * math.pi * 5**3 + length * math.pi * 5**2
+    assert _swept_volume(Sphere(5), heading, length) == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("heading", [(-0.639, 0.739, -0.213), (0.576, 0.694, 0.432)])
+def test_a_ball_passes_a_block_beside_its_path(heading):
+    # At these headings the kernel builds one half's prism inside out. Read as it
+    # comes, it holds everything outside the ball's path, so the block beside the
+    # path reads as a clash.
+    path = Vector(*heading).normalized()
+    beside = path.cross(Vector(0, 0, 1)).normalized()
+    block = Pos(*(path * 10 + beside * 8)) * Box(2, 2, 2)
+    assert not _rule([Sphere(5), block], 0, heading)
+
+
+@pytest.mark.parametrize("heading", [(-0.639, 0.739, -0.213), (0.576, 0.694, 0.432)])
+def test_a_ball_is_stopped_by_a_block_in_its_path(heading):
+    path = Vector(*heading).normalized()
+    block = Pos(*(path * 10)) * Box(2, 2, 2)
+    assert _rule([Sphere(5), block], 0, heading)
+
+
+def test_a_torus_sweeps_exactly_the_volume_it_passes_over_along_its_axis():
+    # Every line along the axis meets the ring in one stretch at most, so the
+    # sweep is the ring plus the travel times the annulus it shades.
+    import math
+
+    major, minor, length = 10.0, 3.0, 20.0
+    ring = 2 * math.pi**2 * major * minor**2
+    expected = ring + length * math.pi * ((major + minor) ** 2 - (major - minor) ** 2)
+    swept = _swept_volume(Torus(major, minor), (0, 0, 1), length)
+    assert swept == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("heading", [(1, 0, 0), (1, 1, 0)])
+def test_a_torus_sweeps_exactly_the_volume_it_passes_over_across_its_axis(heading):
+    # A line across the axis can meet the ring twice, either side of the hole.
+    # Travelling further than the hole is wide fills the hole in, so the sweep is
+    # the ring with its hole filled -- revolve R + sqrt(r^2 - z^2) about the axis --
+    # plus the travel times the shadow, 4Rr + pi r^2.
+    import math
+
+    major, minor, length = 10.0, 3.0, 20.0
+    assert length > 2 * (major - minor)
+    filled = math.pi * (2 * minor * major**2 + math.pi * major * minor**2 + 4 / 3 * minor**3)
+    expected = filled + length * (4 * major * minor + math.pi * minor**2)
+    swept = _swept_volume(Torus(major, minor), heading, length)
+    assert swept == pytest.approx(expected, rel=1e-4)
+
+
+def test_a_pin_with_rounded_ends_in_a_close_bore_is_ruled_within_a_small_budget():
+    # The rounding is a torus each end, which the search has to sweep exactly to
+    # take the pin out along its bore rather than walk it.
+    pin = fillet(Cylinder(5, 40).edges().filter_by(GeomType.CIRCLE), radius=1)
+    block = _bored_block()[0]
+    m = measure_assembly([pin, block], probe_budget=60)
+    assert m.unchecked == []
+    assert m.order is not None
+
+
+def test_a_part_with_no_exact_sweep_is_ruled_on_the_other_part_swept_back():
+    # The pin's faces are all B-splines, so it cannot be swept; the block can, and
+    # sliding the pin out is sliding the block back off it.
+    pin = _as_nurbs(Cylinder(5, 40))
+    block = _bored_block()[0]
+    m = measure_assembly([pin, block], probe_budget=60)
+    assert m.unchecked == []
+    assert m.order is not None
