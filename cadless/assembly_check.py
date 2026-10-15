@@ -62,7 +62,7 @@ OVERLAP_EPSILON_MM3 = 1e-9
 #:
 #: A constant rather than a repeated literal because two places depend on it
 #: agreeing: the search writes it, and the policy reads it to tell 'the search
-#: did not finish' from 'it finished and found nothing'.
+#: could not rule' from 'it ruled and found nothing'.
 _ORDER_UNCHECKED_PREFIX = "assembly order:"
 
 
@@ -291,7 +291,8 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
 
     A search that ran to completion and found nothing always names the parts it
     could not free, so ``order is None`` with an empty ``trapped`` means the
-    search did not finish. Saying "no assembly order exists" there would send the
+    search could not rule -- it ran out of budget, or stopped at pairs it could
+    not see past or measure. Saying "no assembly order exists" there would send the
     model to fix geometry that was never measured, and it is the first line of
     the repair prompt -- which is exactly the confusion the module docstring
     promises this report does not make.
@@ -315,7 +316,7 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
             "through another part; reorient the joint so it slides in along one axis"
         )
         return
-    # The executor normally says why it could not finish, and that reason is
+    # The executor normally says why it could not rule, and that reason is
     # already on the report. A payload carrying neither a result nor a reason is
     # inconsistent, and this is the only thing between it and reading as a pass.
     if not any(reason.startswith(_ORDER_UNCHECKED_PREFIX) for reason in m.unchecked):
@@ -427,9 +428,9 @@ ORDER_PROBE_BUDGET = 20_000
 #: A second bound beside the probe count, because the two fail differently. The
 #: count stops a model that produced very many parts; the clock stops a single
 #: part whose topology makes one boolean operation take seconds. Counting alone
-#: would rest on the units costing roughly the same, and they do not: by design a
-#: sweep's boolean costs more than a distance, and a pathological solid makes any
-#: one of them slow.
+#: would rest on the units costing roughly the same, and they do not: building a
+#: sweep is charged one unit though it cuts, prisms and checks every face, and a
+#: pathological solid makes any one unit slow.
 #:
 #: A share rather than a fixed number of seconds, because the executor returns no
 #: summary at all when its own clock runs out -- so this has to stop first, and a
@@ -444,8 +445,8 @@ MEASUREMENT_TIME_BUDGET_SECONDS = 10.0
 #: How far past a contact the walk looks for a clash, as a fraction of the thinnest
 #: part dimension.
 #:
-#: Only the walk uses it, and only the pairs it walks -- those neither part of
-#: which can be swept exactly. The walk advances by however far apart the two
+#: Only the walk uses it, and only the pairs it walks -- those no sweep could
+#: rule. The walk advances by however far apart the two
 #: solids are, which is what makes it safe rather than sampled. At a contact the
 #: separation is zero and bounds nothing, and the walk stops there: a probe this
 #: far on can turn the heading into a measured clash, never into a clear one.
@@ -667,9 +668,9 @@ def _touching_reason(pairs) -> str:
     unordered = sorted({tuple(sorted(pair)) for pair in pairs})
     names = "; ".join(f"{_label(first)} and {_label(second)}" for first, second in unordered)
     return (
-        f"{_ORDER_UNCHECKED_PREFIX} {names} touch along faces the check cannot sweep "
-        "exactly, so it could not prove they come apart; a small gap between them "
-        "lets it rule"
+        f"{_ORDER_UNCHECKED_PREFIX} {names} touch where the check cannot follow their "
+        "surfaces exactly, so it could not prove they come apart; a small gap between "
+        "them lets it rule"
     )
 
 
@@ -713,9 +714,9 @@ def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, 
 
     Only the relative motion matters: the part meeting another while it moves
     along the heading is the other meeting the part while it moves back along it.
-    So where the moving part has no exact sweep to use, the other part is swept
-    backwards instead, and only a pair where neither can be swept exactly is
-    walked.
+    So where the moving part's sweep cannot rule a pair -- it has no exact one, or
+    the kernel refused a boolean of it -- the other part is swept backwards
+    instead, and only a pair no sweep could rule is walked.
 
     A pair where one part sits strictly inside a round bore of the other, about an
     axis along the heading, is settled before any of that: the two can never
@@ -795,12 +796,12 @@ class _Scene:
         #: ``None`` where the kernel could not say. Filled by the pairwise phase,
         #: which already asked, so no heading asks again.
         self.at_rest: dict[tuple[int, int], float | None] = {}
-        #: Pairs ``(moving, other)`` a walk stopped at undecided: touching where
-        #: neither could be swept, so nothing showed the path past the contact
-        #: clear or blocked.
+        #: Pairs ``(moving, other)`` a walk stopped at undecided: touching where no
+        #: sweep could rule them, so nothing showed the path past the contact clear
+        #: or blocked.
         self.undecided: set[tuple[int, int]] = set()
-        #: Pairs ``(moving, other)`` the kernel would not measure at all along a
-        #: heading -- refused where they stand, by every sweep, and by the walk.
+        #: Pairs ``(moving, other)`` the kernel would not measure along a heading --
+        #: refused where they stand, or by the walk once no sweep could rule them.
         self.refused: set[tuple[int, int]] = set()
 
     def shared_at_rest(self, first, second, budget) -> float | None:
@@ -1320,7 +1321,7 @@ def _is_one_solid(part) -> bool:
 def _walk(parts, windows, index, direction, look_ahead, budget):
     """Walk one part along the heading past the others in ``windows``.
 
-    For the pairs neither part of which can be swept exactly. It advances by the
+    For the pairs no sweep could rule. It advances by the
     measured separation and by nothing more: moving a solid less than its
     distance to another cannot bring the two into contact, so a step that size
     passes over nothing. At contact the separation bounds nothing and no fixed
@@ -1333,8 +1334,8 @@ def _walk(parts, windows, index, direction, look_ahead, budget):
 
     Walks against several others advance in turn, so one that blocks near the
     start ends the heading before a long walk past another is paid for. Returns
-    the verdict, the other parts the walk stopped at a contact, and those it could
-    not measure.
+    the verdict and, when it is undecided, the other parts the walk stopped at a
+    contact and those it could not measure.
     """
     from build123d import Location
 

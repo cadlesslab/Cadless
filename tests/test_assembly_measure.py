@@ -311,6 +311,27 @@ def test_a_distance_probe_that_cannot_run_is_reported_rather_than_cleared(monkey
     assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
 
 
+def test_a_contact_the_walk_cannot_look_past_is_reported_rather_than_trapped(monkeypatch):
+    # Blocks touching face to face, walked because neither can be swept: the
+    # pairwise phase measures them where they stand, and every look the walk then
+    # takes at the contact is refused. Nothing clashed, so nothing is trapped.
+    import cadless.assembly_check as module
+
+    real = module._shared_volume
+    calls = []
+
+    def first_only(first, second):
+        calls.append(1)
+        return real(first, second) if len(calls) == 1 else None
+
+    monkeypatch.setattr(module, "_shared_volume", first_only)
+    pair = [_as_nurbs(Box(20, 20, 10)), _as_nurbs(Pos(20, 0, 0) * Box(20, 20, 10))]
+    m = measure_assembly(pair)
+    assert m.order is None
+    assert m.trapped == []
+    assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
+
+
 def test_a_clash_probe_that_cannot_run_is_reported_rather_than_cleared(monkeypatch):
     # The other half: where two parts stand touching, the shared volume is what
     # says whether they clash, so a refused volume query is reported the same way.
@@ -521,12 +542,12 @@ def _channel_and_bar():
 
 
 @pytest.mark.parametrize("heading, verdict", [((1, 0, 0), FREE), ((0, 0, 1), BLOCKED)])
-def test_a_prism_boolean_the_kernel_refuses_leaves_the_pair_to_the_walk(
+def test_a_prism_boolean_the_kernel_refuses_has_the_pair_ruled_another_way(
     monkeypatch, heading, verdict
 ):
-    # A refused boolean is neither a clash nor a clear path, so the pair is
-    # walked instead -- which still finds the channel sliding off along its slot,
-    # and still finds its floor rising into the bar.
+    # A refused boolean is neither a clash nor a clear path, so the pair is ruled
+    # another way: along the slot, by the bar swept back against the channel; up,
+    # by walking the channel until its floor meets the bar.
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_prism_overlap", lambda prism, other: None)
