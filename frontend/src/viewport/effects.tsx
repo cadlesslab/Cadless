@@ -39,9 +39,18 @@ export interface GroundConfig {
  * No absolute size floor: model GLBs range from ~0.01 scene units (houses)
  * to tens of units, and an oversized plane pollutes the Bounds observe refit
  * that runs on every canvas resize — the camera then frames the plane, not
- * the model, and the near plane lands beyond the whole model (#16). */
-export function groundConfig(box: THREE.Box3 | null): GroundConfig | null {
-  if (!box || box.isEmpty()) return null;
+ * the model, and the near plane lands beyond the whole model (#16).
+ *
+ * `extent` is anywhere else the model will be drawn — an assembly fully taken
+ * apart — and the plane covers it too. Sized to the assembled model alone, it
+ * would leave a part that slid out sideways with no shadow, and one that left
+ * downward sunk through the floor. */
+export function groundConfig(
+  model: THREE.Box3 | null,
+  extent: THREE.Box3 | null = null,
+): GroundConfig | null {
+  if (!model || model.isEmpty()) return null;
+  const box = extent ? model.clone().union(extent) : model;
   const c = box.getCenter(new THREE.Vector3());
   const s = box.getSize(new THREE.Vector3());
   const footprint = Math.max(s.x, s.z);
@@ -53,14 +62,21 @@ export function groundConfig(box: THREE.Box3 | null): GroundConfig | null {
   };
 }
 
-/** A soft contact shadow grounded at the bottom of the model. */
-export function Ground({ modelRef }: { modelRef: RefObject<THREE.Group> }) {
+/** A soft contact shadow grounded at the bottom of the model, and under
+ * `extent` as well when one is given. */
+export function Ground({
+  modelRef,
+  extent = null,
+}: {
+  modelRef: RefObject<THREE.Group>;
+  extent?: THREE.Box3 | null;
+}) {
   const [cfg, setCfg] = useState<GroundConfig | null>(null);
   useEffect(() => {
     const g = modelRef.current;
     if (!g || g.children.length === 0) return;
-    setCfg(groundConfig(new THREE.Box3().setFromObject(g)));
-  }, [modelRef]);
+    setCfg(groundConfig(new THREE.Box3().setFromObject(g), extent));
+  }, [modelRef, extent]);
 
   if (!cfg) return null;
   return (

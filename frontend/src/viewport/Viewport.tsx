@@ -4,18 +4,28 @@
  * fit/reset, ortho/perspective (CameraRig + ViewCommands + the overlay toolbar). */
 import { Bounds, GizmoHelper, GizmoViewcube, Grid, Html } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Component, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Component,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import * as THREE from "three";
 
 import { setThumbnail } from "../panels/thumbnails";
 
 import { useActiveVersion, useStoreSelector } from "../state";
+import { AssemblyPlayer } from "./AssemblyPlayer";
 import { CameraRig } from "./CameraRig";
 import { Appearance, Ground, SceneEnvironment } from "./effects";
 import { Measure, SectionPlane, TriangleCounter } from "./inspectionScene";
 import { ModelParts } from "./ModelParts";
 import { PreviewBanner } from "./PreviewBanner";
 import { Readout } from "./Readout";
+import { useAssemblyMotion } from "./useAssemblyMotion";
 import { usePreviewSubject } from "./usePreviewSubject";
 import { ViewCommands } from "./ViewCommands";
 import { ViewportToolbar } from "./ViewportToolbar";
@@ -90,6 +100,17 @@ export function Viewport() {
   const gridVisible = useViewport((s) => s.gridVisible);
   const axesVisible = useViewport((s) => s.axesVisible);
 
+  const motion = useAssemblyMotion(version, subject.previewing, subject.parts);
+  // Each part's own group, by part ordinal, for the player to move. A ref
+  // rather than state: it changes as parts mount, which is no reason to render.
+  const partGroups = useRef(new Map<number, THREE.Group>());
+  const onPartGroup = useCallback((part: number, group: THREE.Group | null) => {
+    if (group) partGroups.current.set(part, group);
+    else partGroups.current.delete(part);
+  }, []);
+  // Where the parts reach fully apart, for the ground to cover as well.
+  const [apartExtent, setApartExtent] = useState<THREE.Box3 | null>(null);
+
   return (
     <div className="viewport" data-testid="viewport">
       <Canvas
@@ -138,7 +159,7 @@ export function Viewport() {
                     viewportStore.addMeasurePoint([e.point.x, e.point.y, e.point.z]);
                   }}
                 >
-                  <ModelParts urls={urls} />
+                  <ModelParts urls={urls} parts={subject.parts} onPartGroup={onPartGroup} />
                 </group>
                 <ViewCommands modelRef={modelRef} />
                 <Appearance modelRef={modelRef} />
@@ -147,8 +168,18 @@ export function Viewport() {
                 {subject.captureVersionId != null && (
                   <ThumbnailCapture versionId={subject.captureVersionId} />
                 )}
+                {/* Inside Bounds so it remounts with every model under the
+                    Bounds key, and can widen the framing when parts leave. */}
+                {motion && (
+                  <AssemblyPlayer
+                    motion={motion}
+                    modelRef={modelRef}
+                    partGroups={partGroups}
+                    onApartBox={setApartExtent}
+                  />
+                )}
               </Bounds>
-              <Ground modelRef={modelRef} />
+              <Ground modelRef={modelRef} extent={apartExtent} />
               <Measure />
             </Suspense>
           </GltfErrorBoundary>

@@ -2,8 +2,11 @@ import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
 import {
+  advancePlay,
+  apartBox,
   nextJoint,
   parseMotion,
+  SECONDS_PER_JOINT,
   partOffsets,
   sceneHeading,
   takeApartOrder,
@@ -141,6 +144,77 @@ describe("nextJoint", () => {
   it("finishes a joint that is part way rather than skipping past it", () => {
     expect(nextJoint(1.3, 1)).toBe(2);
     expect(nextJoint(1.3, -1)).toBe(1);
+  });
+});
+
+describe("advancePlay", () => {
+  const STILL = { position: 0, wait: 0 };
+
+  it("moves one joint in each joint's worth of time", () => {
+    const next = advancePlay(STILL, 2, "apart", SECONDS_PER_JOINT / 2, false);
+    expect(next.position).toBeCloseTo(0.5, 9);
+    expect(next.done).toBe(false);
+  });
+
+  it("goes back together at the same pace", () => {
+    const next = advancePlay({ position: 1, wait: 0 }, 2, "together", SECONDS_PER_JOINT / 2, false);
+    expect(next.position).toBeCloseTo(0.5, 9);
+  });
+
+  it("stops at the end it is heading for", () => {
+    expect(advancePlay({ position: 1.9, wait: 0 }, 2, "apart", SECONDS_PER_JOINT, false)).toEqual(
+      expect.objectContaining({ position: 2, done: true }),
+    );
+    expect(
+      advancePlay({ position: 0.1, wait: 0 }, 2, "together", SECONDS_PER_JOINT, false),
+    ).toEqual(expect.objectContaining({ position: 0, done: true }));
+  });
+
+  describe("with reduced motion", () => {
+    // A frame's worth of time: far less than a joint takes.
+    const FRAME = 1 / 60;
+
+    it("moves a whole joint at once rather than sliding there", () => {
+      const next = advancePlay(STILL, 2, "apart", FRAME, true);
+      expect(next.position).toBe(1);
+      expect(next.done).toBe(false);
+    });
+
+    it("holds each joint for a joint's worth of time before the next", () => {
+      const first = advancePlay(STILL, 3, "apart", FRAME, true);
+      const held = advancePlay(first, 3, "apart", FRAME, true);
+      expect(held.position).toBe(1);
+      const next = advancePlay(held, 3, "apart", SECONDS_PER_JOINT, true);
+      expect(next.position).toBe(2);
+    });
+
+    it("comes back together a whole joint at a time, and stops there", () => {
+      const next = advancePlay({ position: 1, wait: 0 }, 2, "together", FRAME, true);
+      expect(next).toEqual(expect.objectContaining({ position: 0, done: true }));
+    });
+  });
+});
+
+describe("apartBox", () => {
+  function partAt(x: number): THREE.Group {
+    const group = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    mesh.position.set(x, 0, 0);
+    group.add(mesh);
+    return group;
+  }
+
+  it("is every part where it ends up once the assembly is fully apart", () => {
+    const groups = new Map([
+      [0, partAt(0)],
+      [1, partAt(2)],
+    ]);
+    const box = apartBox(groups, [
+      [0, 0, 0],
+      [0, 10, 0],
+    ]);
+    expectVec(box.min.toArray(), [-0.5, -0.5, -0.5]);
+    expectVec(box.max.toArray(), [2.5, 10.5, 0.5]);
   });
 });
 

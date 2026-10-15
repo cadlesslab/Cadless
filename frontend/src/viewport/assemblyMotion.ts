@@ -129,6 +129,69 @@ export function travelFor(box: THREE.Box3, fraction: number): number {
   return Math.max(size.x, size.y, size.z) * fraction;
 }
 
+/** Seconds one joint takes while playing: long enough to follow which way a
+ * part leaves, short enough that an assembly of many parts does not drag. */
+export const SECONDS_PER_JOINT = 0.8;
+
+export type PlayDirection = "apart" | "together";
+
+/** Where play has got to: the position, and under reduced motion how long is
+ * left before the next jump. */
+export interface PlayHead {
+  position: number;
+  wait: number;
+}
+
+/** Play `elapsed` seconds further in direction `play`.
+ *
+ * Normally the parts slide, one joint per {@link SECONDS_PER_JOINT}. Under
+ * reduced motion they jump a whole joint at a time at that same pace instead —
+ * the first jump at once, so pressing play visibly does something, and each
+ * after a joint's worth of time — because a slide is motion and a jump is a
+ * change of state. `done` is whether the end being played toward has been
+ * reached, which is the caller's cue to stop. */
+export function advancePlay(
+  head: PlayHead,
+  steps: number,
+  play: PlayDirection,
+  elapsed: number,
+  reduced: boolean,
+): PlayHead & { done: boolean } {
+  const dir = play === "apart" ? 1 : -1;
+  let { position, wait } = head;
+  if (reduced) {
+    wait -= elapsed;
+    if (wait <= 0) {
+      position = nextJoint(position, dir);
+      wait = SECONDS_PER_JOINT;
+    }
+  } else {
+    position += (dir * elapsed) / SECONDS_PER_JOINT;
+  }
+  position = Math.min(Math.max(position, 0), steps);
+  return { position, wait, done: position === (dir > 0 ? steps : 0) };
+}
+
+/** The extent of the assembly once every part is fully out.
+ *
+ * Each group is measured where it is and moved by its offset, so the groups
+ * have to be at rest when this is asked: measured part way, a part would be
+ * counted out by its offset twice. A group with no offset is counted where it
+ * stands. */
+export function apartBox(
+  groups: ReadonlyMap<number, THREE.Object3D>,
+  offsets: readonly Vec3[],
+): THREE.Box3 {
+  const box = new THREE.Box3();
+  groups.forEach((group, part) => {
+    const at = new THREE.Box3().setFromObject(group);
+    const offset = offsets[part];
+    if (offset) at.translate(new THREE.Vector3(...offset));
+    box.union(at);
+  });
+  return box;
+}
+
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }

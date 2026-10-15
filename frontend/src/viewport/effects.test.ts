@@ -37,4 +37,21 @@ describe("groundConfig", () => {
   it("returns null for a degenerate (zero-footprint) box", () => {
     expect(groundConfig(boxAround([0, 5, 0]))).toBeNull();
   });
+
+  describe("with an assembly taken apart", () => {
+    // The model spans -1..1 on every axis; one part leaves 4 units along +x.
+    const model = boxAround([2, 2, 2]);
+    const sideways = new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(5, 1, 1));
+
+    it("spreads under the parts that left, not just the assembled model", () => {
+      const cfg = groundConfig(model, sideways)!;
+      expect(cfg.pos[0]).toBeCloseTo(2, 6); // centred on -1..5
+      expect(cfg.scale).toBeGreaterThanOrEqual(6);
+    });
+
+    it("sits below a part that left downward", () => {
+      const below = new THREE.Box3(new THREE.Vector3(-1, -3, -1), new THREE.Vector3(1, 1, 1));
+      expect(groundConfig(model, below)!.pos[1]).toBeLessThan(-3);
+    });
+  });
 });
