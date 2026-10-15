@@ -108,20 +108,39 @@ export function nextJoint(position: number, dir: 1 | -1): number {
   return dir > 0 ? Math.floor(position) + 1 : Math.ceil(position) - 1;
 }
 
+/** How close two unit headings have to be to count as one direction. */
+const SAME_HEADING_TOLERANCE = 1e-6;
+
 /** The offset of every part at `position`, indexed by part ordinal.
  *
  * Joint j (1-based) moves the j-th part to come off by the share of its own
- * stretch that `position` has covered, clamped to [0, 1], times `travel`, along
- * that part's heading. `travel` is in scene units. */
+ * stretch that `position` has covered, clamped to [0, 1], along that part's
+ * heading. `travel` is in scene units.
+ *
+ * A part's stretch is one `travel` for itself plus one for every part that
+ * comes off after it along the same heading. Parts released one way — the
+ * pieces of a beam split end to end — would otherwise all stop the same
+ * distance out and sit joined again, so a chain of any length would end up
+ * looking like two pieces. Parts that leave in different directions part
+ * company anyway and each go one `travel`. */
 export function partOffsets(motion: Motion, position: number, travel: number): Vec3[] {
   const offsets: Vec3[] = motion.headings.map(() => [0, 0, 0]);
-  takeApartOrder(motion).forEach((part, j) => {
+  const parts = takeApartOrder(motion);
+  parts.forEach((part, j) => {
     const heading = motion.headings[part];
     if (!heading) return;
-    const out = Math.min(Math.max(position - j, 0), 1) * travel;
+    const behind = parts.slice(j + 1).filter((later) => {
+      const other = motion.headings[later];
+      return other != null && dot(heading, other) >= 1 - SAME_HEADING_TOLERANCE;
+    }).length;
+    const out = Math.min(Math.max(position - j, 0), 1) * travel * (1 + behind);
     offsets[part] = [heading[0] * out, heading[1] * out, heading[2] * out];
   });
   return offsets;
+}
+
+function dot(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
 /** How far a part travels: `fraction` of the box's largest dimension.

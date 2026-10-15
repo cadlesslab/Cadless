@@ -87,6 +87,27 @@ describe("partOffsets", () => {
   it("never moves the part with no heading", () => {
     for (const p of [0, 0.5, 1, 1.5, 2]) expectVec(partOffsets(shelf(), p, TRAVEL)[0], [0, 0, 0]);
   });
+
+  describe("a beam split into a chain that comes apart along one heading", () => {
+    // Part 2 stays; part 1 and then part 0 were slid on along CAD +X, so they
+    // come off along CAD -X, part 0 first. Sent the same distance, the two
+    // would sit joined again once both are out, and a chain of any length
+    // would look like two pieces.
+    const chain = () =>
+      parseMotion({ order: [2, 1, 0], releases: [[-1, 0, 0], [-1, 0, 0], []], explode_fraction: 0.35 }, PARTS)!;
+
+    it("leaves a gap between every part once all are out", () => {
+      const at = partOffsets(chain(), 2, TRAVEL);
+      expectVec(at[1], [-10, 0, 0]);
+      expectVec(at[0], [-20, 0, 0]);
+    });
+
+    it("sends the first part off the whole way during its own joint", () => {
+      const at = partOffsets(chain(), 1, TRAVEL);
+      expectVec(at[0], [-20, 0, 0]);
+      expectVec(at[1], [0, 0, 0]);
+    });
+  });
 });
 
 describe("parseMotion", () => {
