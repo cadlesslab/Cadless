@@ -586,6 +586,7 @@ def _disassembly_order(parts, budget):
     if floor is None:
         return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
+    scene = _Scene(parts)
     remaining = list(range(len(parts)))
     removed: list[int] = []
     releases: list[list[float]] = [[] for _ in parts]
@@ -601,7 +602,7 @@ def _disassembly_order(parts, budget):
                 freed = index
                 break
             try:
-                direction = _can_be_freed(parts, spheres, index, others, floor, budget)
+                direction = _can_be_freed(parts, spheres, index, others, floor, budget, scene)
             except _BudgetSpent:
                 return (
                     None,
@@ -624,7 +625,7 @@ def _disassembly_order(parts, budget):
     return list(reversed(removed)), [], [], releases
 
 
-def _can_be_freed(parts, spheres, index, others, floor, budget):
+def _can_be_freed(parts, spheres, index, others, floor, budget, scene=None):
     """The heading this part comes out along, or ``None`` if none does.
 
     Returns the direction rather than a yes, because the one that worked is the
@@ -633,7 +634,8 @@ def _can_be_freed(parts, spheres, index, others, floor, budget):
     releases along one axis only.
     """
     for direction in _candidate_directions(spheres, index, others):
-        if not _blocked_along(parts, spheres, index, others, direction, floor, budget):
+        verdict = _rule_heading(parts, spheres, index, others, direction, floor, budget, scene)
+        if verdict == _FREE:
             return direction
     return None
 
@@ -652,7 +654,7 @@ _BLOCKED = "blocked"
 _UNDECIDED = "undecided"
 
 
-def _rule_heading(parts, spheres, index, others, direction, floor, budget) -> str:
+def _rule_heading(parts, spheres, index, others, direction, floor, budget, scene=None) -> str:
     """Rule whether one part slides along ``direction`` clear of every other.
 
     Decided on the volume the part sweeps over its whole travel rather than on
@@ -670,7 +672,12 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget) -> st
     So where the moving part has a face with no exact sweep, the other part is
     swept backwards instead, and only a pair where neither can be swept exactly is
     walked.
+
+    A pair where one part sits strictly inside a round bore of the other, about an
+    axis along the heading, is settled before any of that: the two can never
+    meet along that line, whatever surfaces the ends of the inner part have.
     """
+    scene = scene or _Scene(parts)
     centre, radius = spheres[index]
     windows = {}
     for other in others:
@@ -683,11 +690,15 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget) -> st
         return _FREE
 
     length = max(stop for _, stop in windows.values())
-    own = _sweep(parts[index], direction, length, budget)
+    own = _UNBUILT
     walked = []
     for other in windows:
+        if scene.nested(index, other, direction, budget):
+            continue
         budget.spend()
         at_rest = _shared_volume(parts[index], parts[other])
+        if own is _UNBUILT:
+            own = _sweep(parts[index], direction, length, budget)
         if at_rest is None or at_rest > OVERLAP_EPSILON_MM3 or own is None:
             # A clash where they stand, or a refusal -- of the probe or of the
             # sweep. Blocked either way: a part freed on a measurement that did
@@ -712,6 +723,33 @@ def _rule_heading(parts, spheres, index, others, direction, floor, budget) -> st
 #: What :func:`_sweep` answers for a part with a face it has no exact sweep for --
 #: an answer to route around, unlike ``None``, which is a refusal.
 _INEXACT = object()
+
+#: A sweep not built yet: built on first need, since a heading every other part
+#: is excluded from needs none.
+_UNBUILT = object()
+
+
+class _Scene:
+    """What the order search works out once per measurement and reuses.
+
+    A heading and its reverse share a line of travel, and the same pair comes up
+    in every round of the search, so a verdict about a pair along a line is kept
+    rather than paid for again.
+    """
+
+    def __init__(self, parts) -> None:
+        self.parts = parts
+        self._nested: dict[tuple, bool] = {}
+
+    def nested(self, first, second, direction, budget) -> bool:
+        """Whether one of the two sits strictly inside a round bore of the other along this line."""
+        for line in _bore_lines(self.parts, first, second, direction):
+            key = (min(first, second), max(first, second), line[2])
+            if key not in self._nested:
+                self._nested[key] = _one_inside_the_other(self.parts, first, second, line, budget)
+            if self._nested[key]:
+                return True
+        return False
 
 
 def _sweep(part, direction, length, budget):
@@ -1028,6 +1066,134 @@ def _prism_overlap(prism, other) -> float | None:
         return total
     except Exception:  # noqa: BLE001 - same: report rather than guess
         return None
+
+
+def _bore_lines(parts, first, second, direction):
+    """The axes of either part's round faces that run along the heading.
+
+    Each comes as ``(point, heading, key)``: a point on the axis, the heading with
+    its sign fixed, and a key a heading and its reverse share -- which way along a
+    line a part slides changes nothing about whether it sits inside a bore there.
+    """
+    from build123d import Vector
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cylinder
+
+    heading = Vector(*_line_key(direction)).normalized()
+    lines = {}
+    for index in (first, second):
+        try:
+            faces = list(parts[index].faces())
+        except Exception:  # noqa: BLE001 - no faces to read, no bore to find
+            continue
+        for face in faces:
+            surface = BRepAdaptor_Surface(face.wrapped)
+            if surface.GetType() != GeomAbs_Cylinder:
+                continue
+            axis = surface.Cylinder().Axis()
+            along = Vector(axis.Direction().X(), axis.Direction().Y(), axis.Direction().Z())
+            if along.cross(heading).length > _PARALLEL_COSINE:
+                continue
+            spot = axis.Location()
+            point = Vector(spot.X(), spot.Y(), spot.Z())
+            point = point - heading * point.dot(heading)
+            key = (_line_key(heading), tuple(round(v, 6) for v in (point.X, point.Y, point.Z)))
+            lines.setdefault(key, (point, heading, key))
+    return list(lines.values())
+
+
+def _one_inside_the_other(parts, first, second, line, budget) -> bool:
+    """Whether one part lies strictly inside a round bore, about ``line``, of the other.
+
+    The outer part's nearest approach to the axis is its bore. The inner part lies
+    inside that bore if it comes nearer the axis and never reaches the cylinder of
+    the bore's radius: a solid is connected, so a piece of it outside the cylinder
+    would mean a piece of it on the cylinder. Each distance is taken over a
+    stretch of axis or cylinder spanning the part measured, which holds every point
+    that part's points are nearest to. Their shadows across the line -- one inside
+    a circle, the other outside it -- then never meet, however far either slides.
+    """
+    point, heading, _ = line
+    spans = {index: _span(parts[index], heading) for index in (first, second)}
+    reach = {}
+    for index in (first, second):
+        segment = _axis_segment(point, heading, spans[index])
+        if segment is None:
+            return False
+        budget.spend()
+        reach[index] = _distance(parts[index], segment)
+        if reach[index] is None:
+            return False
+    inner, outer = sorted((first, second), key=lambda index: reach[index])
+    bore = reach[outer]
+    if reach[inner] >= bore - _CONTACT_MM or not _is_one_solid(parts[inner]):
+        return False
+    tube = _tube(point, heading, bore, spans[inner])
+    if tube is None:
+        return False
+    budget.spend()
+    gap = _distance(parts[inner], tube)
+    return gap is not None and gap > _CONTACT_MM
+
+
+def _line_key(direction) -> tuple[float, float, float]:
+    """``direction`` with its sign fixed, so a heading and its reverse share a key."""
+    values = (float(direction.X), float(direction.Y), float(direction.Z))
+    sign = next((1.0 if value > 0 else -1.0 for value in values if abs(value) > 1e-12), 1.0)
+    return tuple(round(sign * value, 12) for value in values)
+
+
+def _span(part, heading, margin: float = 1.0):
+    """How far along ``heading`` the part reaches, with ``margin`` beyond each end."""
+    box = _box_of(getattr(part, "wrapped", None))
+    if box is None:
+        return None
+    low = box.Get()
+    ends = [
+        x * heading.X + y * heading.Y + z * heading.Z
+        for x in (low[0], low[3])
+        for y in (low[1], low[4])
+        for z in (low[2], low[5])
+    ]
+    return min(ends) - margin, max(ends) + margin
+
+
+def _axis_segment(point, heading, span):
+    """The stretch of the axis through ``point`` that ``span`` covers."""
+    from build123d import Edge
+
+    if span is None:
+        return None
+    return Edge.make_line(point + heading * span[0], point + heading * span[1])
+
+
+def _tube(point, heading, radius, span):
+    """A closed cylindrical face of ``radius`` about the axis, over ``span``."""
+    import math
+
+    from build123d import Face
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.Geom import Geom_CylindricalSurface
+    from OCP.gp import gp_Ax3, gp_Dir, gp_Pnt
+
+    if span is None or radius <= _CONTACT_MM:
+        return None
+    base = point + heading * span[0]
+    surface = Geom_CylindricalSurface(
+        gp_Ax3(gp_Pnt(base.X, base.Y, base.Z), gp_Dir(heading.X, heading.Y, heading.Z)), radius
+    )
+    maker = BRepBuilderAPI_MakeFace(surface, 0.0, 2.0 * math.pi, 0.0, span[1] - span[0], 1e-7)
+    if not maker.IsDone():
+        return None
+    return Face(maker.Face())
+
+
+def _is_one_solid(part) -> bool:
+    """Whether ``part`` is a single solid, so one connected piece of material."""
+    try:
+        return len(part.solids()) == 1
+    except Exception:  # noqa: BLE001 - not known to be one solid, so not treated as one
+        return False
 
 
 def _walk_blocked(parts, spheres, index, others, direction, floor, budget) -> bool:

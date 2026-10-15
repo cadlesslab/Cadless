@@ -451,19 +451,31 @@ def test_a_block_drops_off_a_pin_that_leaves_its_hole():
     assert not _rule(_pin_in_a_blind_hole(), 0, (0, 0, -1))
 
 
+def _channel_and_bar():
+    """An open channel and a bar lying loose in its slot, longer than the channel.
+
+    The channel slides off along the slot, and the prism of its end face reaches
+    over the bar's protruding end on the way -- so ruling it free takes a boolean
+    that comes back empty, rather than a box test that never needed one.
+    """
+    channel = Box(40, 20, 10) - Pos(0, 0, 2) * Box(42, 10.4, 10)
+    return [channel, Box(60, 10, 4)]
+
+
 def test_a_prism_boolean_that_cannot_run_blocks_rather_than_clears(monkeypatch):
     import cadless.assembly_check as module
 
-    assert not _rule(_bored_block(), 0, (0, 0, 1))
+    assert not _rule(_channel_and_bar(), 0, (1, 0, 0))
     monkeypatch.setattr(module, "_prism_overlap", lambda prism, other: None)
-    assert _rule(_bored_block(), 0, (0, 0, 1))
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0))
 
 
 def test_a_sweep_that_cannot_be_built_blocks_rather_than_clears(monkeypatch):
     import cadless.assembly_check as module
 
+    assert not _rule(_channel_and_bar(), 0, (1, 0, 0))
     monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
-    assert _rule(_bored_block(), 0, (0, 0, 1))
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0))
 
 
 def _swept_volume(part, heading, length):
@@ -621,6 +633,39 @@ def test_a_pin_with_rounded_ends_in_a_close_bore_is_ruled_within_a_small_budget(
     m = measure_assembly([pin, block], probe_budget=60)
     assert m.unchecked == []
     assert m.order is not None
+
+
+def _block_with_curved_skin():
+    """The bored block with B-spline outer faces round a true cylindrical bore.
+
+    Neither it nor a B-spline pin can be swept, so only the bore can settle the
+    pair without walking it.
+    """
+    return _as_nurbs(Box(30, 30, 20)) - Cylinder(5 + PIN_CLEARANCE, 22)
+
+
+def test_a_pin_inside_a_bore_is_settled_by_the_bore_alone():
+    pin = _as_nurbs(Cylinder(5, 40))
+    m = measure_assembly([pin, _block_with_curved_skin()], probe_budget=60)
+    assert m.unchecked == []
+    assert m.order is not None
+
+
+def test_a_pin_with_a_head_wider_than_its_bore_is_not_settled_by_the_bore():
+    # The head reaches past the bore's radius, so the pin is not inside the bore
+    # and the bore must not answer for it: pushed further in, the head meets the
+    # block.
+    pin = _as_nurbs(Cylinder(5, 40) + Pos(0, 0, 20) * Cylinder(8, 4))
+    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1))
+
+
+def test_a_part_of_two_solids_is_not_settled_by_a_bore_one_of_them_sits_in():
+    # The second solid sits clear of the bore's cylinder, so nothing connects it
+    # to the one inside -- and pushed down, it lands on the block.
+    from build123d import Compound
+
+    pin = Compound([Cylinder(5, 40), Pos(12, 0, 15) * Box(2, 2, 2)])
+    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1))
 
 
 def test_a_part_with_no_exact_sweep_is_ruled_on_the_other_part_swept_back():
