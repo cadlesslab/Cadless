@@ -154,6 +154,37 @@ describe("REST client", () => {
     expect(api.artifactUrl(5, "stl")).toMatch(/\/versions\/5\/artifacts\/stl$/);
     expect(api.artifactUrl(5, "obj")).toMatch(/\/versions\/5\/artifacts\/obj$/);
   });
+
+  it("getAssemblyMotion asks for the version's assembly under the API base", async () => {
+    const payload: api.AssemblyMotion = {
+      order: [0, 1],
+      releases: [[], [0, 0, 1]],
+      explode_fraction: 0.35,
+    };
+    const fetchFn = mockFetch(200, payload);
+
+    const out = await api.getAssemblyMotion(7);
+
+    expect(fetchFn.mock.calls[0][0]).toBe(`${api.BASE}/versions/7/artifacts/assembly`);
+    expect(out).toEqual(payload);
+  });
+
+  describe("hasAssemblyMotion", () => {
+    const withRows = (kinds: string[]) =>
+      ({
+        artifacts: kinds.map((kind) => ({ kind, bytes: 1, part: 0 })),
+      }) as unknown as api.Version;
+
+    it("is true for a version that carries an assembly row", () => {
+      expect(api.hasAssemblyMotion(withRows(["glb", "assembly"]))).toBe(true);
+    });
+
+    it("is false for a version that carries none", () => {
+      // A guide is drawn from the same measurements but is not the motion, and
+      // a version from before the motion was written has the guide alone.
+      expect(api.hasAssemblyMotion(withRows(["glb", "step", "guide"]))).toBe(false);
+    });
+  });
 });
 
 describe("SSE client", () => {

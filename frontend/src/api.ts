@@ -943,6 +943,42 @@ export const glbUrl = (versionId: number) => artifactUrl(versionId, "glb");
 export const guideFrameUrl = (versionId: number, frame: number) =>
   `${BASE}/versions/${versionId}/artifacts/guide/${frame}`;
 
+/** How a version's assembly comes apart, as the engine measured it.
+ *
+ * `order` lists part ordinals — the same numbers its GLB parts are fetched by —
+ * in the order the parts go together. `releases` has one slot per part ordinal,
+ * not per position in the order: a unit heading in the CAD frame (mm, Z-up)
+ * along which that part was released, or `[]` for the part left standing.
+ * `explode_fraction` is how far a part travels, as a share of the assembled
+ * model's largest dimension. */
+export interface AssemblyMotion {
+  order: number[];
+  releases: number[][];
+  explode_fraction: number;
+}
+
+/** The artifact kind the motion is stored and served under. */
+const ASSEMBLY_KIND = "assembly";
+
+/** A version's assembly motion, exactly as the server sent it.
+ *
+ * `unknown` rather than {@link AssemblyMotion}: the viewport moves parts by it,
+ * so it has to be checked against the parts actually drawn before anything
+ * trusts its shape, and a type that claimed the shape would let a caller skip
+ * that. */
+export const getAssemblyMotion = (versionId: number) =>
+  req<unknown>(`/versions/${versionId}/artifacts/${ASSEMBLY_KIND}`);
+
+/** Whether a version carries an assembly motion to fetch.
+ *
+ * Read off the version's own rows, so a version without one costs no request.
+ * The kind is compared as a string because `assembly` is not an
+ * {@link ArtifactKind}, for the reason {@link guideFrameUrl} gives: it is not a
+ * format the model can be exported to, and widening that union would offer it
+ * as one. */
+export const hasAssemblyMotion = (version: Version): boolean =>
+  version.artifacts.some((a) => (a.kind as string) === ASSEMBLY_KIND);
+
 // ---- SSE generation stream ----
 export interface StreamHandle {
   close: () => void;

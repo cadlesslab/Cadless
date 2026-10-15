@@ -31,6 +31,10 @@ export interface ViewerSubject {
   captureVersionId: number | null;
   /** Why the viewport is empty, when it is. Null while something is drawn. */
   emptyReason: string | null;
+  /** The GLB part ordinal each of `urls` draws, in the same order — the number
+   * an assembly names that part by. Empty when there are no parts to name: a
+   * model drawn whole, a preview, or nothing at all. */
+  parts: number[];
 }
 
 /** What to draw, whether to keep a picture of it, and what to say instead.
@@ -54,6 +58,7 @@ export function viewerSubject(
         previewing: true,
         captureVersionId: null,
         emptyReason: preview.note ?? PREVIEW_HAS_NO_MESH,
+        parts: [],
       };
     }
     if (failed) {
@@ -62,15 +67,22 @@ export function viewerSubject(
         previewing: true,
         captureVersionId: null,
         emptyReason: PREVIEW_UNREADABLE,
+        parts: [],
       };
     }
-    return { urls: [preview.url], previewing: true, captureVersionId: null, emptyReason: null };
+    return {
+      urls: [preview.url],
+      previewing: true,
+      captureVersionId: null,
+      emptyReason: null,
+      parts: [],
+    };
   }
 
   const hasModel = version?.ok === true && version.artifacts.some((a) => a.kind === "glb");
   if (hasModel && !failed) {
     return {
-      urls: modelUrls(version),
+      ...modelUrls(version),
       previewing: false,
       captureVersionId: version.id,
       emptyReason: null,
@@ -83,19 +95,25 @@ export function viewerSubject(
     : version && !version.ok
       ? GENERATION_FAILED
       : NOTHING_OPEN;
-  return { urls: [], previewing: false, captureVersionId: null, emptyReason };
+  return { urls: [], previewing: false, captureVersionId: null, emptyReason, parts: [] };
 }
 
-/** Every GLB a version's model is drawn from, in part order.
+/** Every GLB a version's model is drawn from, in part order, and the part
+ * each one is.
  *
  * A model printed whole keeps the one address it has always been fetched from.
  * A model in parts is asked for part by part, so each piece is drawn as itself
- * rather than one of them standing in for the rest. */
-function modelUrls(version: Version): string[] {
+ * rather than one of them standing in for the rest. The ordinals travel with
+ * the addresses because the rows are sorted here: whoever moves a part by its
+ * ordinal needs to know which address that is, not where it fell in a list. */
+function modelUrls(version: Version): { urls: string[]; parts: number[] } {
   const parts = partsOf(version, "glb");
   return parts.length > 1
-    ? parts.map((a) => artifactUrl(version.id, "glb", a.part))
-    : [glbUrl(version.id)];
+    ? {
+        urls: parts.map((a) => artifactUrl(version.id, "glb", a.part)),
+        parts: parts.map((a) => a.part),
+      }
+    : { urls: [glbUrl(version.id)], parts: [] };
 }
 
 export interface ReadoutFields {
