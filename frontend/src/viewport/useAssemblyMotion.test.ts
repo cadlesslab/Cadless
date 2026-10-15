@@ -5,7 +5,12 @@ import { BASE, type AssemblyMotion, type Version } from "../api";
 import { useAssemblyMotion } from "./useAssemblyMotion";
 
 const PARTS = [0, 1];
-const PAYLOAD: AssemblyMotion = { order: [0, 1], releases: [[], [0, 0, 1]], explode_fraction: 0.35 };
+const PAYLOAD: AssemblyMotion = {
+  order: [0, 1],
+  releases: [[], [0, 0, 1]],
+  stretch: [1, 1],
+  explode_fraction: 0.35,
+};
 
 /** A version drawn in two parts, carrying the motion unless told otherwise. */
 function version(id: number, carriesMotion = true): Version {

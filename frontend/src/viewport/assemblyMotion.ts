@@ -29,6 +29,10 @@ export interface Motion {
    * dimension. The engine's own fraction, so the viewport and the written
    * guide's exploded frames agree on how far apart "apart" is. */
   explodeFraction: number;
+  /** Indexed by part ordinal: how many travels the part goes out once all are
+   * apart. The engine's count, the one its exploded frame is drawn with, so
+   * parts that leave the same way are spaced here exactly as they are there. */
+  stretch: number[];
 }
 
 /** Below this a heading is not a direction. The engine's threshold for the same
@@ -66,9 +70,12 @@ export function sceneHeading(h: readonly unknown[]): Vec3 | null {
  * does nothing. */
 export function parseMotion(raw: unknown, parts: readonly number[]): Motion | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-  const { order, releases, explode_fraction } = raw as Record<string, unknown>;
+  const { order, releases, stretch, explode_fraction } = raw as Record<string, unknown>;
   if (!Array.isArray(order) || !order.every((p) => Number.isInteger(p))) return null;
   if (!Array.isArray(releases) || releases.length !== parts.length) return null;
+  // A part never needs more travels than there are parts for it to clear.
+  if (!Array.isArray(stretch) || stretch.length !== parts.length) return null;
+  if (!stretch.every((s) => Number.isInteger(s) && s >= 1 && s <= parts.length)) return null;
   if (!isFiniteNumber(explode_fraction)) return null;
   if (explode_fraction <= 0 || explode_fraction > MAX_EXPLODE_FRACTION) return null;
 
@@ -88,7 +95,12 @@ export function parseMotion(raw: unknown, parts: readonly number[]): Motion | nu
   }
   if (!headings.some((h) => h !== null)) return null;
 
-  return { order: [...(order as number[])], headings, explodeFraction: explode_fraction };
+  return {
+    order: [...(order as number[])],
+    headings,
+    explodeFraction: explode_fraction,
+    stretch: [...(stretch as number[])],
+  };
 }
 
 /** The parts in the order they come off: the last one placed first.
@@ -108,39 +120,23 @@ export function nextJoint(position: number, dir: 1 | -1): number {
   return dir > 0 ? Math.floor(position) + 1 : Math.ceil(position) - 1;
 }
 
-/** How close two unit headings have to be to count as one direction. */
-const SAME_HEADING_TOLERANCE = 1e-6;
-
 /** The offset of every part at `position`, indexed by part ordinal.
  *
  * Joint j (1-based) moves the j-th part to come off by the share of its own
  * stretch that `position` has covered, clamped to [0, 1], along that part's
- * heading. `travel` is in scene units.
- *
- * A part's stretch is one `travel` for itself plus one for every part that
- * comes off after it along the same heading. Parts released one way — the
- * pieces of a beam split end to end — would otherwise all stop the same
- * distance out and sit joined again, so a chain of any length would end up
- * looking like two pieces. Parts that leave in different directions part
- * company anyway and each go one `travel`. */
+ * heading. `travel` is in scene units, and a part's stretch is its `stretch`
+ * count of travels: more than one where parts after it leave the same way, so
+ * the pieces of a beam split end to end do not stop the same distance out and
+ * sit joined again. */
 export function partOffsets(motion: Motion, position: number, travel: number): Vec3[] {
   const offsets: Vec3[] = motion.headings.map(() => [0, 0, 0]);
-  const parts = takeApartOrder(motion);
-  parts.forEach((part, j) => {
+  takeApartOrder(motion).forEach((part, j) => {
     const heading = motion.headings[part];
     if (!heading) return;
-    const behind = parts.slice(j + 1).filter((later) => {
-      const other = motion.headings[later];
-      return other != null && dot(heading, other) >= 1 - SAME_HEADING_TOLERANCE;
-    }).length;
-    const out = Math.min(Math.max(position - j, 0), 1) * travel * (1 + behind);
+    const out = Math.min(Math.max(position - j, 0), 1) * travel * motion.stretch[part];
     offsets[part] = [heading[0] * out, heading[1] * out, heading[2] * out];
   });
   return offsets;
-}
-
-function dot(a: Vec3, b: Vec3): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
 /** How far a part travels: `fraction` of the box's largest dimension.

@@ -110,6 +110,14 @@ def test_parts_leaving_in_different_directions_each_go_one_distance():
     assert offsets == [[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]]
 
 
+def test_the_motion_says_how_far_each_part_goes_once_all_are_apart():
+    # The viewport spaces the parts by these counts rather than deciding again
+    # which headings match, so its chain opens exactly as the exploded frame's.
+    from cadless.assembly_guide import motion_payload
+
+    assert motion_payload(_CHAIN_ORDER, _CHAIN_RELEASES)["stretch"] == [2, 1, 1]
+
+
 def test_a_part_moved_alone_in_its_frame_goes_one_distance():
     # A step frame moves only the part going on; the pieces placed before it are
     # at rest, so there is nothing to keep clear of.

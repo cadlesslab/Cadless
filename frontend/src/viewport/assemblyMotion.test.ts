@@ -23,7 +23,12 @@ function expectVec(actual: readonly number[] | null | undefined, expected: Vec3)
 
 // A base that stays put, a part slid on from above (released along CAD +Z), and
 // a part slid on from the side (released along CAD +X), placed in that order.
-const PAYLOAD = { order: [0, 1, 2], releases: [[], [0, 0, 1], [1, 0, 0]], explode_fraction: 0.35 };
+const PAYLOAD = {
+  order: [0, 1, 2],
+  releases: [[], [0, 0, 1], [1, 0, 0]],
+  stretch: [1, 1, 1],
+  explode_fraction: 0.35,
+};
 const PARTS = [0, 1, 2];
 
 function shelf() {
@@ -93,8 +98,13 @@ describe("partOffsets", () => {
     // come off along CAD -X, part 0 first. Sent the same distance, the two
     // would sit joined again once both are out, and a chain of any length
     // would look like two pieces.
+    // The engine's stretch for that chain: part 0 goes two travels, so it clears
+    // part 1 once both are out.
     const chain = () =>
-      parseMotion({ order: [2, 1, 0], releases: [[-1, 0, 0], [-1, 0, 0], []], explode_fraction: 0.35 }, PARTS)!;
+      parseMotion(
+        { order: [2, 1, 0], releases: [[-1, 0, 0], [-1, 0, 0], []], stretch: [2, 1, 1], explode_fraction: 0.35 },
+        PARTS,
+      )!;
 
     it("leaves a gap between every part once all are out", () => {
       const at = partOffsets(chain(), 2, TRAVEL);
@@ -107,6 +117,13 @@ describe("partOffsets", () => {
       expectVec(at[0], [-20, 0, 0]);
       expectVec(at[1], [0, 0, 0]);
     });
+  });
+
+  it("spaces the parts by the stretch the engine sent, not by a rule of its own", () => {
+    // Different headings, yet a stretch of two: the engine's count is what the
+    // guide's frame was drawn with, so it is the one the viewport follows.
+    const motion = parseMotion({ ...PAYLOAD, stretch: [1, 1, 2] }, PARTS)!;
+    expectVec(partOffsets(motion, 2, TRAVEL)[2], [20, 0, 0]);
   });
 });
 
@@ -144,6 +161,12 @@ describe("parseMotion", () => {
     ["a heading that is not three numbers", { ...PAYLOAD, releases: [[], [0, 1], [1, 0, 0]] }, PARTS],
     ["a heading holding a string", { ...PAYLOAD, releases: [[], [0, 0, "1"], [1, 0, 0]] }, PARTS],
     ["no heading that is a direction", { ...PAYLOAD, releases: [[], [0, 0, 0], []] }, PARTS],
+    ["no stretch", { ...PAYLOAD, stretch: undefined }, PARTS],
+    ["a stretch slot missing", { ...PAYLOAD, stretch: [1, 1] }, PARTS],
+    ["a stretch of zero", { ...PAYLOAD, stretch: [1, 0, 1] }, PARTS],
+    ["a stretch that is not a whole number", { ...PAYLOAD, stretch: [1, 1.5, 1] }, PARTS],
+    // No part needs more travels than there are parts to clear.
+    ["a stretch beyond the part count", { ...PAYLOAD, stretch: [1, 4, 1] }, PARTS],
     ["no fraction", { ...PAYLOAD, explode_fraction: undefined }, PARTS],
     ["a fraction of zero", { ...PAYLOAD, explode_fraction: 0 }, PARTS],
     ["a negative fraction", { ...PAYLOAD, explode_fraction: -0.35 }, PARTS],

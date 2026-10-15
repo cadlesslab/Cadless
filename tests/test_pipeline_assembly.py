@@ -515,6 +515,7 @@ def test_an_accepted_split_writes_its_order_and_headings_beside_the_exports(monk
     assert _motion(tmp_path) == {
         "order": [0, 1],
         "releases": [[0.0, 0.0, 1.0], []],
+        "stretch": [1, 1],
         "explode_fraction": 0.35,
     }
 

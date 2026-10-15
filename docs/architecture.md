@@ -240,7 +240,9 @@ candidate judging, the identity seam and the image decisions are recorded under
    costs vocabulary and cannot cost the sequence. The same order, with the
    heading each part was released along, is handed on unchanged as the
    `assembly` artifact the viewport plays the parts apart and back together
-   from. It is written before the description and stands without it, because
+   from, together with how far each part goes — the spacing the exploded view
+   is drawn with, so parts leaving the same way open every joint in both and
+   the viewport never decides which headings match on its own. It is written before the description and stands without it, because
    it is a measurement rather than anything said about one; a version without
    it — one never checked as an assembly, or rebuilt without the check — is
    drawn with no player rather than one that guesses.

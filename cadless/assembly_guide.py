@@ -70,15 +70,23 @@ def motion_payload(order: Sequence[int], releases: Sequence[Sequence[float]]) ->
     left standing, or every part when the engine that measured the build did not
     record headings -- gets an empty entry, which means "stays put", rather than
     a direction nobody measured or a list that runs short of the parts.
+
+    ``stretch`` is, per part index, how many of those travels the part goes out
+    once every part is apart: the count the exploded frame is drawn with, handed
+    on for the same reason as the fraction, so the player spaces a chain exactly
+    as the frame does rather than deciding again which headings match.
     """
+    headings = [
+        [float(c) for c in releases[index]]
+        if index < len(releases) and _is_heading(releases[index])
+        else []
+        for index in range(len(order))
+    ]
+    everything = set(order)
     return {
         "order": [int(index) for index in order],
-        "releases": [
-            [float(c) for c in releases[index]]
-            if index < len(releases) and _is_heading(releases[index])
-            else []
-            for index in range(len(order))
-        ],
+        "releases": headings,
+        "stretch": [_stretch(index, order, headings, everything) for index in range(len(order))],
         "explode_fraction": EXPLODE_FRACTION,
     }
 

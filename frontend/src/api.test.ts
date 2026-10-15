@@ -159,6 +159,7 @@ describe("REST client", () => {
     const payload: api.AssemblyMotion = {
       order: [0, 1],
       releases: [[], [0, 0, 1]],
+      stretch: [1, 1],
       explode_fraction: 0.35,
     };
     const fetchFn = mockFetch(200, payload);
