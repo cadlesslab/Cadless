@@ -6,6 +6,7 @@
  * Display-mode/appearance state and inspection extend this. */
 import { useSyncExternalStore } from "react";
 
+import { nextJoint } from "./assemblyMotion";
 import type { ViewName } from "./math";
 
 export type Projection = "perspective" | "orthographic";
@@ -13,6 +14,7 @@ export type DisplayMode = "shaded" | "wireframe" | "xray";
 export type Tool = "none" | "measure" | "section";
 export type Axis = "x" | "y" | "z";
 export type Point3 = [number, number, number];
+export type AssemblyPlay = "apart" | "together";
 
 export interface ViewCommand {
   kind: "view" | "fit" | "reset";
@@ -48,6 +50,15 @@ export interface ViewportState {
   sectionOffset: number; // -1..1 across the bbox extent
   measurePoints: Point3[];
   triangleCount: number | null;
+  // assembly play
+  /** How many joints the model on screen can be taken apart by. 0 means there
+   * is nothing to play, and is what hides the control. */
+  assemblySteps: number;
+  /** 0 assembled … `assemblySteps` every moving part out; fractions are a part
+   * on its way. */
+  assemblyPosition: number;
+  /** Which way the parts are moving on their own, or null while they are still. */
+  assemblyPlay: AssemblyPlay | null;
 }
 
 const initial: ViewportState = {
@@ -63,6 +74,9 @@ const initial: ViewportState = {
   sectionOffset: 0,
   measurePoints: [],
   triangleCount: null,
+  assemblySteps: 0,
+  assemblyPosition: 0,
+  assemblyPlay: null,
 };
 
 type Listener = () => void;
@@ -105,7 +119,16 @@ export class ViewportStore {
 
   setTool(tool: Tool) {
     // leaving measure clears its annotations
-    this.set({ tool, measurePoints: tool === "measure" ? this.state.measurePoints : [] });
+    const patch: Partial<ViewportState> = {
+      tool,
+      measurePoints: tool === "measure" ? this.state.measurePoints : [],
+    };
+    // Measure and section read the model as it is assembled — a section box
+    // around parts that are apart, or a distance between two of them, is a
+    // reading of a shape that does not exist — so choosing either brings the
+    // parts home first.
+    if (tool !== "none") Object.assign(patch, { assemblyPosition: 0, assemblyPlay: null });
+    this.set(patch);
   }
   setSectionAxis(sectionAxis: Axis) {
     this.set({ sectionAxis });
@@ -123,6 +146,42 @@ export class ViewportStore {
   }
   setTriangleCount(triangleCount: number | null) {
     this.set({ triangleCount });
+  }
+
+  /** A model with `assemblySteps` joints is on screen (0: none is).
+   *
+   * Always starts assembled and still, because the steps belong to the model
+   * just drawn: a position carried over from the last one would put this one's
+   * parts somewhere nobody moved them. */
+  setAssemblySteps(assemblySteps: number) {
+    this.set({ assemblySteps, assemblyPosition: 0, assemblyPlay: null });
+  }
+  /** Move the parts to `position`, held between assembled and fully apart.
+   *
+   * Moving them off assembled leaves measure or section for orbit, for the same
+   * reason choosing either brings them home: neither can read parts that are
+   * apart. Play goes through here too, so this does not stop it. */
+  setAssemblyPosition(position: number) {
+    this.set(this.positionPatch(position));
+  }
+  /** One joint back or forward, and stop there — a step is a place to look at. */
+  stepAssembly(dir: 1 | -1) {
+    this.set({
+      ...this.positionPatch(nextJoint(this.state.assemblyPosition, dir)),
+      assemblyPlay: null,
+    });
+  }
+  private positionPatch(position: number): Partial<ViewportState> {
+    const assemblyPosition = Math.min(Math.max(position, 0), this.state.assemblySteps);
+    return assemblyPosition > 0 && this.state.tool !== "none"
+      ? { assemblyPosition, tool: "none", measurePoints: [] }
+      : { assemblyPosition };
+  }
+  playAssembly(assemblyPlay: AssemblyPlay) {
+    this.set({ assemblyPlay });
+  }
+  stopAssembly() {
+    this.set({ assemblyPlay: null });
   }
 
   showPreview(preview: Preview) {
