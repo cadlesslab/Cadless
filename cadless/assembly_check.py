@@ -394,8 +394,8 @@ def _size1(value: float) -> str:
 #: The model is asked to sweep each joint profile along an axis lying in the build
 #: plane, so a correct interlock comes apart along one of these. They are not
 #: relied on alone -- :func:`_candidate_directions` adds directions derived from
-#: the geometry, because a candidate that turns out to be blocked costs a few
-#: kernel calls while a missing one costs a false refusal.
+#: the geometry, because a candidate that turns out to be blocked costs kernel
+#: work while a missing one costs a false refusal.
 _AXES = (
     (1.0, 0.0, 0.0),
     (-1.0, 0.0, 0.0),
@@ -427,8 +427,9 @@ ORDER_PROBE_BUDGET = 20_000
 #: A second bound beside the probe count, because the two fail differently. The
 #: count stops a model that produced very many parts; the clock stops a single
 #: part whose topology makes one boolean operation take seconds. Counting alone
-#: rests on probes costing roughly the same, which a pathological solid
-#: disproves.
+#: would rest on the units costing roughly the same, and they do not: by design a
+#: sweep's boolean costs more than a distance, and a pathological solid makes any
+#: one of them slow.
 #:
 #: A share rather than a fixed number of seconds, because the executor returns no
 #: summary at all when its own clock runs out -- so this has to stop first, and a
@@ -585,10 +586,10 @@ def _disassembly_order(parts, budget, scene=None):
     when it says yes.
 
     A round that frees nothing names its parts as trapped only when every heading
-    was blocked -- by a measured clash, or by a probe the kernel refused. Where
-    some heading stopped at a contact the search could not see past, nothing was
-    shown trapped, so it says which parts touch and what would let it rule
-    instead.
+    was blocked by a clash it measured. Where some heading stopped at a contact it
+    could not see past, or at a pair the kernel would not measure, nothing was
+    shown trapped, so it says which parts and why instead -- a repair aimed at a
+    trap that was never shown would change geometry nobody measured.
     """
     if len(parts) < 2:
         return list(range(len(parts))), [], [], []
@@ -605,6 +606,7 @@ def _disassembly_order(parts, budget, scene=None):
     while remaining:
         freed = None
         scene.undecided.clear()
+        scene.refused.clear()
         for index in remaining:
             others = [other for other in remaining if other != index]
             if not others:
@@ -631,13 +633,28 @@ def _disassembly_order(parts, budget, scene=None):
                 releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
                 break
         if freed is None:
+            reasons = []
+            if scene.refused:
+                reasons.append(_unmeasured_reason(scene.refused))
             if scene.undecided:
-                return None, [], [_touching_reason(scene.undecided)], []
+                reasons.append(_touching_reason(scene.undecided))
+            if reasons:
+                return None, [], reasons, []
             return None, sorted(remaining), [], []
         remaining.remove(freed)
         removed.append(freed)
     # Removing in this order works, so assembling in the reverse of it does.
     return list(reversed(removed)), [], [], releases
+
+
+def _unmeasured_reason(pairs) -> str:
+    """The unchecked line for an order stopped at pairs the kernel would not measure."""
+    unordered = sorted({tuple(sorted(pair)) for pair in pairs})
+    names = "; ".join(f"{_label(first)} and {_label(second)}" for first, second in unordered)
+    return (
+        f"{_ORDER_UNCHECKED_PREFIX} the geometry kernel could not measure {names} "
+        "against each other, so nothing showed whether they come apart"
+    )
 
 
 def _touching_reason(pairs) -> str:
@@ -674,8 +691,8 @@ def _can_be_freed(parts, spheres, index, others, look_ahead, budget, scene=None)
 #: What ruling one heading can come to. Three answers rather than a yes or no,
 #: because "proved clear" and "not proved clear" are the only two a search that
 #: is never wrong when it says yes can hand on, and "not proved" splits again into
-#: blocked -- a clash it measured, or a probe the kernel refused, which no answer
-#: may treat as clear -- and a contact it could not see past.
+#: blocked -- a clash it measured -- and undecided: a contact it could not see
+#: past, or a pair the kernel would not measure.
 _FREE = "free"
 _BLOCKED = "blocked"
 _UNDECIDED = "undecided"
@@ -718,34 +735,41 @@ def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, 
 
     length = max(stop for _, stop in windows.values())
     own = _UNBUILT
-    walked = []
+    walked, refused = [], []
     for other in windows:
         if scene.nested(index, other, direction, budget):
             continue
         at_rest = scene.shared_at_rest(index, other, budget)
-        if at_rest is None or at_rest > OVERLAP_EPSILON_MM3:
-            # A clash where they stand, or a probe the kernel refused. Blocked
-            # either way: a part freed on a measurement that did not happen is
-            # how a bad order gets out.
+        if at_rest is None:
+            # Nothing measured where they stand, so nothing past it either: not
+            # free, and not a clash anybody saw.
+            refused.append(other)
+            continue
+        if at_rest > OVERLAP_EPSILON_MM3:
             return _BLOCKED
         if own is _UNBUILT:
             own = _sweep(parts[index], direction, length, budget)
-        if own is not None:
-            if _sweep_meets(own, parts[other], budget):
-                return _BLOCKED
-            continue
-        theirs = _sweep(parts[other], -direction, length, budget)
-        if theirs is None:
-            walked.append(other)
-        elif _sweep_meets(theirs, parts[index], budget):
+        met = None if own is None else _sweep_meets(own, parts[other], budget)
+        if met is None:
+            # No exact sweep of the moving part, or a boolean of it the kernel
+            # refused: try the other part swept back.
+            theirs = _sweep(parts[other], -direction, length, budget)
+            met = None if theirs is None else _sweep_meets(theirs, parts[index], budget)
+        if met:
             return _BLOCKED
-    if not walked:
-        return _FREE
-    verdict, undecided = _walk(
-        parts, {other: windows[other] for other in walked}, index, direction, look_ahead, budget
-    )
+        if met is None:
+            walked.append(other)
+    undecided = []
+    if walked:
+        verdict, undecided, unmeasured = _walk(
+            parts, {other: windows[other] for other in walked}, index, direction, look_ahead, budget
+        )
+        if verdict == _BLOCKED:
+            return _BLOCKED
+        refused += unmeasured
     scene.undecided.update((index, other) for other in undecided)
-    return verdict
+    scene.refused.update((index, other) for other in refused)
+    return _UNDECIDED if undecided or refused else _FREE
 
 
 #: A sweep not built yet: built on first need, since a heading every other part
@@ -756,16 +780,17 @@ _UNBUILT = object()
 class _Scene:
     """What the order search works out once per measurement and reuses.
 
-    Three things: the volume each pair shares where it stands, which the pairwise
-    phase has already asked; whether one of a pair sits inside a bore of the other
-    along a line, which a heading and its reverse share and every round asks
-    again; and the pairs a walk stopped at undecided in the current round, which
-    is what that round reports if it frees nothing.
+    The volume each pair shares where it stands, which the pairwise phase has
+    already asked; each part's cylinder axes, and whether one of a pair sits
+    inside a bore of the other along a line, which a heading and its reverse share
+    and every round asks again; and the pairs the current round left undecided,
+    which are what that round reports if it frees nothing.
     """
 
     def __init__(self, parts) -> None:
         self.parts = parts
         self._nested: dict[tuple, bool] = {}
+        self._axes: dict[int, list] = {}
         #: The volume each pair ``(i, j)``, ``i < j``, shares where it stands --
         #: ``None`` where the kernel could not say. Filled by the pairwise phase,
         #: which already asked, so no heading asks again.
@@ -774,6 +799,9 @@ class _Scene:
         #: neither could be swept, so nothing showed the path past the contact
         #: clear or blocked.
         self.undecided: set[tuple[int, int]] = set()
+        #: Pairs ``(moving, other)`` the kernel would not measure at all along a
+        #: heading -- refused where they stand, by every sweep, and by the walk.
+        self.refused: set[tuple[int, int]] = set()
 
     def shared_at_rest(self, first, second, budget) -> float | None:
         """The volume the two share where they stand, asked of the kernel once."""
@@ -783,9 +811,15 @@ class _Scene:
             self.at_rest[key] = _shared_volume(self.parts[key[0]], self.parts[key[1]])
         return self.at_rest[key]
 
+    def axes(self, index):
+        """The part's cylinder axes, read from its faces once."""
+        if index not in self._axes:
+            self._axes[index] = _cylinder_axes(self.parts[index])
+        return self._axes[index]
+
     def nested(self, first, second, direction, budget) -> bool:
         """Whether one of the two sits strictly inside a round bore of the other along this line."""
-        for line in _bore_lines(self.parts, first, second, direction):
+        for line in _bore_lines(self.axes(first) + self.axes(second), direction):
             key = (min(first, second), max(first, second), line[2])
             if key not in self._nested:
                 self._nested[key] = _one_inside_the_other(self.parts, first, second, line, budget)
@@ -808,20 +842,27 @@ def _sweep(part, direction, length, budget):
         return None
 
 
-def _sweep_meets(pieces, part, budget) -> bool:
-    """Whether any piece of a sweep shares volume with ``part``, or could not be told."""
+def _sweep_meets(pieces, part, budget) -> bool | None:
+    """Whether any piece of a sweep shares volume with ``part``.
+
+    ``None`` when the kernel could not tell -- no box for the part, or a boolean
+    it refused -- which is neither a clash nor a clear path.
+    """
     reach = _box_of(getattr(part, "wrapped", None))
     if reach is None:
-        return True
+        return None
+    refused = False
     for prism, box in pieces:
         if box.IsOut(reach):
             # Disjoint enclosing boxes: the prism cannot share volume with it.
             continue
         budget.spend()
         shared = _prism_overlap(prism, part.wrapped)
-        if shared is None or shared > OVERLAP_EPSILON_MM3:
+        if shared is None:
+            refused = True
+        elif shared > OVERLAP_EPSILON_MM3:
             return True
-    return False
+    return None if refused else False
 
 
 class _NoExactSweep(Exception):
@@ -1020,7 +1061,7 @@ def _silhouette_planes(surface, direction):
     for u in (phi + spread, phi - spread):
         normal = x * -math.sin(u) + y * math.cos(u)
         # A cylinder's two rulings lie in one plane; cutting by it twice is waste.
-        if not any(abs(abs(normal.Dot(seen)) - 1.0) <= _PARALLEL_COSINE for seen in normals):
+        if not any(normal.Crossed(seen).Magnitude() <= _PARALLEL_COSINE for seen in normals):
             normals.append(normal)
     return [(frame.Location(), normal) for normal in normals]
 
@@ -1070,8 +1111,11 @@ def _cut_by_planes(face, planes):
 def _box_of(shape):
     """An enclosing box grown by the margin, or ``None`` if none could be taken.
 
-    Bounded from the exact geometry, never from a mesh the shape may carry: a mesh
-    cuts across a curved face, and a box taken from it could miss the face.
+    Bounded tightly from the exact geometry. The quick bound samples some
+    surfaces -- a surface of revolution among them -- and its box can sit inside
+    the surface, which would let the prefilter skip a boolean that clashes. Never
+    from a mesh the shape may carry either: a mesh cuts across a curved face, and
+    a box taken from it could miss the face.
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
@@ -1080,7 +1124,7 @@ def _box_of(shape):
         return None
     box = Bnd_Box()
     try:
-        BRepBndLib.Add_s(shape, box, False)
+        BRepBndLib.AddOptimal_s(shape, box, False, False)
     except Exception:  # noqa: BLE001 - no box, no prefilter: the caller fails closed
         return None
     if box.IsVoid():
@@ -1135,38 +1179,45 @@ _SPAN_MARGIN_MM = 1.0
 _TUBE_TOLERANCE_MM = 1e-7
 
 
-def _bore_lines(parts, first, second, direction):
-    """The axes of either part's cylindrical faces that run along the heading.
+def _cylinder_axes(part):
+    """``(point, direction)`` for the axis of each of the part's cylindrical faces."""
+    from build123d import Vector
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cylinder
+
+    try:
+        faces = list(part.faces())
+    except Exception:  # noqa: BLE001 - no faces to read, no bore to find
+        return []
+    axes = []
+    for face in faces:
+        surface = BRepAdaptor_Surface(face.wrapped)
+        if surface.GetType() != GeomAbs_Cylinder:
+            continue
+        axis = surface.Cylinder().Axis()
+        spot, along = axis.Location(), axis.Direction()
+        axes.append((Vector(spot.X(), spot.Y(), spot.Z()), Vector(along.X(), along.Y(), along.Z())))
+    return axes
+
+
+def _bore_lines(axes, direction):
+    """Of ``axes``, the lines that run along the heading, each once.
 
     Each comes as ``(point, heading, key)``: a point on the axis, the heading with
     its sign fixed, and a key a heading and its reverse share -- which way along a
     line a part slides changes nothing about whether it sits inside a bore there.
     """
     from build123d import Vector
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.GeomAbs import GeomAbs_Cylinder
 
     heading = Vector(*_line_key(direction)).normalized()
     lines = {}
-    for index in (first, second):
-        try:
-            faces = list(parts[index].faces())
-        except Exception:  # noqa: BLE001 - no faces to read, no bore to find
+    for point, along in axes:
+        if along.cross(heading).length > _PARALLEL_COSINE:
             continue
-        for face in faces:
-            surface = BRepAdaptor_Surface(face.wrapped)
-            if surface.GetType() != GeomAbs_Cylinder:
-                continue
-            axis = surface.Cylinder().Axis()
-            along = Vector(axis.Direction().X(), axis.Direction().Y(), axis.Direction().Z())
-            if along.cross(heading).length > _PARALLEL_COSINE:
-                continue
-            spot = axis.Location()
-            point = Vector(spot.X(), spot.Y(), spot.Z())
-            point = point - heading * point.dot(heading)
-            spot_key = tuple(round(v, _AXIS_KEY_DECIMALS) for v in (point.X, point.Y, point.Z))
-            key = (_line_key(heading), spot_key)
-            lines.setdefault(key, (point, heading, key))
+        point = point - heading * point.dot(heading)
+        spot_key = tuple(round(v, _AXIS_KEY_DECIMALS) for v in (point.X, point.Y, point.Z))
+        key = (_line_key(heading), spot_key)
+        lines.setdefault(key, (point, heading, key))
     return list(lines.values())
 
 
@@ -1277,17 +1328,19 @@ def _walk(parts, windows, index, direction, look_ahead, budget):
     steps across one. It looks for a clash at the contact and ``look_ahead`` past
     it, and answers ``_BLOCKED`` if either probe finds one and ``_UNDECIDED`` if
     neither does: the look-ahead can turn an open question into a measured clash,
-    never into a clear path.
+    never into a clear path. A probe the kernel refuses leaves its pair
+    unmeasured, which is undecided too, never blocked: nothing was seen to clash.
 
     Walks against several others advance in turn, so one that blocks near the
     start ends the heading before a long walk past another is paid for. Returns
-    the verdict and, when it is undecided, the other parts the walk stopped at.
+    the verdict, the other parts the walk stopped at a contact, and those it could
+    not measure.
     """
     from build123d import Location
 
     part = parts[index]
     walks = [[start, stop, other] for other, (start, stop) in windows.items()]
-    undecided = []
+    undecided, refused = [], []
     while walks:
         for walk in list(walks):
             position, stop, other = walk
@@ -1297,20 +1350,25 @@ def _walk(parts, windows, index, direction, look_ahead, budget):
             budget.spend()
             separation = _distance(part.moved(Location(direction * position)), parts[other])
             if separation is None:
-                # A probe the kernel refused. Blocked: freeing a part on a
-                # measurement that did not happen is how a bad order gets out.
-                return _BLOCKED, []
+                # A probe the kernel refused: this pair goes unmeasured from here,
+                # which frees nothing and blames nothing.
+                walks.remove(walk)
+                refused.append(other)
+                continue
             if separation > _CONTACT_MM:
                 walk[0] = position + separation
                 continue
+            looked = []
             for ahead in (position, position + look_ahead):
                 budget.spend()
                 shared = _shared_volume(part.moved(Location(direction * ahead)), parts[other])
-                if shared is None or shared > OVERLAP_EPSILON_MM3:
-                    return _BLOCKED, []
+                if shared is not None and shared > OVERLAP_EPSILON_MM3:
+                    return _BLOCKED, [], []
+                looked.append(shared)
             walks.remove(walk)
-            undecided.append(other)
-    return (_UNDECIDED if undecided else _FREE), undecided
+            (refused if None in looked else undecided).append(other)
+    verdict = _UNDECIDED if undecided or refused else _FREE
+    return verdict, undecided, refused
 
 
 def _travel_window(centre, radius, other_centre, other_radius, direction):

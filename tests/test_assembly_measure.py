@@ -22,6 +22,7 @@ from build123d import (
 
 from cadless.assembly_check import _BLOCKED as BLOCKED
 from cadless.assembly_check import _FREE as FREE
+from cadless.assembly_check import _UNDECIDED as UNDECIDED
 from cadless.assembly_check import measure_assembly
 
 pytestmark = pytest.mark.build123d
@@ -296,28 +297,30 @@ def _as_nurbs(part):
     return solid
 
 
-def test_a_distance_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
+def test_a_distance_probe_that_cannot_run_is_reported_rather_than_cleared(monkeypatch):
     # Where the search walks, it advances by the measured separation, so the
     # distance query is what it rests on. One the kernel could not answer must not
-    # read as "nothing in the way": that frees a part on no evidence and returns
-    # an order that may not work.
+    # read as "nothing in the way" -- that frees a part on no evidence -- nor as a
+    # trap nobody measured, which sends a repair after geometry that may be fine.
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_distance", lambda first, second: None)
     m = measure_assembly([_as_nurbs(part) for part in _mated_pair()])
     assert m.order is None
-    assert m.trapped == [0, 1]
+    assert m.trapped == []
+    assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
 
 
-def test_a_clash_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
-    # The other half: once two parts are in contact the separation no longer
-    # decides it and the shared volume does, so a refused volume query blocks too.
+def test_a_clash_probe_that_cannot_run_is_reported_rather_than_cleared(monkeypatch):
+    # The other half: where two parts stand touching, the shared volume is what
+    # says whether they clash, so a refused volume query is reported the same way.
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_shared_volume", lambda first, second: None)
     m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)])
     assert m.order is None
-    assert m.trapped == [0, 1]
+    assert m.trapped == []
+    assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
 
 
 def test_a_budget_spent_on_the_pairwise_phase_is_reported():
@@ -433,6 +436,57 @@ def test_a_pin_in_a_close_bore_is_ruled_within_a_small_budget():
     assert m.order is not None
 
 
+def _vase_and_a_block_grazing_its_bulge(depth=0.03):
+    """A revolved-spline vase, and a block whose path cuts ``depth`` into its bulge.
+
+    A surface of revolution is the kind a quick bounding box only samples, and
+    the bulge pokes out past such a box -- so a block passing that close is the
+    case where a prefilter on loose boxes skips a boolean that clashes.
+    """
+    from build123d import (
+        Axis,
+        BuildLine,
+        BuildPart,
+        BuildSketch,
+        Line,
+        Plane,
+        Spline,
+        make_face,
+        revolve,
+    )
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepTools import BRepTools
+
+    with BuildPart() as made:
+        with BuildSketch(Plane.XZ):
+            with BuildLine():
+                Spline((0, 0), (24, 9), (15, 30), (27, 54), (0, 66))
+                Line((0, 66), (0, 0))
+            make_face()
+        revolve(axis=Axis.Z)
+    vase = made.part
+    widest = (float("-inf"), 0.0)
+    for face in vase.faces():
+        umin, umax, vmin, vmax = BRepTools.UVBounds_s(face.wrapped)
+        surface = BRepAdaptor_Surface(face.wrapped)
+        for step in range(4001):
+            point = surface.Value(umin, vmin + (vmax - vmin) * step / 4000)
+            widest = max(widest, (point.X(), point.Z()))
+    reach, height = widest
+    return [Pos(reach - depth + 2.5, -60, height) * Box(5, 2, 4), vase]
+
+
+def test_a_block_grazing_a_curved_bulge_is_stopped_by_it():
+    from build123d import Location
+
+    from cadless.assembly_check import OVERLAP_EPSILON_MM3, _shared_volume
+
+    block, vase = _vase_and_a_block_grazing_its_bulge()
+    crossing = block.moved(Location(Vector(0, 60, 0)))
+    assert _shared_volume(crossing, vase) > OVERLAP_EPSILON_MM3, "the fixture lost its clash"
+    assert _rule([block, vase], 0, (0, 1, 0)) == BLOCKED
+
+
 def test_a_lid_resting_on_its_box_lifts_straight_off():
     box = Box(20, 20, 10)
     lid = Pos(0, 0, 6) * Box(20, 20, 2)
@@ -466,12 +520,17 @@ def _channel_and_bar():
     return [channel, Box(60, 10, 4)]
 
 
-def test_a_prism_boolean_that_cannot_run_blocks_rather_than_clears(monkeypatch):
+@pytest.mark.parametrize("heading, verdict", [((1, 0, 0), FREE), ((0, 0, 1), BLOCKED)])
+def test_a_prism_boolean_the_kernel_refuses_leaves_the_pair_to_the_walk(
+    monkeypatch, heading, verdict
+):
+    # A refused boolean is neither a clash nor a clear path, so the pair is
+    # walked instead -- which still finds the channel sliding off along its slot,
+    # and still finds its floor rising into the bar.
     import cadless.assembly_check as module
 
-    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == FREE
     monkeypatch.setattr(module, "_prism_overlap", lambda prism, other: None)
-    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == BLOCKED
+    assert _rule(_channel_and_bar(), 0, heading) == verdict
 
 
 def test_a_sweep_the_kernel_will_not_build_leaves_the_pair_to_the_walk(monkeypatch):
@@ -483,12 +542,12 @@ def test_a_sweep_the_kernel_will_not_build_leaves_the_pair_to_the_walk(monkeypat
     assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == FREE
 
 
-def test_a_pair_that_can_be_neither_swept_nor_measured_blocks_rather_than_clears(monkeypatch):
+def test_a_pair_that_can_be_neither_swept_nor_measured_is_left_undecided(monkeypatch):
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
     monkeypatch.setattr(module, "_distance", lambda first, second: None)
-    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == BLOCKED
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == UNDECIDED
 
 
 def _swept_volume(part, heading, length):
