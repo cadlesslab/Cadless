@@ -129,6 +129,8 @@ describe("parseMotion", () => {
     ["a fraction written as a string", { ...PAYLOAD, explode_fraction: "0.35" }, PARTS],
     // JSON.parse reads 1e400 as Infinity, so this one can arrive over the wire.
     ["an infinite fraction", { ...PAYLOAD, explode_fraction: Infinity }, PARTS],
+    // Finite, but times any travel it overflows, and the offsets come out NaN.
+    ["a fraction above one", { ...PAYLOAD, explode_fraction: 1e308 }, PARTS],
   ])("refuses %s", (_, raw, parts) => {
     expect(parseMotion(raw, parts)).toBeNull();
   });

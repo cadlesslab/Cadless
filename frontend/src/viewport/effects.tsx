@@ -42,9 +42,11 @@ export interface GroundConfig {
  * the model, and the near plane lands beyond the whole model (#16).
  *
  * `extent` is anywhere else the model will be drawn — an assembly fully taken
- * apart — and the plane covers it too. Sized to the assembled model alone, it
- * would leave a part that slid out sideways with no shadow, and one that left
- * downward sunk through the floor. */
+ * apart — and the plane spreads under it too, so a part that slid out sideways
+ * keeps its shadow. Its height stays at the assembled model's base: lowered to
+ * a part that left downward, the plane would hang below the model at rest,
+ * which is the view a reader sees most, while a part passing below the plane
+ * only does so mid-play. */
 export function groundConfig(
   model: THREE.Box3 | null,
   extent: THREE.Box3 | null = null,
@@ -55,8 +57,9 @@ export function groundConfig(
   const s = box.getSize(new THREE.Vector3());
   const footprint = Math.max(s.x, s.z);
   if (footprint <= 0) return null;
+  const height = model.getSize(new THREE.Vector3()).y;
   return {
-    pos: [c.x, box.min.y - s.y * 0.002, c.z],
+    pos: [c.x, model.min.y - height * 0.002, c.z],
     scale: footprint * 1.8,
     far: Math.max(s.y * 2, footprint),
   };

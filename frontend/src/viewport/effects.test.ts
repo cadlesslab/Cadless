@@ -49,9 +49,13 @@ describe("groundConfig", () => {
       expect(cfg.scale).toBeGreaterThanOrEqual(6);
     });
 
-    it("sits below a part that left downward", () => {
+    it("stays under the assembled model when a part leaves downward", () => {
+      // Lowered to the part that left, the plane would hang below the model at
+      // rest -- the view most readers see -- with the shadow detached from it.
       const below = new THREE.Box3(new THREE.Vector3(-1, -3, -1), new THREE.Vector3(1, 1, 1));
-      expect(groundConfig(model, below)!.pos[1]).toBeLessThan(-3);
+      const y = groundConfig(model, below)!.pos[1];
+      expect(y).toBeLessThan(-1);
+      expect(y).toBeGreaterThan(-1.1);
     });
   });
 });

@@ -36,6 +36,11 @@ export interface Motion {
  * zero-length vector is never normalised into a direction it does not have. */
 const HEADING_EPSILON = 1e-9;
 
+/** The furthest a part may be sent: the assembled model's own largest size.
+ * Further than that and the parts leave the frame rather than show a joint, and
+ * a large enough fraction overflows into offsets that are not numbers at all. */
+const MAX_EXPLODE_FRACTION = 1;
+
 /** A CAD heading (mm, Z-up) as a unit direction in the scene (Y-up).
  *
  * The GLBs are written Z-up to Y-up as (x, y, z) -> (x, z, -y), so a heading
@@ -64,7 +69,8 @@ export function parseMotion(raw: unknown, parts: readonly number[]): Motion | nu
   const { order, releases, explode_fraction } = raw as Record<string, unknown>;
   if (!Array.isArray(order) || !order.every((p) => Number.isInteger(p))) return null;
   if (!Array.isArray(releases) || releases.length !== parts.length) return null;
-  if (!isFiniteNumber(explode_fraction) || explode_fraction <= 0) return null;
+  if (!isFiniteNumber(explode_fraction)) return null;
+  if (explode_fraction <= 0 || explode_fraction > MAX_EXPLODE_FRACTION) return null;
 
   const drawn = [...parts].sort((a, b) => a - b);
   const named = [...(order as number[])].sort((a, b) => a - b);
