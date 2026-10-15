@@ -86,8 +86,8 @@ async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Pat
         await store.add_artifact(version_id, GUIDE_KIND, str(target))
         written += 1
     # The motion through the same funnel too, as the one file of its kind: part
-    # 0. Present only where the build passed an assembly check with parts to
-    # play, so most builds register none.
+    # 0. A build that left none registers none, rather than a row for a file
+    # that is not there.
     motion = src / MOTION_FILE
     if motion.is_file():
         target = dest / motion.name

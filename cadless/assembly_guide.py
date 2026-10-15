@@ -72,9 +72,10 @@ def motion_payload(order: Sequence[int], releases: Sequence[Sequence[float]]) ->
     a direction nobody measured or a list that runs short of the parts.
 
     ``stretch`` is, per part index, how many of those travels the part goes out
-    once every part is apart: the count the exploded frame is drawn with, handed
-    on for the same reason as the fraction, so the player spaces a chain exactly
-    as the frame does rather than deciding again which headings match.
+    once every part is apart: the spacing of an exploded view with every part
+    moving, which is what a frame showing them all is drawn with, handed on for
+    the same reason as the fraction, so the player does not decide again which
+    headings match.
     """
     headings = [
         [float(c) for c in releases[index]]

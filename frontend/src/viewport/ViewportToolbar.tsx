@@ -1,6 +1,6 @@
 /** Slim viewport overlay: opacity + inspection tools (Orbit/Measure/Section)
- * and their sub-controls, and the assembly player when the model has one.
- * Named views, fit/reset, projection,
+ * and their sub-controls, and the assembly controls when the model has a
+ * motion to play. Named views, fit/reset, projection,
  * display mode and grid/axes now live in the workspace Toolbar / View menu;
  * this overlay stays on the canvas next to the ViewCube for in-context tools. */
 import { Button, SegmentedControl, Slider } from "../components";

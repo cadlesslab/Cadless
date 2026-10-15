@@ -2,10 +2,10 @@
  *
  * Must render inside <Bounds>: that is what remounts it with every model, so
  * what it measured always belongs to the parts on screen, and what gives it the
- * framing to widen once the parts start to leave. What the position is lives in
- * the store, where the toolbar sets it; this only advances it while playing and
- * puts each part where the position says. The arithmetic is in
- * `assemblyMotion`, where it can be tested without a Canvas. */
+ * framing to widen once the parts start to leave. The position lives in the
+ * store rather than here, so whatever else reads or sets it sees the same one;
+ * this only advances it while playing and puts each part where it says. The
+ * arithmetic is in `assemblyMotion`, where it can be tested without a Canvas. */
 import { useBounds } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { type MutableRefObject, type RefObject, useEffect, useRef } from "react";

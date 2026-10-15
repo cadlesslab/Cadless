@@ -45,8 +45,8 @@ export interface GroundConfig {
  * apart — and the plane spreads under it too, so a part that slid out sideways
  * keeps its shadow. Its height stays at the assembled model's base: lowered to
  * a part that left downward, the plane would hang below the model at rest,
- * which is the view a reader sees most, while a part passing below the plane
- * only does so mid-play. */
+ * which is the view a reader sees most, while a part below the plane is only
+ * there while the assembly is apart. */
 export function groundConfig(
   model: THREE.Box3 | null,
   extent: THREE.Box3 | null = null,

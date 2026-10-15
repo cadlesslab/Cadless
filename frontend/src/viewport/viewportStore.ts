@@ -51,14 +51,9 @@ export interface ViewportState {
   measurePoints: Point3[];
   triangleCount: number | null;
   // assembly play
-  /** How many joints the model on screen can be taken apart by. 0 means there
-   * is nothing to play, and is what hides the control. */
-  assemblySteps: number;
-  /** 0 assembled … `assemblySteps` every moving part out; fractions are a part
-   * on its way. */
-  assemblyPosition: number;
-  /** Which way the parts are moving on their own, or null while they are still. */
-  assemblyPlay: AssemblyPlay | null;
+  assemblySteps: number; // joints the model on screen comes apart by; 0 hides the control
+  assemblyPosition: number; // 0 assembled … assemblySteps all out; a fraction is a part on its way
+  assemblyPlay: AssemblyPlay | null; // which way the parts move on their own; null when still
 }
 
 const initial: ViewportState = {
@@ -148,23 +143,19 @@ export class ViewportStore {
     this.set({ triangleCount });
   }
 
-  /** A model with `assemblySteps` joints is on screen (0: none is).
-   *
-   * Always starts assembled and still, because the steps belong to the model
-   * just drawn: a position carried over from the last one would put this one's
-   * parts somewhere nobody moved them. */
+  // Always starts assembled and still, because the steps belong to the model
+  // just drawn: a position carried over from the last one would put this one's
+  // parts somewhere nobody moved them.
   setAssemblySteps(assemblySteps: number) {
     this.set({ assemblySteps, assemblyPosition: 0, assemblyPlay: null });
   }
-  /** Move the parts to `position`, held between assembled and fully apart.
-   *
-   * Moving them off assembled leaves measure or section for orbit, for the same
-   * reason choosing either brings them home: neither can read parts that are
-   * apart. Play goes through here too, so this does not stop it. */
+  // Moving the parts off assembled leaves measure or section for orbit, for the
+  // same reason choosing either brings them home: neither can read parts that
+  // are apart. It does not stop play, so playing can move the parts through it.
   setAssemblyPosition(position: number) {
     this.set(this.positionPatch(position));
   }
-  /** One joint back or forward, and stop there — a step is a place to look at. */
+  // A step stops play there, because a step is a place to look at.
   stepAssembly(dir: 1 | -1) {
     this.set({
       ...this.positionPatch(nextJoint(this.state.assemblyPosition, dir)),

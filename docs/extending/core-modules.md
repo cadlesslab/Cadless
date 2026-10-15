@@ -150,10 +150,11 @@ build wrote — the copy path, the render review, the assembly guide — asks th
 one function, so they cannot disagree about which files exist.
 
 **Not every artifact kind is an export format, and the difference decides where
-it is declared.** `thumbnail` and `guide` are pictures the engine made *about* a
-build rather than formats the build was converted *to*: they get a `_MEDIA` entry
-so the download route can serve them, and they stay out of `EXPORTERS`, out of
-the frontend `ArtifactKind`, and out of the export menu. Putting one in
+it is declared.** `thumbnail`, `guide` and `assembly` — two pictures and the
+motion an accepted assembly is played from — are things the engine made *about*
+a build rather than formats the build was converted *to*: they get a `_MEDIA`
+entry so the download route can serve them, and they stay out of `EXPORTERS`,
+out of the frontend `ArtifactKind`, and out of the export menu. Putting one in
 `EXPORTERS` would also put it on the `model_p{i}` naming path above, where
 `exported_parts` finds nothing and the file is written, ignored, and never
 served — with nothing raising. Such a kind is registered by name in

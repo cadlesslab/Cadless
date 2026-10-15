@@ -104,8 +104,8 @@ export function viewerSubject(
  * A model printed whole keeps the one address it has always been fetched from.
  * A model in parts is asked for part by part, so each piece is drawn as itself
  * rather than one of them standing in for the rest. The ordinals travel with
- * the addresses because the rows are sorted here: whoever moves a part by its
- * ordinal needs to know which address that is, not where it fell in a list. */
+ * the addresses because whoever moves a part by its ordinal needs to know which
+ * address that is, not where it fell in a list. */
 function modelUrls(version: Version): { urls: string[]; parts: number[] } {
   const parts = partsOf(version, "glb");
   return parts.length > 1

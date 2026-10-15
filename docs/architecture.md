@@ -197,14 +197,16 @@ candidate judging, the identity seam and the image decisions are recorded under
 5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
    the shared data volume — one file per kind, or one per solid where the build
    produced several. Each part's GLB draws the part where it sits in the
-   assembled model: the glTF writer turns Z-up into Y-up after applying a
-   shape's own placement, so a part that keeps a placement of its own — as a
-   solid split out of a result does — is handed over inside a holder that has
-   none. The API persists metadata and serves the artifacts. Not
-   every artifact kind is an export format, and the two are declared in different
-   places: a thumbnail, the drawings of an assembly guide, and the motion an
-   accepted assembly is played from are things the engine made *about* a build
-   rather than formats the build was converted *to*.
+   assembled model: the glTF writer applies its Z-up-to-Y-up turn inside a
+   shape's own placement rather than around it, so the placement is written
+   unturned; a part that keeps a placement of its own — as a solid split out of
+   a result does — is handed over inside a holder that has none, which takes
+   the turn and leaves the placement beneath it. The API persists metadata and
+   serves the artifacts. Not every artifact kind is an export format, and the
+   two are declared in different places: a thumbnail, the drawings of an
+   assembly guide, and the motion an accepted assembly is played from are
+   things the engine made *about* a build rather than formats the build was
+   converted *to*.
    They are served by media type alone and MUST stay out of the exporter
    registry, whose per-part file naming they do not meet — a kind added there is
    written and then never found, with nothing raising. A mirror test holds the
@@ -240,10 +242,12 @@ candidate judging, the identity seam and the image decisions are recorded under
    costs vocabulary and cannot cost the sequence. The same order, with the
    heading each part was released along, is handed on unchanged as the
    `assembly` artifact the viewport plays the parts apart and back together
-   from, together with how far each part goes — the spacing the exploded view
-   is drawn with, so parts leaving the same way open every joint in both and
-   the viewport never decides which headings match on its own. It is written before the description and stands without it, because
-   it is a measurement rather than anything said about one; a version without
+   from, together with how far each part goes — the spacing of an exploded view
+   with every part moving, which is also what a small assembly's single
+   exploded drawing uses, so parts leaving the same way open every joint and
+   the viewport never decides which headings match on its own. It is written
+   before the description and stands without it, because it is a measurement
+   rather than anything said about one; a version without
    it — one never checked as an assembly, or rebuilt without the check — is
    drawn with no player rather than one that guesses.
 

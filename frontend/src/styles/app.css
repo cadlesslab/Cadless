@@ -567,9 +567,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .vp-chip-on { background: var(--accent-weak); color: var(--accent); }
 .vp-opacity { width: 130px; gap: var(--space-2); }
 .vp-section { width: 200px; gap: var(--space-2); }
-/* Four buttons, a scrubber and where the play has got to: wider than any other
-   group, so it wraps inside itself on a narrow canvas rather than running the
-   toolbar off the edge. The slider takes the room left on its line. */
+/* The assembly controls are the widest group, so they wrap inside themselves on
+   a narrow canvas rather than running the toolbar off the edge. The slider
+   takes the room left on its line. */
 .vp-assembly { flex-wrap: wrap; gap: var(--space-1) var(--space-2); max-width: 100%; }
 .vp-assembly .slider { flex: 1 1 100px; width: auto; min-width: 100px; }
 /* A floor under the label, so the group does not reflow each time the count

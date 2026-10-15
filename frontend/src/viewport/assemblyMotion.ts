@@ -8,7 +8,7 @@
  *
  * Position runs from 0 (assembled) to K (every moving part out), where K is the
  * number of joints — one per part that has a direction to leave along. Joint j
- * takes one part out over the stretch from j - 1 to j, so a whole number is
+ * takes one part out over the interval from j - 1 to j, so a whole number is
  * always a part fully home or fully out and never two in motion at once. */
 import * as THREE from "three";
 
@@ -30,19 +30,21 @@ export interface Motion {
    * guide's exploded frames agree on how far apart "apart" is. */
   explodeFraction: number;
   /** Indexed by part ordinal: how many travels the part goes out once all are
-   * apart. The engine's count, the one its exploded frame is drawn with, so
-   * parts that leave the same way are spaced here exactly as they are there. */
+   * apart. The engine's count, the spacing of an exploded view with every part
+   * moving, taken as given rather than worked out again from the headings. */
   stretch: number[];
 }
 
-/** Below this a heading is not a direction. The engine's threshold for the same
- * question, kept equal so a part it left standing is never moved here, and a
- * zero-length vector is never normalised into a direction it does not have. */
+/** Below this a heading is not a direction: a zero-length vector is never
+ * normalised into a direction it does not have, so a part left standing is
+ * never moved. Held equal to the engine's threshold by a mirror test. */
 const HEADING_EPSILON = 1e-9;
 
 /** The furthest a part may be sent: the assembled model's own largest size.
  * Further than that and the parts leave the frame rather than show a joint, and
- * a large enough fraction overflows into offsets that are not numbers at all. */
+ * a large enough fraction overflows into offsets that are not numbers at all.
+ * A mirror test holds the engine's own fraction under it, so the player is not
+ * refused for a fraction the engine itself writes. */
 const MAX_EXPLODE_FRACTION = 1;
 
 /** A CAD heading (mm, Z-up) as a unit direction in the scene (Y-up).
@@ -71,7 +73,10 @@ export function sceneHeading(h: readonly unknown[]): Vec3 | null {
 export function parseMotion(raw: unknown, parts: readonly number[]): Motion | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const { order, releases, stretch, explode_fraction } = raw as Record<string, unknown>;
-  if (!Array.isArray(order) || !order.every((p) => Number.isInteger(p))) return null;
+  // Counted before anything is walked: an order longer than what is drawn can
+  // be refused without reading, copying or sorting it.
+  if (!Array.isArray(order) || order.length !== parts.length) return null;
+  if (!order.every((p) => Number.isInteger(p))) return null;
   if (!Array.isArray(releases) || releases.length !== parts.length) return null;
   // A part never needs more travels than there are parts for it to clear.
   if (!Array.isArray(stretch) || stretch.length !== parts.length) return null;
