@@ -105,5 +105,13 @@ describe("AssemblyPlayer", () => {
     view.unmount();
     expect(p1.position.x).toBe(0);
     expect(viewportStore.get().assemblySteps).toBe(0);
+    // The next model's play must not reach these groups through a listener
+    // left behind.
+    act(() => {
+      viewportStore.setAssemblySteps(1);
+      viewportStore.setAssemblyPosition(1);
+    });
+    expect(p1.position.x).toBe(0);
+    act(() => viewportStore.setAssemblySteps(0));
   });
 });

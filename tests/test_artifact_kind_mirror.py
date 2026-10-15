@@ -17,8 +17,8 @@ quiet in its own way:
 engine made about a build rather than formats the build was converted to, and
 keeping them out of ``EXPORTERS`` is what keeps them out of the export menu and
 out of the per-part ``model_p*`` naming that ``backend.artifact_io.exported_parts``
-reads. So the
-containment below is the contract, and an equality here would forbid the design.
+reads. So the containment below is the contract, and an equality here would
+forbid the design.
 """
 
 from __future__ import annotations

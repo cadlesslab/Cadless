@@ -610,6 +610,13 @@ def test_a_heading_that_is_not_a_number_writes_no_motion(tmp_path):
     assert not (tmp_path / MOTION).exists()
 
 
+def test_a_heading_that_is_nan_is_written_as_a_part_that_stays_put(tmp_path):
+    # NaN is no direction, so it is not refused like an infinity: its part is
+    # filed the way the one left standing is, and the rest of the motion stands.
+    Pipeline._write_motion(tmp_path, [1, 0], [[float("nan"), 0.0, 0.0], [0.0, 0.0, 1.0]])
+    assert _motion(tmp_path)["releases"] == [[], [0.0, 0.0, 1.0]]
+
+
 def test_an_unrunnable_check_refuses_rather_than_passing(monkeypatch):
     unchecked = AssemblyMeasurements(
         part_bboxes=[[100.0, 100.0, 50.0], [100.0, 100.0, 50.0]],

@@ -86,7 +86,7 @@ export function parseMotion(raw: unknown, parts: readonly number[]): Motion | nu
 
   const drawn = [...parts].sort((a, b) => a - b);
   const named = [...(order as number[])].sort((a, b) => a - b);
-  if (named.length !== drawn.length || named.some((p, i) => p !== drawn[i])) return null;
+  if (named.some((p, i) => p !== drawn[i])) return null;
   if (named.some((p) => p < 0 || p >= releases.length)) return null;
 
   const headings: (Vec3 | null)[] = [];

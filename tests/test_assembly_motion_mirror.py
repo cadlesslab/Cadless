@@ -2,8 +2,8 @@
 
 The engine writes the motion and the frontend validates it, in two languages that
 share no code. Two of the frontend's limits only mean something next to the
-engine's own values: a heading threshold that differs lets the viewport move a
-part the engine left standing, or refuse one it measured; and a cap on the
+engine's own values: a heading threshold above the engine's refuses a heading
+the engine measured; and a cap on the
 explode fraction below the fraction the engine writes refuses every motion it
 produces, which hides the player with nothing failing. These read both sides and
 hold them together.
