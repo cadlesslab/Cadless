@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.1.0...backend-v1.2.0) (2026-10-18)
+
+
+### Features
+
+* play an assembly apart and back together in the viewport ([#46](https://github.com/cadlesslab/Cadless/issues/46)) ([5ec014a](https://github.com/cadlesslab/Cadless/commit/5ec014adaf8664eb87fa94ef90ce324961b608b8))
+
+
+### Fixes
+
+* rule the assembly order on swept volumes, so pinned joints get one ([#49](https://github.com/cadlesslab/Cadless/issues/49)) ([d961a1d](https://github.com/cadlesslab/Cadless/commit/d961a1d7c04fc613f781e92a3becad1922d20e9b))
+
 ## [1.1.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.0.0...backend-v1.1.0) (2026-10-13)
 
 
