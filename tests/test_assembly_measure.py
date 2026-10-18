@@ -7,8 +7,22 @@ against synthetic values; here the numbers themselves come from real solids.
 from types import SimpleNamespace
 
 import pytest
-from build123d import Box, Pos, Rot
+from build123d import (
+    Align,
+    Box,
+    Cone,
+    Cylinder,
+    GeomType,
+    Pos,
+    Rot,
+    Sphere,
+    Torus,
+    Vector,
+)
 
+from cadless.assembly_check import _BLOCKED as BLOCKED
+from cadless.assembly_check import _FREE as FREE
+from cadless.assembly_check import _UNDECIDED as UNDECIDED
 from cadless.assembly_check import measure_assembly
 
 pytestmark = pytest.mark.build123d
@@ -135,8 +149,8 @@ def test_a_blocker_thinner_than_a_coarse_step_is_not_jumped():
     # The failure this guards: a search that advances by a fixed step clears a
     # thin wall on both sides without ever sampling inside it, and reports a
     # sealed-in part as free. This shell is 0.4 mm thick against tens of
-    # millimetres of travel, so only advancing by the measured separation catches
-    # it.
+    # millimetres of travel, so only a search that rules the whole path catches
+    # it -- sweeping it, or walking it by the measured separation.
     m = measure_assembly(_caged(wall=0.4))
     assert m.order is None
     assert 0 in m.trapped
@@ -190,9 +204,9 @@ def test_a_grazing_contact_is_not_stepped_over():
     corner of the second between t=14.150 and t=14.840. A search advancing by a
     fixed fraction of a part's size samples 14.02 and then 19.02 and reports the
     part free -- the interval a grazing contact occupies has nothing to do with
-    how thick either part is, so no fraction of a part bounds it. Advancing by
-    the measured separation is what closes this, and it is the only case in the
-    suite where the two strategies disagree.
+    how thick either part is, so no fraction of a part bounds it. Ruling the whole
+    path -- sweeping it, or walking it by the measured separation -- is what
+    closes this.
     """
     from build123d import Vector
 
@@ -205,10 +219,10 @@ def test_a_grazing_contact_is_not_stepped_over():
     heading = Vector(1, 1, 0).normalized()
     budget = module._Budget(10**6, 600.0)
 
-    blocked = module._blocked_along(
-        parts, spheres, 0, [1], heading, module._min_step(parts), budget
+    verdict = module._rule_heading(
+        parts, spheres, 0, [1], heading, module._look_ahead(parts), budget
     )
-    assert blocked, "the search walked past a real collision"
+    assert verdict == BLOCKED, "the search walked past a real collision"
 
 
 # --- failing closed -------------------------------------------------------
@@ -265,28 +279,69 @@ def test_parts_that_cannot_meet_along_a_direction_are_not_stepped_through():
     assert m.trapped == []
 
 
-def test_a_distance_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
-    # The search advances by the measured separation, so the distance query is
-    # what it rests on. One the kernel could not answer must not read as "nothing
-    # in the way": that frees a part on no evidence and returns an order that may
-    # not work.
+def _as_nurbs(part):
+    """The same solid with every face rewritten as a B-spline surface.
+
+    No exact sweep is built for a B-spline face, so a pair made of these is the
+    one the search still walks.
+    """
+    from build123d import Solid
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_NurbsConvert
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    converted = BRepBuilderAPI_NurbsConvert(part.solid().wrapped, True).Shape()
+    solid = Solid(TopoDS.Solid_s(TopExp_Explorer(converted, TopAbs_SOLID).Current()))
+    assert {face.geom_type for face in solid.faces()} == {GeomType.BSPLINE}
+    return solid
+
+
+def test_a_distance_probe_that_cannot_run_is_reported_rather_than_cleared(monkeypatch):
+    # Where the search walks, it advances by the measured separation, so the
+    # distance query is what it rests on. One the kernel could not answer must not
+    # read as "nothing in the way" -- that frees a part on no evidence -- nor as a
+    # trap nobody measured, which sends a repair after geometry that may be fine.
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_distance", lambda first, second: None)
-    m = measure_assembly(_mated_pair())
+    m = measure_assembly([_as_nurbs(part) for part in _mated_pair()])
     assert m.order is None
-    assert m.trapped == [0, 1]
+    assert m.trapped == []
+    assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
 
 
-def test_a_clash_probe_that_cannot_run_blocks_rather_than_clears(monkeypatch):
-    # The other half: once two parts are in contact the separation no longer
-    # decides it and the shared volume does, so a refused volume query blocks too.
+def test_a_contact_the_walk_cannot_look_past_is_reported_rather_than_trapped(monkeypatch):
+    # Blocks touching face to face, walked because neither can be swept: the
+    # pairwise phase measures them where they stand, and every look the walk then
+    # takes at the contact is refused. Nothing clashed, so nothing is trapped.
+    import cadless.assembly_check as module
+
+    real = module._shared_volume
+    calls = []
+
+    def first_only(first, second):
+        calls.append(1)
+        return real(first, second) if len(calls) == 1 else None
+
+    monkeypatch.setattr(module, "_shared_volume", first_only)
+    pair = [_as_nurbs(Box(20, 20, 10)), _as_nurbs(Pos(20, 0, 0) * Box(20, 20, 10))]
+    m = measure_assembly(pair)
+    assert m.order is None
+    assert m.trapped == []
+    assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
+
+
+def test_a_clash_probe_that_cannot_run_is_reported_rather_than_cleared(monkeypatch):
+    # The other half: where two parts stand touching, the shared volume is what
+    # says whether they clash, so a refused volume query is reported the same way.
     import cadless.assembly_check as module
 
     monkeypatch.setattr(module, "_shared_volume", lambda first, second: None)
     m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)])
     assert m.order is None
-    assert m.trapped == [0, 1]
+    assert m.trapped == []
+    assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
 
 
 def test_a_budget_spent_on_the_pairwise_phase_is_reported():
@@ -336,3 +391,530 @@ def test_no_parts_measures_nothing():
     m = measure_assembly([])
     assert m.part_bboxes == []
     assert m.order == []
+
+
+# --- the swept volume -----------------------------------------------------
+
+PIN_CLEARANCE = 0.05
+
+
+def _bored_block():
+    """A block with a round hole straight through it, and the pin standing in it.
+
+    The pin runs out of both ends, so the block slides off it along the bore and
+    is caught by it every other way. The gap is a running fit's, far below the
+    smallest step a stepped search would take.
+    """
+    block = Box(30, 30, 20) - Cylinder(5 + PIN_CLEARANCE, 22)
+    return [block, Cylinder(5, 40)]
+
+
+def _pin_in_a_blind_hole():
+    """A pin in a hole that stops short of the block's far face.
+
+    The hole's floor is the one face of the block that stops it rising off the
+    pin, and the pin sits wholly beyond where that face starts -- so only the
+    face's prism reaches it, never the face read where it lies.
+    """
+    block = Box(30, 30, 20) - Pos(0, 0, 3) * Cylinder(5 + PIN_CLEARANCE, 15)
+    pin = Pos(0, 0, 5.55) * Cylinder(5, 20)
+    return [block, pin]
+
+
+def _rule(parts, index, heading):
+    """How the search rules one part sliding along ``heading``: free, blocked or undecided."""
+    import cadless.assembly_check as module
+
+    spheres = [module._sphere(part) for part in parts]
+    others = [other for other in range(len(parts)) if other != index]
+    budget = module._Budget(10**6, 600.0)
+    return module._rule_heading(
+        parts,
+        spheres,
+        index,
+        others,
+        Vector(*heading).normalized(),
+        module._look_ahead(parts),
+        budget,
+    )
+
+
+def test_a_clash_shorter_than_the_smallest_step_is_not_jumped():
+    # Measured on this pair: sliding the first cube along (1,1,0) clips the second
+    # for t in [0.071, 0.183] mm of travel, up to 0.016 mm^3 deep. They start
+    # 0.05 mm apart, so a search that steps by the larger of the gap and a floor
+    # of 2% of a cube (0.2 mm) lands first at 0.2, past the clash.
+    first = Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
+    second = Pos(10.05, -9.87, 0) * Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
+    assert _rule([first, second], 0, (1, 1, 0)) == BLOCKED, "stepped over a real collision"
+
+
+def test_a_pin_in_a_close_bore_is_ruled_within_a_small_budget():
+    # A stepped search pays one probe per floor step to slide the block along the
+    # pin, a few hundred here; settling the pin inside the bore costs a handful.
+    m = measure_assembly(_bored_block(), probe_budget=60)
+    assert m.unchecked == []
+    assert m.order is not None
+
+
+def _vase_and_a_block_grazing_its_bulge(depth=0.03):
+    """A revolved-spline vase, and a block whose path cuts ``depth`` into its bulge.
+
+    A surface of revolution is the kind a quick bounding box only samples, and
+    the bulge pokes out past such a box -- so a block passing that close is the
+    case where a prefilter on loose boxes skips a boolean that clashes.
+    """
+    from build123d import (
+        Axis,
+        BuildLine,
+        BuildPart,
+        BuildSketch,
+        Line,
+        Plane,
+        Spline,
+        make_face,
+        revolve,
+    )
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepTools import BRepTools
+
+    with BuildPart() as made:
+        with BuildSketch(Plane.XZ):
+            with BuildLine():
+                Spline((0, 0), (24, 9), (15, 30), (27, 54), (0, 66))
+                Line((0, 66), (0, 0))
+            make_face()
+        revolve(axis=Axis.Z)
+    vase = made.part
+    widest = (float("-inf"), 0.0)
+    for face in vase.faces():
+        umin, umax, vmin, vmax = BRepTools.UVBounds_s(face.wrapped)
+        surface = BRepAdaptor_Surface(face.wrapped)
+        for step in range(4001):
+            point = surface.Value(umin, vmin + (vmax - vmin) * step / 4000)
+            widest = max(widest, (point.X(), point.Z()))
+    reach, height = widest
+    return [Pos(reach - depth + 2.5, -60, height) * Box(5, 2, 4), vase]
+
+
+def test_a_block_grazing_a_curved_bulge_is_stopped_by_it():
+    from build123d import Location
+
+    from cadless.assembly_check import OVERLAP_EPSILON_MM3, _shared_volume
+
+    block, vase = _vase_and_a_block_grazing_its_bulge()
+    crossing = block.moved(Location(Vector(0, 60, 0)))
+    assert _shared_volume(crossing, vase) > OVERLAP_EPSILON_MM3, "the fixture lost its clash"
+    assert _rule([block, vase], 0, (0, 1, 0)) == BLOCKED
+
+
+def test_a_lid_resting_on_its_box_lifts_straight_off():
+    box = Box(20, 20, 10)
+    lid = Pos(0, 0, 6) * Box(20, 20, 2)
+    assert _rule([box, lid], 1, (0, 0, 1)) == FREE
+
+
+def test_a_block_slides_along_the_face_it_rests_on():
+    # Contact along a whole face, the case where a boolean on coplanar faces can
+    # leave a sliver of volume that is not there and refuse a free part.
+    base = Box(20, 20, 10)
+    block = Pos(0, 0, 10) * Box(20, 20, 10)
+    assert _rule([base, block], 1, (1, 0, 0)) == FREE
+
+
+def test_a_block_cannot_rise_off_a_pin_that_bottoms_in_its_hole():
+    assert _rule(_pin_in_a_blind_hole(), 0, (0, 0, 1)) == BLOCKED
+
+
+def test_a_block_drops_off_a_pin_that_leaves_its_hole():
+    assert _rule(_pin_in_a_blind_hole(), 0, (0, 0, -1)) == FREE
+
+
+def _channel_and_bar():
+    """An open channel and a bar lying loose in its slot, longer than the channel.
+
+    The channel slides off along the slot, and the prism of its end face reaches
+    over the bar's protruding end on the way -- so ruling it free takes a boolean
+    that comes back empty, rather than a box test that never needed one.
+    """
+    channel = Box(40, 20, 10) - Pos(0, 0, 2) * Box(42, 10.4, 10)
+    return [channel, Box(60, 10, 4)]
+
+
+@pytest.mark.parametrize("heading, verdict", [((1, 0, 0), FREE), ((0, 0, 1), BLOCKED)])
+def test_a_prism_boolean_the_kernel_refuses_has_the_pair_ruled_another_way(
+    monkeypatch, heading, verdict
+):
+    # A refused boolean is neither a clash nor a clear path, so the pair is ruled
+    # another way: along the slot, by the bar swept back against the channel; up,
+    # by walking the channel until its floor meets the bar.
+    import cadless.assembly_check as module
+
+    monkeypatch.setattr(module, "_prism_overlap", lambda prism, other: None)
+    assert _rule(_channel_and_bar(), 0, heading) == verdict
+
+
+def test_a_sweep_the_kernel_will_not_build_leaves_the_pair_to_the_walk(monkeypatch):
+    # A refused sweep is no clash, so blocking on it refuses a part that comes
+    # out freely; the pair is walked instead, which measures it another way.
+    import cadless.assembly_check as module
+
+    monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == FREE
+
+
+def test_a_pair_that_can_be_neither_swept_nor_measured_is_left_undecided(monkeypatch):
+    import cadless.assembly_check as module
+
+    monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
+    monkeypatch.setattr(module, "_distance", lambda first, second: None)
+    assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == UNDECIDED
+
+
+def _swept_volume(part, heading, length):
+    """The volume of the part fused with the pieces of its sweep."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+
+    import cadless.assembly_check as module
+
+    pieces = module._sweep_pieces(part, Vector(*heading).normalized(), length)
+    assert pieces is not None
+    shape = part.wrapped
+    for prism, _ in pieces:
+        shape = BRepAlgoAPI_Fuse(shape, prism).Shape()
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props)
+    return props.Mass()
+
+
+def _shadow_area(rims, heading):
+    """The area of the convex hull of ``rims`` seen along ``heading``.
+
+    For a convex solid the volume it sweeps over a straight travel ``L`` is its
+    own volume plus ``L`` times that area -- an answer that owes nothing to the
+    kernel, which is what makes it an oracle for the sweep.
+    """
+    import numpy as np
+
+    d = np.asarray(heading, dtype=float)
+    d /= np.linalg.norm(d)
+    first = np.cross(d, [0.0, 0.0, 1.0] if abs(d[2]) < 0.9 else [1.0, 0.0, 0.0])
+    first /= np.linalg.norm(first)
+    second = np.cross(d, first)
+    flat = sorted({(float(p @ first), float(p @ second)) for p in np.asarray(rims)})
+
+    def half(points):
+        hull = []
+        for p in points:
+            while (
+                len(hull) > 1
+                and (
+                    (hull[-1][0] - hull[-2][0]) * (p[1] - hull[-2][1])
+                    - (hull[-1][1] - hull[-2][1]) * (p[0] - hull[-2][0])
+                )
+                <= 0
+            ):
+                hull.pop()
+            hull.append(p)
+        return hull
+
+    ring = half(flat)[:-1] + half(flat[::-1])[:-1]
+    xs, ys = np.array([p[0] for p in ring]), np.array([p[1] for p in ring])
+    return 0.5 * abs(float(np.dot(xs, np.roll(ys, -1)) - np.dot(ys, np.roll(xs, -1))))
+
+
+def _rim(radius, z, samples=4000):
+    import numpy as np
+
+    angles = np.linspace(0.0, 2.0 * np.pi, samples, endpoint=False)
+    return np.stack([radius * np.cos(angles), radius * np.sin(angles), np.full(samples, z)], 1)
+
+
+@pytest.mark.parametrize("heading", [(1, 0, 0), (0, 0, 1), (1, 0, 1), (0.3, -0.5, 0.8)])
+def test_a_cylinder_sweeps_exactly_the_volume_it_passes_over(heading):
+    import math
+
+    import numpy as np
+
+    length = 20.0
+    expected = math.pi * 25 * 10 + length * _shadow_area(
+        np.concatenate([_rim(5, -5), _rim(5, 5)]), heading
+    )
+    assert _swept_volume(Cylinder(5, 10), heading, length) == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("heading", [(1, 0, 0), (0, 0, 1), (0, 0, -1), (1, 0, 1), (0.3, -0.5, 0.8)])
+def test_a_cone_sweeps_exactly_the_volume_it_passes_over(heading):
+    # The oblique headings are the ones that cut a cone off its axis-square
+    # silhouette: a cut placed as for a cylinder folds the prism and still
+    # builds a solid, only with the wrong volume.
+    import math
+
+    import numpy as np
+
+    length = 20.0
+    frustum = math.pi * 10 / 3 * (6 * 6 + 6 * 3 + 3 * 3)
+    expected = frustum + length * _shadow_area(np.concatenate([_rim(6, -5), _rim(3, 5)]), heading)
+    swept = _swept_volume(Cone(6, 3, 10), heading, length)
+    assert swept == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("heading", [(1, 0, 0), (1, 1, 0)])
+def test_a_sphere_sweeps_exactly_the_volume_it_passes_over(heading):
+    # Headings the oracle's own fuse can take: at some oblique ones the kernel
+    # fuses the two halves' prisms to nothing, though each is right on its own.
+    import math
+
+    length = 20.0
+    expected = 4 / 3 * math.pi * 5**3 + length * math.pi * 5**2
+    assert _swept_volume(Sphere(5), heading, length) == pytest.approx(expected, rel=1e-4)
+
+
+def _halves_built_inside_out(heading):
+    """How many halves of a ball the kernel prisms inside out along ``heading``."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepGProp import BRepGProp
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+    from OCP.gp import gp_Vec
+    from OCP.GProp import GProp_GProps
+
+    import cadless.assembly_check as module
+
+    path = Vector(*heading).normalized()
+    face = Sphere(5).faces()[0].wrapped
+    halves = module._cut_by_planes(face, module._silhouette_planes(BRepAdaptor_Surface(face), path))
+    inside_out = 0
+    for half in halves:
+        props = GProp_GProps()
+        prism = BRepPrimAPI_MakePrism(half, gp_Vec(path.X * 20, path.Y * 20, path.Z * 20))
+        BRepGProp.VolumeProperties_s(prism.Shape(), props)
+        inside_out += props.Mass() < 0
+    return inside_out
+
+
+BALL_HEADINGS = [(-0.639, 0.739, -0.213), (0.576, 0.694, 0.432)]
+
+
+@pytest.mark.parametrize("heading", BALL_HEADINGS)
+def test_a_ball_passes_a_block_beside_its_path(heading):
+    # At these headings the kernel builds one half's prism inside out. Read as it
+    # comes, it holds everything outside the ball's path, so the block beside the
+    # path reads as a clash.
+    assert _halves_built_inside_out(heading) > 0, "the kernel no longer does this here"
+    path = Vector(*heading).normalized()
+    beside = path.cross(Vector(0, 0, 1)).normalized()
+    block = Pos(*(path * 10 + beside * 8)) * Box(2, 2, 2)
+    assert _rule([Sphere(5), block], 0, heading) == FREE
+
+
+@pytest.mark.parametrize("heading", BALL_HEADINGS)
+def test_a_ball_is_stopped_by_a_block_in_its_path(heading):
+    path = Vector(*heading).normalized()
+    block = Pos(*(path * 10)) * Box(2, 2, 2)
+    assert _rule([Sphere(5), block], 0, heading) == BLOCKED
+
+
+def test_a_torus_sweeps_exactly_the_volume_it_passes_over_along_its_axis():
+    # Every line along the axis meets the ring in one stretch at most, so the
+    # sweep is the ring plus the travel times the annulus it shades.
+    import math
+
+    major, minor, length = 10.0, 3.0, 20.0
+    ring = 2 * math.pi**2 * major * minor**2
+    expected = ring + length * math.pi * ((major + minor) ** 2 - (major - minor) ** 2)
+    swept = _swept_volume(Torus(major, minor), (0, 0, 1), length)
+    assert swept == pytest.approx(expected, rel=1e-4)
+
+
+@pytest.mark.parametrize("heading", [(1, 0, 0), (1, 1, 0)])
+def test_a_torus_sweeps_exactly_the_volume_it_passes_over_across_its_axis(heading):
+    # A line across the axis can meet the ring twice, either side of the hole.
+    # Travelling further than the hole is wide fills the hole in, so the sweep is
+    # the ring with its hole filled -- revolve R + sqrt(r^2 - z^2) about the axis --
+    # plus the travel times the shadow, 4Rr + pi r^2.
+    import math
+
+    major, minor, length = 10.0, 3.0, 20.0
+    assert length >= 2 * major  # wide enough to close the hole's widest chord
+    filled = math.pi * (2 * minor * major**2 + math.pi * major * minor**2 + 4 / 3 * minor**3)
+    expected = filled + length * (4 * major * minor + math.pi * minor**2)
+    swept = _swept_volume(Torus(major, minor), heading, length)
+    assert swept == pytest.approx(expected, rel=1e-4)
+
+
+def _block_with_curved_skin():
+    """The bored block with B-spline outer faces round a true cylindrical bore.
+
+    Neither it nor a B-spline pin can be swept, so only the bore can settle the
+    pair without walking it.
+    """
+    return _as_nurbs(Box(30, 30, 20)) - Cylinder(5 + PIN_CLEARANCE, 22)
+
+
+def test_a_pin_inside_a_bore_is_settled_by_the_bore_alone():
+    pin = _as_nurbs(Cylinder(5, 40))
+    m = measure_assembly([pin, _block_with_curved_skin()], probe_budget=60)
+    assert m.unchecked == []
+    assert m.order is not None
+
+
+def test_a_pin_with_a_head_wider_than_its_bore_is_not_settled_by_the_bore():
+    # The head reaches past the bore's radius, so the pin is not inside the bore
+    # and the bore must not answer for it: pushed further in, the head meets the
+    # block.
+    pin = _as_nurbs(Cylinder(5, 40) + Pos(0, 0, 20) * Cylinder(8, 4))
+    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1)) == BLOCKED
+
+
+def test_a_part_of_two_solids_is_not_settled_by_a_bore_one_of_them_sits_in():
+    # The second solid sits outside the bore's cylinder, so the part is not inside
+    # the bore though one of its solids is -- and pushed down, it lands on the block.
+    from build123d import Compound
+
+    pin = Compound([Cylinder(5, 40), Pos(12, 0, 15) * Box(2, 2, 2)])
+    assert _rule([pin, _block_with_curved_skin()], 0, (0, 0, -1)) == BLOCKED
+
+
+def _pin_bulging_past_its_bore():
+    """A lofted pin whose middle bulges 0.01 mm past its bore, above a bored block.
+
+    The pin's faces are B-splines, and at this orientation a distance query
+    between it and the bore's cylinder misses where its face crosses the cylinder
+    away from every edge -- reporting a gap of about 0.015 mm that is not there.
+    Returns the pin, the block and the heading that pushes the pin into the bore.
+    """
+    from build123d import BuildPart, BuildSketch, Circle, Locations, Plane, loft
+
+    bore = 5 + PIN_CLEARANCE
+    turn = Rot(16.178, 258.639, 119.143)
+    with BuildPart() as made:
+        for level in range(5):
+            plane = Plane.XY.offset(-20 + 10 * level).rotated((0, 0, 221.232))
+            with BuildSketch(plane):
+                with Locations((0, bore + 0.01 - 5 if level == 2 else 0)):
+                    Circle(5)
+        loft()
+    pin = turn * (Pos(0, 0, 31) * made.part)
+    block = turn * (Box(30, 30, 20) - Cylinder(bore, 22))
+    down = Vector((turn * Pos(0, 0, -1)).position).normalized()
+    return pin, block, down
+
+
+def test_a_pin_bulging_past_its_bore_is_not_settled_by_the_bore():
+    from build123d import Location
+
+    from cadless.assembly_check import OVERLAP_EPSILON_MM3, _shared_volume
+
+    pin, block, down = _pin_bulging_past_its_bore()
+    deepest = max(_shared_volume(pin.moved(Location(down * t)), block) for t in (21, 25, 31))
+    assert deepest > OVERLAP_EPSILON_MM3, "the fixture lost its clash"
+    assert _rule([pin, block], 0, (down.X, down.Y, down.Z)) == BLOCKED
+
+
+def test_a_bore_whose_floor_the_distance_misses_does_not_settle_its_pin(monkeypatch):
+    # Make the distance to the axis report the blind hole as an open 5.05 mm bore,
+    # as a search that misses the hole's floor would. The floor still sits inside
+    # the test cylinder, so the volume proof refuses the pair, and the pin pushed
+    # down into the floor is still stopped by it.
+    from build123d import Edge
+
+    import cadless.assembly_check as module
+
+    block, pin = _pin_in_a_blind_hole()
+    real = module._distance
+
+    def missing_the_floor(first, second):
+        if first is block and isinstance(second, Edge):
+            return 5 + PIN_CLEARANCE
+        return real(first, second)
+
+    monkeypatch.setattr(module, "_distance", missing_the_floor)
+    assert _rule([block, pin], 1, (0, 0, -1)) == BLOCKED
+
+
+def test_a_part_whose_box_cannot_be_taken_is_not_read_as_clear(monkeypatch):
+    # The channel rising meets the bar. With no box for the bar, the channel's own
+    # sweep cannot be checked against it, and that must not read as nothing met.
+    import cadless.assembly_check as module
+
+    channel, bar = _channel_and_bar()
+    real = module._box_of
+    monkeypatch.setattr(
+        module, "_box_of", lambda shape: None if shape is bar.wrapped else real(shape)
+    )
+    assert _rule([channel, bar], 0, (0, 0, 1)) == BLOCKED
+
+
+def test_a_walk_never_steps_over_a_clash_shorter_than_the_smallest_step():
+    # The same clip as the plain cubes', on cubes neither of which can be swept,
+    # so the walk alone rules it: it may stop short at the contact, never pass it.
+    first = Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
+    second = Pos(10.05, -9.87, 0) * Box(10, 10, 10, align=(Align.MIN, Align.MIN, Align.MIN))
+    assert _rule([_as_nurbs(first), _as_nurbs(second)], 0, (1, 1, 0)) != FREE
+
+
+def test_parts_the_walk_cannot_see_past_are_named_rather_than_called_trapped():
+    # Two blocks touching face to face, with no exact sweep on either: every way
+    # one moves either meets the other or stops at a contact nothing measured
+    # past. That is not a trapped part, and the line says which parts and why.
+    pair = [_as_nurbs(Box(20, 20, 10)), _as_nurbs(Pos(20, 0, 0) * Box(20, 20, 10))]
+    m = measure_assembly(pair)
+    assert m.order is None
+    assert m.trapped == []
+    assert any("part 1 and part 2 touch" in reason for reason in m.unchecked)
+
+
+def test_a_heading_away_from_a_part_that_is_already_an_axis_is_tried_once():
+    # The hinge's case: the leaf sits straight along -X from the pin, so leading
+    # away from it is +X, which the axes already hold.
+    import cadless.assembly_check as module
+
+    spheres = [((0.0, 0.0, 0.0), 1.0), ((-5.0, 0.0, 0.0), 1.0)]
+    headings = module._candidate_directions(spheres, 0, [1])
+    assert sum(1 for heading in headings if (heading - Vector(1, 0, 0)).length < 1e-9) == 1
+
+
+def test_the_order_search_does_not_ask_again_what_the_pairwise_phase_measured(monkeypatch):
+    # Two blocks that sweep exactly: their shared volume where they stand is asked
+    # once, by the pairwise phase, and not again for every heading tried.
+    import cadless.assembly_check as module
+
+    asked = []
+    real = module._shared_volume
+
+    def counted(first, second):
+        asked.append(1)
+        return real(first, second)
+
+    monkeypatch.setattr(module, "_shared_volume", counted)
+    assert measure_assembly(_mated_pair()).order is not None
+    assert len(asked) == 1
+
+
+def _curved_bar_in_a_channel():
+    """The channel and bar with the bar's faces all B-splines: it cannot be swept.
+
+    The channel can, and has no round face to settle the pair as a bore, so the
+    bar is ruled on the channel swept back against it.
+    """
+    channel, bar = _channel_and_bar()
+    return [_as_nurbs(bar), channel]
+
+
+def test_a_part_that_cannot_be_swept_lifts_out_on_the_other_swept_back():
+    assert _rule(_curved_bar_in_a_channel(), 0, (0, 0, 1)) == FREE
+
+
+def test_a_part_that_cannot_be_swept_meets_what_the_other_swept_back_reaches():
+    # Down, the bar lands on the slot's floor a millimetre below it.
+    assert _rule(_curved_bar_in_a_channel(), 0, (0, 0, -1)) == BLOCKED
+
+
+def test_a_part_that_cannot_be_swept_is_ruled_within_a_small_budget():
+    # Walking the bar along its slot, 0.2 mm from each wall, would take hundreds of
+    # probes; sweeping the channel back takes a handful.
+    m = measure_assembly(_curved_bar_in_a_channel(), probe_budget=60)
+    assert m.unchecked == []
+    assert m.order is not None
