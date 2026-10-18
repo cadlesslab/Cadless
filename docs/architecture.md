@@ -242,10 +242,14 @@ candidate judging, the identity seam and the image decisions are recorded under
    costs vocabulary and cannot cost the sequence. The same order, with the
    heading each part was released along, is handed on unchanged as the
    `assembly` artifact the viewport plays the parts apart and back together
-   from, together with how far each part goes — the spacing of an exploded view
-   with every part moving, which is also what a small assembly's single
-   exploded drawing uses, so parts leaving the same way open every joint and
-   the viewport never decides which headings match on its own. It is written
+   from, together with how far each part goes — measured from the exported
+   meshes as the length the part is engaged plus a spacing, so it clears every
+   part placed before it both at rest and once that part is out too. The guide's
+   drawings move the parts by the same travels, so the two agree on what
+   "apart" is and the viewport never decides on its own how far is clear. The
+   spacing alone, with a count per part for pieces leaving the same way, is
+   still written beside it, for a viewer that predates the measure and for any
+   viewer when the meshes could not be measured. It is written
    before the description and stands without it, because it is a measurement
    rather than anything said about one; a version without
    it — one never checked as an assembly, or rebuilt without the check — is

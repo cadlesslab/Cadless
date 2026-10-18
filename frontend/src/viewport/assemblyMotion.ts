@@ -25,14 +25,12 @@ export interface Motion {
   /** Indexed by part ordinal: the unit scene direction that part leaves along,
    * or null for a part that stays where it is. */
   headings: (Vec3 | null)[];
-  /** How far a part travels, as a fraction of the assembled model's largest
-   * dimension. The engine's own fraction, so the viewport and the written
-   * guide's exploded frames agree on how far apart "apart" is. */
-  explodeFraction: number;
-  /** Indexed by part ordinal: how many travels the part goes out once all are
-   * apart. The engine's count, the spacing of an exploded view with every part
-   * moving, taken as given rather than worked out again from the headings. */
-  stretch: number[];
+  /** Indexed by part ordinal: how far the part goes out, as a fraction of the
+   * assembled model's largest dimension. The engine's measure of each part's
+   * travel where it sent one, so the viewport and the written guide's frames
+   * agree on how far apart "apart" is; otherwise the spacing an older engine
+   * sent, its fraction times its count for that part. */
+  travel: number[];
 }
 
 /** Below this a heading is not a direction: a zero-length vector is never
@@ -40,12 +38,27 @@ export interface Motion {
  * never moved. Held equal to the engine's threshold by a mirror test. */
 const HEADING_EPSILON = 1e-9;
 
-/** The furthest a part may be sent: the assembled model's own largest size.
- * Further than that and the parts leave the frame rather than show a joint, and
- * a large enough fraction overflows into offsets that are not numbers at all.
- * A mirror test holds the engine's own fraction under it, so the player is not
- * refused for a fraction the engine itself writes. */
+/** The largest spacing accepted, as a fraction of the assembled model's
+ * largest size: the `explode_fraction` a file without a measured travel is
+ * played by, and the spacing in the cap on a measured one. Wider than the model
+ * itself and the parts leave the frame rather than show a joint, and a large
+ * enough fraction overflows into offsets that are not numbers at all. A mirror
+ * test holds the engine's own fraction under it, so the player is not refused
+ * for a fraction the engine itself writes. */
 const MAX_EXPLODE_FRACTION = 1;
+
+/** The furthest one part's measured travel may be, per part in the assembly.
+ *
+ * A part goes out beyond every part placed before it, wherever each of those
+ * ended up, plus a spacing. Along any heading the assembled model spans at most
+ * its diagonal, at most √3 of its largest dimension, so each part placed before
+ * adds at most that and a spacing to how far the next has to go: √3 plus the
+ * largest spacing accepted. Rounding that down stays safe because a part never
+ * has more parts before it than one fewer than the count, and the engine's
+ * spacing is well under the largest accepted; the mirror tests hold the
+ * engine's furthest under it. Anything beyond is a payload that is wrong rather
+ * than a part that is far. A literal, so those tests can read it. */
+const MAX_TRAVEL_PER_PART = 2.732;
 
 /** A CAD heading (mm, Z-up) as a unit direction in the scene (Y-up).
  *
@@ -72,13 +85,13 @@ export function sceneHeading(h: readonly unknown[]): Vec3 | null {
  * does nothing. */
 export function parseMotion(raw: unknown, parts: readonly number[]): Motion | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-  const { order, releases, stretch, explode_fraction } = raw as Record<string, unknown>;
+  const { order, releases, stretch, explode_fraction, travel } = raw as Record<string, unknown>;
   // Counted before anything is walked: an order longer than what is drawn can
   // be refused without reading, copying or sorting it.
   if (!Array.isArray(order) || order.length !== parts.length) return null;
   if (!order.every((p) => Number.isInteger(p))) return null;
   if (!Array.isArray(releases) || releases.length !== parts.length) return null;
-  // A part never needs more travels than there are parts for it to clear.
+  // A part never needs more spacings than there are parts for it to clear.
   if (!Array.isArray(stretch) || stretch.length !== parts.length) return null;
   if (!stretch.every((s) => Number.isInteger(s) && s >= 1 && s <= parts.length)) return null;
   if (!isFiniteNumber(explode_fraction)) return null;
@@ -100,11 +113,24 @@ export function parseMotion(raw: unknown, parts: readonly number[]): Motion | nu
   }
   if (!headings.some((h) => h !== null)) return null;
 
+  // Measured travel is optional: a file written before it was measured plays by
+  // the spacing it does carry. Sent, it has to be a distance for every part, and
+  // more than none for each part that moves, or a joint would play as nothing.
+  let travels: number[];
+  if (travel === undefined) {
+    travels = (stretch as number[]).map((s) => s * explode_fraction);
+  } else {
+    if (!Array.isArray(travel) || travel.length !== parts.length) return null;
+    const furthest = parts.length * MAX_TRAVEL_PER_PART;
+    if (!travel.every((t) => isFiniteNumber(t) && t >= 0 && t <= furthest)) return null;
+    if (headings.some((h, part) => h !== null && travel[part] === 0)) return null;
+    travels = [...(travel as number[])];
+  }
+
   return {
     order: [...(order as number[])],
     headings,
-    explodeFraction: explode_fraction,
-    stretch: [...(stretch as number[])],
+    travel: travels,
   };
 }
 
@@ -128,31 +154,29 @@ export function nextJoint(position: number, dir: 1 | -1): number {
 /** The offset of every part at `position`, indexed by part ordinal.
  *
  * Joint j (1-based) moves the j-th part to come off by the share of its own
- * stretch that `position` has covered, clamped to [0, 1], along that part's
- * heading. `travel` is in scene units, and a part's stretch is its `stretch`
- * count of travels: more than one where parts after it leave the same way, so
- * the pieces of a beam split end to end do not stop the same distance out and
- * sit joined again. */
-export function partOffsets(motion: Motion, position: number, travel: number): Vec3[] {
+ * travel that `position` has covered, clamped to [0, 1], along that part's
+ * heading. `size` is the assembled model's largest dimension in scene units,
+ * which each part's travel is a fraction of. */
+export function partOffsets(motion: Motion, position: number, size: number): Vec3[] {
   const offsets: Vec3[] = motion.headings.map(() => [0, 0, 0]);
   takeApartOrder(motion).forEach((part, j) => {
     const heading = motion.headings[part];
     if (!heading) return;
-    const out = Math.min(Math.max(position - j, 0), 1) * travel * motion.stretch[part];
+    const out = Math.min(Math.max(position - j, 0), 1) * size * motion.travel[part];
     offsets[part] = [heading[0] * out, heading[1] * out, heading[2] * out];
   });
   return offsets;
 }
 
-/** How far a part travels: `fraction` of the box's largest dimension.
+/** The box's largest dimension: what each part's travel is a fraction of.
  *
  * Measured off the drawn model rather than off the version's recorded bounding
  * box, because the scene is in metres and the record in millimetres — the
  * travel has to be in the units the parts are moved in. */
-export function travelFor(box: THREE.Box3, fraction: number): number {
+export function largestDimension(box: THREE.Box3): number {
   if (box.isEmpty()) return 0;
   const size = box.getSize(new THREE.Vector3());
-  return Math.max(size.x, size.y, size.z) * fraction;
+  return Math.max(size.x, size.y, size.z);
 }
 
 /** Seconds one joint takes while playing: long enough to follow which way a

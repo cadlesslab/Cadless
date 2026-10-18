@@ -617,6 +617,52 @@ def test_a_heading_that_is_nan_is_written_as_a_part_that_stays_put(tmp_path):
     assert _motion(tmp_path)["releases"] == [[], [0.0, 0.0, 1.0]]
 
 
+def _write_box_stl(path: Path, lo, hi) -> None:
+    """An axis-aligned box as a binary STL, the form the exporter writes."""
+    import struct
+
+    corners = [[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+    quads = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+    tris = [tri for a, b, c, d in quads for tri in ((a, b, c), (a, c, d))]
+    body = b"".join(
+        struct.pack("<12fH", 0.0, 0.0, 0.0, *(v for i in tri for v in corners[i]), 0)
+        for tri in tris
+    )
+    path.write_bytes(b"\0" * 80 + struct.pack("<I", len(tris)) + body)
+
+
+def test_the_motion_carries_how_far_each_exported_part_travels(tmp_path):
+    # A pin through a block, exported as a build exports its parts: the motion
+    # measures the pin's travel from those files, far enough to clear the block.
+    _write_box_stl(tmp_path / "model_p0.stl", (-20, -20, 0), (20, 20, 10))
+    _write_box_stl(tmp_path / "model_p1.stl", (-2, -2, -30), (2, 2, 60))
+    Pipeline._write_motion(tmp_path, [0, 1], [[], [0.0, 0.0, 1.0]])
+    travel = _motion(tmp_path)["travel"]
+    assert travel[0] == 0.0
+    assert -30 + travel[1] * 90 > 10
+
+
+def test_parts_that_cannot_be_read_cost_the_travel_and_not_the_motion(tmp_path):
+    # The viewport still has the order and headings to play, spaced as before.
+    (tmp_path / "model_p0.stl").write_bytes(b"not a mesh")
+    (tmp_path / "model_p1.stl").write_bytes(b"not a mesh")
+    Pipeline._write_motion(tmp_path, [0, 1], [[], [0.0, 0.0, 1.0]])
+    motion = _motion(tmp_path)
+    assert motion["order"] == [0, 1]
+    assert "travel" not in motion
+
+
+def test_a_part_that_reads_back_empty_still_leaves_the_motion_written(tmp_path):
+    # A well-formed binary STL with no facets: readable, with nothing in it. It
+    # is in no one's way, and the motion that measures around it is written.
+    _write_box_stl(tmp_path / "model_p0.stl", (-20, -20, 0), (20, 20, 10))
+    (tmp_path / "model_p1.stl").write_bytes(b"\0" * 80 + (0).to_bytes(4, "little"))
+    Pipeline._write_motion(tmp_path, [0, 1], [[], [0.0, 0.0, 1.0]])
+    motion = _motion(tmp_path)
+    assert motion["order"] == [0, 1]
+    assert motion["travel"] == pytest.approx([0.0, 0.35])
+
+
 def test_an_unrunnable_check_refuses_rather_than_passing(monkeypatch):
     unchecked = AssemblyMeasurements(
         part_bboxes=[[100.0, 100.0, 50.0], [100.0, 100.0, 50.0]],
