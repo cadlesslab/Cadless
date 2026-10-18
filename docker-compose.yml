@@ -58,6 +58,16 @@ services:
       # Forge-mode global kill-switch. Default OFF: a turn must opt in AND
       # this must be on for best-of-N racing to run (both-true gate).
       CADLESS_FORGE_ENABLED: ${CADLESS_FORGE_ENABLED:-false}
+      # Assembly-output kill-switch, default OFF like forge's above: while it
+      # is off, no turn is built as an assembly.
+      CADLESS_ASSEMBLY_ENABLED: ${CADLESS_ASSEMBLY_ENABLED:-false}
+      # A default rather than a pass-through: an empty value would fail the
+      # api's number parsing and stop it starting.
+      CADLESS_EXEC_TIMEOUT_SECS: ${CADLESS_EXEC_TIMEOUT_SECS:-30}
+      # Passed through only when set: with no value here, a key left unset
+      # stays unset in the container rather than arriving as an empty string.
+      ANTHROPIC_API_KEY:
+      OPENAI_API_KEY:
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
