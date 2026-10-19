@@ -182,6 +182,23 @@ def test_the_assembly_motion_reaches_the_store_as_one_file_of_its_own_kind(store
     assert written == 3  # the two stl parts plus the motion
 
 
+def test_the_whole_assembly_files_reach_the_store_as_part_0_of_their_kinds(store, tmp_path):
+    """Beside the motion file and not mistaken for it: each is its own kind."""
+    src = tmp_path / "staging"
+    src.mkdir()
+    _touch(src, "model_p0.stl", "model_p1.stl", "assembly.json", "assembly.glb", "assembly.step")
+
+    written, rows = _copy_in(store, src)
+
+    whole = sorted((a.kind, a.part, Path(a.path).name) for a in rows if a.kind != "stl")
+    assert whole == [
+        ("assembly", 0, "assembly.json"),
+        ("assembly_glb", 0, "assembly.glb"),
+        ("assembly_step", 0, "assembly.step"),
+    ]
+    assert written == 5
+
+
 def test_a_build_with_no_assembly_motion_registers_none(store, tmp_path):
     src = tmp_path / "staging"
     src.mkdir()

@@ -257,3 +257,94 @@ def test_names_that_cannot_be_read_leave_the_parts_unnamed(monkeypatch):
     tree = build_tree(_car())
 
     assert [p.name for p in tree.parts] == ["part0", "part1", "part2", "part3"]
+
+
+def test_a_label_that_is_not_text_still_names_its_part():
+    """build123d keeps whatever the code assigned once the compound is built; a
+    number there is a name."""
+    a, b = Box(1, 1, 1), Pos(5, 0, 0) * Box(1, 1, 1)
+    result = Compound(children=[a, b])
+    a.label, b.label = 7, 8
+
+    assert [p.name for p in build_tree(result).parts] == ["7", "8"]
+
+
+def test_a_label_past_the_bound_is_cut_to_it():
+    long = "x" * (assembly_tree.NAME_MAX + 50)
+    result = Compound(children=[_named(Box(1, 1, 1), long), Pos(5, 0, 0) * Box(1, 1, 1)])
+
+    assert build_tree(result).parts[0].name == "x" * assembly_tree.NAME_MAX
+
+
+def test_sibling_groups_that_share_a_label_stay_two_groups():
+    def axle(y):
+        kit = Compound(
+            children=[Pos(0, y, 0) * Box(1, 1, 1), Pos(3, y, 0) * Box(1, 1, 1)], label="axle"
+        )
+        return kit
+
+    parts = build_tree(Compound(children=[axle(0), axle(10)])).parts
+
+    assert [p.path for p in parts] == [("axle",)] * 4
+    first, second = (
+        {parts[0].group_ids, parts[1].group_ids},
+        {parts[2].group_ids, parts[3].group_ids},
+    )
+    assert len(first) == len(second) == 1
+    assert first != second
+
+
+_RECORD = [
+    {"index": 0, "name": "chassis", "path": ["car"], "color": None},
+    {"index": 1, "name": "wheel", "path": ["car"], "color": [1, 0, 0, 1]},
+]
+
+
+def test_a_part_record_keeps_the_four_fields_in_their_shape():
+    raw = [dict(entry, extra="from a newer worker") for entry in _RECORD]
+
+    assert assembly_tree.parts_record(raw) == [
+        {"index": 0, "name": "chassis", "path": ["car"], "color": None},
+        {"index": 1, "name": "wheel", "path": ["car"], "color": [1.0, 0.0, 0.0, 1.0]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"index": 0},
+        [{"index": 0}],
+        ["chassis"],
+        [{"index": 1, "name": "a", "path": [], "color": None}],
+        [{"index": False, "name": "a", "path": [], "color": None}],
+        [{"index": 0, "name": 7, "path": [], "color": None}],
+        [{"index": 0, "name": "", "path": [], "color": None}],
+        [{"index": 0, "name": "x" * 129, "path": [], "color": None}],
+        [{"index": 0, "name": "a", "path": "car", "color": None}],
+        [{"index": 0, "name": "a", "path": ["g"] * 17, "color": None}],
+        [{"index": 0, "name": "a", "path": [], "color": [1, 0, 0]}],
+        [{"index": 0, "name": "a", "path": [], "color": [float("nan"), 0, 0, 1]}],
+        [{"index": 0, "name": "a", "path": [], "color": [10**400, 0, 0, 1]}],
+        [{"index": i, "name": "a", "path": [], "color": None} for i in range(2001)],
+        [{"index": i, "name": "a" * 128, "path": [], "color": None} for i in range(2000)],
+    ],
+    ids=[
+        "not-a-list",
+        "missing-fields",
+        "not-a-mapping",
+        "index-out-of-place",
+        "bool-index",
+        "name-not-text",
+        "empty-name",
+        "name-too-long",
+        "path-not-a-list",
+        "path-too-deep",
+        "colour-not-rgba",
+        "colour-not-finite",
+        "colour-past-a-float",
+        "too-many-parts",
+        "too-large",
+    ],
+)
+def test_a_part_record_that_cannot_be_read_is_none(raw):
+    assert assembly_tree.parts_record(raw) is None

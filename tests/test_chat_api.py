@@ -288,6 +288,50 @@ def test_text_only_turn_streams_mapped_sequence(client, store, monkeypatch):
     assert end["stop_reason"] == "end_turn"
 
 
+_CHAT_PARTS = [
+    {"index": 0, "name": "chassis", "path": ["car"], "color": None},
+    {"index": 1, "name": "wheel", "path": ["car"], "color": [1.0, 0.0, 0.0, 1.0]},
+]
+
+
+class _NamedPartsPipeline(StubPipeline):
+    def run(self, intent, export_dir=None, **kwargs):
+        result = super().run(intent, export_dir=export_dir, **kwargs)
+        for n in range(2):
+            (Path(export_dir) / f"model_p{n}.stl").write_bytes(bytes([n]) * 84)
+        result.parts = _CHAT_PARTS
+        return result
+
+
+def test_a_chat_built_version_keeps_its_part_names_out_of_the_model_s_view(
+    client, store, monkeypatch
+):
+    """The chat layer stores the parts with the version; the model reading the
+    tool's result is not handed one entry per part on every turn."""
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a car"}),
+            _text_turn("Built your car."),
+        ]
+    )
+    _install(monkeypatch, provider, pipeline=_NamedPartsPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _stream_chat(client, pid)
+
+    tresult = next(e for e in events if e["event"] == "tool_result")
+    assert client.get(f"/versions/{tresult['version_id']}").json()["parts"] == _CHAT_PARTS
+    results = [
+        json.loads(block.content)
+        for call in provider.calls
+        for message in call["messages"]
+        for block in message.content
+        if block.kind == "tool_result"
+    ]
+    assert results, "the model was never shown the tool's result"
+    assert all("parts" not in result for result in results)
+
+
 def test_tool_turn_streams_tool_events_with_nested_stage_progress(client, store, monkeypatch):
     provider = ScriptedProvider(
         [
@@ -2503,3 +2547,22 @@ def test_nothing_the_review_stored_is_replayed_into_a_later_turn(client, store, 
     # The model's own words still replay — this must narrow what reaches the
     # orchestrator, not silence the assistant turn it is attached to.
     assert "Done." in replayed
+
+
+def test_a_tool_result_s_files_are_taken_only_from_the_turn_s_staging(store, tmp_path):
+    """The thumbnail path is the worker's report; a directory taken from it on trust
+    is whatever directory it names."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "model.glb").write_bytes(b"glTF-not-this-turn-s")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+
+    async def go():
+        await store.init()
+        p = await store.create_project("P")
+        payload = {"ok": True, "code": "result = 1", "thumbnail": str(elsewhere / "model.glb")}
+        vid = await chat._persist_tool_version(store, p.id, "x", payload, staging=staging)
+        return await store.list_artifacts(vid)
+
+    assert asyncio.run(go()) == []

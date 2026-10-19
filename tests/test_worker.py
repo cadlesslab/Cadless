@@ -270,6 +270,33 @@ def test_a_rebuild_leaves_none_of_the_previous_shape_behind(tmp_path):
     assert list(tmp_path.glob("model_p*.stl")) == []
 
 
+def test_an_assembly_is_also_written_whole(tmp_path):
+    """A build of several parts gets one GLB and one STEP of the whole, beside its parts."""
+    res = run_code(_CAR, export_dir=str(tmp_path))
+
+    assert res.ok, res.error
+    assert res.assembly_glb_path == str(tmp_path / "assembly.glb")
+    assert res.assembly_step_path == str(tmp_path / "assembly.step")
+    assert (tmp_path / "assembly.glb").stat().st_size > 0
+    assert (tmp_path / "assembly.step").stat().st_size > 0
+
+
+def test_a_one_part_rebuild_leaves_no_whole_assembly_behind(tmp_path):
+    """The whole-assembly files go with the build that wrote them, and the motion
+    file beside them -- the pipeline's, not the worker's -- is left alone."""
+    run_code(_CAR, export_dir=str(tmp_path))
+    assert (tmp_path / "assembly.glb").exists()
+    (tmp_path / "assembly.json").write_text("{}")
+
+    res = run_code("from build123d import *\nresult = Box(8, 8, 8)", export_dir=str(tmp_path))
+
+    assert res.ok, res.error
+    assert res.assembly_glb_path is None
+    assert not (tmp_path / "assembly.glb").exists()
+    assert not (tmp_path / "assembly.step").exists()
+    assert (tmp_path / "assembly.json").read_text() == "{}"
+
+
 def test_export_scale_scales_artifacts_not_geometry(tmp_path):
     """Metre-authored domains export at 1000x so mm-assuming consumers read
     correct real-world size (issue #18); the geometry summary stays unscaled."""
@@ -412,3 +439,43 @@ def test_the_parts_are_measured_after_the_export_scale_is_applied():
     assert res.assembly is not None
     for box in res.assembly.part_bboxes:
         assert box == pytest.approx([1000.0, 1000.0, 1000.0], rel=1e-3)
+
+
+def test_labels_that_are_not_text_still_name_the_whole_assembly(tmp_path):
+    code = (
+        "from build123d import *\n"
+        "a = Box(4, 4, 4)\n"
+        "b = Pos(10, 0, 0) * Box(4, 4, 4)\n"
+        "result = Compound(children=[a, b])\n"
+        "a.label = 1\n"
+        "b.label = 2\n"
+    )
+
+    res = run_code(code, export_dir=str(tmp_path))
+
+    assert res.ok, res.error
+    assert [p["name"] for p in res.parts] == ["1", "2"]
+    assert (tmp_path / "assembly.glb").stat().st_size > 0
+
+
+def test_a_dangling_link_where_a_whole_file_goes_is_cleared(tmp_path):
+    """``exists`` follows a link, so a dangling one would be written through."""
+    target = tmp_path / "elsewhere.step"
+    (tmp_path / "assembly.step").symlink_to(target)
+
+    res = run_code(_CAR, export_dir=str(tmp_path))
+
+    assert res.ok, res.error
+    assert not (tmp_path / "assembly.step").is_symlink()
+    assert not target.exists()
+
+
+def test_a_dangling_link_where_a_part_file_goes_is_cleared(tmp_path):
+    target = tmp_path / "elsewhere.stl"
+    (tmp_path / "model_p0.stl").symlink_to(target)
+
+    res = run_code(_CAR, export_dir=str(tmp_path))
+
+    assert res.ok, res.error
+    assert not (tmp_path / "model_p0.stl").is_symlink()
+    assert not target.exists()

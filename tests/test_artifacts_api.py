@@ -1,6 +1,8 @@
 """Artifact serving tests."""
 
 import asyncio
+import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -271,3 +273,139 @@ def test_the_wire_says_which_part_each_artifact_is(client, store):
     assert r.status_code == 200
     artifacts = r.json()["artifacts"]
     assert sorted(a["part"] for a in artifacts if a["kind"] == "stl") == [0, 1, 2]
+
+
+def _seed_with_whole_assembly(store, parts=None):
+    async def go():
+        p = await store.create_project("P")
+        v = await store.add_version(p.id, "x", "result=1", ok=True, parts=parts)
+        d = Path(store.version_artifact_dir(v.id))
+        for n in range(2):
+            f = d / f"model_p{n}.stl"
+            f.write_bytes(bytes([n]) * 84)
+            await store.add_artifact(v.id, "stl", str(f))
+        (d / "assembly.glb").write_bytes(b"glTF-whole")
+        (d / "assembly.step").write_text("ISO-10303-21; whole")
+        await store.add_artifact(v.id, "assembly_glb", str(d / "assembly.glb"))
+        await store.add_artifact(v.id, "assembly_step", str(d / "assembly.step"))
+        return v.id
+
+    return asyncio.run(go())
+
+
+def test_the_whole_assembly_glb_is_served_inline_on_its_own_address(client, store):
+    vid = _seed_with_whole_assembly(store)
+
+    r = client.get(f"/versions/{vid}/artifacts/assembly_glb")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "model/gltf-binary"
+    assert "attachment" not in r.headers.get("content-disposition", "")
+    assert r.content == b"glTF-whole"
+
+
+def test_the_whole_assembly_step_is_offered_as_a_named_download(client, store):
+    vid = _seed_with_whole_assembly(store)
+
+    r = client.get(f"/versions/{vid}/artifacts/assembly_step")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/step"
+    assert f"model_{vid}_assembly.step" in r.headers["content-disposition"]
+    assert r.text == "ISO-10303-21; whole"
+
+
+def test_a_version_with_no_whole_assembly_answers_not_found(client, store):
+    vid = _seed_with_stl_parts(store, 1)
+
+    r = client.get(f"/versions/{vid}/artifacts/assembly_glb")
+
+    assert r.status_code == 404
+    assert r.json() == {"detail": "assembly_glb artifact not found"}
+
+
+def test_a_version_returns_the_names_its_build_gave_its_parts(client, store):
+    parts = [
+        {"index": 0, "name": "chassis", "path": ["car"], "color": None},
+        {"index": 1, "name": "wheel", "path": ["car"], "color": [1.0, 0.0, 0.0, 1.0]},
+    ]
+    vid = _seed_with_whole_assembly(store, parts=parts)
+
+    assert client.get(f"/versions/{vid}").json()["parts"] == parts
+
+
+def test_a_version_stored_before_parts_had_names_names_them_by_number(client, store):
+    vid = _seed_with_stl_parts(store, 3)
+
+    assert client.get(f"/versions/{vid}").json()["parts"] == [
+        {"index": n, "name": f"part{n}", "path": [], "color": None} for n in range(3)
+    ]
+
+
+def test_the_whole_assembly_files_are_not_served_by_part_number(client, store):
+    vid = _seed_with_whole_assembly(store)
+
+    r = client.get(f"/versions/{vid}/artifacts/assembly_step/0")
+
+    assert r.status_code == 404
+    assert r.json() == {"detail": "assembly_step has no numbered parts"}
+
+
+def test_a_stored_list_that_does_not_number_the_files_gives_way_to_numbers(client, store):
+    parts = [{"index": n, "name": f"named{n}", "path": [], "color": None} for n in range(3)]
+    vid = _seed_with_whole_assembly(store, parts=parts)
+
+    assert [p["name"] for p in client.get(f"/versions/{vid}").json()["parts"]] == [
+        "part0",
+        "part1",
+    ]
+
+
+def test_a_version_with_no_files_names_no_parts(client, store):
+    async def go():
+        p = await store.create_project("P")
+        v = await store.add_version(
+            p.id,
+            "x",
+            "result=1",
+            ok=True,
+            parts=[{"index": 0, "name": "a", "path": [], "color": None}],
+        )
+        return v.id
+
+    vid = asyncio.run(go())
+
+    assert client.get(f"/versions/{vid}").json()["parts"] == []
+
+
+def test_a_project_s_versions_stay_readable_whatever_a_worker_reported(client, store):
+    async def go():
+        p = await store.create_project("P")
+        v = await store.add_version(
+            p.id, "x", "result=1", ok=True, parts=[{"index": 0, "name": 7, "path": []}]
+        )
+        f = Path(store.version_artifact_dir(v.id)) / "model.stl"
+        f.write_bytes(b"\x00" * 84)
+        await store.add_artifact(v.id, "stl", str(f))
+        return p.id
+
+    pid = asyncio.run(go())
+
+    assert client.get(f"/projects/{pid}/versions").status_code == 200
+
+
+def test_a_row_another_build_wrote_is_read_as_numbered_parts(client, store, tmp_path):
+    """A row written past this build's checks -- by another engine build, or by
+    hand -- is checked again where it is read."""
+    vid = _seed_with_stl_parts(store, 1)
+    with sqlite3.connect(tmp_path / "db.sqlite") as db:
+        db.execute(
+            "UPDATE script_versions SET parts_json=? WHERE id=?",
+            (json.dumps([{"index": 0, "name": 7, "path": []}]), vid),
+        )
+    pid = client.get(f"/versions/{vid}").json()["project_id"]
+
+    r = client.get(f"/projects/{pid}/versions")
+
+    assert r.status_code == 200
+    assert r.json()[0]["parts"] == [{"index": 0, "name": "part0", "path": [], "color": None}]

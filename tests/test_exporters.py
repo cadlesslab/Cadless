@@ -1,6 +1,7 @@
 """Exporter tests (STEP, glTF). Marked build123d."""
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -248,3 +249,166 @@ def test_a_shape_with_no_location_of_its_own_is_written_as_before(tmp_path):
     direct = tmp_path / "direct.glb"
     export_gltf(shape, str(direct), binary=True, linear_deflection=0.1)
     assert Path(ours).read_bytes() == direct.read_bytes()
+
+
+# --- the whole assembly as one file ----------------------------------------
+
+
+def _car():
+    from build123d import Box, Color, Compound, Cylinder, Pos
+
+    def named(shape, label, color=None):
+        shape.label = label
+        if color is not None:
+            shape.color = color
+        return shape
+
+    chassis = named(Box(30, 40, 4), "chassis")
+    axle = named(Box(20, 1, 1), "axle_f")
+    wheel_fl = named(Pos(-10, 0, 0) * Cylinder(3, 2), "wheel_fl", Color(1, 0, 0))
+    wheel_fr = named(Pos(10, 0, 0) * Cylinder(3, 2), "wheel_fr", Color(1, 0, 0))
+    front = Compound(children=[axle, wheel_fl, wheel_fr], label="front_axle")
+    front.location = Pos(0, 25, 0)
+    car = Compound(children=[chassis, front], label="car")
+    car.location = Pos(100, 0, 0)
+    return car
+
+
+def _named_nodes(document: dict) -> list[dict]:
+    """Every named node, in the order a depth-first walk from the scene meets them."""
+    nodes = document["nodes"]
+    found: list[dict] = []
+
+    def walk(index: int) -> None:
+        if nodes[index].get("name"):
+            found.append(nodes[index])
+        for child in nodes[index].get("children", []):
+            walk(child)
+
+    for root in document["scenes"][document.get("scene", 0)]["nodes"]:
+        walk(root)
+    return found
+
+
+def test_the_assembly_glb_names_every_part_and_group_in_tree_order(tmp_path):
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+    from tests.glb_bounds import read_glb
+
+    paths = export_assembly(build_tree(_car()), str(tmp_path))
+
+    document, _ = read_glb(paths["assembly_glb"])
+    assert [node["name"] for node in _named_nodes(document)] == [
+        "car",
+        "chassis",
+        "front_axle",
+        "axle_f",
+        "wheel_fl",
+        "wheel_fr",
+    ]
+
+
+def test_the_assembly_glb_gives_each_coloured_part_its_colour(tmp_path):
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+    from tests.glb_bounds import read_glb
+
+    paths = export_assembly(build_tree(_car()), str(tmp_path))
+
+    document, _ = read_glb(paths["assembly_glb"])
+    colours = {}
+    for node in _named_nodes(document):
+        if "mesh" not in node:
+            continue
+        index = document["meshes"][node["mesh"]]["primitives"][0].get("material")
+        material = document["materials"][index] if index is not None else {}
+        colours[node["name"]] = material.get("pbrMetallicRoughness", {}).get("baseColorFactor")
+    assert colours["wheel_fl"] == pytest.approx([1.0, 0.0, 0.0, 1.0])
+    assert colours["wheel_fr"] == pytest.approx([1.0, 0.0, 0.0, 1.0])
+    assert colours["chassis"] is None
+
+
+def test_the_assembly_step_names_its_products_by_the_labels(tmp_path):
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+
+    paths = export_assembly(build_tree(_car()), str(tmp_path))
+
+    text = Path(paths["assembly_step"]).read_text()
+    for label in ("car", "chassis", "front_axle", "axle_f", "wheel_fl", "wheel_fr"):
+        assert f"PRODUCT('{label}'" in text, label
+
+
+def test_the_assembly_files_hold_the_parts_where_they_sit_at_the_export_scale(tmp_path):
+    """Written from the tree's parts, so the whole file is scaled the way each part is."""
+    from build123d import import_step
+
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+    from tests.glb_bounds import PLACEMENT_TOLERANCE_MM, glb_world_bounds
+
+    car = _car()
+    bb = car.bounding_box()
+    expected = [2 * v for v in (*bb.min, *bb.max)]
+
+    paths = export_assembly(build_tree(car, scale=2.0), str(tmp_path))
+
+    low, high = glb_world_bounds(paths["assembly_glb"])
+    assert [*low, *high] == pytest.approx(expected, abs=0.05)
+    step_bb = import_step(paths["assembly_step"]).bounding_box()
+    assert [*step_bb.min, *step_bb.max] == pytest.approx(expected, abs=PLACEMENT_TOLERANCE_MM)
+
+
+def test_sibling_groups_that_share_a_label_are_two_nodes_in_part_order(tmp_path):
+    from build123d import Box, Compound, Pos
+
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+    from tests.glb_bounds import read_glb
+
+    def named(shape, label):
+        shape.label = label
+        return shape
+
+    def axle(y, left, right):
+        return Compound(
+            children=[
+                named(Pos(0, y, 0) * Box(1, 1, 1), left),
+                named(Pos(3, y, 0) * Box(1, 1, 1), right),
+            ],
+            label="axle",
+        )
+
+    car = Compound(
+        children=[
+            axle(0, "fl", "fr"),
+            axle(10, "rl", "rr"),
+            named(Pos(0, 5, 0) * Box(9, 1, 1), "chassis"),
+        ]
+    )
+
+    paths = export_assembly(build_tree(car), str(tmp_path))
+
+    document, _ = read_glb(paths["assembly_glb"])
+    assert [node["name"] for node in _named_nodes(document)] == [
+        "axle",
+        "fl",
+        "fr",
+        "axle",
+        "rl",
+        "rr",
+        "chassis",
+    ]
+
+
+def test_a_whole_glb_build123d_did_not_write_fails_the_export(tmp_path, monkeypatch):
+    """build123d says so by its return value; a path to a missing file is not returned."""
+    import build123d
+
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+
+    monkeypatch.setattr(build123d, "export_gltf", lambda *a, **k: False)
+
+    with pytest.raises(RuntimeError, match="assembly.glb"):
+        export_assembly(build_tree(_car()), str(tmp_path))

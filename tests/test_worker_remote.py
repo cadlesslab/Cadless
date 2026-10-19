@@ -229,6 +229,35 @@ def test_run_code_remote_carries_the_part_names(monkeypatch):
     assert res.parts == parts
 
 
+def test_run_code_remote_carries_the_whole_assembly_paths(monkeypatch):
+    import urllib.request
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "ok": True,
+                    "volume": 1.0,
+                    "bbox": [1, 1, 1],
+                    "assembly_glb_path": "/d/assembly.glb",
+                    "assembly_step_path": "/d/assembly.step",
+                }
+            ).encode()
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
+    res = run_code("result = 1", config=Settings(worker_url="http://worker:9000"))
+    assert (res.assembly_glb_path, res.assembly_step_path) == (
+        "/d/assembly.glb",
+        "/d/assembly.step",
+    )
+
+
 def test_run_code_remote_survives_a_payload_from_a_different_engine_build(monkeypatch):
     # The neighbouring RepairContext(**rc) raises TypeError on a key it does not
     # know, which turns an api/worker version skew into a broken call. This field
