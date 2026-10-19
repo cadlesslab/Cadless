@@ -48,9 +48,6 @@ IMPORTED_DIRNAME = "imported-catalog"
 # Long enough for any id a person would write, short enough that the directory
 # it names is one every filesystem can hold.
 MAX_ITEM_ID_LENGTH = 128
-# An artifact's kind becomes the extension of the file the loader writes, so the
-# shape this allows is the shape a file extension actually is.
-ARTIFACT_KIND_SHAPE = re.compile(r"[A-Za-z0-9_-]{1,32}\Z")
 _DIR_NAME_SHAPE = re.compile(r"[^a-z0-9]+")
 # How a provenance sentence opens, for an arrival that writes one. The prefix
 # and the reader that matches it are the whole contract between the code that
@@ -460,19 +457,15 @@ def _checked_manifest(package: ClsPackage) -> CatalogManifest:
                 f"step {step.index} names {step.code!r}, which is not one of the step files "
                 "this package carries and the code check read"
             )
-        for kind, relative in step.artifacts.items():
-            if not ARTIFACT_KIND_SHAPE.match(kind):
-                # Not a label: the loader spells a filename out of it. A kind
-                # carrying a separator, a control character or three hundred
-                # characters fails partway through loading an item that is
-                # already on disk, and the id it took stays taken.
-                raise CatalogImportError(
-                    f"step {step.index} names an artifact kind this tool will not "
-                    f"write a file for: {kind!r}"
-                )
+        # Each artifact key's kind was held to the shape of a file extension when the
+        # manifest model was validated above: a kind carrying a separator, a
+        # control character or three hundred characters would fail partway
+        # through loading an item that is already on disk, and the id it took
+        # would stay taken.
+        for key, relative in step.artifacts.items():
             if relative not in carried:
                 raise CatalogImportError(
-                    f"step {step.index}'s {kind} artifact names {relative!r}, "
+                    f"step {step.index}'s {key} artifact names {relative!r}, "
                     "which this package does not carry"
                 )
     if manifest.thumbnail is not None and manifest.thumbnail not in carried:

@@ -9,12 +9,38 @@ geometry + pre-rendered artifacts.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from cadless.catalog.domains import find_domain
 from cadless.catalog.pack import PackError, safe_entry_name
+
+# An artifact's kind becomes the extension of the file the loader writes, so the
+# shape this allows is the shape a file extension actually is.
+_KIND = r"[A-Za-z0-9_-]{1,32}"
+ARTIFACT_KIND_SHAPE = re.compile(_KIND + r"\Z")
+# A later part of a kind is keyed `<kind>:<part>`, counting from 1: the first part
+# is the bare kind, so each part has exactly one spelling and two keys cannot name
+# the same part.
+PART_KEY_SEPARATOR = ":"
+_PART_KEY = re.compile(rf"(?P<kind>{_KIND}){PART_KEY_SEPARATOR}(?P<part>[1-9][0-9]*)\Z")
+
+
+def parse_artifact_key(key: str) -> tuple[str, int]:
+    """The (kind, part) a step's artifact key names.
+
+    A key with no separator is the kind itself and its first part, as every key
+    was before a step could carry several files of one kind. A key with one has
+    to be a kind and a part number from 1 exactly, or it is refused.
+    """
+    if PART_KEY_SEPARATOR not in key:
+        return key, 0
+    match = _PART_KEY.match(key)
+    if match is None:
+        raise ValueError(f"artifact key {key!r} is not <kind> or <kind>:<part number from 1>")
+    return match["kind"], int(match["part"])
 
 
 class StepGeometry(BaseModel):
@@ -43,7 +69,9 @@ class CatalogStep(BaseModel):
     instruction: str  # the natural-language instruction for this step
     code: str  # path to the step's build123d script, relative to and inside the item dir
     geometry: StepGeometry = Field(default_factory=StepGeometry)
-    artifacts: dict[str, str] = Field(default_factory=dict)  # kind -> relative path, inside it
+    # Key -> relative path, inside the item. The key is the kind for the first
+    # file of a kind and `<kind>:<part>` for each later one (see parse_artifact_key).
+    artifacts: dict[str, str] = Field(default_factory=dict)
     assertions: dict = Field(default_factory=dict)  # e.g. {"volume_tol": 0.05}
     # Multi-body convention (#40): the number of disjoint solids this step's
     # ``result`` deliberately produces (a build123d Compound of positioned
@@ -54,6 +82,39 @@ class CatalogStep(BaseModel):
     # Re-authoring: a realistic conversation turn for this step. ``None``
     # on legacy manifests so the loader falls back to its placeholder behavior.
     transcript: StepTranscript | None = None
+
+    @field_validator("artifacts")
+    @classmethod
+    def _each_key_names_one_part(cls, artifacts: dict[str, str]) -> dict[str, str]:
+        """Refuse keys the loader could not write a file for, or file as they say.
+
+        The kind becomes the extension of the copy the loader writes, so it is
+        held to the shape of one here, for every manifest whichever way it
+        arrived. The store numbers a kind's files in the order they are added, so
+        part n can only be filed as part n when every number below it is named
+        too; a kind whose numbers skip one is refused before anything is copied.
+        """
+        parts: dict[str, list[int]] = {}
+        for key in artifacts:
+            kind, part = parse_artifact_key(key)
+            if not ARTIFACT_KIND_SHAPE.match(kind):
+                raise ValueError(f"artifact key {key!r} names a kind that is not a file extension")
+            parts.setdefault(kind, []).append(part)
+        for kind, numbers in parts.items():
+            if sorted(numbers) != list(range(len(numbers))):
+                raise ValueError(
+                    f"artifact keys for {kind!r} name parts {sorted(numbers)}, "
+                    "with one missing below the last"
+                )
+        return artifacts
+
+    def artifact_parts(self) -> dict[str, list[str]]:
+        """Each kind's artifact keys, in part order."""
+        parts: dict[str, list[tuple[int, str]]] = {}
+        for key in self.artifacts:
+            kind, part = parse_artifact_key(key)
+            parts.setdefault(kind, []).append((part, key))
+        return {kind: [key for _, key in sorted(numbered)] for kind, numbered in parts.items()}
 
 
 class CatalogManifest(BaseModel):
@@ -122,9 +183,9 @@ def step_code_path(item: Path, step: CatalogStep) -> Path:
     return _inside_item(item, step.code, f"step {step.index} code")
 
 
-def step_artifact_path(item: Path, step: CatalogStep, kind: str) -> Path:
-    """Where ``step``'s ``kind`` artifact sits, checked to be inside ``item``."""
-    return _inside_item(item, step.artifacts[kind], f"step {step.index} {kind} artifact")
+def step_artifact_path(item: Path, step: CatalogStep, key: str) -> Path:
+    """Where the artifact ``step`` keys as ``key`` sits, checked to be inside ``item``."""
+    return _inside_item(item, step.artifacts[key], f"step {step.index} {key} artifact")
 
 
 def thumbnail_path(item: Path, manifest: CatalogManifest) -> Path:
@@ -140,7 +201,8 @@ def load_manifest(house_dir: Path) -> CatalogManifest:
     Steps are sorted by ``index`` and validated to be contiguous from 1; the
     ``domain`` must be registered in the domain registry; every referenced
     ``code`` file must exist; every ``code``, artifact and ``thumbnail`` path
-    must stay inside ``house_dir``, which itself must not be a symlink. Raises
+    must stay inside ``house_dir``, which itself must not be a symlink; and
+    every artifact key must pass ``CatalogStep``'s key check. Raises
     ``ValueError`` otherwise.
     """
     house_dir = Path(house_dir)
@@ -164,8 +226,8 @@ def load_manifest(house_dir: Path) -> CatalogManifest:
         if not step_code_path(house_dir, step).exists():
             raise ValueError(f"step {step.index} code file missing: {house_dir / step.code}")
         # Artifacts and the thumbnail may be missing; here they only have to stay inside.
-        for kind in step.artifacts:
-            step_artifact_path(house_dir, step, kind)
+        for key in step.artifacts:
+            step_artifact_path(house_dir, step, key)
     if manifest.thumbnail is not None:
         thumbnail_path(house_dir, manifest)
     return manifest
