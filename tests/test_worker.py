@@ -1,6 +1,8 @@
 """Execution-worker tests. Marked build123d: spawns subprocesses that
 import the OCCT kernel."""
 
+from pathlib import Path
+
 import pytest
 
 from cadless.config import Settings
@@ -105,12 +107,11 @@ def test_export_writes_one_file_per_part(tmp_path):
 
 
 def test_each_part_of_a_split_build_is_drawn_where_it_is(tmp_path):
-    """Every part's GLB spans the same box as the OBJ written beside it.
+    """Every part's files span the box the part occupies in the built model.
 
-    The solids split out of one result each keep a Location of their own, which
-    is how they stay where they were built. The OBJ is written from the shape's
-    own tessellation, already in place, so it is the reference: a GLB that
-    disagrees with it draws that part away from its neighbours.
+    Both boxes sit where the ``Locations`` put them, and each part's GLB agrees
+    with the OBJ written beside it: a GLB that disagrees draws that part away
+    from its neighbours.
     """
     from cadless.catalog.thumbnail import load_mesh
     from tests.glb_bounds import PLACEMENT_TOLERANCE_MM, glb_world_bounds
@@ -124,12 +125,121 @@ def test_each_part_of_a_split_build_is_drawn_where_it_is(tmp_path):
         export_dir=str(tmp_path),
     )
     assert res.ok, res.error
+    expected = {0: [-5, 60, 35, 5, 80, 65], 1: [95, -10, -15, 105, 10, 15]}
     for index in (0, 1):
         vertices = load_mesh(tmp_path / f"model_p{index}.obj").reshape(-1, 3)
+        obj_box = [*vertices.min(axis=0), *vertices.max(axis=0)]
+        assert obj_box == pytest.approx(expected[index], abs=PLACEMENT_TOLERANCE_MM), index
         low, high = glb_world_bounds(tmp_path / f"model_p{index}.glb")
-        assert [*low, *high] == pytest.approx(
-            [*vertices.min(axis=0), *vertices.max(axis=0)], abs=PLACEMENT_TOLERANCE_MM
-        ), f"part {index}"
+        assert [*low, *high] == pytest.approx(obj_box, abs=PLACEMENT_TOLERANCE_MM), f"part {index}"
+
+
+_CAR = (
+    "from build123d import *\n"
+    "chassis = Box(30, 40, 4)\n"
+    "chassis.label = 'chassis'\n"
+    "axle = Box(20, 1, 1)\n"
+    "axle.label = 'axle_f'\n"
+    "wheel_fl = Pos(-10, 0, 0) * Cylinder(3, 2)\n"
+    "wheel_fl.label = 'wheel_fl'\n"
+    "wheel_fr = Pos(10, 0, 0) * Cylinder(3, 2)\n"
+    "wheel_fr.label = 'wheel_fr'\n"
+    "front = Compound(children=[axle, wheel_fl, wheel_fr], label='front_axle')\n"
+    "front.location = Pos(0, 25, 0)\n"
+    "result = Compound(children=[chassis, front], label='car')\n"
+)
+
+
+def test_a_labelled_assembly_reports_its_parts_by_name_in_solids_order(tmp_path):
+    """The names the code gave its parts come back with the build."""
+    res = run_code(_CAR, export_dir=str(tmp_path))
+
+    assert res.ok, res.error
+    assert res.part_count == 4
+    assert [(p["index"], p["name"], p["path"]) for p in res.parts] == [
+        (0, "chassis", ["car"]),
+        (1, "axle_f", ["car", "front_axle"]),
+        (2, "wheel_fl", ["car", "front_axle"]),
+        (3, "wheel_fr", ["car", "front_axle"]),
+    ]
+    assert sorted(p.name for p in tmp_path.glob("model_p*.stl")) == [
+        f"model_p{i}.stl" for i in range(4)
+    ]
+
+
+def test_a_one_solid_build_reports_one_unnamed_part():
+    res = run_code("from build123d import *\nresult = Box(8, 8, 8)")
+
+    assert res.ok, res.error
+    assert res.parts == [{"index": 0, "name": "part0", "path": [], "color": None}]
+
+
+def test_a_one_solid_build_exports_the_shape_it_was_given(tmp_path):
+    """A one-part build's files are byte for byte what exporting the shape itself writes.
+
+    The part read out of the tree is the same geometry with its placement baked
+    in, and its GLB would be written differently: the shape the code built is
+    what a one-part build has always exported.
+    """
+    from build123d import Box, Pos, Rot
+
+    from cadless import exporters
+
+    code = "from build123d import *\nresult = Pos(5, 0, 0) * Rot(0, 0, 30) * Box(4, 6, 8)\n"
+    res = run_code(code, export_dir=str(tmp_path / "built"))
+    assert res.ok, res.error
+
+    shape = Pos(5, 0, 0) * Rot(0, 0, 30) * Box(4, 6, 8)
+    for kind in ("glb", "stl", "obj"):
+        direct = exporters.EXPORTERS[kind](shape, str(tmp_path / "direct"), "model")
+        built = tmp_path / "built" / f"model.{kind}"
+        assert built.read_bytes() == Path(direct).read_bytes(), kind
+
+
+def _built_boxes(code: str, scale: float) -> list[list[float]]:
+    """Each solid's box in the built model, in millimetres at ``scale``."""
+    namespace: dict = {}
+    exec(code, namespace)  # noqa: S102 - the test's own fixed code
+    boxes = []
+    for solid in namespace["result"].solids():
+        bb = solid.bounding_box()
+        boxes.append([scale * v for v in (*bb.min, *bb.max)])
+    return boxes
+
+
+def _obj_box(path) -> list[float]:
+    from cadless.catalog.thumbnail import load_mesh
+
+    vertices = load_mesh(path).reshape(-1, 3)
+    return [*vertices.min(axis=0), *vertices.max(axis=0)]
+
+
+def test_a_placed_assembly_is_scaled_into_millimetres_part_by_part(tmp_path):
+    """The export scale converts a part's position as well as its size.
+
+    The car here is placed 100 units out, and every part file lands at 2x its
+    place in the model, each under the file number its name was reported with.
+    """
+    code = _CAR + "result.location = Pos(100, 0, 0)\n"
+
+    res = run_code(code, export_dir=str(tmp_path), export_scale=2.0)
+
+    assert res.ok, res.error
+    assert [p["name"] for p in res.parts] == ["chassis", "axle_f", "wheel_fl", "wheel_fr"]
+    for index, expected in enumerate(_built_boxes(code, 2.0)):
+        # A cylinder's mesh falls short of its exact box by its tessellation.
+        assert _obj_box(tmp_path / f"model_p{index}.obj") == pytest.approx(expected, abs=0.01)
+
+
+def test_a_placed_single_solid_is_scaled_about_the_origin(tmp_path):
+    """A one-part build is exported as the shape it was, converted the same way as parts."""
+    code = "from build123d import *\nresult = Pos(5, 0, 0) * Rot(0, 0, 30) * Box(4, 6, 8)\n"
+
+    res = run_code(code, export_dir=str(tmp_path), export_scale=1000.0)
+
+    assert res.ok, res.error
+    (expected,) = _built_boxes(code, 1000.0)
+    assert _obj_box(tmp_path / "model.obj") == pytest.approx(expected, abs=1e-2)
 
 
 def test_a_single_solid_still_exports_under_the_plain_name(tmp_path):

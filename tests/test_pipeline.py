@@ -463,6 +463,16 @@ def test_failing_assertion_at_budget_end_does_not_hard_stop(monkeypatch):
     assert gen.repairs == 0
 
 
+def test_a_successful_run_carries_the_build_s_part_names(monkeypatch):
+    parts = [{"index": 0, "name": "wheel", "path": [], "color": None}]
+    gen = _pipeline_with_exec(monkeypatch, _exec_ok(parts=parts), [GOOD])
+
+    result = Pipeline(generator=gen).run("x")
+
+    assert result.ok
+    assert result.parts == parts
+
+
 def test_missing_assertions_never_blocks(monkeypatch):
     gen = _pipeline_with_exec(monkeypatch, _exec_ok(), [GOOD])
     result = Pipeline(generator=gen).run("x")  # no assertions arg

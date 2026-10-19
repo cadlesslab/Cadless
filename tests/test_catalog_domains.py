@@ -233,10 +233,8 @@ class _Shape:
     is_manifold = True
     def bounding_box(self):
         return _BBox()
-    def solids(self):
-        return [self]
-    def scale(self, factor):
-        return ("scaled", factor)
+    def scale(self, factor, about=None):
+        return ("scaled", factor, about)
 
 result = _Shape()
 """
@@ -263,7 +261,8 @@ def _run_child(tmp_path, monkeypatch, capsys, extra_argv):
 def test_child_scales_exported_shape_only(tmp_path, monkeypatch, capsys):
     rc, payload, seen = _run_child(tmp_path, monkeypatch, capsys, ["1000"])
     assert rc == 0 and payload["ok"]
-    assert seen["shape"] == ("scaled", 1000.0)
+    # About the world origin, so a placed result's position is converted too.
+    assert seen["shape"] == ("scaled", 1000.0, (0, 0, 0))
     assert payload["volume"] == 6.0  # geometry summary is unscaled
     assert payload["bbox"] == [1.0, 2.0, 3.0]
 
