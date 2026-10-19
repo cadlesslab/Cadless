@@ -146,9 +146,15 @@ translates its events into a neutral SSE vocabulary: `turn_start`, `steer`
 (a mid-turn user message injected into the running turn — see steering
 below), `text_delta`, `thinking_delta`, `tool_start`, `tool_progress` (the
 pipeline `stage` events, nested), `tool_result`, `plan`, `clarification`,
-`turn_end`. The router adds two events of its own: `codegen_delta` (live
-code tokens, from the pipeline's `on_codegen` hook) and `error` (a failure
-detail when the turn raises).
+`turn_end`. The router adds three events of its own: `codegen_delta` (live
+code tokens, from the pipeline's `on_codegen` hook), `critique` (each render
+critique round — the verdict and the views the reviewer was shown — relayed
+live from the agent's `on_critique` hook) and `error` (a failure detail when
+the turn raises). A `tool_result` carries `assembly_findings`
+— the assembly check's failures and the lines it could not establish, as the
+check worded them — when the build it reports was refused or left undecided;
+the stored tool result holds the same verdict, so a reloaded transcript shows
+them too.
 
 The agent exposes five tools to the model (`build_tools()`):
 

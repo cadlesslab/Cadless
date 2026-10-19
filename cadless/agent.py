@@ -1095,6 +1095,9 @@ class Agent:
                     "thumbnail": payload.get("thumbnail"),
                     "code": payload.get("code"),
                     "error": payload.get("error"),
+                    # The assembly check's verdict on this build, so the chat can
+                    # show its findings to the reader as well as to the model.
+                    "assembly": payload.get("assembly"),
                 }
                 # Forge race set: carry the losing candidates through so
                 # the chat layer can persist them as non-current candidate rows. It
@@ -1206,7 +1209,7 @@ class Agent:
 
         A failed ``generate_model``/``edit_model`` result carries the repair loop's
         ``last_stage``. We count failures per stage across the turn; once
-        the same stage has failed :attr:`_same_stage_escalation` times, we append
+        the same stage has failed :attr:`_same_stage_escalation` times, we add
         guidance to the tool_result steering the model to ``ask_clarification``
         rather than burning more of the repair budget on the same failure. Unlike
         the debounce (which keys on identical ``(name, input)``), this fires even
@@ -1223,15 +1226,27 @@ class Agent:
         stage_failures[stage] = count
         if count < self._same_stage_escalation:
             return block
-        hint = (
-            f"\n\n[agent] The repair loop has now failed {count} times at the "
+        note = (
+            f"The repair loop has now failed {count} times at the "
             f"'{stage}' stage this turn without converging. Do NOT retry the same "
             f"build — call {ASK_CLARIFICATION} to ask the user for the detail "
             f"needed to break the cycle instead of burning the repair budget."
         )
+        content = block.content or ""
+        try:
+            summary = json.loads(content)
+        except ValueError:
+            summary = None
+        if isinstance(summary, dict):
+            # Inside the summary rather than after it: the stored result stays one
+            # JSON object, which the chat reads a refused build's verdict back
+            # out of on a reload.
+            content = json.dumps({**summary, "agent_note": note})
+        else:
+            content = f"{content}\n\n[agent] {note}"
         return ContentBlock.of_tool_result(
             tool_use_id=block.tool_use_id or "",
-            content=(block.content or "") + hint,
+            content=content,
             is_error=block.is_error,
         )
 

@@ -3,11 +3,10 @@
 ``POST /projects/{id}/chat`` (SSE) accepts a user message, resolves the project's
 single chat session, runs the provider-agnostic agent loop
 (:mod:`cadless.agent`), and streams UI events mapped from the agent's neutral
-:class:`~cadless.agent.StreamEventOut`s:
-
-  ``turn_start`` · ``text_delta {text}`` · ``tool_start {tool,label}`` ·
-  ``tool_progress {stage: …}`` · ``tool_result {version_id,ok,metrics,thumbnail}`` ·
-  ``turn_end {stop_reason}`` · ``error``
+:class:`~cadless.agent.StreamEventOut`s. The full vocabulary is listed in
+``docs/pipeline.md`` ("Two SSE paths"); this router shapes ``tool_result``
+itself, as ``{version_id,ok,metrics,thumbnail,tool,error,assembly_findings}``,
+and adds ``codegen_delta``, ``critique`` and ``error`` of its own.
 
 The existing pipeline ``stage`` events NEST inside ``tool_progress`` so the
 frontend ``StagedProgress`` is reused verbatim.
@@ -296,6 +295,32 @@ def _critique_line(event: dict) -> str:
         return f"{_CRITIQUE_PREFIX}{seen}: it matches the request."
     finding = event.get("feedback") or "it does not match the request"
     return f"{_CRITIQUE_PREFIX}{seen}: {finding}."
+
+
+def _assembly_findings(verdict: object) -> dict | None:
+    """What the assembly check found wrong with a tool's build, for the chat.
+
+    The check's own sentences, failures kept apart from what it could not
+    establish, so a reader can ask for the fix in the chat without the model
+    having to relay them. ``None`` where there is nothing to show: no verdict, a
+    build that was no assembly, or one the check accepted.
+
+    Read defensively, keeping only lists of non-blank strings: a turn must not
+    fail on the verdict's shape, nor show a reader anything but sentences.
+    """
+    if not isinstance(verdict, dict):
+        return None
+
+    def sentences(raw: object) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        return [line for line in raw if isinstance(line, str) and line.strip()]
+
+    failures = sentences(verdict.get("failures"))
+    unchecked = sentences(verdict.get("unchecked"))
+    if not failures and not unchecked:
+        return None
+    return {"failures": failures, "unchecked": unchecked}
 
 
 def _replayed_block(block: ContentBlock, role: str = "user") -> str:
@@ -669,6 +694,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                             ),
                             "tool": ev.data.get("tool"),
                             "error": ev.data.get("error"),
+                            "assembly_findings": _assembly_findings(ev.data.get("assembly")),
                         }
                         emit({"event": "tool_result", **data})
                     elif ev.kind == "turn_end":

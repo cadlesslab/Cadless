@@ -172,6 +172,8 @@ export type ChatEvent =
       thumbnail: string | null;
       tool: string;
       error: string | null;
+      // Optional as well as nullable: a server older than the field leaves it out.
+      assembly_findings?: AssemblyFindings | null;
     }
   | { event: "clarification"; questions: ClarificationQuestion[] }
   // One round of the render critique: what the reviewer was shown and what it
@@ -185,6 +187,15 @@ export type ChatEvent =
   | { event: "steer"; text: string }
   | { event: "turn_end"; stop_reason: string | null }
   | { event: "error"; detail: string };
+
+/** What the assembly check found wrong with a build, in its own words.
+ *
+ * `failures` are what it ruled against; `unchecked` what it could not establish
+ * either way. */
+export interface AssemblyFindings {
+  failures: string[];
+  unchecked: string[];
+}
 
 /** One render the critique reviewer was shown: which way the camera was pointing,
  * plus the picture as base64 PNG carrying **no** `data:` URL prefix.

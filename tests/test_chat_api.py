@@ -134,9 +134,13 @@ class ScriptedProvider(FakeChatProvider):
 class StubPipeline:
     """Stand-in CAD pipeline: emits the real stage-event vocabulary, writes a glb."""
 
-    def __init__(self, *, ok: bool = True, error: str | None = None) -> None:
+    def __init__(
+        self, *, ok: bool = True, error: str | None = None, assembly: dict | None = None
+    ) -> None:
         self.ok = ok
         self.error = error
+        # The assembly check's verdict on the build, as the real pipeline keeps it.
+        self.verdict = assembly
         self.groundings: list[str | None] = []
         self.images: list[list] = []
         # What each turn asked for by way of an assembly, recorded the same way
@@ -195,7 +199,12 @@ class StubPipeline:
             glb_path=glb,
             step_path=str(Path(export_dir) / "model.step") if (export_dir and self.ok) else None,
             parameters={"size": 10} if self.ok else {},
-            attempts=[],
+            # A refused assembly's last attempt failed at the check, as the real
+            # repair loop records it.
+            attempts=[Attempt(n=1, code="", stage="assembly", error="refused")]
+            if self.verdict is not None and self.verdict.get("ok") is False
+            else [],
+            assembly=self.verdict,
         )
 
 
@@ -1194,6 +1203,140 @@ def test_forge_defaults_off_when_flag_omitted(client, store, monkeypatch):
     assert tresult["ok"] is True
     assert pipeline.candidate_ns == []
     assert pipeline.run_count == 1
+
+
+# --- the assembly check's findings, shown in the chat ---------------------
+
+# What the check found on a build it refused.
+_REFUSED = {
+    "ok": False,
+    "order": None,
+    "attempt": 3,
+    "measured": True,
+    "failures": ["part 1 and part 2 share 40 mm^3 of interior volume; they must not overlap"],
+    "unchecked": [
+        "assembly order: part 2 and part 3 touch where the check cannot follow their "
+        "surfaces exactly; a gap between them would let it rule"
+    ],
+    "joints": [],
+    "releases": [],
+}
+
+
+def _findings_turn(monkeypatch, verdict):
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+            _text_turn("Done."),
+        ]
+    )
+    refused = verdict is not None and verdict.get("ok") is False
+    _install(monkeypatch, provider, pipeline=StubPipeline(ok=not refused, assembly=verdict))
+
+
+def test_a_refused_assembly_streams_the_checks_findings_with_its_tool_result(
+    client, store, monkeypatch
+):
+    # The chat shows why the parts were not accepted, in the check's own words,
+    # failures apart from what it could not establish.
+    _findings_turn(monkeypatch, _REFUSED)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    tresult = next(e for e in _stream_chat(client, pid) if e["event"] == "tool_result")
+
+    assert tresult["assembly_findings"] == {
+        "failures": _REFUSED["failures"],
+        "unchecked": _REFUSED["unchecked"],
+    }
+
+
+def test_an_accepted_assembly_streams_no_findings(client, store, monkeypatch):
+    accepted = {**_REFUSED, "ok": True, "failures": [], "unchecked": [], "order": [0, 1, 2]}
+    _findings_turn(monkeypatch, accepted)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    tresult = next(e for e in _stream_chat(client, pid) if e["event"] == "tool_result")
+
+    assert tresult["assembly_findings"] is None
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        pytest.param(None, id="no assembly asked for"),
+        # What the pipeline records when the build came out as one solid.
+        pytest.param({"ok": None, "order": None, "attempt": 1, "measured": False}, id="one solid"),
+    ],
+)
+def test_a_build_the_check_did_not_rule_on_streams_no_findings(client, store, monkeypatch, verdict):
+    _findings_turn(monkeypatch, verdict)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    tresult = next(e for e in _stream_chat(client, pid) if e["event"] == "tool_result")
+
+    assert tresult["assembly_findings"] is None
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        {"ok": False, "failures": 5, "unchecked": None},
+        {"ok": False, "failures": "part 1 and part 2 overlap", "unchecked": {}},
+        {"ok": False, "failures": [None, 3, "  ", {"line": "x"}], "unchecked": [["y"]]},
+    ],
+    ids=["a number", "a bare string", "entries that are not words"],
+)
+def test_findings_of_an_unexpected_shape_are_not_shown(verdict):
+    # A turn must not fail on the verdict's shape, nor show a reader characters
+    # or objects as sentences.
+    assert chat._assembly_findings(verdict) is None
+
+
+def test_only_the_findings_that_are_words_are_shown():
+    verdict = {"ok": False, "failures": ["part 1 overlaps part 2", 7, " "], "unchecked": ["x"]}
+
+    assert chat._assembly_findings(verdict) == {
+        "failures": ["part 1 overlaps part 2"],
+        "unchecked": ["x"],
+    }
+
+
+def test_a_refused_assembly_keeps_its_findings_in_the_stored_tool_result(
+    client, store, monkeypatch
+):
+    # A reloaded transcript reads the findings back from here, so the stored
+    # tool result has to carry them in the same shape the check wrote them.
+    _findings_turn(monkeypatch, _REFUSED)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    _stream_chat(client, pid)
+
+    assistant = _messages(store, pid)[1]
+    stored = next(b for b in assistant.blocks if b.kind == "tool_result")
+    verdict = json.loads(stored.content)["assembly"]
+    assert verdict["failures"] == _REFUSED["failures"]
+    assert verdict["unchecked"] == _REFUSED["unchecked"]
+
+
+def test_a_second_refusal_in_a_turn_keeps_its_findings_in_the_stored_tool_result(
+    client, store, monkeypatch
+):
+    # From the second refusal at the same stage the agent adds a note steering
+    # the model to ask; the stored result must still read back as the verdict.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "one"}),
+            _tool_turn(tool_use_id="tu-2", name="generate_model", tool_input={"spec": "two"}),
+            _text_turn("I need a detail."),
+        ]
+    )
+    _install(monkeypatch, provider, pipeline=StubPipeline(ok=False, assembly=_REFUSED))
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    _stream_chat(client, pid)
+
+    assistant = _messages(store, pid)[1]
+    stored = [json.loads(b.content) for b in assistant.blocks if b.kind == "tool_result"]
+    assert [s["assembly"]["failures"] for s in stored] == [_REFUSED["failures"]] * 2
+    assert "agent_note" in stored[1]
 
 
 # --- assembly mode: opt-in toggle + both-true gate ------------------

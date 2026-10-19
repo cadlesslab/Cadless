@@ -9,6 +9,7 @@ debounce, block assembly) is what's under test, not build123d geometry.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -1110,6 +1111,28 @@ def test_repeated_same_stage_failure_escalates_to_ask_clarification():
     assert "execute" in (tool_results[1].content or "")
     # The 1st failure does NOT (only one occurrence so far).
     assert "ask_clarification" not in (tool_results[0].content or "")
+
+
+def test_an_escalated_result_is_still_the_builds_summary():
+    # The chat reads a refused build's verdict back out of the stored tool
+    # result on a reload, so the escalation rides inside the summary rather
+    # than after it.
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "one"}),
+            _tool_turn(tool_use_id="tu-2", name="generate_model", tool_input={"spec": "two"}),
+            _text_turn("giving up"),
+        ]
+    )
+    agent = Agent(provider=provider, model="fake-model")
+    result = agent.run_turn(
+        user_text="make it", context=_context(pipeline=FailingPipeline(stage="execute"))
+    )
+
+    escalated = [b for b in result.blocks if b.kind == "tool_result"][1]
+    summary = json.loads(escalated.content or "")
+    assert summary["last_stage"] == "execute"
+    assert "ask_clarification" in summary["agent_note"]
 
 
 def test_distinct_failing_stages_do_not_escalate():
