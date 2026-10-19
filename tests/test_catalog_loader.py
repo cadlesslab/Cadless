@@ -826,3 +826,170 @@ def test_a_file_swapped_for_a_link_after_the_check_is_refused_at_the_read(tmp_pa
         assert not list((tmp_path / "arts").rglob("model.step"))
 
     run(go())
+
+
+def _write_parts_item(catalog_dir: Path, house_id: str, files: dict[str, bytes | None]) -> Path:
+    """One step whose artifacts are ``files``, listed in the manifest in this order.
+
+    Each key is written as the manifest spells it; a value of ``None`` names a
+    file the item does not have.
+    """
+    house = catalog_dir / house_id
+    (house / "steps").mkdir(parents=True, exist_ok=True)
+    (house / "steps" / "01.py").write_text("result = 1\n")
+    (house / "artifacts").mkdir(exist_ok=True)
+    artifacts = {}
+    for n, (key, content) in enumerate(files.items()):
+        rel = f"artifacts/{n}.bin"
+        if content is not None:
+            (house / rel).write_bytes(content)
+        artifacts[key] = rel
+    step = {"index": 1, "instruction": "parts", "code": "steps/01.py", "artifacts": artifacts}
+    (house / "manifest.json").write_text(
+        json.dumps({"id": house_id, "name": house_id, "steps": [step]})
+    )
+    return house
+
+
+def _loaded_parts(tmp_path: Path, house: Path) -> list[tuple[str, int, str, bytes]]:
+    """(kind, part, file name, bytes) of every artifact the loaded item's step holds."""
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        pid = await load_house(s, Ledger(tmp_path / "ledger.json"), house)
+        (version,) = await s.list_versions(pid)
+        return sorted(
+            (a.kind, a.part, Path(a.path).name, Path(a.path).read_bytes())
+            for a in await s.list_artifacts(version.id)
+        )
+
+    return run(go())
+
+
+def test_the_loader_declares_the_part_key_separator_it_reads():
+    """A reader of baked items asks the loader how it spells a later part's key.
+
+    Nothing in the engine reads the name back, so without this a cleanup could
+    drop it and only that reader would notice — by no longer finding the loader
+    able to read part keys at all.
+    """
+    from cadless.catalog import loader as loader_module
+
+    assert loader_module.PART_KEY_SEPARATOR == ":"
+
+
+def test_a_later_part_loads_under_its_kind_and_number(tmp_path):
+    """`glb:1` is the second glb part, as a live build stores it, not a kind of its own.
+
+    Stored as kind `glb:1`, it is a kind the viewer never asks for, and the
+    part it does ask for is not there — so the item shows one part of several.
+    """
+    house = _write_parts_item(
+        tmp_path / "cat",
+        "parts",
+        {"glb": b"glb-0", "glb:1": b"glb-1", "stl": b"stl-0", "stl:1": b"stl-1"},
+    )
+
+    assert _loaded_parts(tmp_path, house) == [
+        ("glb", 0, "model_p0.glb", b"glb-0"),
+        ("glb", 1, "model_p1.glb", b"glb-1"),
+        ("stl", 0, "model_p0.stl", b"stl-0"),
+        ("stl", 1, "model_p1.stl", b"stl-1"),
+    ]
+
+
+def test_parts_are_numbered_by_their_key_not_by_where_the_manifest_lists_them(tmp_path):
+    """The store numbers a kind's files in the order they are added.
+
+    So the order the manifest happens to list its keys in must not decide which
+    file becomes which part.
+    """
+    house = _write_parts_item(
+        tmp_path / "cat", "parts", {"glb:2": b"glb-2", "glb": b"glb-0", "glb:1": b"glb-1"}
+    )
+
+    assert _loaded_parts(tmp_path, house) == [
+        ("glb", 0, "model_p0.glb", b"glb-0"),
+        ("glb", 1, "model_p1.glb", b"glb-1"),
+        ("glb", 2, "model_p2.glb", b"glb-2"),
+    ]
+
+
+def test_part_numbers_are_ordered_as_numbers_not_as_text(tmp_path):
+    """Read as text, `glb:10` sorts before `glb:2` and would be filed as part 2."""
+    keys = ["glb"] + [f"glb:{n}" for n in range(1, 11)]
+    listed = sorted(keys)  # text order: glb, glb:1, glb:10, glb:2, ...
+    house = _write_parts_item(tmp_path / "cat", "kit", {key: key.encode() for key in listed})
+
+    loaded = _loaded_parts(tmp_path, house)
+
+    assert [(part, content) for _, part, _, content in loaded] == [
+        (n, key.encode()) for n, key in enumerate(keys)
+    ]
+
+
+def test_a_later_part_swapped_for_a_link_while_an_earlier_one_copies_is_refused(
+    tmp_path, monkeypatch
+):
+    """Each part's path is checked as that part is opened.
+
+    Checking every part before the first copy would leave the later ones
+    unchecked for as long as the earlier ones take, and a link put in that time
+    would be copied and served as a part of the item.
+    """
+    from cadless.catalog import loader as loader_module
+
+    outside = tmp_path / "outside.glb"
+    outside.write_bytes(b"not for serving")
+    house = _write_parts_item(tmp_path / "cat", "parts", {"glb": b"glb-0", "glb:1": b"glb-1"})
+    real_copy = loader_module._copy_artifact
+
+    def copy_then_swap_the_next_part(store, version_id, src, filename):
+        dst = real_copy(store, version_id, src, filename)
+        if filename == "model_p0.glb":
+            later = house / "artifacts" / "1.bin"
+            later.unlink()
+            later.symlink_to(outside)
+        return dst
+
+    monkeypatch.setattr(loader_module, "_copy_artifact", copy_then_swap_the_next_part)
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        with pytest.raises(ValueError, match="inside the item directory"):
+            await load_house(s, Ledger(tmp_path / "ledger.json"), house)
+        assert await s.list_projects() == []
+
+    run(go())
+    stored = [p for p in (tmp_path / "arts").rglob("*") if p.is_file()]
+    assert not [p for p in stored if p.read_bytes() == b"not for serving"]
+
+
+def test_a_kind_missing_one_of_its_part_files_is_left_out_whole(tmp_path):
+    """Artifacts may be missing, but part of a kind may not stand in for all of it.
+
+    Registering the parts that are there would number every part after the gap
+    one lower than the manifest said, and the viewer would draw them out of place.
+    Nothing of the kind is copied either, so no file sits in the version's
+    directory that no row accounts for.
+    """
+    house = _write_parts_item(
+        tmp_path / "cat",
+        "parts",
+        {"glb": b"glb-0", "glb:1": None, "glb:2": b"glb-2", "stl": b"stl-0"},
+    )
+
+    assert _loaded_parts(tmp_path, house) == [("stl", 0, "model.stl", b"stl-0")]
+    assert not list((tmp_path / "arts").rglob("*.glb"))
+
+
+def test_a_kind_with_one_part_keeps_the_plain_file_name(tmp_path):
+    """A single-part kind is written exactly as before parts had numbers."""
+    house = _write_parts_item(tmp_path / "cat", "single", {"glb": b"glb-0", "step": b"step-0"})
+
+    assert _loaded_parts(tmp_path, house) == [
+        ("glb", 0, "model.glb", b"glb-0"),
+        ("step", 0, "model.step", b"step-0"),
+    ]

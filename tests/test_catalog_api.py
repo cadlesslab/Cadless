@@ -690,6 +690,30 @@ def test_catalog_thumbnail_url_points_at_final_version(tmp_path):
         assert r.content == b"\x89PNG fake"
 
 
+def test_a_later_part_of_a_catalog_item_is_served_by_its_number(tmp_path):
+    """The viewer asks for `glb/1`; the manifest names that file `glb:1`."""
+    store = Store(db_path=tmp_path / "db.sqlite", artifacts_dir=tmp_path / "arts")
+    ledger = Ledger(tmp_path / "catalog-ledger.json")
+    house = _write_house(tmp_path / "cat", "h1", "house", "Casa")
+    (house / "artifacts").mkdir()
+    (house / "artifacts" / "a.glb").write_bytes(b"first part")
+    (house / "artifacts" / "b.glb").write_bytes(b"second part")
+    manifest = json.loads((house / "manifest.json").read_text())
+    manifest["steps"][0]["artifacts"] = {"glb": "artifacts/a.glb", "glb:1": "artifacts/b.glb"}
+    (house / "manifest.json").write_text(json.dumps(manifest))
+
+    async def go():
+        await store.init()
+        await load_house(store, ledger, house)
+
+    asyncio.run(go())
+    with TestClient(create_app(store=store)) as c:
+        vid = c.get("/catalog").json()["items"][0]["current_version_id"]
+        r = c.get(f"/versions/{vid}/artifacts/glb/1")
+        assert r.status_code == 200
+        assert r.content == b"second part"
+
+
 def test_catalog_thumbnail_survives_a_current_version_move(tmp_path):
     """The thumbnail is baked onto one specific version, so the URL has to name
     that version rather than whatever is current. Every path that moved a
