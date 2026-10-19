@@ -4,8 +4,10 @@
  * in flight appends a live turn, which is dropped once its version lands (the
  * `done` event's version_id appears in `versions`). Unit-tested. */
 import type {
+  AssemblyFindings,
   ChatEvent,
   ClarificationQuestion,
+  ContentBlock,
   CritiqueView,
   MessageOut,
   ProgressEvent,
@@ -53,6 +55,9 @@ export type ChatMessage =
       mediaType: string | null;
       reading: string | null;
     }
+  // What the assembly check found wrong with one tool's build, read back from the
+  // tool result the turn stored: the check's own words, apart from the reply.
+  | { kind: "assembly-findings"; id: string; failures: string[]; unchecked: string[] }
   // The in-flight `POST /chat` turn, rendered incrementally from its SSE events.
   | { kind: "live-chat"; id: "live-chat"; turn: LiveTurn };
 
@@ -80,6 +85,8 @@ export interface LiveTurn {
   critique: CritiqueRound | null;
   /** The settled tool result, if one arrived. */
   result: { versionId: number | null; ok: boolean; error: string | null } | null;
+  /** The assembly check's findings on each failed tool result that carried any. */
+  findings: AssemblyFindings[];
   /** Clarification questions, if the turn ended asking for input. */
   clarification: ClarificationQuestion[] | null;
   /** The ordered plan steps, if the turn emitted a plan before acting. */
@@ -129,10 +136,52 @@ function guideFromInput(input: Record<string, unknown> | null | undefined) {
   };
 }
 
+/** The assembly check's findings in a verdict, or null where there are none.
+ *
+ * Tolerant of the loose shape it is read from — a stored tool result is JSON
+ * written by whatever engine ran the turn — and keeps only lines that are words,
+ * so an entry of the wrong type cannot reach the page as something else. */
+function findingsFrom(verdict: unknown): AssemblyFindings | null {
+  if (typeof verdict !== "object" || verdict === null) return null;
+  const { failures, unchecked } = verdict as Record<string, unknown>;
+  const words = (raw: unknown) =>
+    Array.isArray(raw) ? raw.filter((l): l is string => typeof l === "string" && l.trim() !== "") : [];
+  const found = { failures: words(failures), unchecked: words(unchecked) };
+  return found.failures.length || found.unchecked.length ? found : null;
+}
+
+// Parsed once per stored block: the transcript is rebuilt on every streamed
+// event, and a tool result's content carries the whole script it built.
+const findingsByBlock = new WeakMap<ContentBlock, AssemblyFindings | null>();
+
+/** The findings a stored tool result carries in its verdict, or null.
+ *
+ * The block's content is the JSON the model was handed; the check's verdict sits
+ * under `assembly`. Only a result that failed is read, so the box can say its
+ * build was not kept. Content that does not parse as JSON yields nothing: an
+ * error message, or a result an older engine stored with a note after the JSON. */
+function storedFindings(block: ContentBlock): AssemblyFindings | null {
+  const cached = findingsByBlock.get(block);
+  if (cached !== undefined) return cached;
+  let found: AssemblyFindings | null = null;
+  try {
+    const parsed: unknown = JSON.parse(block.content ?? "");
+    if (typeof parsed === "object" && parsed !== null) {
+      const summary = parsed as Record<string, unknown>;
+      if (summary.ok === false) found = findingsFrom(summary.assembly);
+    }
+  } catch {
+    found = null;
+  }
+  findingsByBlock.set(block, found);
+  return found;
+}
+
 /** Map a block-based transcript (`GET /projects/{id}/messages`) to chat messages.
  * `text` blocks become markdown turns; an `image` block becomes a picture to
  * fetch; an assistant message that produced a version becomes a result card.
- * `tool_use`/`tool_result` blocks are internal and not surfaced. */
+ * `tool_use`/`tool_result` blocks are internal and not surfaced, apart from the
+ * assembly check's findings a tool result carries. */
 export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (const m of messages) {
@@ -190,6 +239,14 @@ export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
         error: m.error,
       });
     }
+    // After the card, which shows the build that was kept: each box is about a
+    // build that was not, in the order the turn made them.
+    m.blocks
+      .filter((b) => b.kind === "tool_result")
+      .forEach((b, index) => {
+        const found = storedFindings(b);
+        if (found) out.push({ kind: "assembly-findings", id: `${id}-a${index}`, ...found });
+      });
     // After the card, because it describes what the card produced.
     const guideBlock = m.blocks.find((b) => b.kind === "guide");
     if (guideBlock) {
@@ -233,6 +290,7 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
   const stageEvents: ProgressEvent[] = [];
   let critique: CritiqueRound | null = null;
   let result: LiveTurn["result"] = null;
+  const findings: AssemblyFindings[] = [];
   let clarification: ClarificationQuestion[] | null = null;
   let plan: string[] | null = null;
   const steers: string[] = [];
@@ -260,9 +318,13 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
         // shed everything but the final one the moment the transcript reloaded.
         critique = { attempt: e.attempt, matches: e.matches, feedback: e.feedback, views: e.views };
         break;
-      case "tool_result":
+      case "tool_result": {
         result = { versionId: e.version_id, ok: e.ok, error: e.error };
+        // Only off a result that failed, so the box can say its build was not kept.
+        const found = e.ok ? null : findingsFrom(e.assembly_findings);
+        if (found) findings.push(found);
         break;
+      }
       case "clarification":
         clarification = e.questions;
         break;
@@ -282,7 +344,10 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
         break;
     }
   }
-  return { text, thinking, codegen, plan, steers, stageEvents, critique, result, clarification, stopReason, error, done };
+  return {
+    text, thinking, codegen, plan, steers, stageEvents, critique, result, findings, clarification,
+    stopReason, error, done,
+  };
 }
 
 export function toMessages(

@@ -81,6 +81,37 @@ function msg(over: Partial<MessageOut> = {}): MessageOut {
   };
 }
 
+// What the assembly check found on a refused build.
+const FAILURE = "part 1 and part 2 share 40 mm^3 of interior volume; they must not overlap";
+const UNCHECKED =
+  "assembly order: part 2 and part 3 touch where the check cannot follow their surfaces exactly";
+
+function toolCall(id: string, content: unknown): MessageOut["blocks"] {
+  return [
+    { kind: "tool_use", id, name: "generate_model", input: {} },
+    {
+      kind: "tool_result",
+      tool_use_id: id,
+      content: typeof content === "string" ? content : JSON.stringify(content),
+      is_error: true,
+    },
+  ];
+}
+
+function storedResult(content: unknown): MessageOut {
+  return msg({
+    id: 21,
+    role: "assistant",
+    status: "error",
+    version_id: null,
+    blocks: [...toolCall("t1", content), { kind: "text", text: "The parts did not fit." }],
+  });
+}
+
+function refused(failure: string) {
+  return { ok: false, assembly: { ok: false, failures: [failure], unchecked: [] } };
+}
+
 describe("messagesFromBlocks", () => {
   it("maps a user text block to a user message", () => {
     const msgs = messagesFromBlocks([
@@ -218,6 +249,83 @@ describe("messagesFromBlocks", () => {
       }),
     ]);
     expect(msgs).toEqual([]);
+  });
+
+  it("shows the assembly check's findings from a stored tool result, after the reply", () => {
+    const msgs = messagesFromBlocks([
+      storedResult({ ok: false, assembly: { ok: false, failures: [FAILURE], unchecked: [UNCHECKED] } }),
+    ]);
+    expect(msgs.map((m) => m.kind)).toEqual(["text", "assembly-findings"]);
+    expect(msgs[1]).toEqual({
+      kind: "assembly-findings",
+      id: "m21-a0",
+      failures: [FAILURE],
+      unchecked: [UNCHECKED],
+    });
+  });
+
+  it("shows nothing for a stored result the check accepted", () => {
+    const msgs = messagesFromBlocks([
+      storedResult({ ok: true, assembly: { ok: true, failures: [], unchecked: [] } }),
+    ]);
+    expect(msgs.map((m) => m.kind)).toEqual(["text"]);
+  });
+
+  it.each([
+    ["not JSON", "not json"],
+    ["no verdict", { ok: false }],
+    ["findings that are not a list", { ok: false, assembly: { failures: "one" } }],
+    ["JSON null", null],
+  ])("shows nothing for a stored result with %s", (_, content) => {
+    expect(messagesFromBlocks([storedResult(content)]).map((m) => m.kind)).toEqual(["text"]);
+  });
+
+  it("shows nothing for a stored result that was kept, whatever its verdict says", () => {
+    // The box says its build was not kept, so only a failed result is read.
+    const msgs = messagesFromBlocks([
+      storedResult({ ok: true, assembly: { ok: false, failures: [FAILURE], unchecked: [] } }),
+    ]);
+    expect(msgs.map((m) => m.kind)).toEqual(["text"]);
+  });
+
+  it("keeps only the findings that are words", () => {
+    const msgs = messagesFromBlocks([
+      storedResult({ ok: false, assembly: { failures: [FAILURE, 3, "  "], unchecked: [null] } }),
+    ]);
+    expect(msgs[1]).toMatchObject({ failures: [FAILURE], unchecked: [] });
+  });
+
+  it("shows each refused build's findings in a turn, in the order it made them", () => {
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 21,
+        role: "assistant",
+        status: "error",
+        version_id: null,
+        blocks: [...toolCall("t1", refused("first")), ...toolCall("t2", refused("second"))],
+      }),
+    ]);
+    expect(msgs).toEqual([
+      { kind: "assembly-findings", id: "m21-a0", failures: ["first"], unchecked: [] },
+      { kind: "assembly-findings", id: "m21-a1", failures: ["second"], unchecked: [] },
+    ]);
+  });
+
+  it("puts a refused build's findings between the kept build's card and its guide", () => {
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 22,
+        role: "assistant",
+        version_id: 13,
+        blocks: [
+          ...toolCall("t1", refused(FAILURE)),
+          ...toolCall("t2", { ok: true, assembly: { ok: true, failures: [], unchecked: [] } }),
+          { kind: "text", text: "Fixed it." },
+          { kind: "guide", input: { parts: ["base"], steps: ["Start with base."] } },
+        ],
+      }),
+    ]);
+    expect(msgs.map((m) => m.kind)).toEqual(["text", "result", "assembly-findings", "guide"]);
   });
 
   it("skips empty blocks and tool_use/tool_result blocks", () => {
@@ -383,6 +491,58 @@ describe("liveTurnFromEvents", () => {
     expect(turn.result).toMatchObject({ versionId: 12, ok: true });
     expect(turn.stopReason).toBe("end_turn");
     expect(turn.done).toBe(true);
+  });
+
+  it("collects the assembly check's findings from a refused tool result, not a kept one", () => {
+    const events: ChatEvent[] = [
+      {
+        event: "tool_result", version_id: null, ok: false, metrics: null, thumbnail: null,
+        tool: "generate_model", error: "assembly: ...",
+        assembly_findings: { failures: [FAILURE], unchecked: [UNCHECKED] },
+      },
+      {
+        event: "tool_result", version_id: 13, ok: true, metrics: null, thumbnail: null,
+        tool: "edit_model", error: null, assembly_findings: null,
+      },
+    ];
+    expect(liveTurnFromEvents(events).findings).toEqual([
+      { failures: [FAILURE], unchecked: [UNCHECKED] },
+    ]);
+  });
+
+  it("collects each refused tool result's findings, in order", () => {
+    const refusal = (failure: string): ChatEvent => ({
+      event: "tool_result", version_id: null, ok: false, metrics: null, thumbnail: null,
+      tool: "generate_model", error: "assembly: ...",
+      assembly_findings: { failures: [failure], unchecked: [] },
+    });
+    expect(liveTurnFromEvents([refusal("first"), refusal("second")]).findings).toEqual([
+      { failures: ["first"], unchecked: [] },
+      { failures: ["second"], unchecked: [] },
+    ]);
+  });
+
+  it("collects no findings off a tool result that was kept, whatever it carries", () => {
+    const events: ChatEvent[] = [
+      {
+        event: "tool_result", version_id: 13, ok: true, metrics: null, thumbnail: null,
+        tool: "edit_model", error: null, assembly_findings: { failures: [FAILURE], unchecked: [] },
+      },
+    ];
+    expect(liveTurnFromEvents(events).findings).toEqual([]);
+  });
+
+  it.each([
+    ["sends no field", {}],
+    ["sends null", { assembly_findings: null }],
+  ])("collects no findings off a refused tool result from a backend that %s", (_, extra) => {
+    const events: ChatEvent[] = [
+      {
+        event: "tool_result", version_id: null, ok: false, metrics: null, thumbnail: null,
+        tool: "generate_model", error: "assembly: ...", ...extra,
+      },
+    ];
+    expect(liveTurnFromEvents(events).findings).toEqual([]);
   });
 
   it("captures a clarification event's questions and ends the turn", () => {

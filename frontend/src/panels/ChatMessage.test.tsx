@@ -1,4 +1,4 @@
-import { fireEvent } from "@testing-library/react";
+import { fireEvent, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../api";
@@ -45,6 +45,7 @@ function liveTurn(over: Partial<LiveTurn> = {}): LiveTurn {
   return {
     text: "", thinking: "", codegen: "", plan: null, steers: [], stageEvents: [],
     critique: null, result: null, clarification: null, stopReason: null, error: null, done: false,
+    findings: [],
     ...over,
   };
 }
@@ -186,6 +187,60 @@ describe("ChatMessage", () => {
     expect(drawings[1].getAttribute("src")).toContain("/versions/42/artifacts/guide/1");
   });
 
+  it("shows a stored turn's assembly findings, failures apart from the undecided", () => {
+    const failure = "part 1 and part 2 share 40 mm^3 of interior volume";
+    const undecided = "assembly order: part 2 and part 3 touch where the check cannot follow";
+    const { getByRole } = renderMsg({
+      kind: "assembly-findings",
+      id: "m21-a0",
+      failures: [failure],
+      unchecked: [undecided],
+    });
+    const box = getByRole("group", { name: "Assembly check" });
+    within(box).getByText("On a build that was not kept.");
+    expect(within(box).getByRole("list", { name: "Not accepted" }).textContent).toBe(failure);
+    expect(within(box).getByRole("list", { name: "Could not be established" }).textContent).toBe(
+      undecided,
+    );
+  });
+
+  it("leaves out a heading whose list is empty", () => {
+    const { queryByText } = renderMsg({
+      kind: "assembly-findings",
+      id: "m21-a0",
+      failures: ["part 1 does not fit the build volume"],
+      unchecked: [],
+    });
+    expect(queryByText("Could not be established")).toBeNull();
+  });
+
+  it("shows each of a live turn's assembly findings, in order", () => {
+    const { getAllByRole } = renderMsg({
+      kind: "live-chat",
+      id: "live-chat",
+      turn: liveTurn({
+        findings: [
+          { failures: ["part 2 is trapped by part 1"], unchecked: [] },
+          { failures: ["part 3 does not fit the build volume"], unchecked: [] },
+        ],
+      }),
+    });
+    const boxes = getAllByRole("group", { name: "Assembly check" });
+    expect(boxes.map((b) => within(b).getByRole("list").textContent)).toEqual([
+      "part 2 is trapped by part 1",
+      "part 3 does not fit the build volume",
+    ]);
+  });
+
+  it("shows no assembly check on a live turn with no findings", () => {
+    const { queryByRole } = renderMsg({
+      kind: "live-chat",
+      id: "live-chat",
+      turn: liveTurn({ result: { versionId: 12, ok: true, error: null }, findings: [] }),
+    });
+    expect(queryByRole("group", { name: "Assembly check" })).toBeNull();
+  });
+
   it("renders an assembly guide that has no drawings", () => {
     // A build whose release headings went unmeasured still has an order worth
     // reading, so the steps must not be gated on there being pictures.
@@ -211,6 +266,7 @@ describe("ChatMessage", () => {
       stageEvents: [{ event: "start", intent: "a bracket", max_tries: 3 }],
       critique: null,
       result: null,
+      findings: [],
       clarification: null,
       stopReason: null,
       error: null,
@@ -237,6 +293,7 @@ describe("ChatMessage", () => {
       stageEvents: [],
       critique: null,
       result: null,
+      findings: [],
       clarification: null,
       stopReason: null,
       error: null,
@@ -258,6 +315,7 @@ describe("ChatMessage", () => {
       stageEvents: [],
       critique: null,
       result: null,
+      findings: [],
       clarification: null,
       stopReason: "end_turn",
       error: null,
