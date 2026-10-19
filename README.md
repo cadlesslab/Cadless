@@ -19,6 +19,21 @@ model and it tries again.
 The result is **parametric**, not a frozen mesh: every part keeps the code that
 built it, so you can change a dimension and rebuild instead of starting over.
 
+Ask for a design as several interlocking parts and Cadless checks that they go
+together — each inside the printer's build volume, no two sharing space — and
+measures an order in which they come apart. The viewport plays that order one
+joint at a time, apart and back together. Below, two designs from the bundled
+catalog rebuilt as assemblies: a piston assembly and a butt hinge.
+
+<p align="center">
+  <img src="docs/media/assembly-piston.gif" width="400" alt="Piston assembly in the viewport: the wrist pin slides out sideways, the piston lifts off the connecting rod, and both go back">
+  <img src="docs/media/assembly-hinge.gif" width="400" alt="Butt hinge in the viewport: the pin lifts out of the knuckles, one leaf slides away, and both go back">
+</p>
+
+Assembly output is off by default and needs a model key: set
+`CADLESS_ASSEMBLY_ENABLED=true`, then switch on **Assembly** in the chat
+composer for the turn.
+
 ---
 
 ## Quick start
@@ -145,6 +160,7 @@ Every variable is optional. See `.env.example` for the full list.
 | `CADLESS_CATALOG_ROOT` | `./catalog` | Where catalog items live |
 | `CADLESS_DATA_DIR` | `/data` | Database and saved settings |
 | `CADLESS_EXEC_TIMEOUT_SECS` | `30` | Per-execution wall-clock limit |
+| `CADLESS_ASSEMBLY_ENABLED` | `false` | Lets a turn ask for interlocking parts (the chat's **Assembly** toggle) |
 | `CADLESS_PROXY_PORT` | `8800` | Published port |
 
 ---
