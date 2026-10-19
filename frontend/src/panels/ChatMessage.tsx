@@ -1,10 +1,10 @@
 /** Renders one chat turn: a user bubble, an assistant result card, or the live
  * in-flight assistant turn (streaming staged progress). Reuses the version
  * thumbnail cache and the version actions from the History panel. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { attachmentUrl, guideFrameUrl } from "../api";
-import type { ClarificationQuestion, Version } from "../api";
+import type { AssemblyFindings, ClarificationQuestion, Version } from "../api";
 import { IconButton, CadlessIcon } from "../components";
 import { useStoreSelector } from "../state";
 import type { useApp } from "../useApp";
@@ -381,6 +381,43 @@ function AssemblyGuide({
   );
 }
 
+/** What the assembly check found wrong with a build that was not kept, in the
+ * check's own words.
+ *
+ * Kept apart from the reply so a reader sees what was measured rather than what
+ * a model chose to say about it, and with failures apart from what the check
+ * could not establish: keeping the two apart lets a reader tell "checked and
+ * wrong" from "could not be checked". A heading with nothing under it is left
+ * out, and each list is named by its heading. */
+function AssemblyCheck({ failures, unchecked }: AssemblyFindings) {
+  const id = useId();
+  const sections = [
+    { key: "failures", heading: "Not accepted", lines: failures },
+    { key: "unchecked", heading: "Could not be established", lines: unchecked },
+  ];
+  return (
+    // A group rather than a landmark: a turn can hold several, all with this name.
+    <div className="assembly-check" role="group" aria-label="Assembly check">
+      <p className="assembly-check-title">Assembly check</p>
+      <p className="assembly-check-note">On a build that was not kept.</p>
+      {sections
+        .filter((s) => s.lines.length > 0)
+        .map((s) => (
+          <div key={s.key}>
+            <p className="assembly-check-heading" id={`${id}-${s.key}`}>
+              {s.heading}
+            </p>
+            <ul className="assembly-check-list" aria-labelledby={`${id}-${s.key}`}>
+              {s.lines.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
+    </div>
+  );
+}
+
 /** The in-flight `POST /chat` turn: streamed markdown + nested StagedProgress +
  * the settled result card, plus a stopped/error note. */
 function LiveChat({
@@ -444,6 +481,9 @@ function LiveChat({
           app={app}
         />
       )}
+      {turn.findings.map((found, i) => (
+        <AssemblyCheck key={i} {...found} />
+      ))}
       {turn.clarification && turn.clarification.length > 0 && (
         <Clarification questions={turn.clarification} app={app} />
       )}
@@ -535,6 +575,8 @@ export function ChatMessage({
             steps={msg.steps}
             frames={msg.frames}
           />
+        ) : msg.kind === "assembly-findings" ? (
+          <AssemblyCheck failures={msg.failures} unchecked={msg.unchecked} />
         ) : msg.kind === "result" ? (
           <ResultByVersion
             versionId={msg.versionId}
