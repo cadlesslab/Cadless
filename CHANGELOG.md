@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/cadlesslab/Cadless/compare/backend-v1.2.0...backend-v1.2.1) (2026-10-19)
+
+
+### Fixes
+
+* move each part far enough to clear its joint when an assembly comes apart ([#50](https://github.com/cadlesslab/Cadless/issues/50)) ([fafa3e5](https://github.com/cadlesslab/Cadless/commit/fafa3e57be8ec38900184b01f4ba9ed4fad9d62f))
+
 ## [1.2.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.1.0...backend-v1.2.0) (2026-10-18)
 
 
