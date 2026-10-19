@@ -315,6 +315,7 @@ def _default_reparametrize(code: str, overrides: dict) -> dict:
         "step_path": res.step_path,
         "stl_path": res.stl_path,
         "obj_path": res.obj_path,
+        "parts": res.parts,
     }
 
 
@@ -353,7 +354,7 @@ def _route_live_events(on_progress, on_codegen, on_critique=None):
 
 
 def _result_summary(result: GenerationResult) -> dict:
-    """The result + metrics + thumbnail payload returned to the model as JSON.
+    """The result + metrics + thumbnail payload; the model is shown it as JSON.
 
     ``attempt_count`` and ``last_stage`` surface the internal repair
     loop's convergence state so the orchestrator can detect a repeated 'Nth
@@ -392,6 +393,9 @@ def _result_summary(result: GenerationResult) -> dict:
             "parameters": result.parameters,
         },
         "thumbnail": result.glb_path,  # GLB render is the thumbnail artifact
+        # For the chat layer to store with the version; kept out of the tool
+        # result the model reads, as ``forge`` is.
+        "parts": result.parts,
     }
 
 
@@ -428,6 +432,7 @@ def _reparam_summary(out: dict) -> dict:
             "parameters": out.get("parameters"),
         },
         "thumbnail": out.get("glb_path"),
+        "parts": out.get("parts"),
     }
 
 
@@ -1098,6 +1103,7 @@ class Agent:
                     # The assembly check's verdict on this build, so the chat can
                     # show its findings to the reader as well as to the model.
                     "assembly": payload.get("assembly"),
+                    "parts": payload.get("parts"),
                 }
                 # Forge race set: carry the losing candidates through so
                 # the chat layer can persist them as non-current candidate rows. It
@@ -1140,9 +1146,10 @@ class Agent:
     ) -> tuple[ContentBlock, dict]:
         """Execute one tool with progress streaming; return (block, summary payload).
 
-        The summary payload is the same ``_result_summary``/``_reparam_summary``
-        dict the model sees, so the SSE layer can map it to a ``tool_result`` UI
-        event and the router can persist a version from it.
+        The summary payload is the ``_result_summary``/``_reparam_summary`` dict
+        the model is shown less ``forge`` and ``parts``, so the SSE layer can map
+        it to a ``tool_result`` UI event and the router can persist a version
+        from it.
         """
         signature = f"{tu.name}:{json.dumps(tu.input or {}, sort_keys=True)}"
         if signature in seen_calls:
@@ -1261,7 +1268,8 @@ class Agent:
 
         ``on_progress`` (when given) receives the wrapped pipeline's progress
         events — the ``stage`` vocabulary the SSE layer nests inside
-        ``tool_progress``. The summary payload is the same dict the model sees.
+        ``tool_progress``. The model is shown the summary payload less ``forge``
+        and ``parts``.
         """
         name = tu.name
         args = tu.input or {}
@@ -1354,8 +1362,10 @@ class Agent:
             return block, {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         # The forge race set rides on the payload for the chat layer to
         # persist, but it holds non-JSON GenerationResult objects and is internal —
-        # keep it out of the tool_result content the model sees.
-        model_view = {k: v for k, v in payload.items() if k != "forge"}
+        # keep it out of the tool_result content the model sees. The part list
+        # rides the same way, for the chat layer to store with the version: one
+        # entry per part would otherwise grow every turn the model reads.
+        model_view = {k: v for k, v in payload.items() if k not in ("forge", "parts")}
         block = ContentBlock.of_tool_result(
             tool_use_id=tu.id or "",
             content=json.dumps(model_view),

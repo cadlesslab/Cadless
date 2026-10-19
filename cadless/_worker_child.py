@@ -4,7 +4,9 @@ Invoked as a subprocess by :mod:`cadless.worker`. Reads a code file, executes
 it, computes a geometry summary, optionally exports artifacts, and prints a single
 ``__VTRESULT__ {json}`` line to stdout. Kept dependency-light, and side-effect
 free apart from the optional export — which writes one file per solid and first
-removes what an earlier build left of that kind in the same directory.
+removes what an earlier build left of that kind in the same directory, plus one
+GLB and one STEP of the whole for a build of several parts, clearing an earlier
+build's pair by exact name.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
      [<check_assembly>] [<wall_secs>]
@@ -133,7 +135,9 @@ def _clear_previous(export_dir: str, kind: str) -> None:
     if not directory.is_dir():
         return
     for stale in [directory / f"model.{kind}", *directory.glob(f"model_p*.{kind}")]:
-        if stale.exists():
+        # ``exists`` follows a link, so a dangling one would be left for the
+        # export to write through.
+        if stale.is_symlink() or stale.exists():
             stale.unlink()
 
 
@@ -212,6 +216,8 @@ def main(argv: list[str]) -> int:
             )
             summary["assembly"] = asdict(measure_assembly(parts, time_budget=budget))
         if export_dir:
+            from pathlib import Path  # noqa: PLC0415 - lazy, as below
+
             from cadless import exporters  # lazy: only when export requested
 
             for kind, export in exporters.EXPORTERS.items():
@@ -228,6 +234,18 @@ def main(argv: list[str]) -> int:
                 # read off the directory rather than carried beside this: a
                 # second field would be a second place for the two to disagree.
                 summary[f"{kind}_path"] = paths[0]
+            # By exact name: ``assembly.json`` beside them is the pipeline's
+            # motion file, not this build's to clear.
+            for name in exporters.ASSEMBLY_FILES.values():
+                stale = Path(export_dir) / name
+                if stale.is_symlink() or stale.exists():
+                    stale.unlink()
+            # A whole file that cannot be written fails the build, as a part file
+            # would, rather than reporting a build of several parts with its
+            # whole files missing and nothing said.
+            if tree is not None and len(tree.parts) > 1:
+                for kind, path in exporters.export_assembly(tree, export_dir).items():
+                    summary[f"{kind}_path"] = path
     except Exception as exc:  # noqa: BLE001
         print(f"{SENTINEL} " + json.dumps(_error_payload(exc, code, prefix="post-process: ")))
         return 1

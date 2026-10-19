@@ -199,6 +199,7 @@ async def reparametrize_version(
             # own set_parameters tool already carries it; this is the panel route
             # reaching the same store method.
             built_as_assembly=version.built_as_assembly,
+            parts=res.parts,
         )
         if res.ok:
             await artifact_io.copy_and_register(store, new_version.id, staging)

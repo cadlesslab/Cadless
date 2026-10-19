@@ -143,6 +143,9 @@ class GenerationResult:
     #: "color"}`` per part in part order -- the worker result's ``parts``, carried
     #: through for the build this result returns.
     parts: list[dict] | None = None
+    #: The whole build as one GLB and one STEP: the worker result's, carried through.
+    assembly_glb_path: str | None = None
+    assembly_step_path: str | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -510,6 +513,8 @@ class Pipeline:
                     assembly=last_assembly,
                     guide=guide,
                     parts=res.parts,
+                    assembly_glb_path=res.assembly_glb_path,
+                    assembly_step_path=res.assembly_step_path,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)

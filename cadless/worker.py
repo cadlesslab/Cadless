@@ -63,6 +63,9 @@ class ExecResult:
     # as a tree, or the worker that ran it does not report parts -- which is not
     # the same as one part.
     parts: list[dict] | None = None
+    # The whole build as one file of each; ``None`` where the child wrote none.
+    assembly_glb_path: str | None = None
+    assembly_step_path: str | None = None
     repair_context: RepairContext | None = None
 
 
@@ -179,6 +182,8 @@ def run_code(
             obj_path=payload.get("obj_path"),
             assembly=AssemblyMeasurements.from_payload(payload.get("assembly")),
             parts=payload.get("parts"),
+            assembly_glb_path=payload.get("assembly_glb_path"),
+            assembly_step_path=payload.get("assembly_step_path"),
         )
 
 
@@ -233,6 +238,8 @@ def _run_remote(
         obj_path=data.get("obj_path"),
         assembly=AssemblyMeasurements.from_payload(data.get("assembly")),
         parts=data.get("parts"),
+        assembly_glb_path=data.get("assembly_glb_path"),
+        assembly_step_path=data.get("assembly_step_path"),
         repair_context=RepairContext(**rc) if isinstance(rc, dict) else None,
     )
 

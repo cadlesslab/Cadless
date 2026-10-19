@@ -14,12 +14,32 @@ the payload is plain data, and a reader of it never needs the kernel.
 
 from __future__ import annotations
 
+import itertools
+import json
 import logging
 import math
+import sys
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+#: The longest name a part or a group keeps. A label is whatever the build's code
+#: assigned, and every name is carried into the payload, the store and the
+#: whole-assembly files, so it is cut once, where it is read.
+NAME_MAX = 128
+
+#: Bounds on a part list that is kept: how many parts, how deep a path, and its
+#: size as JSON. The list arrives from a worker, which need be neither this build
+#: of the engine nor honest, and is read back on every read of the version.
+MAX_PARTS = 2000
+MAX_DEPTH = 16
+MAX_RECORD_BYTES = 256 * 1024
+
+
+def unnamed(index: int) -> str:
+    """The name of a part its build gave none: zero-based, as the part files are."""
+    return f"part{index}"
 
 
 @dataclass(frozen=True)
@@ -31,6 +51,9 @@ class PartNode:
     path: tuple[str, ...]  # labels of the labelled groups above it, root first
     color: tuple[float, float, float, float] | None
     solid: Any  # a build123d Solid with its placement baked in: identity location
+    # Which group each label of ``path`` names, by the order the walk met them:
+    # two sibling sub-assemblies may share a label and are still two groups.
+    group_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -61,11 +84,24 @@ class _Leaf:
     solid: Any  # the leaf's solid as an OCCT shape, placed as ``result.solids()`` places it
     name: str  # "" where the leaf has no label: the part's index names it
     path: tuple[str, ...]
+    group_ids: tuple[int, ...]
     color: tuple[float, float, float, float] | None
 
 
 def _children(node) -> list:
     return list(getattr(node, "children", ()) or ())
+
+
+def _label(node) -> str:
+    """A node's label as a name: text, at most ``NAME_MAX`` long, "" for none.
+
+    ``str`` rather than trusting the type: build123d keeps whatever the code
+    assigned, and a number there is a name the code meant, not a fault.
+    """
+    label = getattr(node, "label", None)
+    if label is None or label == "":
+        return ""
+    return str(label)[:NAME_MAX]
 
 
 def _rgba(color) -> tuple[float, float, float, float] | None:
@@ -154,24 +190,26 @@ def _leaves(shape) -> list[_Leaf]:
     names.
     """
     found: list[_Leaf] = []
+    group_ids = itertools.count()
 
-    def walk(node, wrapped, path: tuple[str, ...]) -> None:
+    def walk(node, wrapped, path: tuple[str, ...], ids: tuple[int, ...]) -> None:
         children = _children(node)
+        label = _label(node)
         if children:
-            inner = (*path, node.label) if node.label else path
+            inner, inner_ids = ((*path, label), (*ids, next(group_ids))) if label else (path, ids)
             subs = _sub_shapes(wrapped)
             if len(subs) == len(children) and _paired(children, subs):
                 for child, sub in zip(children, subs, strict=True):
-                    walk(child, sub, inner)
+                    walk(child, sub, inner, inner_ids)
                 return
-            found.extend(_Leaf(solid, "", inner, None) for solid in _solids_of(wrapped))
+            found.extend(_Leaf(solid, "", inner, inner_ids, None) for solid in _solids_of(wrapped))
             return
         solids = _solids_of(wrapped)
         for k, solid in enumerate(solids):
-            name = node.label if len(solids) == 1 else (f"{node.label}_{k}" if node.label else "")
-            found.append(_Leaf(solid, name, path, _rgba(node.color)))
+            name = label if len(solids) == 1 else (f"{label}_{k}"[:NAME_MAX] if label else "")
+            found.append(_Leaf(solid, name, path, ids, _rgba(node.color)))
 
-    walk(shape, shape.wrapped, ())
+    walk(shape, shape.wrapped, (), ())
     return found
 
 
@@ -182,9 +220,10 @@ def _groups(shape) -> list[tuple[str, tuple[str, ...]]]:
         children = _children(node)
         if not children:
             return
-        if node.label:
-            found.append((node.label, path))
-            path = (*path, node.label)
+        label = _label(node)
+        if label:
+            found.append((label, path))
+            path = (*path, label)
         for child in children:
             walk(child, path)
 
@@ -239,14 +278,69 @@ def build_tree(result, scale: float = 1.0) -> BuildTree:
         parts.append(
             PartNode(
                 index=index,
-                name=(leaf.name if leaf is not None and leaf.name else f"part{index}"),
+                name=(leaf.name if leaf is not None and leaf.name else unnamed(index)),
                 path=leaf.path if leaf is not None else (),
                 color=leaf.color if leaf is not None else None,
                 solid=_bake(solid, scale),
+                group_ids=leaf.group_ids if leaf is not None else (),
             )
         )
     return BuildTree(
-        name=result.label or "",
+        name=_label(result),
         parts=parts,
         groups=_groups(result) if lined_up else [],
     )
+
+
+def _is_name(value: Any) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= NAME_MAX
+
+
+def _is_component(value: Any) -> bool:
+    # Compared rather than passed to ``math.isfinite``: JSON hands an integer
+    # back as an ``int`` of any size, which that raises on. NaN fails both sides.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return -sys.float_info.max <= value <= sys.float_info.max
+
+
+def _is_colour(value: Any) -> bool:
+    return isinstance(value, list) and len(value) == 4 and all(map(_is_component, value))
+
+
+def parts_record(raw: Any) -> list[dict] | None:
+    """``raw`` as a part list to keep, or ``None`` where it is not one.
+
+    Each entry comes back with exactly ``index``, ``name``, ``path`` and
+    ``color``, the indices counting from zero in order; keys it does not know
+    are dropped, and an absent ``color`` is none. Anything else -- a name or
+    path missing or of the wrong type, an index out of place, a name or a path
+    label empty or past ``NAME_MAX``, a colour that is not four finite numbers,
+    a list past the bounds above -- refuses the whole list rather than the
+    entry, because a list with a hole in it numbers the parts after the hole
+    wrongly.
+    """
+    if not isinstance(raw, list) or len(raw) > MAX_PARTS:
+        return None
+    record: list[dict] = []
+    for position, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            return None
+        index, name, path, color = (entry.get(k) for k in ("index", "name", "path", "color"))
+        if type(index) is not int or index != position or not _is_name(name):
+            return None
+        if not isinstance(path, list) or len(path) > MAX_DEPTH or not all(map(_is_name, path)):
+            return None
+        if color is not None and not _is_colour(color):
+            return None
+        record.append(
+            {
+                "index": index,
+                "name": name,
+                "path": list(path),
+                "color": None if color is None else [float(c) for c in color],
+            }
+        )
+    if len(json.dumps(record)) > MAX_RECORD_BYTES:
+        return None
+    return record

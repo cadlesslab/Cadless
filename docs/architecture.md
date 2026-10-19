@@ -206,16 +206,21 @@ candidate judging, the identity seam and the image decisions are recorded under
    placement rather than around it, so the placement is written unturned; a
    one-part build, exported as the shape the code made, keeps any placement of
    its own and is handed over inside a holder that has none, which takes the
-   turn and leaves the placement beneath it. The API persists metadata and
-   serves the artifacts. Not every artifact kind is an export format, and the
-   two are declared in different places: a thumbnail, the drawings of an
-   assembly guide, and the motion an accepted assembly is played from are
-   things the engine made *about* a build rather than formats the build was
-   converted *to*.
-   They are served by media type alone and MUST stay out of the exporter
-   registry, whose per-part file naming they do not meet — a kind added there is
-   written and then never found, with nothing raising. A mirror test holds the
-   declarations of that vocabulary against each other.
+   turn and leaves the placement beneath it. A build of several parts also gets
+   the whole of itself as one GLB and one STEP, written from the same parts and
+   naming each part and labelled group. The API persists metadata — the part
+   names with the version, checked and bounded where they are stored, and
+   returned only where they number the files the version holds — and serves the
+   artifacts, copying a build's files only from the route's own staging
+   directory, never from a directory a worker's report names. Not every artifact kind is in the exporter registry, and the two
+   are declared in different places: a thumbnail, the drawings of an assembly
+   guide, and the motion an accepted assembly is played from are things the
+   engine made *about* a build rather than formats the build was converted
+   *to*; the whole-assembly files are exports, but one file per build rather
+   than one per part. They are served by media type alone and MUST stay out of
+   the exporter registry, whose per-part file naming they do not meet — a kind
+   added there is written and then never found, with nothing raising. A mirror
+   test holds the declarations of that vocabulary against each other.
 6. An execution failure can return to the provider as a repair prompt, and so can
    a post-build check that ran on a program which executed perfectly well: the
    render critique, the geometry assertions, and — on a turn that asked for an

@@ -111,7 +111,7 @@ def export_amf(result, out_dir: str, name: str = "model") -> str:
     return path
 ```
 
-Then add one entry to the registry at the bottom of `cadless/exporters.py`:
+Then add one entry to the `EXPORTERS` registry in `cadless/exporters.py`:
 
 ```python
 EXPORTERS = {"step": export_step, "glb": export_glb, "stl": export_stl,
@@ -159,8 +159,13 @@ out of the frontend `ArtifactKind`, and out of the export menu. Putting one in
 `exported_parts` finds nothing and the file is written, ignored, and never
 served — with nothing raising. Such a kind is registered by name in
 `copy_and_register` instead, which is what keeps the ordinal-by-write-order rule
-intact for it. `tests/test_artifact_kind_mirror.py` holds the declarations
-together and states which of them are containments rather than equalities.
+intact for it. `assembly_glb` and `assembly_step` (`exporters.ASSEMBLY_FILES`)
+are kept out the same way for the second reason alone: each is one file for the
+whole build, written by `export_assembly` beside the parts of a build that has
+several, so the per-part naming does not describe it either. They are served on
+fixed addresses of their own, and the numbered route refuses them.
+`tests/test_artifact_kind_mirror.py` holds the declarations together and states
+which of them are containments rather than equalities.
 
 Re-running refuses such a version, and `backend/routers/versions.py` has two
 separate guards for it because they catch different populations. The first reads
@@ -173,8 +178,9 @@ into a staging directory, never the version's own, which is what makes the secon
 guard safe to reach: it discards a rebuild rather than having already overwritten
 what the version was serving.
 
-Production code always goes through the registry; the individual `export_*`
-functions are called directly only by tests.
+Per-part formats always go through the registry; the individual `export_*`
+functions are called directly only by tests. `export_assembly`, which writes the
+whole-build files, is the one exporter production calls by name.
 
 If build123d has no writer for your format, follow `export_obj` — it is written
 by hand from `Shape.tessellate` rather than pulling in a dependency. Watch the

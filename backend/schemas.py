@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from cadless.assembly_tree import unnamed
+from cadless.exporters import EXPORTERS
 from cadless.llm.types import ContentBlock
 from cadless.store import Artifact, ChatMessage, Project, ScriptVersion
 
@@ -118,6 +120,29 @@ class MessageOut(BaseModel):
         )
 
 
+class PartOut(BaseModel):
+    # The part number its files are served under, and the name its build gave it.
+    index: int
+    name: str
+    path: list[str] = []
+    color: list[float] | None = None
+
+
+def _parts_of(v: ScriptVersion, artifacts: list[Artifact]) -> list[PartOut]:
+    """The parts the version holds files for, by the names its build gave them.
+
+    The list describes the files, so every index in it is one a part route
+    serves. A stored list that does not number exactly those parts -- none
+    stored, an empty one, or one for a version with no files -- gives way to
+    one unnamed part per part number, named as a build names a part it cannot
+    label.
+    """
+    numbers = sorted({a.part for a in artifacts if a.kind in EXPORTERS})
+    if v.parts is not None and [p["index"] for p in v.parts] == numbers:
+        return [PartOut(**p) for p in v.parts]
+    return [PartOut(index=i, name=unnamed(i)) for i in numbers]
+
+
 class VersionOut(BaseModel):
     id: int
     project_id: int
@@ -135,6 +160,7 @@ class VersionOut(BaseModel):
     # "rolled back to step N". Purely additive — null for legacy/no-plan rows.
     plan_step: int | None = None
     artifacts: list[ArtifactOut] = []
+    parts: list[PartOut] = []
 
     @classmethod
     def of(cls, v: ScriptVersion, artifacts: list[Artifact] | None = None) -> VersionOut:
@@ -152,4 +178,5 @@ class VersionOut(BaseModel):
             parent_version_id=v.parent_version_id,
             plan_step=v.plan_step,
             artifacts=[ArtifactOut.of(a) for a in (artifacts or [])],
+            parts=_parts_of(v, artifacts or []),
         )

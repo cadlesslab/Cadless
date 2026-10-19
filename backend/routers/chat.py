@@ -388,6 +388,8 @@ async def _persist_tool_version(
     plan_step: int | None = None,
     parent_version_id: int | None = None,
     built_as_assembly: bool = False,
+    *,
+    staging: Path,
 ) -> int | None:
     """Persist a ScriptVersion (+ artifacts) for a successful tool result.
 
@@ -402,6 +404,11 @@ async def _persist_tool_version(
     (the version current when the turn started, then the previous tool's version),
     so the version lineage stays connected across chat turns instead of every turn
     becoming a disconnected root.
+
+    ``staging`` is the directory this turn's builds export into. The files are
+    copied from the directory the payload's thumbnail is in only when that lies
+    inside it: the path is the worker's report, and a directory taken from it on
+    trust is any directory the report names, another owner's version included.
     """
     if not payload.get("ok"):
         return None
@@ -419,10 +426,11 @@ async def _persist_tool_version(
         parent_version_id=parent_version_id,
         plan_step=plan_step,
         built_as_assembly=built_as_assembly,
+        parts=payload.get("parts"),
     )
     thumb = payload.get("thumbnail")
-    src_dir = Path(thumb).parent if thumb else None
-    if src_dir and src_dir.exists():
+    src_dir = Path(thumb).parent.resolve() if thumb else None
+    if src_dir and src_dir.is_relative_to(staging.resolve()) and src_dir.exists():
         await artifact_io.copy_and_register(store, version.id, src_dir)
     await store.set_current_version(project_id, version.id)
     return version.id
@@ -627,6 +635,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 ev.data,
                                 plan_step,
                                 parent_version_id=chain_parent,
+                                staging=staging,
                                 # A fresh generation starts a new model, so it is
                                 # an assembly only if this turn asked; anything
                                 # else derives from the current one and keeps its

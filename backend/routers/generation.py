@@ -100,6 +100,7 @@ async def persist_generation(
             parameters=result.parameters,
             parent_version_id=parent_version_id,
             built_as_assembly=built_as_assembly,
+            parts=result.parts,
         )
         if result.ok:
             await artifact_io.copy_and_register(store, version.id, staging)

@@ -121,6 +121,7 @@ async def persist_losers(
             # but it is promotable, and a promoted row whose flag contradicts its
             # geometry would land the project back on a model that looks single.
             built_as_assembly=built_as_assembly,
+            parts=cand.parts,
         )
         persisted.append(loser_version)
     return persisted

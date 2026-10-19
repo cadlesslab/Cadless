@@ -9,6 +9,7 @@ from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 
 from backend.deps import get_store
+from cadless.exporters import ASSEMBLY_FILES
 from cadless.scoped_store import ScopedStore
 
 router = APIRouter(prefix="/versions/{version_id}/artifacts", tags=["artifacts"])
@@ -26,6 +27,10 @@ _MEDIA = {
     # rather than a file for the user, and for the same reason as the guide not
     # an exported format.
     "assembly": "application/json",
+    # The whole build as one file of each. One per build rather than one per
+    # part, so not in EXPORTERS either, and not served by part number below.
+    "assembly_glb": "model/gltf-binary",
+    "assembly_step": "application/step",
 }
 
 
@@ -33,7 +38,7 @@ _MEDIA = {
 #: mesh and reads an assembly's motion, and an ``<img>`` tag loads a thumbnail.
 #: Named here rather than left to each route, so every route serves a given
 #: kind the same way.
-_INLINE = {"glb", "thumbnail", "guide", "assembly"}
+_INLINE = {"glb", "thumbnail", "guide", "assembly", "assembly_glb"}
 
 #: The largest value SQLite stores as an integer. Anything above it raises out of
 #: the driver at bind time rather than answering, so it is refused at the edge.
@@ -94,6 +99,23 @@ async def get_assembly(version_id: int, store: ScopedStore = Depends(get_store))
     return await _download(version_id, "assembly", store)
 
 
+async def _whole(version_id: int, kind: str, suffix: str, store: ScopedStore) -> FileResponse:
+    path = await _resolve(store, version_id, kind)
+    return _serve(path, kind, f"model_{version_id}_assembly.{suffix}")
+
+
+@router.get("/assembly_glb")
+async def get_assembly_glb(version_id: int, store: ScopedStore = Depends(get_store)):
+    """The whole build as one GLB."""
+    return await _whole(version_id, "assembly_glb", "glb", store)
+
+
+@router.get("/assembly_step")
+async def get_assembly_step(version_id: int, store: ScopedStore = Depends(get_store)):
+    """The whole build as one STEP."""
+    return await _whole(version_id, "assembly_step", "step", store)
+
+
 @router.get("/{kind}/{part}")
 async def get_part(
     version_id: int,
@@ -109,9 +131,14 @@ async def get_part(
     them, ``kind`` arrives from the URL. Reading its media type straight out of
     the table would raise on a typo instead of answering, which turns a mistyped
     address into a server error, so an unknown kind is refused as not found.
+
+    The whole-build files are refused here too: a version has one of each or
+    none, and served by number they would download under a part file's name.
     """
     if kind not in _MEDIA:
         raise HTTPException(status_code=404, detail=f"unknown artifact kind {kind!r}")
+    if kind in ASSEMBLY_FILES:
+        raise HTTPException(status_code=404, detail=f"{kind} has no numbered parts")
     artifact = await store.get_artifact_part(version_id, kind, part)
     if not artifact or not os.path.exists(artifact.path):
         raise HTTPException(status_code=404, detail=f"{kind} part {part} not found")

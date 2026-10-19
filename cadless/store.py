@@ -32,6 +32,7 @@ from typing import Any
 import aiosqlite
 from pydantic import ValidationError
 
+from cadless.assembly_tree import parts_record
 from cadless.config import Settings, settings
 from cadless.identity import (
     LOCAL,
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS script_versions (
     candidate_of_version_id INTEGER,
     plan_step INTEGER,
     built_as_assembly INTEGER,
+    parts_json TEXT,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -229,6 +231,9 @@ class ScriptVersion:
     # owns now, so storing them here would let a version built for a larger bed
     # keep being edited against it after they changed machines.
     built_as_assembly: bool = False
+    # The build's parts as its tree named them, one ``{"index", "name", "path",
+    # "color"}`` per part in part order; ``None`` where none was recorded.
+    parts: list[dict] | None = None
 
 
 @dataclass
@@ -550,6 +555,9 @@ class Store:
             # take the same branch deliberately, because guessing True would start
             # measuring edits to models that never asked to be assemblies.
             await db.execute("ALTER TABLE script_versions ADD COLUMN built_as_assembly INTEGER")
+        if "parts_json" not in cols:
+            # Left NULL rather than backfilled: the names are the build's to give.
+            await db.execute("ALTER TABLE script_versions ADD COLUMN parts_json TEXT")
         msg_rows = await (await db.execute("PRAGMA table_info(chat_messages)")).fetchall()
         msg_cols = {r["name"] for r in msg_rows}
         if msg_cols and "blocks_json" not in msg_cols:
@@ -916,6 +924,7 @@ class Store:
             source.bbox,
             parameters=dict(source.parameters),
             built_as_assembly=source.built_as_assembly,
+            parts=source.parts,
             owner=mine,
         )
         await self.set_current_version(project.id, seed.id, owner=mine)
@@ -989,6 +998,7 @@ class Store:
                 parent_version_id=id_map.get(v.parent_version_id),
                 plan_step=v.plan_step,
                 built_as_assembly=v.built_as_assembly,
+                parts=v.parts,
                 owner=mine,
             )
             id_map[v.id] = new_v.id
@@ -1036,6 +1046,7 @@ class Store:
         candidate_of_version_id: int | None = None,
         plan_step: int | None = None,
         built_as_assembly: bool = False,
+        parts: list[dict] | None = None,
         *,
         owner: Owner = UNSCOPED,
     ) -> ScriptVersion:
@@ -1051,14 +1062,22 @@ class Store:
         bbox_json = json.dumps(list(bbox)) if bbox else None
         params = parameters or {}
         params_json = json.dumps(params) if params else None
+        # Kept only in the shape a reader can take, and within its bounds: the
+        # list comes from a worker, and a row that fails to read fails every
+        # read of the project's versions. Refused out loud: its parts are then
+        # named by number, and nothing else says why.
+        record = parts_record(parts)
+        if parts is not None and record is None:
+            logger.warning("a version's part list was refused; its parts are named by number")
+        parts = record
         pred, owner_params = _owner_sql(owner, write=True)
         async with self._connect() as db:
             cur = await db.execute(
                 "INSERT INTO script_versions"
                 "(project_id,prompt,code,ok,error,volume,bbox_json,parameters_json,"
                 "parent_version_id,candidate_of_version_id,plan_step,built_as_assembly,"
-                "created_at)"
-                " SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?"
+                "parts_json,created_at)"
+                " SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?"
                 f" WHERE EXISTS (SELECT 1 FROM projects WHERE id=? AND {pred})",
                 (
                     project_id,
@@ -1073,6 +1092,7 @@ class Store:
                     candidate_of_version_id,
                     plan_step,
                     int(built_as_assembly),
+                    json.dumps(parts) if parts is not None else None,
                     ts,
                     project_id,
                     *owner_params,
@@ -1097,6 +1117,7 @@ class Store:
                 candidate_of_version_id,
                 plan_step,
                 built_as_assembly,
+                parts,
             )
 
     async def list_versions(
@@ -1836,6 +1857,7 @@ def _version(r) -> ScriptVersion:
         r["candidate_of_version_id"],
         r["plan_step"],
         bool(r["built_as_assembly"]),
+        parts_record(json.loads(r["parts_json"])) if r["parts_json"] else None,
     )
 
 

@@ -36,6 +36,16 @@ export interface ArtifactRef {
 
 export type ParamValue = number | string | boolean;
 
+/** One part of a version, as the code that built it named it. `index` is the
+ * part ordinal its files are fetched by; `path` the labels of the groups above
+ * it; `color` null where the code gave none. */
+export interface PartRef {
+  index: number;
+  name: string;
+  path: string[];
+  color: [number, number, number, number] | null;
+}
+
 export interface Version {
   id: number;
   project_id: number;
@@ -52,6 +62,9 @@ export interface Version {
    * written under, or null when no plan was active. Lets the UI narrate "step N". */
   plan_step: number | null;
   artifacts: ArtifactRef[];
+  /** The version's parts by name. Optional because a server older than part
+   * names sends none. */
+  parts?: PartRef[];
 }
 
 export interface GenerateResponse {
@@ -995,6 +1008,18 @@ export const getAssemblyMotion = (versionId: number) =>
  * as one. */
 export const hasAssemblyMotion = (version: Version): boolean =>
   version.artifacts.some((a) => (a.kind as string) === ASSEMBLY_KIND);
+
+/** The whole build as one file of each. Not {@link ArtifactKind}s: an
+ * ArtifactKind is a per-part format fetched by part number, and each of these
+ * is one file for the whole build, fetched at an address of its own. */
+export type WholeAssemblyKind = "assembly_glb" | "assembly_step";
+
+export const wholeAssemblyUrl = (versionId: number, kind: WholeAssemblyKind) =>
+  `${BASE}/versions/${versionId}/artifacts/${kind}`;
+
+/** Whether a version carries the whole-assembly file of a kind. */
+export const hasWholeAssembly = (version: Version, kind: WholeAssemblyKind): boolean =>
+  version.artifacts.some((a) => (a.kind as string) === kind);
 
 // ---- SSE generation stream ----
 export interface StreamHandle {

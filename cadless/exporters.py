@@ -7,9 +7,10 @@
 
 STEP/GLB/STL wrap the OCCT writers via build123d; build123d has no OBJ writer,
 so ``export_obj`` is written directly from ``Shape.tessellate`` (a trivial
-``v``/``f`` text format — no extra dependency). All exporters share the signature
-``(result, out_dir, name="model") -> path`` so ``EXPORTERS`` can drive them
-uniformly.
+``v``/``f`` text format — no extra dependency). Every member of ``EXPORTERS``
+shares the signature ``(result, out_dir, name="model") -> path`` so the registry
+can drive them uniformly; ``export_assembly``, one file of each for the whole
+build, is outside it.
 """
 
 from __future__ import annotations
@@ -207,3 +208,86 @@ EXPORTERS = {
     "stl": export_stl,
     "obj": export_obj,
 }
+
+#: The whole-assembly files, keyed by artifact kind. Not in ``EXPORTERS``: each
+#: is one file for the whole build, not one per part, so the per-part naming
+#: above does not describe it.
+ASSEMBLY_FILES = {"assembly_glb": "assembly.glb", "assembly_step": "assembly.step"}
+
+
+def _assembly_compound(tree):
+    """The tree's parts as one Compound: each named and coloured, under its groups.
+
+    Built from the parts rather than from the build's own ``result``, because
+    the parts are already what the part files hold -- placed, scaled and in
+    part order -- and a file of the whole should agree with the files of its
+    pieces. Each part is a deep copy, so putting it in a compound neither moves
+    nor freezes the tree's own.
+
+    Groups are told apart by ``group_ids`` rather than by label: two sibling
+    sub-assemblies may share one, and keyed by label they would merge into one
+    node and pull the second one's parts ahead of what lies between them. A
+    group's parts are consecutive in part order, so each group is one run.
+    """
+    from build123d import Color, Compound
+
+    def named(part):
+        solid = copy.deepcopy(part.solid)
+        solid.label = part.name
+        if part.color is not None:
+            solid.color = Color(*part.color)
+        return solid
+
+    def gather(members: list, depth: int) -> list:
+        children: list = []
+        start = 0
+        while start < len(members):
+            part = members[start]
+            if len(part.group_ids) == depth:
+                children.append(named(part))
+                start += 1
+                continue
+            group = part.group_ids[depth]
+            end = start
+            while (
+                end < len(members)
+                and len(members[end].group_ids) > depth
+                and members[end].group_ids[depth] == group
+            ):
+                end += 1
+            inner = gather(members[start:end], depth + 1)
+            children.append(Compound(children=inner, label=part.path[depth]))
+            start = end
+        return children
+
+    parts = list(tree.parts)
+    # The root is a group of its own when the build labelled its result: the
+    # first group the walk meets, holding every part.
+    if tree.name and parts and all(part.group_ids[:1] == (0,) for part in parts):
+        return Compound(children=gather(parts, 1), label=tree.name)
+    return Compound(children=gather(parts, 0), label=tree.name)
+
+
+def export_assembly(tree, out_dir: str) -> dict[str, str]:
+    """Write the whole build as one GLB and one STEP; return ``{kind: path}``.
+
+    The GLB carries a node per part and per labelled group, named as the tree
+    names them, and a material per colour; the STEP names its products the same
+    way. Written at the GLB deflection every part file is written at.
+
+    Raises when the GLB is not written: build123d reports that by its return
+    value, and a path returned for a file that is not there would be served as
+    one that is.
+    """
+    from build123d import export_gltf
+    from build123d import export_step as _export_step
+
+    compound = _assembly_compound(tree)
+    os.makedirs(out_dir, exist_ok=True)
+    paths = {kind: os.path.join(out_dir, name) for kind, name in ASSEMBLY_FILES.items()}
+    if not export_gltf(
+        compound, paths["assembly_glb"], binary=True, linear_deflection=settings.gltf_deflection
+    ):
+        raise RuntimeError(f"build123d did not write {paths['assembly_glb']}")
+    _export_step(compound, paths["assembly_step"])
+    return paths
