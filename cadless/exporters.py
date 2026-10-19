@@ -100,11 +100,10 @@ def _location_as_a_child(shape):
     onto the right of the exported shape's own Location. That is the right
     side for the geometry and the wrong side for the Location: a shape that sits
     where it is because of its Location keeps its geometry turned but has its
-    placement written unturned, so it is drawn somewhere else -- and the parts
-    of a split build each carry one, so they are drawn apart from each other.
-    Inside a compound with no Location of its own, the turn lands on the
-    compound and the shape's Location is composed beneath it, which is the
-    order a viewer needs.
+    placement written unturned, so it is drawn somewhere else -- as a one-part
+    build placed with ``Pos(...) * shape`` would be. Inside a compound with no
+    Location of its own, the turn lands on the compound and the shape's
+    Location is composed beneath it, which is the order a viewer needs.
 
     A shape already at the identity is handed back as it is. Its file is then
     the one it has always been, and a level of nesting added to every build

@@ -81,21 +81,37 @@ def _part_count(result) -> int | None:
         return None
 
 
-def _parts_to_export(shape) -> list:
-    """The pieces to write as separate files: the solids, or the shape itself.
+def _read_tree(result, scale: float):
+    """The build read as a tree of named parts, or ``None`` if its solids cannot be read.
 
-    A one-solid build exports the shape it was handed rather than the solid pulled
+    A shape whose solids cannot be read is exported whole for the same reason
+    ``_part_count`` returns ``None`` there: the fallback is the old behaviour,
+    not a failure. Nothing after that is caught here: a part that cannot be
+    baked or scaled fails the build as a post-process error, as a result that
+    cannot be scaled does.
+    """
+    from cadless.assembly_tree import build_tree  # noqa: PLC0415 - lazy, as the exporters are
+
+    try:
+        result.solids()
+    except Exception:  # noqa: BLE001 - unsplittable shapes export whole, as before
+        return None
+    return build_tree(result, scale)
+
+
+def _parts_to_export(shape, tree) -> list:
+    """The pieces to write as separate files: the tree's parts, or the shape itself.
+
+    A one-part build exports the shape it was handed rather than the part read
     back out of it. They are the same geometry, and passing the original through
     keeps a single-part export identical to what it was before parts existed --
-    which is what the upgrade path rests on. A shape that cannot be split is
-    exported whole for the same reason ``_part_count`` returns ``None`` there:
-    the fallback is the old behaviour, not a failure.
+    which is what the upgrade path rests on. A build of several parts exports
+    each part with its placement already in its geometry, so no reader of a
+    part's file has a Location to compose.
     """
-    try:
-        solids = shape.solids()
-    except Exception:  # noqa: BLE001 - unsplittable shapes export whole, as before
+    if tree is None or len(tree.parts) < 2:
         return [shape]
-    return list(solids) if len(solids) > 1 else [shape]
+    return [part.solid for part in tree.parts]
 
 
 def _clear_previous(export_dir: str, kind: str) -> None:
@@ -173,9 +189,16 @@ def main(argv: list[str]) -> int:
         # Scaled once, above both readers. The export writes millimetres and the
         # assembly checks are against a build volume in millimetres, so measuring
         # the unscaled result would compare authoring units to millimetres and
-        # never refuse a model authored in metres.
-        shape = result if export_scale == 1.0 else result.scale(export_scale)
-        parts = _parts_to_export(shape)
+        # never refuse a model authored in metres. About the world origin: left to
+        # itself, ``scale`` anchors at the shape's own Location, which would leave
+        # a placed result's position in authoring units while its parts -- baked
+        # first, then scaled -- move to millimetres.
+        shape = result if export_scale == 1.0 else result.scale(export_scale, about=(0, 0, 0))
+        # Each part is scaled after its placement is baked in, the way the whole
+        # shape above is: about the world origin.
+        tree = _read_tree(result, export_scale)
+        summary["parts"] = tree.as_payload()["parts"] if tree is not None else None
+        parts = _parts_to_export(shape, tree)
         if check_assembly and len(parts) > 1:
             from dataclasses import asdict  # noqa: PLC0415 - lazy, as the exporters are
 

@@ -196,12 +196,17 @@ candidate judging, the identity seam and the image decisions are recorded under
    resource-limited subprocess fallback.
 5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
    the shared data volume — one file per kind, or one per solid where the build
-   produced several. Each part's GLB draws the part where it sits in the
-   assembled model: the glTF writer applies its Z-up-to-Y-up turn inside a
-   shape's own placement rather than around it, so the placement is written
-   unturned; a part that keeps a placement of its own — as a solid split out of
-   a result does — is handed over inside a holder that has none, which takes
-   the turn and leaves the placement beneath it. The API persists metadata and
+   produced several. It reads the result as the tree build123d makes
+   (`cadless/assembly_tree.py`): the parts are the result's solids in the order
+   `solids()` returns them, which is the order every part file is numbered by,
+   and each is named from the label of the leaf it came from, or `part<i>`.
+   A build of several parts writes each part with its placement baked into its
+   geometry. Each part's GLB draws the part where it sits in the assembled
+   model: the glTF writer applies its Z-up-to-Y-up turn inside a shape's own
+   placement rather than around it, so the placement is written unturned; a
+   one-part build, exported as the shape the code made, keeps any placement of
+   its own and is handed over inside a holder that has none, which takes the
+   turn and leaves the placement beneath it. The API persists metadata and
    serves the artifacts. Not every artifact kind is an export format, and the
    two are declared in different places: a thumbnail, the drawings of an
    assembly guide, and the motion an accepted assembly is played from are

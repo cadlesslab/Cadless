@@ -139,6 +139,10 @@ class GenerationResult:
     #: addresses by index. Zero is ordinary rather than a failure: a build whose
     #: headings were never measured gets its written steps and no pictures.
     guide: dict | None = None
+    #: The build's parts as its tree names them, one ``{"index", "name", "path",
+    #: "color"}`` per part in part order -- the worker result's ``parts``, carried
+    #: through for the build this result returns.
+    parts: list[dict] | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -505,6 +509,7 @@ class Pipeline:
                     critique=last_critique,
                     assembly=last_assembly,
                     guide=guide,
+                    parts=res.parts,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)

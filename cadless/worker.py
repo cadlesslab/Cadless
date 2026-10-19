@@ -58,6 +58,11 @@ class ExecResult:
     # when the caller asked for an assembly. ``None`` means nobody asked, which
     # is not the same as "asked and found nothing wrong".
     assembly: AssemblyMeasurements | None = None
+    # One entry per part, in part order: ``{"index", "name", "path", "color"}``,
+    # as the build's tree names them. ``None`` where the build could not be read
+    # as a tree, or the worker that ran it does not report parts -- which is not
+    # the same as one part.
+    parts: list[dict] | None = None
     repair_context: RepairContext | None = None
 
 
@@ -173,6 +178,7 @@ def run_code(
             stl_path=payload.get("stl_path"),
             obj_path=payload.get("obj_path"),
             assembly=AssemblyMeasurements.from_payload(payload.get("assembly")),
+            parts=payload.get("parts"),
         )
 
 
@@ -226,6 +232,7 @@ def _run_remote(
         stl_path=data.get("stl_path"),
         obj_path=data.get("obj_path"),
         assembly=AssemblyMeasurements.from_payload(data.get("assembly")),
+        parts=data.get("parts"),
         repair_context=RepairContext(**rc) if isinstance(rc, dict) else None,
     )
 
