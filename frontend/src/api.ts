@@ -949,12 +949,16 @@ export const guideFrameUrl = (versionId: number, frame: number) =>
  * in the order the parts go together. `releases` has one slot per part ordinal,
  * not per position in the order: a unit heading in the CAD frame (mm, Z-up)
  * along which that part was released, or `[]` for the part left standing.
- * `explode_fraction` is how far a part travels, as a share of the assembled
- * model's largest dimension, and `stretch` — again one slot per part ordinal —
- * how many of those travels the part goes out once all are apart. */
+ * `travel`, one slot per part ordinal, is how far each part goes out, as a
+ * share of the assembled model's largest dimension, measured so each part
+ * clears what it was engaged with; a file written before that was measured has
+ * none. `explode_fraction` and `stretch` are the spacing such a file plays by:
+ * a share of the same dimension, and per part ordinal how many of those the
+ * part goes out once all are apart. */
 export interface AssemblyMotion {
   order: number[];
   releases: number[][];
+  travel?: number[];
   stretch: number[];
   explode_fraction: number;
 }

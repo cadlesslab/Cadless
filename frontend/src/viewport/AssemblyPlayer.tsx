@@ -14,9 +14,9 @@ import * as THREE from "three";
 import {
   advancePlay,
   apartBox,
+  largestDimension,
   partOffsets,
   takeApartOrder,
-  travelFor,
   type Motion,
 } from "./assemblyMotion";
 import { viewportStore } from "./viewportStore";
@@ -38,7 +38,7 @@ export function AssemblyPlayer({
   onApartBox: (box: THREE.Box3 | null) => void;
 }) {
   const bounds = useBounds();
-  const travel = useRef(0);
+  const size = useRef(0);
   const apart = useRef<THREE.Box3 | null>(null);
   const framed = useRef(false);
   const wait = useRef(0);
@@ -55,9 +55,9 @@ export function AssemblyPlayer({
 
     // Where nothing can say, motion is not reduced: the player still runs.
     reduced.current = globalThis.matchMedia?.(REDUCED_MOTION).matches ?? false;
-    travel.current = travelFor(assembled, motion.explodeFraction);
+    size.current = largestDimension(assembled);
     const steps = takeApartOrder(motion).length;
-    apart.current = apartBox(groups, partOffsets(motion, steps, travel.current));
+    apart.current = apartBox(groups, partOffsets(motion, steps, size.current));
     framed.current = false;
     onApartBox(apart.current);
 
@@ -66,7 +66,7 @@ export function AssemblyPlayer({
     // -- a section chosen while the parts are apart sends them home and is
     // measured right away -- has to find them where the position says.
     const place = () => {
-      const offsets = partOffsets(motion, viewportStore.get().assemblyPosition, travel.current);
+      const offsets = partOffsets(motion, viewportStore.get().assemblyPosition, size.current);
       groups.forEach((group, part) => {
         const offset = offsets[part];
         if (offset) group.position.set(offset[0], offset[1], offset[2]);

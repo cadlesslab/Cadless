@@ -37,12 +37,12 @@ from cadless.catalog.thumbnail import (
 #: of the exploded one. One place to change if part counts grow.
 STEP_FRAME_MIN_PARTS = 4
 
-#: How far a part is pushed out, as a fraction of the whole assembly's largest
-#: dimension.
+#: The gap a part is pushed out by once it has cleared its joint, as a fraction
+#: of the whole assembly's largest dimension.
 #:
-#: Far enough to open a gap at every joint, and no further: the frames of a set
+#: Far enough to show a gap at every joint, and no further: the frames of a set
 #: share one scale, so a part sent a long way shrinks every other frame to make
-#: room for it.
+#: room for it. A part with nothing engaged travels exactly this far.
 EXPLODE_FRACTION = 0.35
 
 #: Below this a heading is not a direction. A zero-length vector cannot be
@@ -53,17 +53,23 @@ _HEADING_EPSILON = 1e-9
 #: How close two unit headings have to be to count as one direction.
 _SAME_HEADING_TOLERANCE = 1e-6
 
+#: Beyond this share of a unit heading along X, the heading is too near X for X
+#: to serve as the second axis its cross product needs; Y is used instead. Any
+#: value well short of one keeps the cross product far from zero length.
+_NEAR_X = 0.9
+
 #: The file a checked assembly's motion is written to, beside its exports.
 MOTION_FILE = "assembly.json"
 
 
-def motion_payload(order: Sequence[int], releases: Sequence[Sequence[float]]) -> dict:
+def motion_payload(
+    order: Sequence[int],
+    releases: Sequence[Sequence[float]],
+    part_meshes: Sequence[np.ndarray] | None = None,
+) -> dict:
     """The measured order and headings, in the form the viewport plays them from.
 
-    The same facts the frames are drawn from, handed on rather than drawn, and
-    carrying the fraction the frames are drawn with: a player that moves each
-    part by it moves it as far as a frame does, from one number rather than a
-    second copy of it that could drift.
+    The same facts the frames are drawn from, handed on rather than drawn.
 
     ``releases`` comes back with one entry per part, filed under the part's own
     index rather than its place in the order. A part with no heading -- the one
@@ -71,11 +77,20 @@ def motion_payload(order: Sequence[int], releases: Sequence[Sequence[float]]) ->
     record headings -- gets an empty entry, which means "stays put", rather than
     a direction nobody measured or a list that runs short of the parts.
 
-    ``stretch`` is, per part index, how many of those travels the part goes out
-    once every part is apart: the spacing of an exploded view with every part
-    moving, which is what a frame showing them all is drawn with, handed on for
-    the same reason as the fraction, so the player does not decide again which
-    headings match.
+    ``travel`` is, per part index, how far the part goes out, as a fraction of
+    the assembled model's largest dimension: the distances the frames are drawn
+    with, so a player that moves each part by them moves it as far as a frame
+    does. A fraction rather than millimetres because the viewport draws in other
+    units and measures the model it draws. It is there only when ``part_meshes``
+    are the parts the order names, because a travel measured from other meshes
+    would move these parts by another model's joints, and only when they have a
+    finite size to be a fraction of.
+
+    ``explode_fraction`` and ``stretch`` are the spacing a file without ``travel``
+    is played by, by a viewer that predates it and by any viewer when nothing was
+    measured: per part index, ``stretch`` counts how many of those fractions the
+    part goes out once every part is apart, so pieces leaving the same way do not
+    stop at the same place.
     """
     headings = [
         [float(c) for c in releases[index]]
@@ -83,13 +98,20 @@ def motion_payload(order: Sequence[int], releases: Sequence[Sequence[float]]) ->
         else []
         for index in range(len(order))
     ]
-    everything = set(order)
-    return {
+    payload = {
         "order": [int(index) for index in order],
         "releases": headings,
-        "stretch": [_stretch(index, order, headings, everything) for index in range(len(order))],
+        "stretch": [_stretch(index, order, headings) for index in range(len(order))],
         "explode_fraction": EXPLODE_FRACTION,
     }
+    if part_meshes is not None and sorted(order) == list(range(len(part_meshes))):
+        # A vertex out at infinity, or no vertex at all, leaves nothing a travel
+        # could be a fraction of; the file keeps the spacing alone.
+        size = _largest_dimension(part_meshes)
+        if np.isfinite(size) and size > 0:
+            travels = _travels(part_meshes, order, headings)
+            payload["travel"] = [travel / size for travel in travels]
+    return payload
 
 
 def compose(meshes: Sequence[np.ndarray], offsets: Sequence[Sequence[float]]) -> np.ndarray:
@@ -128,13 +150,13 @@ def guide_frames(
         # a false exploded view. The written steps still stand on the order.
         return []
 
-    distance = _explode_distance(part_meshes)
+    travels = _travels(part_meshes, order, releases)
     basis = isometric_basis()
     plans = _frame_plans(count, order)
     drawings = [
         compose(
             [part_meshes[index] for index in shown],
-            _frame_offsets(shown, order, releases, moving, distance),
+            _frame_offsets(shown, releases, moving, travels),
         )
         for _, shown, moving in plans
     ]
@@ -166,39 +188,106 @@ def _frame_plans(count: int, order: Sequence[int]) -> list[tuple[str, list[int],
 
 def _frame_offsets(
     shown: Sequence[int],
-    order: Sequence[int],
     releases: Sequence[Sequence[float]],
     moving: set[int],
-    distance: float,
+    travels: Sequence[float],
 ) -> list[list[float]]:
     """Where each shown part sits in one frame, in the order they are shown.
 
-    A moved part goes one ``distance`` out, plus one more for every other part
-    moved in the same frame that comes off after it along the same heading --
-    one placed before it in the order. Sent the same distance, parts released
-    the same way would be drawn joined again, so a beam split end to end into
-    three would look like two. Parts leaving in different directions part
-    company anyway, and a part moved alone has nothing to keep clear of.
+    A moved part goes its own travel out along its heading, and every other part
+    stays where it belongs. One travel per part whichever frame it is drawn in:
+    measured to clear the parts placed before it both at rest and fully out, it
+    clears them in a step frame, where they are at rest, and in the exploded one,
+    where they are out.
     """
-    return [
-        _offset(index, releases, moving, distance * _stretch(index, order, releases, moving))
-        for index in shown
-    ]
+    return [_offset(index, releases, moving, travels[index]) for index in shown]
 
 
-def _stretch(
-    index: int, order: Sequence[int], releases: Sequence[Sequence[float]], moving: set[int]
-) -> int:
-    """How many distances a moved part goes out; see :func:`_frame_offsets`."""
-    if index not in moving or index >= len(releases) or not _is_heading(releases[index]):
+def _travels(
+    part_meshes: Sequence[np.ndarray],
+    order: Sequence[int],
+    releases: Sequence[Sequence[float]],
+) -> list[float]:
+    """How far each part goes out, in the meshes' own units, per part index.
+
+    The length a part is engaged along its heading, plus the spacing every part
+    gets. Engaged means: how far it has to go before it is beyond every part
+    placed before it that lies across its path -- beyond where that part rests,
+    and beyond where that part ends up once it is out too. Both, because the
+    part placed before it comes off after it, along a heading of its own; its
+    whole way out lies between those two places, so a part beyond both along
+    its own heading never meets it. Cleared from only one of them, a pin could
+    end inside or against a sleeve that went out the same way, or still be in a
+    sleeve that went the other way.
+
+    Across its path means the two overlap seen down the heading. A part off to
+    one side is in no way of it, and counting it would send the part out past
+    something it never had to clear. The boxes seen down the heading are coarse
+    in the safe direction: they can only find more in the way. The reach along
+    it is read off mesh vertices, and a curved surface's furthest point can fall
+    between them, so it can come out short by the tessellation's deviation; the
+    spacing on top, there for the gap a reader sees, is far wider than that.
+
+    Walked in the order the parts go together, so each part placed before this
+    one has its travel by the time it is needed. A part with no heading stays
+    put and travels nothing, and a part with no triangles has nothing to clear
+    and is in no one's way.
+    """
+    points = [np.asarray(mesh, dtype=np.float64).reshape(-1, 3) for mesh in part_meshes]
+    spacing = _largest_dimension(part_meshes) * EXPLODE_FRACTION
+    travels = [0.0] * len(points)
+    for position, index in enumerate(order):
+        if index >= len(releases) or not _is_heading(releases[index]):
+            continue
+        heading = _unit(releases[index])
+        across = _across(heading)
+        mine = points[index]
+        reach = 0.0
+        for other in order[:position]:
+            theirs = points[other]
+            if not len(mine) or not len(theirs):
+                continue
+            if travels[other]:
+                out = theirs + _unit(releases[other]) * travels[other]
+                theirs = np.concatenate([theirs, out])
+            if _apart_seen_along(mine @ across.T, theirs @ across.T):
+                continue
+            reach = max(reach, float((theirs @ heading).max() - (mine @ heading).min()))
+        travels[index] = reach + spacing
+    return travels
+
+
+def _across(heading: np.ndarray) -> np.ndarray:
+    """Two unit directions square to ``heading`` and to each other, as rows."""
+    helper = np.array([0.0, 1.0, 0.0]) if abs(heading[0]) > _NEAR_X else np.array([1.0, 0.0, 0.0])
+    first = np.cross(heading, helper)
+    first /= float(np.linalg.norm(first))
+    return np.stack([first, np.cross(heading, first)])
+
+
+def _apart_seen_along(mine: np.ndarray, theirs: np.ndarray) -> bool:
+    """Whether two point sets, projected on a plane, have boxes that do not meet.
+
+    Boxes that touch count as meeting, so a part exactly as wide as the gap it
+    slides through is still treated as in the way.
+    """
+    return bool(
+        np.any(mine.max(axis=0) < theirs.min(axis=0))
+        or np.any(theirs.max(axis=0) < mine.min(axis=0))
+    )
+
+
+def _stretch(index: int, order: Sequence[int], releases: Sequence[Sequence[float]]) -> int:
+    """How many spacings a part goes out with every part apart, for a file
+    played without a measured travel; see :func:`motion_payload`."""
+    if index not in order or index >= len(releases) or not _is_heading(releases[index]):
         return 1
     heading = _unit(releases[index])
     placed_before = list(order)[: list(order).index(index)]
     return 1 + sum(
         1
         for other in placed_before
-        if other in moving
-        and other < len(releases)
+        if other < len(releases)
         and _is_heading(releases[other])
         and float(np.dot(_unit(releases[other]), heading)) >= 1 - _SAME_HEADING_TOLERANCE
     )
@@ -227,6 +316,8 @@ def _is_heading(heading: Sequence[float]) -> bool:
     return len(heading) == 3 and float(np.linalg.norm(np.asarray(heading))) > _HEADING_EPSILON
 
 
-def _explode_distance(meshes: Sequence[np.ndarray]) -> float:
+def _largest_dimension(meshes: Sequence[np.ndarray]) -> float:
     points = np.concatenate([np.asarray(mesh, dtype=np.float64).reshape(-1, 3) for mesh in meshes])
-    return float((points.max(axis=0) - points.min(axis=0)).max()) * EXPLODE_FRACTION
+    if not len(points):
+        return 0.0
+    return float((points.max(axis=0) - points.min(axis=0)).max())

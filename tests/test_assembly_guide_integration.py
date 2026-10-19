@@ -81,6 +81,12 @@ def test_a_real_two_part_build_writes_the_motion_the_viewport_plays(tmp_path):
     # Every part once, and a heading slot for each of them.
     assert sorted(motion["order"]) == [0, 1]
     assert len(motion["releases"]) == 2
+    # Each part's travel, measured from the files the build exported: the part
+    # that moves goes at least the spacing, and the one left standing nowhere.
+    moving = [part for part in range(2) if motion["releases"][part]]
+    assert len(motion["travel"]) == 2
+    assert all(motion["travel"][part] >= motion["explode_fraction"] - 1e-9 for part in moving)
+    assert all(motion["travel"][part] == 0 for part in range(2) if part not in moving)
 
 
 def test_a_real_four_part_build_is_drawn_a_step_at_a_time(tmp_path):

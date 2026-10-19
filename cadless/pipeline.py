@@ -748,13 +748,20 @@ class Pipeline:
         make the whole file unreadable: an infinite one fails the write the same
         way, and a NaN one is no direction at all, so its part is written as the
         one that stays put.
+
+        How far each part travels is measured from the exported meshes, read
+        here rather than handed over by the drawing so that the motion stands
+        whether or not anything is drawn. Parts that cannot be read cost the
+        travel and not the motion: the file is written without it, and the
+        viewport spaces the parts the way it did before travel was measured.
         """
         if not export_dir:
             return
         try:
             from cadless.assembly_guide import MOTION_FILE, motion_payload  # noqa: PLC0415
 
-            text = json.dumps(motion_payload(order, releases), allow_nan=False)
+            meshes = _exported_meshes(Path(export_dir))
+            text = json.dumps(motion_payload(order, releases, meshes), allow_nan=False)
             (Path(export_dir) / MOTION_FILE).write_text(text, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001 — the motion, never the build
             logger.warning("assembly motion: could not write: %s", exc, exc_info=True)
@@ -932,6 +939,23 @@ def _clear_assembly_motion(export_dir) -> None:
         (Path(export_dir) / MOTION_FILE).unlink(missing_ok=True)
     except OSError as exc:
         logger.warning("assembly motion: could not clear %s: %s", MOTION_FILE, exc)
+
+
+def _exported_meshes(directory: Path) -> list | None:
+    """The exported parts as triangle arrays, or ``None`` where one cannot be read.
+
+    Through the shared reader, for the reason the guide's drawing gives: a
+    second spelling of the part names drifts from the writer's quietly. One part
+    that cannot be read is logged and costs the whole travel, since a travel
+    measured without a part would clear everything but that part.
+    """
+    try:
+        from cadless.catalog.thumbnail import load_mesh  # noqa: PLC0415
+
+        return [load_mesh(part) for part in exported_parts(directory, "stl")]
+    except Exception as exc:  # noqa: BLE001 — the travel, never the motion
+        logger.warning("assembly motion: parts unreadable, writing no travel: %s", exc)
+        return None
 
 
 def _emit(on_progress, event: dict) -> None:

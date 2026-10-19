@@ -95,34 +95,224 @@ _CHAIN_ORDER = [2, 1, 0]
 _CHAIN_RELEASES = [[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], []]
 
 
-def test_an_exploded_chain_opens_every_joint_rather_than_rejoining_its_pieces():
-    # Sent the same distance, the two pieces that leave the same way would be
-    # drawn joined again, and three pieces would look like two.
-    offsets = _frame_offsets(_CHAIN_ORDER, _CHAIN_ORDER, _CHAIN_RELEASES, {0, 1, 2}, 10.0)
-    assert offsets == [[0.0, 0.0, 0.0], [-10.0, 0.0, 0.0], [-20.0, 0.0, 0.0]]
-
-
-def test_parts_leaving_in_different_directions_each_go_one_distance():
+def test_parts_leaving_in_different_directions_each_go_the_usual_spacing():
     # A lid lifted off and a side panel slid out already part company; pushing
     # the later one further would only shrink every frame to fit it.
-    order, releases = [0, 1, 2], [[], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]
-    offsets = _frame_offsets(order, order, releases, {0, 1, 2}, 10.0)
-    assert offsets == [[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [10.0, 0.0, 0.0]]
+    from cadless.assembly_guide import motion_payload
+
+    meshes = [
+        _block((0, 0, 0), (10, 10, 10)),
+        _block((0, 0, 10), (10, 10, 12)),
+        _block((10, 0, 0), (12, 10, 10)),
+    ]
+    payload = motion_payload([0, 1, 2], [[], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], meshes)
+    assert payload["travel"] == pytest.approx([0.0, 0.35, 0.35])
 
 
-def test_the_motion_says_how_far_each_part_goes_once_all_are_apart():
-    # The viewport spaces the parts by these counts rather than deciding again
-    # which headings match, so its chain opens exactly as the exploded frame's.
+def test_the_motion_still_says_how_many_spacings_each_part_goes():
+    # A viewer that predates the measured travel spaces the parts by these
+    # counts, so a new file still plays there, joints rejoined as before.
     from cadless.assembly_guide import motion_payload
 
     assert motion_payload(_CHAIN_ORDER, _CHAIN_RELEASES)["stretch"] == [2, 1, 1]
 
 
-def test_a_part_moved_alone_in_its_frame_goes_one_distance():
-    # A step frame moves only the part going on; the pieces placed before it are
-    # at rest, so there is nothing to keep clear of.
-    offsets = _frame_offsets(_CHAIN_ORDER, _CHAIN_ORDER, _CHAIN_RELEASES, {0}, 10.0)
-    assert offsets[2] == [-10.0, 0.0, 0.0]
+def test_a_part_moved_alone_in_its_frame_goes_its_own_travel():
+    # A step frame moves only the part going on; the pieces placed before it stay
+    # where they are, and so does a piece with travel that is not moving.
+    offsets = _frame_offsets(_CHAIN_ORDER, _CHAIN_RELEASES, {0}, [21.0, 10.5, 0.0])
+    assert offsets == [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-21.0, 0.0, 0.0]]
+
+
+# --- how far each part goes, measured -------------------------------------
+
+
+def _block(lo, hi) -> np.ndarray:
+    """An axis-aligned box from two corners, as a triangle array."""
+    lo, hi = np.asarray(lo, dtype=np.float64), np.asarray(hi, dtype=np.float64)
+    return _cube(side=1.0) * (hi - lo) + (lo + hi) / 2.0
+
+
+def _travel_mm(payload: dict, part: int, meshes) -> float:
+    points = np.concatenate([m.reshape(-1, 3) for m in meshes])
+    return payload["travel"][part] * float((points.max(axis=0) - points.min(axis=0)).max())
+
+
+def test_a_pin_is_moved_clear_of_the_bore_it_runs_through():
+    # A pin longer than the spacing sits deeper in its joint than a fixed share
+    # of the model would take it, and the next part to leave then passes through
+    # it on screen. Moved by its own measure, it comes all the way out.
+    from cadless.assembly_guide import motion_payload
+
+    block = _block((-20, -20, 0), (20, 20, 10))
+    pin = _block((-2, -2, -30), (2, 2, 60))
+    meshes = [block, pin]
+    payload = motion_payload([0, 1], [[], [0.0, 0.0, 1.0]], meshes)
+    assert -30 + _travel_mm(payload, 1, meshes) > 10
+
+
+def test_the_deepest_part_in_the_way_decides_how_far_a_part_goes():
+    # The pin runs through a tall block placed first and a thin plate slid on
+    # from below after it. The block is what holds the pin longest, so it is the
+    # block the pin has to clear, whichever part was placed last.
+    from cadless.assembly_guide import motion_payload
+
+    block = _block((-20, -20, 0), (20, 20, 50))
+    plate = _block((-20, -20, -5), (20, 20, 0))
+    pin = _block((-2, -2, -10), (2, 2, 60))
+    meshes = [block, plate, pin]
+    payload = motion_payload([0, 1, 2], [[], [0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], meshes)
+    assert -10 + _travel_mm(payload, 2, meshes) > 50
+
+
+def test_a_measured_chain_keeps_every_joint_open():
+    # The beam split end to end again, now measured: the piece that leaves first
+    # has to stop beyond where the next one stops, or the two sit joined.
+    from cadless.assembly_guide import motion_payload
+
+    meshes = [
+        _block((-20, 0, 0), (-10, 5, 5)),
+        _block((-10, 0, 0), (0, 5, 5)),
+        _block((0, 0, 0), (10, 5, 5)),
+    ]
+    payload = motion_payload(_CHAIN_ORDER, _CHAIN_RELEASES, meshes)
+    assert payload["travel"] == pytest.approx([0.7, 0.35, 0.0])
+
+
+def test_a_part_off_the_path_does_not_push_a_part_further():
+    # A tall post beside the lid is in no way of it. Counting it would send the
+    # lid out past the top of the post for no joint a reader can see.
+    from cadless.assembly_guide import motion_payload
+
+    meshes = [
+        _block((0, 0, 0), (10, 10, 10)),
+        _block((30, 0, 0), (35, 10, 50)),
+        _block((0, 0, 10), (10, 10, 12)),
+    ]
+    payload = motion_payload([0, 1, 2], [[], [], [0.0, 0.0, 1.0]], meshes)
+    assert payload["travel"] == pytest.approx([0.0, 0.0, 0.35])
+
+
+def test_a_part_clears_where_an_earlier_part_ended_up_not_only_where_it_was():
+    # The pin goes on last and comes off first, but the sleeve it runs through
+    # was slid in along the same axis before it, seated a little into the base.
+    # Cleared only from the sleeve at rest, the pin would stop inside the sleeve
+    # once the sleeve is out too.
+    from cadless.assembly_guide import motion_payload
+
+    base = _block((-20, -20, -5), (20, 20, 0))
+    sleeve = _block((-4, -4, -3), (4, 4, 20))
+    pin = _block((-1, -1, 0), (1, 1, 30))
+    meshes = [base, sleeve, pin]
+    payload = motion_payload([0, 1, 2], [[], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]], meshes)
+    sleeve_top = 20 + _travel_mm(payload, 1, meshes)
+    assert 0 + _travel_mm(payload, 2, meshes) > sleeve_top
+
+
+def test_a_part_clears_where_an_earlier_part_rests_when_that_part_leaves_the_other_way():
+    # The sleeve comes off downward after the pin comes off upward. While the pin
+    # leaves, the sleeve is still where it rests; cleared only from where the
+    # sleeve ends up below, the pin would stop inside it.
+    from cadless.assembly_guide import motion_payload
+
+    bracket = _block((-20, -20, 0), (20, 20, 10))
+    sleeve = _block((-4, -4, -30), (4, 4, 70))
+    pin = _block((-1, -1, -40), (1, 1, 80))
+    meshes = [bracket, sleeve, pin]
+    payload = motion_payload([0, 1, 2], [[], [0.0, 0.0, -1.0], [0.0, 0.0, 1.0]], meshes)
+    assert -40 + _travel_mm(payload, 2, meshes) > 70
+
+
+def test_a_part_touching_another_from_the_side_counts_it_as_in_the_way():
+    # Seen down the heading, the lid's edge meets the wall's face. Touching is
+    # taken as meeting, so the lid is sent out past the top of the wall rather
+    # than trusted to slide up its face.
+    from cadless.assembly_guide import motion_payload
+
+    meshes = [
+        _block((0, 0, 0), (12, 10, 2)),
+        _block((10, 0, 0), (12, 10, 20)),
+        _block((0, 0, 2), (10, 10, 4)),
+    ]
+    payload = motion_payload([0, 1, 2], [[], [], [0.0, 0.0, 1.0]], meshes)
+    assert 2 + _travel_mm(payload, 2, meshes) > 20
+
+
+def test_a_part_off_the_path_of_a_part_leaving_along_x_does_not_push_it():
+    # The same off-the-path rule for a heading along X, which needs a second
+    # axis other than X to see the parts down it.
+    from cadless.assembly_guide import motion_payload
+
+    meshes = [
+        _block((0, 0, 0), (10, 10, 10)),
+        _block((0, 30, 0), (50, 35, 10)),
+        _block((10, 0, 0), (12, 10, 10)),
+    ]
+    payload = motion_payload([0, 1, 2], [[], [], [1.0, 0.0, 0.0]], meshes)
+    assert payload["travel"] == pytest.approx([0.0, 0.0, 0.35])
+
+
+def test_no_travel_is_written_when_the_meshes_do_not_match_the_parts():
+    # The viewport falls back to the spacing alone; a travel measured from a
+    # different set of meshes would move these parts by another model's joints.
+    from cadless.assembly_guide import motion_payload
+
+    payload = motion_payload([0, 1], [[], [0.0, 0.0, 1.0]], [_cube()])
+    assert "travel" not in payload
+    assert "travel" not in motion_payload([0, 1], [[], [0.0, 0.0, 1.0]])
+
+
+def test_the_guide_draws_a_pin_out_by_the_travel_the_viewport_plays(monkeypatch):
+    # The guide's drawing and the viewport agree on how far apart "apart" is:
+    # the exploded frame puts the pin where the motion file sends it.
+    from cadless import assembly_guide
+
+    block = _block((-20, -20, 0), (20, 20, 10))
+    pin = _block((-2, -2, -30), (2, 2, 60))
+    order, releases = [0, 1], [[], [0.0, 0.0, 1.0]]
+    drawn = []
+    real = assembly_guide.compose
+
+    def recording(meshes, offsets):
+        drawn.append(offsets)
+        return real(meshes, offsets)
+
+    monkeypatch.setattr(assembly_guide, "compose", recording)
+    assert len(assembly_guide.guide_frames([block, pin], order, releases)) == 1
+    played = _travel_mm(
+        assembly_guide.motion_payload(order, releases, [block, pin]), 1, [block, pin]
+    )
+    assert drawn[0][1] == pytest.approx([0.0, 0.0, played])
+
+
+def test_a_part_with_no_triangles_is_in_no_ones_way():
+    # An exported part that reads back empty has nothing to clear and blocks
+    # nothing, so the other parts travel as they would without it, in the
+    # motion and in the guide's drawing alike.
+    from cadless.assembly_guide import motion_payload
+
+    block = _block((-20, -20, 0), (20, 20, 10))
+    pin = _block((-2, -2, -30), (2, 2, 60))
+    empty = np.empty((0, 3, 3))
+    releases = [[], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]
+    with_empty = motion_payload([0, 1, 2], releases, [block, empty, pin])["travel"]
+    without = motion_payload([0, 1], [[], [0.0, 0.0, 1.0]], [block, pin])["travel"]
+    assert with_empty[2] == pytest.approx(without[1])
+    assert len(guide_frames([block, empty, pin], [0, 1, 2], releases)) == 1
+
+
+def test_no_travel_is_written_when_the_meshes_measure_nothing():
+    # No vertex at all, or one out at infinity, leaves nothing a travel could be
+    # a fraction of. The order and headings still stand.
+    from cadless.assembly_guide import motion_payload
+
+    empty = np.empty((0, 3, 3))
+    payload = motion_payload([0, 1], [[], [0.0, 0.0, 1.0]], [empty, empty])
+    assert payload["order"] == [0, 1]
+    assert "travel" not in payload
+    far = _cube()
+    far[0, 0] = [np.inf, 0.0, 0.0]
+    assert "travel" not in motion_payload([0, 1], [[], [0.0, 0.0, 1.0]], [_cube(), far])
 
 
 # --- how many frames ------------------------------------------------------

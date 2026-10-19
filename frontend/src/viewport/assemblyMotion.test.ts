@@ -9,8 +9,8 @@ import {
   SECONDS_PER_JOINT,
   partOffsets,
   sceneHeading,
+  largestDimension,
   takeApartOrder,
-  travelFor,
   type Vec3,
 } from "./assemblyMotion";
 
@@ -23,11 +23,13 @@ function expectVec(actual: readonly number[] | null | undefined, expected: Vec3)
 
 // A base that stays put, a part slid on from above (released along CAD +Z), and
 // a part slid on from the side (released along CAD +X), placed in that order.
+// Written before travel was measured: every part goes the spacing, half the
+// model's size.
 const PAYLOAD = {
   order: [0, 1, 2],
   releases: [[], [0, 0, 1], [1, 0, 0]],
   stretch: [1, 1, 1],
-  explode_fraction: 0.35,
+  explode_fraction: 0.5,
 };
 const PARTS = [0, 1, 2];
 
@@ -64,33 +66,34 @@ describe("takeApartOrder", () => {
 });
 
 describe("partOffsets", () => {
-  const TRAVEL = 10;
+  // The model's largest dimension in the scene: the spacing of a half is 10.
+  const SIZE = 20;
 
   it("leaves every part where it is when assembled", () => {
-    partOffsets(shelf(), 0, TRAVEL).forEach((o) => expectVec(o, [0, 0, 0]));
+    partOffsets(shelf(), 0, SIZE).forEach((o) => expectVec(o, [0, 0, 0]));
   });
 
   it("moves only the first joint's part, halfway, at 0.5", () => {
-    const at = partOffsets(shelf(), 0.5, TRAVEL);
+    const at = partOffsets(shelf(), 0.5, SIZE);
     expectVec(at[2], [5, 0, 0]);
     expectVec(at[1], [0, 0, 0]);
   });
 
   it("has the first part fully out before the next one starts", () => {
-    const at = partOffsets(shelf(), 1, TRAVEL);
+    const at = partOffsets(shelf(), 1, SIZE);
     expectVec(at[2], [10, 0, 0]);
     expectVec(at[1], [0, 0, 0]);
   });
 
   it("has every part that moves out at the last joint, each along its own heading", () => {
-    const at = partOffsets(shelf(), 2, TRAVEL);
+    const at = partOffsets(shelf(), 2, SIZE);
     expectVec(at[2], [10, 0, 0]);
     // released along CAD +Z, so it leaves upward in the scene
     expectVec(at[1], [0, 10, 0]);
   });
 
   it("never moves the part with no heading", () => {
-    for (const p of [0, 0.5, 1, 1.5, 2]) expectVec(partOffsets(shelf(), p, TRAVEL)[0], [0, 0, 0]);
+    for (const p of [0, 0.5, 1, 1.5, 2]) expectVec(partOffsets(shelf(), p, SIZE)[0], [0, 0, 0]);
   });
 
   describe("a beam split into a chain that comes apart along one heading", () => {
@@ -102,28 +105,38 @@ describe("partOffsets", () => {
     // part 1 once both are out.
     const chain = () =>
       parseMotion(
-        { order: [2, 1, 0], releases: [[-1, 0, 0], [-1, 0, 0], []], stretch: [2, 1, 1], explode_fraction: 0.35 },
+        { order: [2, 1, 0], releases: [[-1, 0, 0], [-1, 0, 0], []], stretch: [2, 1, 1], explode_fraction: 0.5 },
         PARTS,
       )!;
 
     it("leaves a gap between every part once all are out", () => {
-      const at = partOffsets(chain(), 2, TRAVEL);
+      const at = partOffsets(chain(), 2, SIZE);
       expectVec(at[1], [-10, 0, 0]);
       expectVec(at[0], [-20, 0, 0]);
     });
 
     it("sends the first part off the whole way during its own joint", () => {
-      const at = partOffsets(chain(), 1, TRAVEL);
+      const at = partOffsets(chain(), 1, SIZE);
       expectVec(at[0], [-20, 0, 0]);
       expectVec(at[1], [0, 0, 0]);
     });
   });
 
   it("spaces the parts by the stretch the engine sent, not by a rule of its own", () => {
-    // Different headings, yet a stretch of two: the engine's count is what the
-    // guide's frame was drawn with, so it is the one the viewport follows.
+    // Different headings, yet a stretch of two: a file without a measured
+    // travel is played by the engine's count, not one worked out here.
     const motion = parseMotion({ ...PAYLOAD, stretch: [1, 1, 2] }, PARTS)!;
-    expectVec(partOffsets(motion, 2, TRAVEL)[2], [20, 0, 0]);
+    expectVec(partOffsets(motion, 2, SIZE)[2], [20, 0, 0]);
+  });
+
+  it("moves each part by the travel the engine measured, when it sent one", () => {
+    // A pin engaged deeper than the spacing goes out far enough to clear its
+    // bore: the measured travel replaces the spacing, part by part.
+    const motion = parseMotion({ ...PAYLOAD, travel: [0, 1.25, 0.75] }, PARTS)!;
+    const at = partOffsets(motion, 2, SIZE);
+    expectVec(at[1], [0, 25, 0]);
+    expectVec(at[2], [15, 0, 0]);
+    expectVec(at[0], [0, 0, 0]);
   });
 });
 
@@ -131,7 +144,22 @@ describe("parseMotion", () => {
   it("keeps a motion that names every drawn part", () => {
     const motion = shelf();
     expect(motion.order).toEqual([0, 1, 2]);
-    expect(motion.explodeFraction).toBe(0.35);
+  });
+
+  it("takes each part's travel from the spacing when none was measured", () => {
+    expect(parseMotion({ ...PAYLOAD, stretch: [1, 1, 2] }, PARTS)!.travel).toEqual([0.5, 0.5, 1]);
+  });
+
+  it("takes each part's measured travel as sent", () => {
+    expect(parseMotion({ ...PAYLOAD, travel: [0, 1.25, 0.5] }, PARTS)!.travel).toEqual([0, 1.25, 0.5]);
+  });
+
+  it("accepts a travel as far as the part count of diagonals and spacings", () => {
+    // The viewport's cap: a diagonal and a spacing for each part, which the
+    // engine's furthest stays under.
+    const furthest = PARTS.length * 2.732;
+    expect(parseMotion({ ...PAYLOAD, travel: [0, furthest, 0.5] }, PARTS)).not.toBeNull();
+    expect(parseMotion({ ...PAYLOAD, travel: [0, furthest + 0.01, 0.5] }, PARTS)).toBeNull();
   });
 
   // Every case is a payload that cannot be played over what is drawn: moving
@@ -181,6 +209,15 @@ describe("parseMotion", () => {
     ["an infinite fraction", { ...PAYLOAD, explode_fraction: Infinity }, PARTS],
     // Finite, but times any travel it overflows, and the offsets come out NaN.
     ["a fraction above one", { ...PAYLOAD, explode_fraction: 1e308 }, PARTS],
+    // A measured travel that cannot be played: each one is either not a
+    // distance, or moves a part that has to move by nothing at all.
+    ["a travel that is not a list", { ...PAYLOAD, travel: 1 }, PARTS],
+    ["a travel slot missing", { ...PAYLOAD, travel: [0, 1] }, PARTS],
+    ["a travel written as a string", { ...PAYLOAD, travel: [0, "1", 1] }, PARTS],
+    ["a negative travel", { ...PAYLOAD, travel: [0, -1, 1] }, PARTS],
+    ["an infinite travel", { ...PAYLOAD, travel: [0, Infinity, 1] }, PARTS],
+    ["a travel beyond any the engine writes", { ...PAYLOAD, travel: [0, 1e308, 1] }, PARTS],
+    ["no travel for a part that moves", { ...PAYLOAD, travel: [0, 0, 1] }, PARTS],
   ])("refuses %s", (_, raw, parts) => {
     expect(parseMotion(raw, parts)).toBeNull();
   });
@@ -270,13 +307,13 @@ describe("apartBox", () => {
   });
 });
 
-describe("travelFor", () => {
-  it("is the fraction of the model's largest dimension", () => {
+describe("largestDimension", () => {
+  it("is the model's largest dimension", () => {
     const box = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(2, 4, 1));
-    expect(travelFor(box, 0.35)).toBeCloseTo(1.4, 9);
+    expect(largestDimension(box)).toBeCloseTo(4, 9);
   });
 
   it("is nothing for a model with no extent", () => {
-    expect(travelFor(new THREE.Box3(), 0.35)).toBe(0);
+    expect(largestDimension(new THREE.Box3())).toBe(0);
   });
 });
