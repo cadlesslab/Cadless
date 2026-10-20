@@ -127,7 +127,8 @@ async def _resolve_refinement(
 
     The second value travels with the code because a refinement produces a new
     version of the same model: dropping it there would leave a model still in
-    pieces with no record of why, and the next edit would be told to fuse it.
+    pieces with no record of why, and the next edit would lose the bed and the
+    clearance it was split for.
     """
     prior = await store.get_version(prior_version_id)
     if not prior or prior.project_id != project_id:

@@ -30,7 +30,10 @@ catalog rebuilt as assemblies: a piston assembly and a butt hinge.
   <img src="docs/media/assembly-hinge.gif" width="400" alt="Butt hinge in the viewport: the pin lifts out of the knuckles, one leaf slides away, and both go back">
 </p>
 
-Assembly output is off by default and needs a model key: set
+Every model of several parts the generator builds is checked for parts that
+share space. Asking for a part split to fit your printer's bed — held to the
+bed, to joints that mate, and to an order the pieces go together in — is off by
+default and needs a model key: set
 `CADLESS_ASSEMBLY_ENABLED=true`, then switch on **Assembly** in the chat
 composer for the turn.
 
@@ -160,7 +163,7 @@ Every variable is optional. See `.env.example` for the full list.
 | `CADLESS_CATALOG_ROOT` | `./catalog` | Where catalog items live |
 | `CADLESS_DATA_DIR` | `/data` | Database and saved settings |
 | `CADLESS_EXEC_TIMEOUT_SECS` | `30` | Per-execution wall-clock limit |
-| `CADLESS_ASSEMBLY_ENABLED` | `false` | Lets a turn ask for interlocking parts (the chat's **Assembly** toggle) |
+| `CADLESS_ASSEMBLY_ENABLED` | `false` | Lets a turn ask for a part split into interlocking pieces that fit the printer's bed (the chat's **Assembly** toggle) |
 | `CADLESS_PROXY_PORT` | `8800` | Published port |
 
 ---

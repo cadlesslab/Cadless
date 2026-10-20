@@ -58,8 +58,8 @@ services:
       # Forge-mode global kill-switch. Default OFF: a turn must opt in AND
       # this must be on for best-of-N racing to run (both-true gate).
       CADLESS_FORGE_ENABLED: ${CADLESS_FORGE_ENABLED:-false}
-      # Assembly-output kill-switch, default OFF like forge's above: while it
-      # is off, no turn is built as an assembly.
+      # Bed-split kill-switch, default OFF like forge's above: while it is off,
+      # no turn can ask for a part split to fit the printer's bed.
       CADLESS_ASSEMBLY_ENABLED: ${CADLESS_ASSEMBLY_ENABLED:-false}
       # A default rather than a pass-through: an empty value would fail the
       # api's number parsing and stop it starting.

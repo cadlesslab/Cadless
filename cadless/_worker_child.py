@@ -16,13 +16,33 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import traceback
 
 SENTINEL = "__VTRESULT__"
 
+# When this process started: the parent's wall clock runs from about here, so
+# the time left to it is measured from here too.
+_STARTED = time.monotonic()
+
 # Filename used when compiling the generated script; lets us pick its frames out
 # of a traceback so we can anchor the error on a line of the user's code.
 _GENERATED_FILE = "<generated>"
+
+
+def measurement_budget(wall_secs: float, elapsed: float) -> float:
+    """How many seconds the assembly measurement may spend.
+
+    A share of the time left rather than of the whole clock: the clock covers the
+    build, the measurement and the export together, and a build that already ran
+    long would otherwise be pushed past it by the measurement and return nothing.
+    With no clock to divide, the fixed budget.
+    """
+    from cadless import assembly_check  # noqa: PLC0415 - lazy, as below
+
+    if wall_secs <= 0:
+        return assembly_check.MEASUREMENT_TIME_BUDGET_SECONDS
+    return max(0.0, wall_secs - elapsed) * assembly_check.MEASUREMENT_TIME_SHARE
 
 
 def _error_payload(exc: BaseException, code: str, *, prefix: str = "") -> dict:
@@ -159,9 +179,8 @@ def main(argv: list[str]) -> int:
     # Authoring-units -> mm factor applied to *exports only* (issue #18/#20);
     # the geometry summary always stays in the script's authoring units.
     export_scale = float(argv[3]) if len(argv) > 3 and argv[3] else 1.0
-    # Off unless the turn asked for an assembly. A multi-solid result is not by
-    # itself an assembly, and measuring the relations between parts nobody will
-    # read costs the same wall clock the build is running on.
+    # Off unless the caller will read the measurement: measuring the relations
+    # between parts costs the same wall clock the build is running on.
     check_assembly = bool(len(argv) > 4 and argv[4])
     # The parent's wall clock, so the assembly measurement can take a share of
     # it rather than a fixed number of seconds. A clock that runs out up here
@@ -206,14 +225,9 @@ def main(argv: list[str]) -> int:
         if check_assembly and len(parts) > 1:
             from dataclasses import asdict  # noqa: PLC0415 - lazy, as the exporters are
 
-            from cadless import assembly_check  # noqa: PLC0415
             from cadless.assembly_check import measure_assembly  # noqa: PLC0415
 
-            budget = (
-                wall_secs * assembly_check.MEASUREMENT_TIME_SHARE
-                if wall_secs > 0
-                else assembly_check.MEASUREMENT_TIME_BUDGET_SECONDS
-            )
+            budget = measurement_budget(wall_secs, time.monotonic() - _STARTED)
             summary["assembly"] = asdict(measure_assembly(parts, time_budget=budget))
         if export_dir:
             from pathlib import Path  # noqa: PLC0415 - lazy, as below

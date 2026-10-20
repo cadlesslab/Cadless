@@ -261,7 +261,7 @@ class ToolContext:
     # which already chose how many parts it is in is a statement about what its
     # prompt should SAY, and `cadless.prompts` acts on it by framing an edit with
     # the constraints alone; it is not a reason to withhold the value, which also
-    # gates whether the parts are measured at all.
+    # decides which checks the parts are held to.
     assembly: AssemblySpec | None = None
     # The same machine, reached the other way: what the model being edited was
     # already built as, rather than what this turn asked for. Separate from
@@ -1321,11 +1321,11 @@ class Agent:
                     images=context.images,
                     on_reading=context.on_reading,
                     # An edit to an assembly is still an assembly. Withholding the
-                    # spec here did not leave the edit merely unguided: the closing
-                    # rule falls back to asking for "the final solid", which is an
-                    # instruction to fuse the parts the turn asked to keep apart,
-                    # and the geometric check is gated on this same value, so
-                    # nothing measured what came back either. The concern that
+                    # spec here would not leave the edit merely unguided: its
+                    # closing line would lose the joints and clearance the split
+                    # needs, and the parts would be judged by the checks for a
+                    # build nobody asked to split -- never against the bed the
+                    # turn is for. The concern that
                     # withholding it answered -- that re-stating the split brief
                     # invites a rewrite rather than an edit -- is answered in
                     # `cadless.prompts`, which frames an edit by the constraints

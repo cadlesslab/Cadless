@@ -553,7 +553,7 @@ class Store:
             # per-turn option back to off. NULL on every legacy row and read as
             # False -- "was not asked for" and "was written before we recorded it"
             # take the same branch deliberately, because guessing True would start
-            # measuring edits to models that never asked to be assemblies.
+            # holding edits to models that never asked to be assemblies to the bed.
             await db.execute("ALTER TABLE script_versions ADD COLUMN built_as_assembly INTEGER")
         if "parts_json" not in cols:
             # Left NULL rather than backfilled: the names are the build's to give.

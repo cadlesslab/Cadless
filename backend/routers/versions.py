@@ -195,9 +195,9 @@ async def reparametrize_version(
             parent_version_id=version.id,
             # Re-parametrising rebuilds the same model with different numbers, so
             # it is the same model: dropping this would leave it in pieces with no
-            # record of why, and the next edit would be told to fuse it. The agent's
-            # own set_parameters tool already carries it; this is the panel route
-            # reaching the same store method.
+            # record of why, and the next edit would lose the bed it was split
+            # for. The agent's own set_parameters tool already carries it; this is
+            # the panel route reaching the same store method.
             built_as_assembly=version.built_as_assembly,
             parts=res.parts,
         )

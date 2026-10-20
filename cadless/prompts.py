@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 
-from cadless.api_subset import RESULT_VARIABLE
+from cadless.api_subset import RESULT_SHAPE, RESULT_VARIABLE
 from cadless.config import settings
 from cadless.few_shot import render_few_shot
 from cadless.llm.provider import ChatProvider, ImagesUnsupported
@@ -128,13 +128,12 @@ def build_refinement_message(
     over-simplified one on a small position tweak.
 
     ``assembly`` decides what the closing line asks ``result`` to be, exactly as it
-    does in :func:`build_repair_message`. Editing an assembly and being told to
-    finish with "the final solid" is an instruction to fuse it, which is the one
-    thing the turn asked against -- and the prompt is otherwise silent on the
-    subject, so nothing else in the message would disagree.
+    does in :func:`build_repair_message`. An edit to an assembly is closed by a
+    line that keeps its joints and their clearance; any other edit by
+    ``RESULT_SHAPE``, which leaves the split to the model.
     """
     keeps = (
-        "still assign the final solid to `result`"
+        f"still assign the model to `result`: {RESULT_SHAPE}"
         if assembly is None
         else (
             "still assign the whole assembly to `result` as a Compound of separate "
@@ -192,10 +191,9 @@ def build_repair_message(
     model can target deep OCCT failures precisely. Otherwise it falls back to the
     flat ``error`` string (e.g. validation/critique failures).
 
-    ``assembly`` decides what the closing line asks ``result`` to be. It used to
-    say "the final solid" unconditionally, which on an assembly turn instructed
-    the model to undo the very thing that turn asked for -- and a repair round is
-    where that instruction lands hardest, because the request it is repairing is
+    ``assembly`` decides what the closing line asks ``result`` to be. On an
+    assembly turn it keeps the joints and their clearance, because a repair round
+    is where a looser instruction lands hardest: the request it is repairing is
     the one hardest to get right in the first place.
 
     It settles the closing line and nothing else: the requirements themselves are
@@ -206,7 +204,7 @@ def build_repair_message(
     """
     failure = _format_failure(error, context)
     keeps = (
-        "assigns the final solid to `result`"
+        f"assigns the model to `result`: {RESULT_SHAPE}"
         if assembly is None
         else (
             "assigns the whole assembly to `result` as a Compound of separate "
@@ -503,8 +501,8 @@ class CodeGenerator:
 
         ``assembly`` is here for the same reason it is on ``generate``: an edit to
         an assembly is still an assembly, and a round that lost the spec would be
-        editing against the default closing rule, which asks for one connected
-        solid. The wrapping order matches ``generate`` exactly; what differs is
+        editing against the default closing rule, which leaves the split to the
+        model. The wrapping order matches ``generate`` exactly; what differs is
         which rules go in. An edit is the one round not entitled to choose the
         split, so it is framed by the constraints alone -- see
         :func:`_assembly_edit_rules`.
@@ -542,7 +540,8 @@ class CodeGenerator:
         A repair round that lost the picture would be trying to fix the shape
         against the words alone, which is the half of the request that was least
         able to describe it in the first place. ``assembly`` is here for the same
-        reason: a round that lost it would be repairing towards a single solid.
+        reason: a round that lost it would be repairing without the bed and the
+        clearance the split was made for.
 
         Both are framed in the same place and the same order as ``generate`` and
         ``refine`` frame them. Handing the blocks over is not the same as asking

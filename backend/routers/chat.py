@@ -93,8 +93,8 @@ class ChatRequest(BaseModel):
     # put this flag back to False is still framed and checked as an assembly. This
     # field therefore means "this turn is asking", never "this turn is the only
     # thing that decides" -- unlike ``forge``, which really is per-turn, because
-    # forgetting a race costs a cheaper generation while forgetting an assembly asks
-    # the model to fuse a model that is in pieces.
+    # forgetting a race costs a cheaper generation while forgetting an assembly
+    # drops the bed and the clearance a model in pieces was split for.
     assembly: bool = False
 
     @model_validator(mode="after")
@@ -686,7 +686,14 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 ),
                                 loop,
                             ).result()
-                        if ok and ev.data.get("code") and version_id is not None:
+                        # A build kept with its parts found not to go together
+                        # is no example to learn from, and the turn's message
+                        # now describes it rather than the build before it.
+                        verdict = ev.data.get("assembly")
+                        parts_failed = isinstance(verdict, dict) and verdict.get("ok") is False
+                        if ok and parts_failed:
+                            last_good = None
+                        elif ok and ev.data.get("code") and version_id is not None:
                             last_good = {
                                 "version_id": version_id,
                                 "code": ev.data.get("code"),
