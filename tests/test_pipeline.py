@@ -103,8 +103,9 @@ def test_a_repair_site_cannot_inherit_an_answer_it_never_gave():
 
 def test_a_repair_round_carries_the_assembly_spec():
     """Validation failing on attempt 1 is the ordinary case, not a rare one, so a
-    repair that lost the spec would quietly turn most assembly turns back into
-    single solids -- on exactly the request least likely to land first time."""
+    repair that lost the spec would quietly drop the bed and the clearance from
+    most assembly turns -- on exactly the request least likely to land first
+    time."""
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
     )

@@ -11,6 +11,7 @@ import json
 import pytest
 
 from cadless.assembly_check import (
+    PARTS_CHECKS,
     AssemblyMeasurements,
     AssemblyReport,
     evaluate_assembly,
@@ -450,3 +451,87 @@ def test_print_fit_still_stays_silent_on_a_box_it_cannot_read():
     assert too_big_for(["not a number", 10.0, 10.0], SPEC.volume) == ""
     assert too_big_for([float("nan"), 10.0, 10.0], SPEC.volume) == ""
     assert too_big_for(None, SPEC.volume) == ""
+
+
+# --- the parts checks: a build that did not ask to be an assembly -----------
+
+
+def test_the_parts_checks_do_not_hold_a_part_to_the_bed():
+    """Fitting the bed is print_fit's question for a build nobody asked to split."""
+    report = evaluate_assembly(
+        _m(part_bboxes=[[999.0, 100.0, 50.0], [100.0, 100.0, 50.0]]), SPEC, checks=PARTS_CHECKS
+    )
+    assert report.ok
+
+
+def test_the_parts_checks_let_parts_stand_apart():
+    """An exploded view, or a set of separate objects, is not a failed joint."""
+    report = evaluate_assembly(_m(gaps=[[0, 1, 30.0]]), SPEC, checks=PARTS_CHECKS)
+    assert report.ok
+
+
+def test_the_parts_checks_still_describe_the_joints():
+    report = evaluate_assembly(_m(), SPEC, checks=PARTS_CHECKS)
+    assert report.joints == [[1], [0]]
+
+
+def test_the_parts_checks_catch_two_parts_in_one_space():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, checks=PARTS_CHECKS)
+    assert not report.ok
+    assert any("share" in f for f in report.failures)
+
+
+def test_the_parts_checks_let_a_captive_part_stay():
+    """A chain link or a ball in a cage cannot come out, and is meant not to."""
+    report = evaluate_assembly(_m(order=None, trapped=[0, 1]), SPEC, checks=PARTS_CHECKS)
+    assert report.ok
+
+
+def test_an_unreadable_gap_entry_does_not_fail_the_parts_checks():
+    report = evaluate_assembly(_m(gaps=[["x"]]), SPEC, checks=PARTS_CHECKS)
+    assert report.ok
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "gap between part 1 and part 2: the distance could not be computed",
+        "assembly order: the search ran out of budget after 9 probes",
+    ],
+)
+def test_a_measurement_of_a_check_not_faced_does_not_fail_the_parts_checks(reason):
+    report = evaluate_assembly(_m(unchecked=[reason]), SPEC, checks=PARTS_CHECKS)
+    assert report.ok
+    assert not evaluate_assembly(_m(unchecked=[reason]), SPEC).ok
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "shared volume between part 1 and part 2: the intersection could not be computed",
+        "overlap and gap between every pair: the measurement ran out of budget after 0 of 1 pairs",
+        "something the measurement did not say the check of",
+    ],
+)
+def test_a_measurement_bearing_on_overlap_or_on_nothing_named_fails_the_parts_checks(reason):
+    report = evaluate_assembly(_m(unchecked=[reason]), SPEC, checks=PARTS_CHECKS)
+    assert not report.ok
+    assert report.unchecked == [reason]
+
+
+def test_a_check_named_wrongly_is_reported_rather_than_skipped():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, checks=frozenset({"overlaps"}))
+    assert not report.ok
+    assert any("overlaps" in reason for reason in report.unchecked)
+
+
+def test_a_reason_that_is_not_text_counts_against_the_report_and_never_raises():
+    report = evaluate_assembly(_m(unchecked=[None]), SPEC)
+    assert not report.ok
+
+
+@pytest.mark.parametrize("checks", [PARTS_CHECKS, None])
+def test_an_order_of_other_parts_is_withheld_whatever_is_judged(checks):
+    kwargs = {} if checks is None else {"checks": checks}
+    report = evaluate_assembly(_m(order=[0, 0]), SPEC, **kwargs)
+    assert report.order is None

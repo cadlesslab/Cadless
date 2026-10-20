@@ -1505,10 +1505,9 @@ def test_an_edit_keeps_the_assembly_the_version_was_built_with(client, store, mo
     """The second turn is the one a reload produces: the option has gone back to
     off, and the person is editing a model that is in pieces.
 
-    Without this, the edit is not merely unguided -- ``build_refinement_message``
-    falls back to asking for "the final solid", which is an instruction to fuse the
-    parts, and the geometric check is gated on the same value so nothing measures
-    what comes back.
+    Without this, the edit is not merely unguided: it would lose the bed and the
+    clearance the model was split for, and its parts would be held only to the
+    check for a build nobody asked to split.
     """
     monkeypatch.setattr(chat.settings, "assembly_enabled", True)
     pipeline = _build_then_edit(monkeypatch)
@@ -2566,3 +2565,54 @@ def test_a_tool_result_s_files_are_taken_only_from_the_turn_s_staging(store, tmp
         return await store.list_artifacts(vid)
 
     assert asyncio.run(go()) == []
+
+
+class _WantingPartsPipeline(StubPipeline):
+    def run(self, *args, **kwargs):
+        result = super().run(*args, **kwargs)
+        result.assembly = {"ok": False, "failures": ["two parts share volume"], "measured": True}
+        return result
+
+
+def test_a_build_kept_with_parts_found_wanting_distills_nothing(client, store, monkeypatch):
+    """It is the model asked for, but no example to learn from."""
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "x"}),
+            _text_turn("Built it, though two parts overlap."),
+        ]
+    )
+    _install(monkeypatch, provider, pipeline=_WantingPartsPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid)
+    assert _kb_entries(store) == []
+
+
+class _SoundThenWantingPipeline(StubPipeline):
+    def __init__(self):
+        super().__init__()
+        self.builds = 0
+
+    def run(self, *args, **kwargs):
+        result = super().run(*args, **kwargs)
+        self.builds += 1
+        if self.builds > 1:
+            result.assembly = {"ok": False, "failures": ["two parts share volume"]}
+        return result
+
+
+def test_a_turn_ending_on_parts_found_wanting_distills_no_earlier_build(client, store, monkeypatch):
+    """The turn's message now describes the build it ended on, not the one before."""
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "x"}),
+            _tool_turn(tool_use_id="tu-2", name="edit_model", tool_input={"change": "y"}),
+            _text_turn("Done, though two parts overlap."),
+        ]
+    )
+    _install(monkeypatch, provider, pipeline=_SoundThenWantingPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_chat(client, pid)
+    assert _kb_entries(store) == []

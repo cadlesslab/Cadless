@@ -241,8 +241,8 @@ def test_a_refinement_keeps_the_assembly_record(client, store, monkeypatch):
 
     This route never sets the flag itself — a fresh prompt is not an assembly and
     the request has no field for one — but dropping it on a refinement would leave
-    the model in pieces with nothing recording why, and the next chat edit would be
-    told to assign the final solid. Read from the store, since the flag is
+    the model in pieces with nothing recording why, and the next chat edit would
+    lose the bed it was split for. Read from the store, since the flag is
     deliberately not on the wire.
     """
     import asyncio

@@ -177,10 +177,12 @@ def test_a_repair_round_on_an_assembly_turn_does_not_ask_for_one_solid():
     assert "final solid" not in message
 
 
-def test_a_repair_round_on_an_ordinary_turn_still_asks_for_a_solid():
+def test_a_repair_round_on_an_ordinary_turn_asks_for_a_solid_or_placed_parts():
     message = build_repair_message("a shelf", "result = 1", "boom")
 
-    assert "assigns the final solid to `result`" in message
+    assert "final solid" not in message
+    assert "one solid, or a `Compound(children=[...])`" in message
+    assert "given a label" in message
 
 
 def test_a_refine_round_on_an_assembly_turn_does_not_ask_for_one_solid():
@@ -198,10 +200,11 @@ def test_a_refine_round_on_an_assembly_turn_does_not_ask_for_one_solid():
     assert "final solid" not in message
 
 
-def test_a_refine_round_on_an_ordinary_turn_still_asks_for_a_solid():
+def test_a_refine_round_on_an_ordinary_turn_asks_for_a_solid_or_placed_parts():
     message = build_refinement_message("make it taller", "result = 1")
 
-    assert "still assign the final solid to `result`" in message
+    assert "final solid" not in message
+    assert "one solid, or a `Compound(children=[...])`" in message
 
 
 def test_a_repair_round_on_an_assembly_turn_is_told_which_printer_it_is_for():
@@ -825,3 +828,14 @@ def test_surgical_refine_keeps_edit_similarity_bounded():
     gen = CodeGenerator(provider=fake)
     refined = gen.refine("align the first and second floor", prior)
     assert refine_diff_ratio(prior, refined) < 0.3
+
+
+def test_the_system_prompt_teaches_a_tree_of_placed_labelled_parts():
+    from cadless.system_prompt import SYSTEM_PROMPT
+
+    assert "connected solid" not in SYSTEM_PROMPT
+    assert "final solid" not in SYSTEM_PROMPT
+    assert "Pos(...) * Rot(...)" in SYSTEM_PROMPT
+    assert 'part.label = "wheel_fl"' in SYSTEM_PROMPT
+    assert 'Compound(children=[...], label="front_axle")' in SYSTEM_PROMPT
+    assert "one solid, or a `Compound(children=[...])`" in SYSTEM_PROMPT

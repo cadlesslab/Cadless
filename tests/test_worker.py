@@ -479,3 +479,47 @@ def test_a_dangling_link_where_a_part_file_goes_is_cleared(tmp_path):
     assert res.ok, res.error
     assert not (tmp_path / "model_p0.stl").is_symlink()
     assert not target.exists()
+
+
+def test_the_measurement_takes_a_share_of_the_time_left():
+    """A build that already ran long is not pushed past its own timeout."""
+    from cadless import assembly_check
+    from cadless._worker_child import measurement_budget
+
+    share = assembly_check.MEASUREMENT_TIME_SHARE
+    assert measurement_budget(30.0, 0.0) == pytest.approx(30.0 * share)
+    assert measurement_budget(30.0, 27.0) == pytest.approx(3.0 * share)
+    assert measurement_budget(30.0, 40.0) == 0.0
+
+
+def test_a_worker_with_no_clock_measures_on_the_fixed_budget():
+    from cadless import assembly_check
+    from cadless._worker_child import measurement_budget
+
+    assert measurement_budget(0.0, 5.0) == assembly_check.MEASUREMENT_TIME_BUDGET_SECONDS
+
+
+def test_the_child_measures_on_a_share_of_the_time_left(tmp_path, monkeypatch, capsys):
+    """Wired through the child itself, not only the helper beside it."""
+    import time
+
+    from cadless import _worker_child, assembly_check
+    from cadless.assembly_check import AssemblyMeasurements
+
+    seen = {}
+
+    def fake_measure(parts, time_budget):
+        seen["budget"] = time_budget
+        return AssemblyMeasurements(part_bboxes=[], gaps=[], order=None)
+
+    monkeypatch.setattr(assembly_check, "measure_assembly", fake_measure)
+    monkeypatch.setattr(_worker_child, "_STARTED", time.monotonic() - 12.0)
+    code_file = tmp_path / "m.py"
+    code_file.write_text(
+        "from build123d import *\nresult = Compound([Box(1, 1, 1), Pos(5, 0, 0) * Box(1, 1, 1)])\n"
+    )
+
+    _worker_child.main(["prog", str(code_file), "", "1", "1", "30"])
+    capsys.readouterr()
+
+    assert 0.0 < seen["budget"] <= (30.0 - 12.0) * assembly_check.MEASUREMENT_TIME_SHARE

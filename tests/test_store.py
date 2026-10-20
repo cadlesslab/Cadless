@@ -408,8 +408,7 @@ def test_a_branch_and_a_clone_keep_the_assembly_record(tmp_path):
     """A copy that drops the flag recreates the very bug the column exists to close.
 
     The copied model is still in pieces; only the record of why would be gone, and
-    the first edit to it would be told to assign the final solid — which is an
-    instruction to fuse the parts.
+    the first edit to it would lose the bed and the clearance it was split for.
     """
 
     async def go():

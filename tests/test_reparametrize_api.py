@@ -129,9 +129,9 @@ def test_reparametrize_keeps_the_assembly_record(client, store):
 
     This route reaches the same store method the agent's set_parameters tool does,
     and dropping the record here would leave the model in pieces with nothing
-    saying so: the next chat edit would be told to assign the final solid, which is
-    an instruction to fuse it. Read from the store rather than the response because
-    the flag is deliberately not on the wire.
+    saying so: the next chat edit would lose the bed it was split for. Read from
+    the store rather than the response because the flag is deliberately not on
+    the wire.
     """
     pid, vid = _seed(store, built_as_assembly=True)
 
