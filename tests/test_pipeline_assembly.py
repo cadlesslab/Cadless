@@ -559,11 +559,11 @@ class _CountingWriter:
     def __init__(self):
         self.calls = 0
 
-    def write(self, intent, code, order, joints):
+    def write(self, intent, code, order, joints, names=None):
         from cadless.guide_writer import plain_guide
 
         self.calls += 1
-        return plain_guide(order, joints)
+        return plain_guide(order, joints, names)
 
 
 def test_only_a_turn_that_asked_has_its_parts_named_by_the_writer(monkeypatch):
@@ -602,7 +602,7 @@ def test_the_writer_is_given_the_measured_order_and_joints(monkeypatch):
     seen = {}
 
     class _Spy:
-        def write(self, intent, code, order, joints):
+        def write(self, intent, code, order, joints, names=None):
             seen["order"] = order
             seen["joints"] = joints
             from cadless.guide_writer import plain_guide
@@ -971,3 +971,104 @@ def test_a_build_with_nothing_to_widen_to_hands_back_the_one_file(tmp_path):
     bare.mkdir()
     missing = bare / "model_p0.stl"
     assert critique_subject(str(missing)) == str(missing)
+
+
+# --- the parts by the names their build gave them ---------------------------
+
+
+def _named_exec(measurements, names):
+    return ExecResult(
+        ok=True,
+        volume=1000.0,
+        bbox=(10.0, 10.0, 10.0),
+        part_count=len(names),
+        stl_path="/tmp/model.stl",
+        assembly=measurements,
+        parts=[{"index": i, "name": n, "path": [], "color": None} for i, n in enumerate(names)],
+    )
+
+
+def test_the_check_names_the_parts_its_build_named(monkeypatch):
+    monkeypatch.setattr(
+        "cadless.pipeline.run_code",
+        lambda code, **kw: _named_exec(_overlapping(), ["chassis", "wheel_fl"]),
+    )
+    result = Pipeline(generator=FakeGen(), config=Settings(repair_max_attempts=1)).run(
+        "a car", assembly=SPEC
+    )
+    assert "chassis and wheel_fl share" in result.error
+
+
+def test_the_guide_names_the_parts_its_build_named(monkeypatch):
+    monkeypatch.setattr(
+        "cadless.pipeline.run_code",
+        lambda code, **kw: _named_exec(_sound(), ["axle_f", "wheel_fl"]),
+    )
+    result = Pipeline(generator=FakeGen(), config=Settings(repair_max_attempts=1)).run("a car")
+    assert result.guide["parts"] == ["axle_f", "wheel_fl"]
+    assert result.guide["steps"] == ["Start with axle_f.", "Fit wheel_fl to axle_f."]
+
+
+def test_a_named_build_on_a_turn_that_asked_does_not_call_the_writer_s_model(monkeypatch):
+    from cadless.guide_writer import GuideWriter
+
+    provider = FakeChatProvider()
+    monkeypatch.setattr(
+        "cadless.pipeline.run_code",
+        lambda code, **kw: _named_exec(_sound(), ["axle_f", "wheel_fl"]),
+    )
+    result = Pipeline(
+        generator=FakeGen(),
+        config=Settings(repair_max_attempts=1),
+        guide_writer=GuideWriter(provider=provider),
+    ).run("a car", assembly=SPEC)
+    assert provider.calls == []
+    assert result.guide["steps"] == ["Start with axle_f.", "Fit wheel_fl to axle_f."]
+
+
+_TOY_CAR = """from build123d import *
+chassis = Box(40, 20, 4)
+chassis.label = "chassis"
+axle = Pos(15, 0, 4) * Box(4, 24, 4)
+axle.label = "axle_f"
+wheel = Pos(15, 13, 4) * Box(6, 2, 6)
+wheel.label = "wheel_fl"
+result = Compound(children=[chassis, axle, wheel])
+"""
+
+
+@pytest.mark.build123d
+def test_the_guide_for_a_labelled_toy_car_names_its_parts_end_to_end():
+    result = Pipeline(generator=FakeGen(_TOY_CAR), config=Settings(repair_max_attempts=1)).run(
+        "a toy car"
+    )
+    assert result.ok, result.error
+    assert result.guide is not None, result.assembly
+    assert sorted(result.guide["parts"]) == ["axle_f", "chassis", "wheel_fl"]
+    assert not any("part " in step for step in result.guide["steps"])
+    assert any("wheel_fl" in step and "axle_f" in step for step in result.guide["steps"])
+
+
+def test_a_part_list_of_another_length_is_not_read_as_these_parts_names(monkeypatch):
+    """A list that does not line up with the measured parts is not read."""
+    monkeypatch.setattr(
+        "cadless.pipeline.run_code",
+        lambda code, **kw: _named_exec(_overlapping(), ["chassis", "wheel_fl", "spare"]),
+    )
+    result = Pipeline(generator=FakeGen(), config=Settings(repair_max_attempts=1)).run(
+        "a car", assembly=SPEC
+    )
+    assert "part 1 and part 2 share" in result.error
+
+
+def test_a_part_list_out_of_order_is_not_read_as_these_parts_names(monkeypatch):
+    def out_of_order(code, **kw):
+        res = _named_exec(_overlapping(), ["chassis", "wheel_fl"])
+        res.parts.reverse()
+        return res
+
+    monkeypatch.setattr("cadless.pipeline.run_code", out_of_order)
+    result = Pipeline(generator=FakeGen(), config=Settings(repair_max_attempts=1)).run(
+        "a car", assembly=SPEC
+    )
+    assert "part 1 and part 2 share" in result.error

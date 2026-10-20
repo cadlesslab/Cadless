@@ -136,3 +136,67 @@ def test_the_payload_carries_the_names_and_the_steps():
 def test_the_payload_survives_the_trip_to_the_browser_unchanged():
     guide = plain_guide(ORDER, JOINTS)
     assert json.loads(json.dumps(guide.as_payload())) == guide.as_payload()
+
+
+# --- the names the build gave ------------------------------------------------
+
+
+def test_the_plain_guide_uses_the_names_the_build_gave():
+    guide = plain_guide([0, 1], [[1], [0]], names=["axle_f", "wheel_fl"])
+    assert guide.parts == ["axle_f", "wheel_fl"]
+    assert guide.steps == ["Start with axle_f.", "Fit wheel_fl to axle_f."]
+
+
+def test_the_plain_guide_numbers_a_part_its_build_left_unnamed():
+    guide = plain_guide([0, 1], [[1], [0]], names=["axle_f", "part1"])
+    assert guide.parts == ["axle_f", "part 2"]
+
+
+def test_a_fully_named_build_asks_the_model_nothing():
+    provider = _provider(_named("ignored", "ignored"))
+
+    guide = GuideWriter(provider=provider).write(
+        "a car", CODE, [0, 1], [[1], [0]], names=["axle_f", "wheel_fl"]
+    )
+
+    assert provider.calls == []
+    assert guide.steps == ["Start with axle_f.", "Fit wheel_fl to axle_f."]
+
+
+def test_a_half_named_build_asks_the_model_for_exactly_the_unnamed_parts():
+    provider = _provider(_named("left wheel"))
+
+    guide = GuideWriter(provider=provider).write(
+        "a car", CODE, [0, 1, 2], [[1], [0, 2], [1]], names=["axle_f", "part1", "chassis"]
+    )
+
+    assert guide.parts == ["axle_f", "left wheel", "chassis"]
+    assert len(provider.calls) == 1
+    question = provider.calls[0]["messages"][0].content[0].text
+    assert "Name only part 2," in question
+    assert "exactly 1 short name," in question
+
+
+def test_a_half_named_build_keeps_its_names_when_the_model_fails():
+    guide = GuideWriter(provider=_AngryProvider()).write(
+        "a car", CODE, [0, 1], [[1], [0]], names=["axle_f", "part1"]
+    )
+    assert guide.parts == ["axle_f", "part 2"]
+
+
+def test_a_name_the_model_gives_twice_over_is_told_apart_by_number():
+    guide = GuideWriter(provider=_provider(_named("chassis"))).write(
+        "a car", CODE, [0, 1], [[1], [0]], names=["chassis", "part1"]
+    )
+    assert guide.parts == ["chassis (part 1)", "chassis (part 2)"]
+
+
+def test_a_part_with_a_blank_label_is_named_by_the_model():
+    provider = _provider(_named("left wheel"))
+
+    guide = GuideWriter(provider=provider).write(
+        "a car", CODE, [0, 1], [[1], [0]], names=["axle_f", "   "]
+    )
+
+    assert len(provider.calls) == 1
+    assert guide.parts == ["axle_f", "left wheel"]
