@@ -228,7 +228,10 @@ def main(argv: list[str]) -> int:
             from cadless.assembly_check import measure_assembly  # noqa: PLC0415
 
             budget = measurement_budget(wall_secs, time.monotonic() - _STARTED)
-            summary["assembly"] = asdict(measure_assembly(parts, time_budget=budget))
+            # The names the tree gave, so what the measurement could not
+            # establish is worded as everything else a reader is shown.
+            names = [part.name for part in tree.parts] if tree is not None else None
+            summary["assembly"] = asdict(measure_assembly(parts, time_budget=budget, names=names))
         if export_dir:
             from pathlib import Path  # noqa: PLC0415 - lazy, as below
 

@@ -2,12 +2,15 @@
 
 The engine already knows how a multi-part build goes together: the order search
 established a sequence in which every part reaches its place, and the mating
-check established which parts meet which. What it does not know is what to call
-them. ``base plate`` and ``left arm`` are in the request and in the code the
-model wrote, and nowhere in the geometry.
+check established which parts meet which. What it may not know is what to call
+them. A build that labelled its parts named them, and those names are used,
+with a number beside any two parts share; ``base plate`` and ``left arm`` for a
+part it left unlabelled are in the request and in the code the model wrote, and
+nowhere in the geometry.
 
 So the work is split, and the split is the point. **The sentences are built
-here, from the measured order and joints. The model supplies only the names.**
+here, from the measured order and joints. The model supplies only the names the
+build did not give** -- none, for a build that named every part.
 Asked for the steps themselves a model would sometimes state a different order,
 and a guide that contradicts the order the engine proved collision-free is worse
 than one with dull names: a reader can follow dull names, and cannot follow a
@@ -27,6 +30,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from cadless.assembly_check import given_name, part_labels
 from cadless.config import Settings, settings
 from cadless.llm.provider import ChatProvider
 from cadless.llm.registry import build_provider
@@ -63,10 +67,14 @@ class AssemblyGuide:
         return {"parts": list(self.parts), "steps": list(self.steps)}
 
 
-def plain_guide(order: Sequence[int], joints: Sequence[Sequence[int]]) -> AssemblyGuide:
-    """The guide the engine writes unaided, naming parts as it numbers them."""
-    names = [f"part {index + 1}" for index in range(len(order))]
-    return AssemblyGuide(parts=names, steps=build_steps(order, joints, names))
+def plain_guide(
+    order: Sequence[int],
+    joints: Sequence[Sequence[int]],
+    names: Sequence[str | None] | None = None,
+) -> AssemblyGuide:
+    """The guide the engine writes unaided: parts by their build's names, or numbered."""
+    labels = part_labels(len(order), names)
+    return AssemblyGuide(parts=labels, steps=build_steps(order, joints, labels))
 
 
 def build_steps(
@@ -121,16 +129,32 @@ class GuideWriter:
         code: str,
         order: Sequence[int],
         joints: Sequence[Sequence[int]],
+        names: Sequence[str | None] | None = None,
     ) -> AssemblyGuide:
-        """The guide for this build. Never raises; falls back to plain names."""
-        names = self._names(intent, code, len(order))
-        if names is None:
-            return plain_guide(order, joints)
-        return AssemblyGuide(parts=names, steps=build_steps(order, joints, names))
+        """The guide for this build. Never raises; falls back to plain names.
 
-    def _names(self, intent: str, code: str, count: int) -> list[str] | None:
+        A part its build named keeps that name, and the model is asked only for
+        the rest -- so a build that named every part never asks it at all. The
+        model's names join the build's under one rule, so a name both gave is
+        told apart by number as two the build gave would be.
+        """
+        count = len(order)
+        merged = [given_name(index, names) for index in range(count)]
+        missing = [index for index in range(count) if merged[index] is None]
+        if missing:
+            asked = self._names(intent, code, count, missing)
+            if asked is None:
+                return plain_guide(order, joints, names)
+            for index, name in zip(missing, asked, strict=True):
+                merged[index] = name
+        labels = part_labels(count, merged)
+        return AssemblyGuide(parts=labels, steps=build_steps(order, joints, labels))
+
+    def _names(
+        self, intent: str, code: str, count: int, missing: Sequence[int]
+    ) -> list[str] | None:
         try:
-            reply = self._ask(intent, code, count)
+            reply = self._ask(intent, code, count, missing)
         except Exception:  # noqa: BLE001 - a guide is worth less than the build it describes
             # Logged rather than passed over. Everything a model call can raise
             # is caught here, which during this module's own development quietly
@@ -139,9 +163,9 @@ class GuideWriter:
             # reason is indistinguishable from one that is never reached.
             logger.warning("assembly guide: naming the parts failed", exc_info=True)
             return None
-        return _read_names(reply, count)
+        return _read_names(reply, len(missing))
 
-    def _ask(self, intent: str, code: str, count: int) -> str:
+    def _ask(self, intent: str, code: str, count: int, missing: Sequence[int]) -> str:
         provider = self.provider
         chunks: list[str] = []
         for chunk in provider.stream_turn(
@@ -151,7 +175,10 @@ class GuideWriter:
             model=self._cfg.bedrock_fast_model_slug,
             system=_SYSTEM,
             messages=[
-                Message(role="user", content=[ContentBlock.of_text(_question(intent, code, count))])
+                Message(
+                    role="user",
+                    content=[ContentBlock.of_text(_question(intent, code, count, missing))],
+                )
             ],
             tools=[],
             params=TurnParams(max_tokens=_MAX_TOKENS, temperature=0.0),
@@ -161,16 +188,28 @@ class GuideWriter:
         return "".join(chunks)
 
 
-def _question(intent: str, code: str, count: int) -> str:
-    return (
+def _question(intent: str, code: str, count: int, missing: Sequence[int]) -> str:
+    opening = (
         f"This script builds an assembly of {count} separate parts, printed "
         f"separately and put together by hand. It was written for the request:\n"
         f'"{intent}"\n\n'
         f"```python\n{code}\n```\n\n"
-        f"Name each part as someone holding it would: what it is, not where it "
-        f"sits in the list. Reply with JSON only, an object with one key "
-        f'"parts", holding exactly {count} short names in the order the script '
-        f"builds them."
+    )
+    if len(missing) == count:
+        return opening + (
+            f"Name each part as someone holding it would: what it is, not where it "
+            f"sits in the list. Reply with JSON only, an object with one key "
+            f'"parts", holding exactly {count} short names in the order the script '
+            f"builds them."
+        )
+    which = ", ".join(f"part {index + 1}" for index in missing)
+    many = len(missing)
+    return opening + (
+        f"The script names the other parts already. Name only {which}, counting "
+        f"the parts from one in the order the script builds them, as someone "
+        f"holding each would: what it is, not where it sits in the list. Reply "
+        f'with JSON only, an object with one key "parts", holding exactly {many} '
+        f"short name{'' if many == 1 else 's'}, in that order."
     )
 
 

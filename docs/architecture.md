@@ -255,8 +255,10 @@ candidate judging, the identity seam and the image decisions are recorded under
    graded rather than fatal: a model that declines costs only the names, a render
    that fails costs only the pictures, and the build stands either way. The order
    and the joints it states are the ones the check measured; it re-derives
-   neither, and a model is asked only what to call the parts, so a bad answer
-   costs vocabulary and cannot cost the sequence. The same order, with the
+   neither. The parts are called what their build named them, and a model is
+   asked, on a turn that asked for an assembly, only what to call the ones it
+   left unnamed — never, for a build that named them all — so a bad answer costs
+   vocabulary and cannot cost the sequence. The same order, with the
    heading each part was released along, is handed on unchanged as the
    `assembly` artifact the viewport plays the parts apart and back together
    from, together with how far each part goes — measured from the exported
