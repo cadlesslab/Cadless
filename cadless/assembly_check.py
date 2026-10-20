@@ -43,8 +43,11 @@ from __future__ import annotations
 
 import math
 import time
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from cadless.assembly_tree import unnamed
 from cadless.print_fit import _dimensions, too_big_for
 from cadless.printer_profile import AssemblySpec
 
@@ -201,6 +204,7 @@ def evaluate_assembly(
     spec: AssemblySpec,
     *,
     checks: frozenset[str] = ASSEMBLY_CHECKS,
+    names: Sequence[str | None] | None = None,
 ) -> AssemblyReport:
     """Check ``measurements`` against ``spec``; pure, and never raises.
 
@@ -214,6 +218,9 @@ def evaluate_assembly(
     reported rather than ignored, so a misspelling cannot pass a build unjudged.
     The joints are described whichever are named: a guide to parts that came
     apart still says which ones touch.
+
+    ``names`` are the parts' names in part order, as their build gave them; they
+    change what the sentences call a part and nothing that is judged.
     """
     report = AssemblyReport()
     for name in sorted(checks - ASSEMBLY_CHECKS):
@@ -231,6 +238,7 @@ def evaluate_assembly(
     if len(measurements.part_bboxes) < 2:
         return report
 
+    labels = part_labels(len(measurements.part_bboxes), names)
     report.order = measurements.order
     if not _is_permutation(report.order, len(measurements.part_bboxes)):
         # Withheld whatever is judged: an order of other parts would be played
@@ -238,12 +246,12 @@ def evaluate_assembly(
         # check's to say, below, where that check is faced.
         report.order = None
     if "fit" in checks:
-        _check_fit(measurements, spec, report)
+        _check_fit(measurements, spec, report, labels)
     if "overlap" in checks:
-        _check_overlap(measurements, report)
-    _check_mating(measurements, spec, report, judge="mating" in checks)
+        _check_overlap(measurements, report, labels)
+    _check_mating(measurements, spec, report, labels, judge="mating" in checks)
     if "order" in checks:
-        _check_order(measurements, report)
+        _check_order(measurements, report, labels)
     return report
 
 
@@ -252,10 +260,15 @@ def mating_tolerance(clearance_mm: float) -> float:
     return max(clearance_mm * MATING_TOLERANCE_FACTOR, MATING_TOLERANCE_FLOOR_MM)
 
 
-def _check_fit(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport) -> None:
+def _check_fit(
+    m: AssemblyMeasurements,
+    spec: AssemblySpec,
+    report: AssemblyReport,
+    labels: Sequence[str],
+) -> None:
     volume = spec.volume
     for index, box in enumerate(m.part_bboxes):
-        label = _label(index)
+        label = _at(labels, index)
         size = _dimensions(box)
         if size is None:
             # ``too_big_for`` answers "" for a box it cannot read, and every caller
@@ -274,7 +287,7 @@ def _check_fit(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyRepo
             )
 
 
-def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport) -> None:
+def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str]) -> None:
     for entry in m.overlaps:
         pair = _pair(entry)
         if pair is None:
@@ -286,7 +299,8 @@ def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport) -> None:
             continue
         if shared > OVERLAP_EPSILON_MM3:
             report.failures.append(
-                f"{_label(first)} and {_label(second)} share {shared:g} mm^3 of interior volume; "
+                f"{_at(labels, first)} and {_at(labels, second)} share "
+                f"{shared:g} mm^3 of interior volume; "
                 "two parts cannot occupy the same space, so widen the clearance on that joint"
             )
 
@@ -325,7 +339,12 @@ def mating_graph(
 
 
 def _check_mating(
-    m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport, *, judge: bool
+    m: AssemblyMeasurements,
+    spec: AssemblySpec,
+    report: AssemblyReport,
+    labels: Sequence[str],
+    *,
+    judge: bool,
 ) -> None:
     count = len(m.part_bboxes)
     tolerance = mating_tolerance(spec.clearance_mm)
@@ -340,9 +359,9 @@ def _check_mating(
         return
     alone = sorted(next(iter(group)) for group in groups if len(group) == 1)
     if alone:
-        names = ", ".join(_label(index) for index in alone)
+        loose = ", ".join(_at(labels, index) for index in alone)
         report.failures.append(
-            f"{names} comes no closer than {_size1(tolerance)} mm to any other part; "
+            f"{loose} comes no closer than {_size1(tolerance)} mm to any other part; "
             "a part that mates with nothing is not joined to the assembly"
         )
     if len(groups) - len(alone) > 1:
@@ -363,7 +382,7 @@ def _is_permutation(order, count: int) -> bool:
     )
 
 
-def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
+def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str]) -> None:
     """Rule on the order search's three outcomes, keeping the last two apart.
 
     A search that ran to completion and found nothing always names the parts it
@@ -387,9 +406,9 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
             )
         return
     if m.trapped:
-        names = ", ".join(_label(index) for index in sorted(m.trapped))
+        trapped = ", ".join(_at(labels, index) for index in sorted(m.trapped))
         report.failures.append(
-            f"no assembly order exists: {names} cannot be brought into place without passing "
+            f"no assembly order exists: {trapped} cannot be brought into place without passing "
             "through another part; reorient the joint so it slides in along one axis"
         )
         return
@@ -447,8 +466,46 @@ def _index_list(value: object) -> list[int] | None:
     return out
 
 
-def _label(index: int) -> str:
-    """Parts are counted from one in anything a person or the model reads."""
+def given_name(index: int, names: Sequence[str | None] | None) -> str | None:
+    """The name a build gave part ``index``, on one line, or ``None`` where it gave none.
+
+    ``unnamed(index)`` is no name: it is what a build calls a part it could not
+    label, and read as one it would call the part by the number of the part
+    before it. A blank label is no name either, and a label over several lines
+    is put on one, so a sentence naming it stays one sentence.
+    """
+    if names is None or not 0 <= index < len(names):
+        return None
+    name = names[index]
+    if not isinstance(name, str):
+        return None
+    name = " ".join(name.split())
+    if not name or name == unnamed(index):
+        return None
+    return name
+
+
+def part_labels(count: int, names: Sequence[str | None] | None) -> list[str]:
+    """What anything a person or the model reads calls each of ``count`` parts.
+
+    A part's name where its build gave one, otherwise its number counted from
+    one; and where two parts would read the same, each named one has its number
+    beside its name, so two parts that share a name are told apart.
+    """
+    plain = [given_name(index, names) or f"part {index + 1}" for index in range(count)]
+    seen = Counter(plain)
+    return [
+        f"{label} (part {index + 1})"
+        if seen[label] > 1 and given_name(index, names) is not None
+        else label
+        for index, label in enumerate(plain)
+    ]
+
+
+def _at(labels: Sequence[str] | None, index: int) -> str:
+    """Part ``index``'s label, or its number where ``labels`` does not reach it."""
+    if labels is not None and 0 <= index < len(labels):
+        return labels[index]
     return f"part {index + 1}"
 
 
@@ -550,6 +607,7 @@ def measure_assembly(
     parts,
     probe_budget: int = ORDER_PROBE_BUDGET,
     time_budget: float = MEASUREMENT_TIME_BUDGET_SECONDS,
+    names: Sequence[str | None] | None = None,
 ) -> AssemblyMeasurements:
     """Measure the relations between ``parts``, which must already be in millimetres.
 
@@ -558,6 +616,7 @@ def measure_assembly(
     silently compare the two.
     """
     boxes = [_extent(part) for part in parts]
+    labels = part_labels(len(parts), names)
     unchecked: list[str] = []
     overlaps: list[list[float]] = []
     gaps: list[list[float]] = []
@@ -588,7 +647,8 @@ def measure_assembly(
             scene.at_rest[(first, second)] = shared
             if shared is None:
                 unchecked.append(
-                    f"{_SHARED_UNCHECKED_PREFIX} {_label(first)} and {_label(second)}: "
+                    f"{_SHARED_UNCHECKED_PREFIX} {_at(labels, first)} and "
+                    f"{_at(labels, second)}: "
                     "the intersection could not be computed"
                 )
             elif shared > 0.0:
@@ -598,13 +658,14 @@ def measure_assembly(
             distance = _distance(parts[first], parts[second])
             if distance is None:
                 unchecked.append(
-                    f"{_GAP_UNCHECKED_PREFIX} {_label(first)} and {_label(second)}: "
+                    f"{_GAP_UNCHECKED_PREFIX} {_at(labels, first)} and "
+                    f"{_at(labels, second)}: "
                     "the distance could not be computed"
                 )
             else:
                 gaps.append([first, second, distance])
 
-    order, trapped, order_unchecked, releases = _disassembly_order(parts, budget, scene)
+    order, trapped, order_unchecked, releases = _disassembly_order(parts, budget, scene, labels)
     unchecked.extend(order_unchecked)
     return AssemblyMeasurements(
         part_bboxes=boxes,
@@ -653,7 +714,7 @@ def _distance(first, second) -> float | None:
         return None
 
 
-def _disassembly_order(parts, budget, scene=None):
+def _disassembly_order(parts, budget, scene=None, labels=None):
     """An order in which the parts can be assembled, or why there is none.
 
     Found by taking the assembly apart: repeatedly free a part that can be
@@ -714,9 +775,9 @@ def _disassembly_order(parts, budget, scene=None):
         if freed is None:
             reasons = []
             if scene.refused:
-                reasons.append(_unmeasured_reason(scene.refused))
+                reasons.append(_unmeasured_reason(scene.refused, labels))
             if scene.undecided:
-                reasons.append(_touching_reason(scene.undecided))
+                reasons.append(_touching_reason(scene.undecided, labels))
             if reasons:
                 return None, [], reasons, []
             return None, sorted(remaining), [], []
@@ -726,17 +787,19 @@ def _disassembly_order(parts, budget, scene=None):
     return list(reversed(removed)), [], [], releases
 
 
-def _unmeasured_reason(pairs) -> str:
+def _unmeasured_reason(pairs, labels=None) -> str:
     """The unchecked line for an order stopped at pairs the kernel would not measure."""
     unordered = sorted({tuple(sorted(pair)) for pair in pairs})
-    names = "; ".join(f"{_label(first)} and {_label(second)}" for first, second in unordered)
+    which = "; ".join(
+        f"{_at(labels, first)} and {_at(labels, second)}" for first, second in unordered
+    )
     return (
-        f"{_ORDER_UNCHECKED_PREFIX} the geometry kernel could not measure {names} "
+        f"{_ORDER_UNCHECKED_PREFIX} the geometry kernel could not measure {which} "
         "against each other, so nothing showed whether they come apart"
     )
 
 
-def _touching_reason(pairs) -> str:
+def _touching_reason(pairs, labels=None) -> str:
     """The unchecked line for an order stopped at contacts it could not see past.
 
     Names each touching pair once, whichever of the two was moving, and says what
@@ -744,9 +807,11 @@ def _touching_reason(pairs) -> str:
     never across a contact.
     """
     unordered = sorted({tuple(sorted(pair)) for pair in pairs})
-    names = "; ".join(f"{_label(first)} and {_label(second)}" for first, second in unordered)
+    which = "; ".join(
+        f"{_at(labels, first)} and {_at(labels, second)}" for first, second in unordered
+    )
     return (
-        f"{_ORDER_UNCHECKED_PREFIX} {names} touch where the check cannot follow their "
+        f"{_ORDER_UNCHECKED_PREFIX} {which} touch where the check cannot follow their "
         "surfaces exactly, so it could not prove they come apart; a small gap between "
         "them lets it rule"
     )
