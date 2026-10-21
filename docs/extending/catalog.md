@@ -63,8 +63,8 @@ l-bracket/
 ```
 
 Everything under `artifacts/` is generated — never hand-edit it. So is
-`manifest.json`'s `geometry` and `artifacts` data, which the authoring pipeline
-measures and fills in.
+`manifest.json`'s `geometry`, `artifacts` and `parts` data, which the authoring
+pipeline measures and fills in.
 
 A build that publishes produces this same shape from a project without running
 any of that: it reads the ladder out of the store, copies the exports each step
@@ -98,21 +98,25 @@ entry in `steps` has:
 | `instruction` | the natural-language instruction for this step |
 | `code` | path to the step's script, relative to the item directory and inside it: no absolute path, no `..`, nothing that leaves the item through a link |
 | `geometry` | `volume` / `bbox`, measured when the item was authored |
-| `artifacts` | key → relative path, likewise inside the item. The key is the kind (`glb`, `stl`, …) for a step's first file of that kind and `<kind>:<part>` for each later one (`glb:1`, `glb:2`), so a step built as several parts carries one file per part |
+| `artifacts` | key → relative path, likewise inside the item. The key is the kind (`glb`, `stl`, …) for a step's first file of that kind and `<kind>:<part>` for each later one (`glb:1`, `glb:2`), so a step built as several parts carries one file per part. A step of several parts may also carry its whole build as one file of each, under `assembly_glb` and `assembly_step` — keyed once, and filed as `assembly.glb` / `assembly.step` as a build writes them |
 | `assertions` | optional post-conditions, e.g. `{"volume_tol": 0.05}` |
 | `expected_bodies` | how many disjoint solids the step deliberately produces; absent means 1 |
+| `parts` | optional names of the step's parts, in part order, as its build labelled them: one per part, each at most 128 characters, showing something other than spaces and invisible format characters, and free of control characters, line separators, bidi embeddings, overrides and isolates, tag characters and lone surrogates. Stored with the version and returned in its API `parts` list wherever they number its part files; absent, the parts are numbered as before |
 | `transcript` | optional `user_prompt` / `assistant_message` pair |
 
-Loading validates five things, so get them right or you will see the error
-before anything runs: step indices must start at 1 and be contiguous, every
-`code` path must exist, every `code`, artifact and `thumbnail` path must stay
-inside the item directory (spelled as a `.cls` entry would be, and the item
-directory must not be a symlink), every artifact key must be a kind shaped like
-a file extension (letters, digits, `_` and `-`, at most 32 characters) or such a
-kind followed by `:` and a part number from 1 with no leading zero, with no part
-number of a kind skipped, and `domain` must name a registered domain. A kind with
-one of its part files missing is loaded without that kind rather than with its
-parts renumbered.
+Loading validates these, so get them right or you will see the error before
+anything runs: step indices must start at 1 and be contiguous, every `code` path
+must exist, every `code`, artifact and `thumbnail` path must stay inside the item
+directory (spelled as a `.cls` entry would be, and the item directory must not be
+a symlink), every artifact key must be a kind shaped like a file extension
+(letters, digits, `_` and `-`, at most 32 characters) or such a kind followed by
+`:` and a part number from 1 with no leading zero, with no part number of a kind
+skipped, `assembly_glb` and `assembly_step` at most once each, a step's `parts`
+must name each of its parts once with names of at most 128 characters that show
+something and hold no control character, line separator, bidi embedding,
+override or isolate, tag character or lone surrogate, and `domain` must name a
+registered domain. A kind with one of its part files missing is loaded without
+that kind rather than with its parts renumbered.
 The containment rule is what keeps a catalog root from making the API read or
 serve a file elsewhere on the machine: the loader copies what those paths name
 into the store, and the artifacts route serves the copies.
@@ -242,7 +246,8 @@ Metric sets compose: `BASE_METRICS` (volume, bbox) applies everywhere,
 - [ ] Item directory contains `manifest.json`, under the right domain's content dir
 - [ ] `domain` names a registered domain
 - [ ] Step indices start at 1 and are contiguous; every `code` path exists; no `code`, artifact or `thumbnail` path leaves the item directory
-- [ ] Each artifact key is a kind (`glb`) or a kind and a part number from 1 (`glb:1`), with no part number skipped
+- [ ] Each artifact key is a kind (`glb`) or a kind and a part number from 1 (`glb:1`), with no part number skipped; `assembly_glb` / `assembly_step` at most once each
+- [ ] `parts`, if given, names each part once, in part order
 - [ ] Each step script assigns its output to `result`
 - [ ] `list` shows the item before you try to `load` it
 - [ ] New domain, if any, declares the correct `authoring_units`

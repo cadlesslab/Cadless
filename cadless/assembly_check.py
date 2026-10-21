@@ -47,7 +47,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from cadless.assembly_tree import unnamed
+from cadless.assembly_tree import readable, unnamed
 from cadless.print_fit import _dimensions, too_big_for
 from cadless.printer_profile import AssemblySpec
 
@@ -471,8 +471,9 @@ def given_name(index: int, names: Sequence[str | None] | None) -> str | None:
 
     ``unnamed(index)`` is no name: it is what a build calls a part it could not
     label, and read as one it would call the part by the number of the part
-    before it. A blank label is no name either, and a label over several lines
-    is put on one, so a sentence naming it stays one sentence.
+    before it. A label that shows nothing is no name either, nor one holding a
+    character no name may hold, and a label over several lines is put on one, so
+    a sentence naming it stays one sentence.
     """
     if names is None or not 0 <= index < len(names):
         return None
@@ -480,7 +481,7 @@ def given_name(index: int, names: Sequence[str | None] | None) -> str | None:
     if not isinstance(name, str):
         return None
     name = " ".join(name.split())
-    if not name or name == unnamed(index):
+    if name == unnamed(index) or not readable(name):
         return None
     return name
 
