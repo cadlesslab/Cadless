@@ -1011,3 +1011,47 @@ def test_a_derivation_naming_no_catalogue_is_dropped_rather_than_written_empty(t
     result = import_package(read_cls(packed(item)), origin="a file")
 
     assert "derived_from" not in json.loads((result.item_dir / "source.json").read_text())
+
+
+def test_a_package_s_part_names_and_whole_assembly_survive_the_import(tmp_path):
+    """The manifest is written back out on import; names it dropped would be gone."""
+    package = carried(
+        a_manifest(
+            steps=[
+                {
+                    "index": 1,
+                    "instruction": "A kit.",
+                    "code": "steps/01.py",
+                    "artifacts": {
+                        "glb": "artifacts/01/a.glb",
+                        "glb:1": "artifacts/01/b.glb",
+                        "assembly_glb": "artifacts/01/whole.glb",
+                    },
+                    "parts": ["base", "lid"],
+                }
+            ]
+        ),
+        {
+            "steps/01.py": ALLOWED_STEP.encode(),
+            "artifacts/01/a.glb": b"first",
+            "artifacts/01/b.glb": b"second",
+            "artifacts/01/whole.glb": b"whole",
+        },
+    )
+
+    result = import_package(package, origin="a file")
+
+    store = Store(db_path=tmp_path / "db.sqlite", artifacts_dir=tmp_path / "arts")
+
+    async def go():
+        await store.init()
+        pid = await load_house(store, Ledger(tmp_path / "ledger.json"), result.item_dir)
+        (version,) = await store.list_versions(pid)
+        whole = [a for a in await store.list_artifacts(version.id) if a.kind == "assembly_glb"]
+        return version, whole
+
+    version, whole = asyncio.run(go())
+    assert [part["name"] for part in version.parts] == ["base", "lid"]
+    assert [(a.part, Path(a.path).name, Path(a.path).read_bytes()) for a in whole] == [
+        (0, "assembly.glb", b"whole")
+    ]

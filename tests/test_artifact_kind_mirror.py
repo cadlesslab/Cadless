@@ -125,3 +125,11 @@ def test_the_parsers_read_declarations_rather_than_prose():
     assert "glb" in _ts_format_meta_keys(_source(_FORMATS_TS))
     assert "stl" in _ts_order(_source(_FORMATS_TS))
     assert "guide" in _MEDIA
+
+
+def test_the_part_kinds_are_the_exported_formats():
+    """The catalog counts parts by these without importing the exporters."""
+    from cadless import artifact_kinds, exporters
+
+    assert artifact_kinds.PART_KINDS == tuple(EXPORTERS)
+    assert exporters.ASSEMBLY_FILES is artifact_kinds.ASSEMBLY_FILES

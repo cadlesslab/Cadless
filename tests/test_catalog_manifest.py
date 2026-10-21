@@ -1,6 +1,8 @@
 """Manifest parser tests (catalog Phase 1). Pure; tmp_path fixtures."""
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -305,3 +307,166 @@ def test_numbered_keys_group_a_kind_s_parts_in_part_order(tmp_path):
         "glb": ["glb", "glb:1"],
         "stl": ["stl"],
     }
+
+
+# --- part names and whole-assembly files ------------------------------------
+
+_TWO_PARTS = {
+    "stl": "artifacts/01/model_p0.stl",
+    "stl:1": "artifacts/01/model_p1.stl",
+}
+
+
+def test_a_step_may_name_its_parts(tmp_path):
+    item = tmp_path / "item"
+    _write_item(
+        item,
+        {"id": "h", "name": "H", "steps": [_step(artifacts=_TWO_PARTS, parts=["base", "lid"])]},
+    )
+    assert load_manifest(item).steps[0].parts == ["base", "lid"]
+
+
+def test_a_step_that_names_no_parts_loads_as_before(tmp_path):
+    item = tmp_path / "item"
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=_TWO_PARTS)]})
+    assert load_manifest(item).steps[0].parts is None
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        ["base"],
+        ["base", "lid", "spare"],
+        ["base", ""],
+        ["base", "   "],
+        ["base", "x" * 129],
+        ["base", "\ud800"],
+        ["base", "a\u202eb"],
+        ["base", "a\nb"],
+        ["base", "a\U000e0041b"],
+        ["base", "\u200b\u200d"],
+    ],
+    ids=[
+        "too-few",
+        "too-many",
+        "empty",
+        "blank",
+        "too-long",
+        "lone-surrogate",
+        "bidi-control",
+        "line-break",
+        "tag-character",
+        "nothing-visible",
+    ],
+)
+def test_part_names_that_do_not_name_the_step_s_parts_are_refused(tmp_path, parts):
+    item = tmp_path / "item"
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=_TWO_PARTS, parts=parts)]})
+    with pytest.raises(ValueError):
+        load_manifest(item)
+
+
+def test_a_whole_assembly_file_is_keyed_once(tmp_path):
+    item = tmp_path / "item"
+    artifacts = {
+        **_TWO_PARTS,
+        "assembly_glb": "artifacts/01/assembly.glb",
+        "assembly_step": "artifacts/01/assembly.step",
+    }
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=artifacts)]})
+    assert load_manifest(item).steps[0].artifacts["assembly_glb"] == "artifacts/01/assembly.glb"
+
+
+def test_a_second_whole_assembly_file_of_a_kind_is_refused(tmp_path):
+    item = tmp_path / "item"
+    artifacts = {
+        **_TWO_PARTS,
+        "assembly_glb": "artifacts/01/assembly.glb",
+        "assembly_glb:1": "artifacts/01/assembly2.glb",
+    }
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=artifacts)]})
+    with pytest.raises(ValueError):
+        load_manifest(item)
+
+
+def test_a_name_of_the_longest_length_is_kept(tmp_path):
+    item = tmp_path / "item"
+    names = ["base", "x" * 128]
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=_TWO_PARTS, parts=names)]})
+    assert load_manifest(item).steps[0].parts == names
+
+
+def test_parts_are_counted_by_the_part_files_of_the_most_files(tmp_path):
+    """Two stl parts and one step file are two parts, as the API numbers them."""
+    item = tmp_path / "item"
+    artifacts = {**_TWO_PARTS, "step": "artifacts/01/model_p0.step"}
+    _write_item(
+        item, {"id": "h", "name": "H", "steps": [_step(artifacts=artifacts, parts=["a", "b"])]}
+    )
+    assert load_manifest(item).steps[0].parts == ["a", "b"]
+
+
+def test_files_that_are_not_part_formats_do_not_count_as_parts(tmp_path):
+    item = tmp_path / "item"
+    artifacts = {
+        **_TWO_PARTS,
+        "guide": "artifacts/01/guide_f0.png",
+        "guide:1": "artifacts/01/guide_f1.png",
+        "guide:2": "artifacts/01/guide_f2.png",
+    }
+    _write_item(
+        item, {"id": "h", "name": "H", "steps": [_step(artifacts=artifacts, parts=["a", "b"])]}
+    )
+    assert load_manifest(item).steps[0].parts == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    "artifacts",
+    [{}, {"assembly_glb": "artifacts/01/assembly.glb"}],
+    ids=["no-files", "whole-assembly-only"],
+)
+def test_names_for_a_step_with_no_part_files_are_refused(tmp_path, artifacts):
+    item = tmp_path / "item"
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=artifacts, parts=["a"])]})
+    with pytest.raises(ValueError):
+        load_manifest(item)
+
+
+def test_names_written_with_joiners_and_marks_are_kept(tmp_path):
+    """Persian spelled with a ZWNJ, an emoji joined by ZWJs, Hebrew with an RLM."""
+    item = tmp_path / "item"
+    names = [
+        "\u06a9\u062a\u0627\u0628\u200c\u062e\u0627\u0646\u0647",
+        "\U0001f468\u200d\U0001f469\u200d\U0001f467",
+    ]
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=_TWO_PARTS, parts=names)]})
+    assert load_manifest(item).steps[0].parts == names
+
+    names = ["\u05d2\u05dc\u05d2\u05dc\u200f", "lid"]
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=_TWO_PARTS, parts=names)]})
+    assert load_manifest(item).steps[0].parts == names
+
+
+def test_names_for_more_parts_than_a_version_keeps_are_refused(tmp_path):
+    item = tmp_path / "item"
+    count = 2001
+    artifacts = {
+        ("stl" if i == 0 else f"stl:{i}"): f"artifacts/01/model_p{i}.stl" for i in range(count)
+    }
+    names = [f"p{i}" for i in range(count)]
+    _write_item(item, {"id": "h", "name": "H", "steps": [_step(artifacts=artifacts, parts=names)]})
+    with pytest.raises(ValueError, match="2000"):
+        load_manifest(item)
+
+
+def test_reading_a_manifest_loads_no_engine_configuration():
+    """A manifest is read where the engine is not configured to run."""
+    root = Path(__file__).resolve().parents[1]
+    probe = (
+        f"import sys; sys.path.insert(0, {str(root)!r}); "
+        "import cadless.catalog.manifest; "
+        "assert cadless.catalog.manifest.__file__.startswith(sys.path[0]); "
+        "print('cadless.config' in sys.modules)"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False"

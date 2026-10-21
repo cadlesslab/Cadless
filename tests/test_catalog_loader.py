@@ -993,3 +993,72 @@ def test_a_kind_with_one_part_keeps_the_plain_file_name(tmp_path):
         ("glb", 0, "model.glb", b"glb-0"),
         ("step", 0, "model.step", b"step-0"),
     ]
+
+
+# --- part names and whole-assembly files ------------------------------------
+
+
+def _write_assembly_item(catalog_dir: Path, house_id: str, *, new: bool) -> Path:
+    """One step of two parts; ``new`` adds part names and the whole-assembly files."""
+    house = catalog_dir / house_id
+    (house / "steps").mkdir(parents=True, exist_ok=True)
+    (house / "steps" / "01.py").write_text("result = 1\n")
+    art = house / "artifacts" / "01"
+    art.mkdir(parents=True, exist_ok=True)
+    artifacts = {}
+    for n in range(2):
+        (art / f"model_p{n}.stl").write_bytes(bytes([n]) * 84)
+        (art / f"model_p{n}.glb").write_bytes(b"glTF" + bytes([n]))
+        artifacts["stl" if n == 0 else f"stl:{n}"] = f"artifacts/01/model_p{n}.stl"
+        artifacts["glb" if n == 0 else f"glb:{n}"] = f"artifacts/01/model_p{n}.glb"
+    step = {"index": 1, "instruction": "build it", "code": "steps/01.py", "artifacts": artifacts}
+    if new:
+        (art / "assembly.glb").write_bytes(b"glTF-whole")
+        (art / "assembly.step").write_text("ISO-10303-21; whole")
+        step["artifacts"] = {
+            **artifacts,
+            "assembly_glb": "artifacts/01/assembly.glb",
+            "assembly_step": "artifacts/01/assembly.step",
+        }
+        step["parts"] = ["base", "lid"]
+    (house / "manifest.json").write_text(
+        json.dumps({"id": house_id, "name": house_id, "steps": [step]})
+    )
+    return house
+
+
+def _loaded(tmp_path, house):
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        pid = await load_house(s, Ledger(tmp_path / f"ledger-{house.name}.json"), house)
+        version = (await s.list_versions(pid))[-1]
+        return version, await s.list_artifacts(version.id)
+
+    return run(go())
+
+
+def test_a_legacy_item_and_a_new_one_file_the_same_part_files(tmp_path):
+    _, legacy = _loaded(tmp_path, _write_assembly_item(tmp_path / "cat", "old", new=False))
+    _, new = _loaded(tmp_path, _write_assembly_item(tmp_path / "cat", "new", new=True))
+
+    def model_rows(rows):
+        return sorted((a.kind, a.part, Path(a.path).name) for a in rows if a.kind in ("stl", "glb"))
+
+    assert model_rows(new) == model_rows(legacy)
+
+
+def test_a_new_item_files_its_whole_assembly_under_its_own_names(tmp_path):
+    _, rows = _loaded(tmp_path, _write_assembly_item(tmp_path / "cat", "new", new=True))
+    whole = {a.kind: (a.part, Path(a.path).name) for a in rows if a.kind.startswith("assembly")}
+    assert whole == {"assembly_glb": (0, "assembly.glb"), "assembly_step": (0, "assembly.step")}
+
+
+def test_a_new_item_keeps_its_part_names_on_the_version(tmp_path):
+    version, _ = _loaded(tmp_path, _write_assembly_item(tmp_path / "cat", "new", new=True))
+    assert [p["name"] for p in version.parts] == ["base", "lid"]
+
+
+def test_a_legacy_item_records_no_part_names(tmp_path):
+    version, _ = _loaded(tmp_path, _write_assembly_item(tmp_path / "cat", "old", new=False))
+    assert version.parts is None

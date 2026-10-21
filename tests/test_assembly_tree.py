@@ -325,6 +325,11 @@ def test_a_part_record_keeps_the_four_fields_in_their_shape():
         [{"index": 0, "name": "a", "path": [], "color": [1, 0, 0]}],
         [{"index": 0, "name": "a", "path": [], "color": [float("nan"), 0, 0, 1]}],
         [{"index": 0, "name": "a", "path": [], "color": [10**400, 0, 0, 1]}],
+        [{"index": 0, "name": "\ud800", "path": [], "color": None}],
+        [{"index": 0, "name": "a\u202eb", "path": [], "color": None}],
+        [{"index": 0, "name": "a\x07b", "path": [], "color": None}],
+        [{"index": 0, "name": "a\U000e0041b", "path": [], "color": None}],
+        [{"index": 0, "name": "\u200b", "path": [], "color": None}],
         [{"index": i, "name": "a", "path": [], "color": None} for i in range(2001)],
         [{"index": i, "name": "a" * 128, "path": [], "color": None} for i in range(2000)],
     ],
@@ -342,9 +347,96 @@ def test_a_part_record_keeps_the_four_fields_in_their_shape():
         "colour-not-rgba",
         "colour-not-finite",
         "colour-past-a-float",
+        "name-lone-surrogate",
+        "name-bidi-control",
+        "name-control",
+        "name-tag-character",
+        "name-nothing-visible",
         "too-many-parts",
         "too-large",
     ],
 )
 def test_a_part_record_that_cannot_be_read_is_none(raw):
     assert assembly_tree.parts_record(raw) is None
+
+
+def test_a_label_over_several_lines_is_put_on_one():
+    a, b = Box(1, 1, 1), Pos(5, 0, 0) * Box(1, 1, 1)
+    result = Compound(children=[a, b])
+    a.label, b.label = "front\nwheel", "   "
+
+    assert [p.name for p in build_tree(result).parts] == ["front wheel", "part1"]
+
+
+def test_a_part_record_keeps_names_written_with_joiners_and_marks():
+    names = [
+        "\u06a9\u062a\u0627\u0628\u200c\u062e\u0627\u0646\u0647",
+        "\U0001f468\u200d\U0001f469\u200d\U0001f467",
+        "\u05d2\u05dc\u05d2\u05dc\u200f",
+    ]
+    raw = [{"index": i, "name": n, "path": [], "color": None} for i, n in enumerate(names)]
+
+    assert [p["name"] for p in assembly_tree.parts_record(raw)] == names
+
+
+def test_a_label_no_name_may_hold_numbers_that_part_alone():
+    a, b = Box(1, 1, 1), Pos(5, 0, 0) * Box(1, 1, 1)
+    result = Compound(children=[a, b])
+    a.label, b.label = "a\u202eb", "lid"
+    tree = build_tree(result)
+
+    assert [p.name for p in tree.parts] == ["part0", "lid"]
+    assert assembly_tree.parts_record(tree.as_payload()["parts"]) is not None
+
+
+def test_a_label_with_nothing_visible_numbers_that_part():
+    a, b = Box(1, 1, 1), Pos(5, 0, 0) * Box(1, 1, 1)
+    result = Compound(children=[a, b])
+    a.label, b.label = "\u200b", "lid"
+
+    assert [p.name for p in build_tree(result).parts] == ["part0", "lid"]
+
+
+@pytest.mark.parametrize(
+    "char",
+    [
+        "\x00",
+        "\x1f",
+        "\x7f",
+        "\x85",
+        "\x9f",
+        "\u2028",
+        "\u2029",
+        "\u202a",
+        "\u202e",
+        "\u2066",
+        "\u2069",
+        "\ud800",
+        "\udfff",
+        "\U000e0000",
+        "\U000e007f",
+    ],
+)
+def test_a_name_may_not_hold_a_character_of_any_refused_group(char):
+    assert not assembly_tree.readable(f"a{char}b")
+
+
+@pytest.mark.parametrize(
+    "char",
+    [
+        " ",
+        "~",
+        "\xa0",
+        "\u200f",
+        "\u2027",
+        "\u202f",
+        "\u2065",
+        "\u206a",
+        "\ud7ff",
+        "\ue000",
+        "\U000dffff",
+        "\U000e0080",
+    ],
+)
+def test_a_name_may_hold_the_characters_beside_them(char):
+    assert assembly_tree.readable(f"a{char}b")
