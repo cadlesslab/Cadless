@@ -74,6 +74,13 @@ def _copy_artifact(store: AnyStore, version_id: int, src: Path, filename: str) -
     return str(dst)
 
 
+def _part_record(names: list[str] | None) -> list[dict] | None:
+    """A step's part names as the store keeps a build's parts, or ``None``."""
+    if names is None:
+        return None
+    return [{"index": i, "name": name, "path": [], "color": None} for i, name in enumerate(names)]
+
+
 def _read_step_code(item: Path, step: CatalogStep) -> str:
     return step_code_path(item, step).read_text()
 
@@ -89,11 +96,12 @@ def _copy_step_kind(
     left out whole, the parts already copied taken back out: the store numbers
     parts in the order they are added, so the parts after a gap would each be
     filed one lower than they are. Each path is checked as its own file is
-    opened, not all of them before the first copy.
+    opened, not all of them before the first copy. A whole-assembly file takes
+    the name the worker gives it, as a part file does.
     """
     copied: list[str] = []
     for i, key in enumerate(keys):
-        name = f"{exporters.part_name(i, len(keys))}.{kind}"
+        name = exporters.ASSEMBLY_FILES.get(kind) or f"{exporters.part_name(i, len(keys))}.{kind}"
         dst = _copy_artifact(store, version_id, step_artifact_path(item, step, key), name)
         if dst is None:
             for done in copied:
@@ -194,6 +202,7 @@ async def load_house(
             bbox=step.geometry.bbox,
             parameters=extract_params(code),
             parent_version_id=parent,
+            parts=_part_record(step.parts),
         )
         for kind, keys in step.artifact_parts().items():
             copied = await _read_or_clear(

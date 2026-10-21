@@ -20,6 +20,7 @@ import os
 import re
 from pathlib import Path
 
+from cadless.artifact_kinds import ASSEMBLY_FILES as ASSEMBLY_FILES
 from cadless.config import settings
 
 #: How one part of a build is named, and how that name is read back.
@@ -208,11 +209,6 @@ EXPORTERS = {
     "stl": export_stl,
     "obj": export_obj,
 }
-
-#: The whole-assembly files, keyed by artifact kind. Not in ``EXPORTERS``: each
-#: is one file for the whole build, not one per part, so the per-part naming
-#: above does not describe it.
-ASSEMBLY_FILES = {"assembly_glb": "assembly.glb", "assembly_step": "assembly.step"}
 
 
 def _assembly_compound(tree):
