@@ -602,3 +602,19 @@ def test_a_blank_label_is_no_name(blank):
 def test_a_label_over_several_lines_is_put_on_one():
     report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["front\nwheel", "lid"])
     assert any(f.startswith("front wheel and lid share") for f in report.failures)
+
+
+def test_a_name_holding_a_bidi_override_is_numbered():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["a\u202eb", "lid"])
+    assert any(f.startswith("part 1 and lid share") for f in report.failures)
+
+
+def test_a_name_written_with_a_joiner_is_used():
+    name = "\u06a9\u062a\u0627\u0628\u200c\u062e\u0627\u0646\u0647"
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=[name, "lid"])
+    assert any(f.startswith(f"{name} and lid share") for f in report.failures)
+
+
+def test_a_name_with_nothing_visible_is_numbered():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["\u200b\u200d", "lid"])
+    assert any(f.startswith("part 1 and lid share") for f in report.failures)
