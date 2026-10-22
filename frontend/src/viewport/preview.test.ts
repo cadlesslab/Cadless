@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { artifactUrl, glbUrl, type Version } from "../api";
+import { artifactUrl, glbUrl, type Version, wholeAssemblyUrl } from "../api";
 import { readoutFor, viewerSubject } from "./preview";
 
 function version(over: Partial<Version> = {}): Version {
@@ -43,6 +43,53 @@ describe("viewerSubject", () => {
     const s = viewerSubject(version({ artifacts }), null, false);
     expect(s.urls).toEqual([0, 1, 2].map((p) => artifactUrl(7, "glb", p)));
     expect(s.parts).toEqual([0, 1, 2]);
+  });
+
+  describe("a version with a whole-assembly file", () => {
+    const rows = [
+      ...[0, 1, 2].map((part) => ({ kind: "glb" as const, bytes: 1, part })),
+      { kind: "assembly_glb", bytes: 1, part: 0 },
+    ] as Version["artifacts"];
+
+    it("names each part as the version does, for the file to be checked against", () => {
+      const parts = [
+        { index: 0, name: "chassis", path: [], color: null },
+        { index: 2, name: "wheel", path: [], color: null },
+      ];
+      const s = viewerSubject(version({ artifacts: rows, parts }), null, false);
+      expect(s.names).toEqual(["chassis", null, "wheel"]);
+    });
+
+    it("draws it from that one file, as the parts its files are numbered by", () => {
+      const s = viewerSubject(version({ artifacts: rows }), null, false);
+      expect(s).toMatchObject({
+        urls: [wholeAssemblyUrl(7, "assembly_glb")],
+        fromAssemblyFile: true,
+      });
+      expect(s.parts).toEqual([0, 1, 2]);
+    });
+
+    it("goes back to the file of each part when the whole one would not do", () => {
+      const s = viewerSubject(version({ artifacts: rows }), null, false, true);
+      expect(s.urls).toEqual([0, 1, 2].map((p) => artifactUrl(7, "glb", p)));
+      expect(s.fromAssemblyFile).toBe(false);
+    });
+
+    it("is not used for a model printed whole", () => {
+      const one = [
+        { kind: "glb", bytes: 1, part: 0 },
+        { kind: "assembly_glb", bytes: 1, part: 0 },
+      ] as Version["artifacts"];
+      expect(viewerSubject(version({ artifacts: one }), null, false)).toMatchObject({
+        urls: [glbUrl(7)],
+        fromAssemblyFile: false,
+      });
+    });
+  });
+
+  it("asks for each part of a version with no whole-assembly file, as before", () => {
+    const artifacts = [0, 1].map((part) => ({ kind: "glb" as const, bytes: 1, part }));
+    expect(viewerSubject(version({ artifacts }), null, false).fromAssemblyFile).toBe(false);
   });
 
   it("names no parts for a model drawn whole", () => {

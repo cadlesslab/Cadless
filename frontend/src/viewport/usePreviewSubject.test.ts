@@ -2,7 +2,7 @@ import { useGLTF } from "@react-three/drei";
 import { renderHook, act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { artifactUrl, type Version } from "../api";
+import { artifactUrl, type Version, wholeAssemblyUrl } from "../api";
 import { usePreviewSubject } from "./usePreviewSubject";
 import type { Preview } from "./viewportStore";
 
@@ -105,6 +105,71 @@ describe("usePreviewSubject", () => {
       act(() => result.current.onFailed());
       rerender({ v: twoParts() });
       expect(result.current.subject.urls).toEqual([]);
+    });
+
+    it("falls back to the file of each part when the whole-assembly file fails", () => {
+      const withWhole = version({
+        artifacts: [
+          ...[0, 1].map((part) => ({ kind: "glb" as const, bytes: 1, part })),
+          { kind: "assembly_glb", bytes: 1, part: 0 },
+        ] as Version["artifacts"],
+      });
+      const { result } = renderHook(() => usePreviewSubject(withWhole, null));
+      expect(result.current.subject.urls).toEqual([wholeAssemblyUrl(7, "assembly_glb")]);
+
+      act(() => result.current.onFailed());
+      expect(vi.mocked(useGLTF.clear).mock.calls).toEqual([[wholeAssemblyUrl(7, "assembly_glb")]]);
+      expect(result.current.subject.urls).toEqual([artifactUrl(7, "glb", 0), artifactUrl(7, "glb", 1)]);
+      expect(result.current.subject.emptyReason).toBeNull();
+
+      // Only when those fail too is the model one that could not be loaded.
+      act(() => result.current.onFailed());
+      expect(result.current.subject.urls).toEqual([]);
+      expect(result.current.subject.emptyReason).toBeTruthy();
+    });
+
+    it("asks a later version for its own whole-assembly file after one would not do", () => {
+      const withWhole = (id: number) =>
+        version({
+          id,
+          artifacts: [
+            ...[0, 1].map((part) => ({ kind: "glb" as const, bytes: 1, part })),
+            { kind: "assembly_glb", bytes: 1, part: 0 },
+          ] as Version["artifacts"],
+        });
+      const seen: string[][] = [];
+      const { result, rerender } = renderHook(
+        ({ v }: { v: Version }) => {
+          const r = usePreviewSubject(v, null);
+          seen.push(r.subject.urls);
+          return r;
+        },
+        { initialProps: { v: withWhole(7) } },
+      );
+      act(() => result.current.onFailed());
+      seen.length = 0;
+      rerender({ v: withWhole(8) });
+      // Its very first render already asks for the whole file, not its parts.
+      expect(seen[0]).toEqual([wholeAssemblyUrl(8, "assembly_glb")]);
+    });
+
+    it("tries a version's whole-assembly file again when it is opened again", () => {
+      const withWhole = (id: number) =>
+        version({
+          id,
+          artifacts: [
+            ...[0, 1].map((part) => ({ kind: "glb" as const, bytes: 1, part })),
+            { kind: "assembly_glb", bytes: 1, part: 0 },
+          ] as Version["artifacts"],
+        });
+      const { result, rerender } = renderHook(
+        ({ v }: { v: Version }) => usePreviewSubject(v, null),
+        { initialProps: { v: withWhole(7) } },
+      );
+      act(() => result.current.onFailed());
+      rerender({ v: withWhole(8) });
+      rerender({ v: withWhole(7) });
+      expect(result.current.subject.urls).toEqual([wholeAssemblyUrl(7, "assembly_glb")]);
     });
 
     it("tries again for a version with other parts", () => {

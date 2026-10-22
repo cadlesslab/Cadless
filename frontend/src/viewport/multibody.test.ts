@@ -13,125 +13,11 @@
  * primitives within a body without merging bodies or moving geometry.
  */
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { describe, expect, it } from "vitest";
 
+import { encodeGlb, parseGlb } from "../test/glb";
 import { frameDistance } from "./math";
 import { weldModel } from "./weld";
-
-// --------------------------------------------------------------------------- //
-// minimal binary-glTF writer (mirrors the OCCT exporter's document shape)
-// --------------------------------------------------------------------------- //
-
-interface BodyDef {
-  name: string;
-  translation?: [number, number, number];
-  primitives: THREE.BufferGeometry[];
-}
-
-/** Encode bodies as a GLB: root rotation node, one node+mesh per body, one
- *  primitive per geometry, no materials (OCCT emits none). */
-function encodeGlb(bodies: BodyDef[]): ArrayBuffer {
-  const bufferViews: object[] = [];
-  const accessors: object[] = [];
-  const meshes: object[] = [];
-  const rootChildren: number[] = [];
-  const nodes: object[] = [
-    // OCCT-style root: rotate the Z-up model frame into glTF's Y-up.
-    { name: "root", rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], children: rootChildren },
-  ];
-  const chunks: Uint8Array[] = [];
-  let byteOffset = 0;
-
-  const pushView = (bytes: Uint8Array): number => {
-    bufferViews.push({ buffer: 0, byteOffset, byteLength: bytes.byteLength });
-    chunks.push(bytes);
-    const pad = (4 - (bytes.byteLength % 4)) % 4;
-    if (pad) chunks.push(new Uint8Array(pad));
-    byteOffset += bytes.byteLength + pad;
-    return bufferViews.length - 1;
-  };
-
-  const pushVec3 = (arr: Float32Array): number => {
-    const min = [Infinity, Infinity, Infinity];
-    const max = [-Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < arr.length; i += 3) {
-      for (let c = 0; c < 3; c++) {
-        min[c] = Math.min(min[c], arr[i + c]);
-        max[c] = Math.max(max[c], arr[i + c]);
-      }
-    }
-    accessors.push({
-      bufferView: pushView(new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength)),
-      componentType: 5126, // FLOAT
-      count: arr.length / 3,
-      type: "VEC3",
-      min,
-      max,
-    });
-    return accessors.length - 1;
-  };
-
-  for (const body of bodies) {
-    const primitives = body.primitives.map((g) => {
-      const position = pushVec3(new Float32Array(g.getAttribute("position").array));
-      const normal = pushVec3(new Float32Array(g.getAttribute("normal").array));
-      const idx = new Uint16Array(g.index!.array);
-      accessors.push({
-        bufferView: pushView(new Uint8Array(idx.buffer, idx.byteOffset, idx.byteLength)),
-        componentType: 5123, // UNSIGNED_SHORT
-        count: idx.length,
-        type: "SCALAR",
-      });
-      return { attributes: { POSITION: position, NORMAL: normal }, indices: accessors.length - 1 };
-    });
-    meshes.push({ primitives });
-    nodes.push({
-      name: body.name,
-      mesh: meshes.length - 1,
-      ...(body.translation ? { translation: body.translation } : {}),
-    });
-    rootChildren.push(nodes.length - 1);
-  }
-
-  const json = {
-    asset: { version: "2.0" },
-    scene: 0,
-    scenes: [{ nodes: [0] }],
-    nodes,
-    meshes,
-    accessors,
-    bufferViews,
-    buffers: [{ byteLength: byteOffset }],
-  };
-  let jsonBytes = new TextEncoder().encode(JSON.stringify(json));
-  const jsonPad = (4 - (jsonBytes.length % 4)) % 4;
-  if (jsonPad) {
-    const padded = new Uint8Array(jsonBytes.length + jsonPad).fill(0x20); // spaces
-    padded.set(jsonBytes);
-    jsonBytes = padded;
-  }
-
-  const total = 12 + 8 + jsonBytes.length + 8 + byteOffset;
-  const out = new ArrayBuffer(total);
-  const dv = new DataView(out);
-  const u8 = new Uint8Array(out);
-  dv.setUint32(0, 0x46546c67, true); // "glTF"
-  dv.setUint32(4, 2, true);
-  dv.setUint32(8, total, true);
-  dv.setUint32(12, jsonBytes.length, true);
-  dv.setUint32(16, 0x4e4f534a, true); // "JSON"
-  u8.set(jsonBytes, 20);
-  let off = 20 + jsonBytes.length;
-  dv.setUint32(off, byteOffset, true);
-  dv.setUint32(off + 4, 0x004e4942, true); // "BIN"
-  off += 8;
-  for (const c of chunks) {
-    u8.set(c, off);
-    off += c.byteLength;
-  }
-  return out;
-}
 
 // --------------------------------------------------------------------------- //
 // fixture: a two-body mm-scale assembly (coordinates in metres, glTF style)
@@ -172,9 +58,7 @@ function makeAssemblyGlb(): ArrayBuffer {
 }
 
 function loadGlb(buffer: ArrayBuffer): Promise<THREE.Group> {
-  return new Promise((resolve, reject) => {
-    new GLTFLoader().parse(buffer, "", (gltf) => resolve(gltf.scene), reject);
-  });
+  return parseGlb(buffer).then((gltf) => gltf.scene);
 }
 
 function meshesIn(root: THREE.Object3D): THREE.Mesh[] {
