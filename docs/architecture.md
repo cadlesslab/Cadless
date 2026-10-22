@@ -375,6 +375,12 @@ catalog content read-only.
   the engine stores and never reads. An item recorded by a build that is not
   installed reads as `unknown` rather than being assigned one of the arrivals
   this build does implement.
+- Every GLB is in metres, glTF's unit: it is written from a build in
+  millimetres, a domain authored in metres being scaled to them at export. The
+  measure tool therefore converts a length measured in the scene before it
+  labels it in millimetres; read as millimetres, it is a thousand times short.
+  The size and volume recorded with a version stay in the domain's authoring
+  units.
 - `docs/pipeline.md` is the detailed source for repair, progress, thread, and
   process sequencing; this document intentionally does not duplicate it.
 
