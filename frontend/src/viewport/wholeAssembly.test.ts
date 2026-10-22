@@ -156,8 +156,8 @@ describe("assemblyParts", () => {
   });
 
   it("reads a name the file spells as its UTF-8 bytes as that name", async () => {
-    // How the engine's writer has spelled a name outside ASCII: each UTF-8
-    // byte read as a character of its own.
+    // How the engine's files spelled a name outside ASCII while they came
+    // through build123d's writer: each UTF-8 byte read as a character of its own.
     const name = "\uc55e \ubc14\ud034";
     const bytewise = Array.from(new TextEncoder().encode(name), (b) => String.fromCharCode(b)).join("");
     const gltf = await parseGlb(
