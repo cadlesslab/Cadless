@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cadless.assembly_check import evaluate_assembly
+from cadless.assembly_check import ASSEMBLY_CHECKS, PARTS_CHECKS, evaluate_assembly
 from cadless.assertions import (
     GeometryAssertions,
     GeometrySignature,
@@ -49,12 +49,17 @@ from cadless.config import Settings, settings
 from cadless.exporters import exported_parts
 from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
-from cadless.printer_profile import AssemblySpec
+from cadless.printer_profile import AssemblySpec, assembly_spec
 from cadless.prompts import CodeGenerator
 from cadless.validation import validate_code
 from cadless.worker import run_code
 
 logger = logging.getLogger(__name__)
+
+# What a build that did not ask for an assembly is measured against. The parts
+# checks it faces need no printer, so the defaults serve only to describe its
+# joints, and nothing here reads a user's settings.
+_UNASKED = assembly_spec()
 
 # Lifecycle phases emitted as {"event": "stage", "phase": ..., "status": ...}.
 STAGE_PHASES = (
@@ -103,10 +108,11 @@ class GenerationResult:
     #: written from a prompt holding the user's, and handing that to the
     #: orchestrator as fact is the thing the transcript already refuses to do.
     critique: dict | None = None
-    #: The assembly check of the build this result carries, or ``None`` where the
-    #: turn did not ask for one. ``{"ok", "order", "attempt", "measured"}``, plus
-    #: ``failures``, ``unchecked``, ``joints`` and ``releases`` once something was
-    #: measured.
+    #: The assembly check of the build this result carries, or ``None`` where
+    #: there was nothing to check: a build of one part on a turn that did not ask
+    #: for an assembly. ``{"ok", "order", "attempt", "measured"}``, plus
+    #: ``failures``, ``unchecked``, ``joints``, ``releases`` and ``checks`` (which
+    #: of them the build was held to) once something was measured.
     #:
     #: ``joints`` is one sorted neighbour list per part, and ``releases`` one unit
     #: heading per part -- the way the order search took that part out -- with an
@@ -139,6 +145,13 @@ class GenerationResult:
     #: addresses by index. Zero is ordinary rather than a failure: a build whose
     #: headings were never measured gets its written steps and no pictures.
     guide: dict | None = None
+    #: The build's parts as its tree names them, one ``{"index", "name", "path",
+    #: "color"}`` per part in part order -- the worker result's ``parts``, carried
+    #: through for the build this result returns.
+    parts: list[dict] | None = None
+    #: The whole build as one GLB and one STEP: the worker result's, carried through.
+    assembly_glb_path: str | None = None
+    assembly_step_path: str | None = None
 
     @property
     def attempt_count(self) -> int:
@@ -337,11 +350,15 @@ class Pipeline:
             _emit_stage(on_progress, "validate", "ok", n)
 
             _emit_stage(on_progress, "build", "begin", n)
+            # Always asked: the worker measures only a build of several parts,
+            # so a one-part build pays nothing, and whether the turn asked for an
+            # assembly decides how the measurement is judged, not whether it is
+            # taken.
             res = run_code(
                 code,
                 export_dir=export_dir,
                 export_scale=export_scale,
-                check_assembly=assembly is not None,
+                check_assembly=True,
                 config=self._cfg,
             )
             if res.ok:
@@ -383,18 +400,22 @@ class Pipeline:
                             continue
                     else:
                         _emit_stage(on_progress, "critique", "ok", n)
-                # Does the split actually go together? Only on a turn that asked
-                # for an assembly, and only once the model produced more than one
-                # part -- a lone part against the build volume is print_fit's
-                # question, not this one.
+                # Do the parts actually go together? Once the model produced more
+                # than one part -- a lone part against the build volume is
+                # print_fit's question, not this one. A turn that asked for an
+                # assembly is held to every check against its printer; any other
+                # build to the parts checks alone (see assembly_check).
                 #
                 # Runs on every attempt including the last, for the reason the
                 # critique does: a `n < max_tries` gate leaves the build actually
-                # delivered as the one nobody checked. Unlike the critique it then
-                # refuses that build rather than handing it over with the finding
-                # attached -- a vision model disagreeing about a shape is an
-                # opinion, whereas two parts occupying the same space is not, and
-                # printing it wastes hours and material.
+                # delivered as the one nobody checked. On a turn that asked, it
+                # then refuses that build rather than handing it over with the
+                # finding attached -- a vision model disagreeing about a shape is
+                # an opinion, whereas two parts occupying the same space is not,
+                # and printing it wastes hours and material. On a turn that did
+                # not ask, the last attempt is handed over with the verdict on
+                # it: nobody asked for an assembly, and a model whose parts were
+                # found wanting is still the model that was asked for.
                 if assembly is not None and res.assembly is None:
                     # The turn asked and nothing came back. Ordinarily that means
                     # the model produced one solid, which is not an assembly and
@@ -404,9 +425,11 @@ class Pipeline:
                     # tell this from a turn that never asked -- both of which
                     # otherwise leave the result carrying nothing at all.
                     last_assembly = {"ok": None, "order": None, "attempt": n, "measured": False}
-                if assembly is not None and res.assembly is not None:
+                if res.assembly is not None:
+                    asked = assembly is not None
+                    checks = ASSEMBLY_CHECKS if asked else PARTS_CHECKS
                     _emit_stage(on_progress, "assembly", "begin", n)
-                    fit = evaluate_assembly(res.assembly, assembly)
+                    fit = evaluate_assembly(res.assembly, assembly or _UNASKED, checks=checks)
                     last_assembly = {
                         "ok": fit.ok,
                         "order": fit.order,
@@ -419,9 +442,33 @@ class Pipeline:
                         # a part came out is something measured, not something
                         # ruled, and the report carries rulings.
                         "releases": list(res.assembly.releases),
+                        "checks": sorted(checks),
                     }
                     signal = fit.repair_signal()
-                    if signal is not None:
+                    if signal is not None and not asked:
+                        last_error = "assembly: " + signal
+                        _emit_stage(on_progress, "assembly", "error", n, last_error)
+                        # Only a failure is repaired. A check that could not be
+                        # established found no fault for a repair to fix, so it
+                        # is reported instead.
+                        if fit.failures and n < max_tries:
+                            self._record(
+                                attempts, on_progress, Attempt(n, code, "assembly", last_error)
+                            )
+                            code = self._repair(
+                                on_progress,
+                                intent,
+                                code,
+                                last_error,
+                                n,
+                                max_tries,
+                                may_resplit=may_resplit,
+                                forced=True,
+                                images=images,
+                                assembly=None,
+                            )
+                            continue
+                    elif signal is not None:
                         last_error = "assembly: " + signal
                         _emit_stage(on_progress, "assembly", "error", n, last_error)
                         self._record(
@@ -447,7 +494,8 @@ class Pipeline:
                             assembly=assembly,
                         )
                         continue
-                    _emit_stage(on_progress, "assembly", "ok", n)
+                    else:
+                        _emit_stage(on_progress, "assembly", "ok", n)
                 # Deterministic geometry post-conditions: a failed
                 # assertion is a semantic repair signal via the same channel as the
                 # VLM critique. Optional and additive — only when budget remains and
@@ -488,7 +536,15 @@ class Pipeline:
                 _emit_stage(on_progress, "mesh", "ok", n)
                 # Last, and only on a split that was accepted. A guide written
                 # earlier would describe an assembly a later check still refuses.
-                guide = self._guide(on_progress, intent, code, last_assembly, export_dir, n)
+                guide = self._guide(
+                    on_progress,
+                    intent,
+                    code,
+                    last_assembly,
+                    export_dir,
+                    n,
+                    asked=assembly is not None,
+                )
                 self._record(attempts, on_progress, Attempt(n, code, "execute", None))
                 return GenerationResult(
                     ok=True,
@@ -505,6 +561,9 @@ class Pipeline:
                     critique=last_critique,
                     assembly=last_assembly,
                     guide=guide,
+                    parts=res.parts,
+                    assembly_glb_path=res.assembly_glb_path,
+                    assembly_step_path=res.assembly_step_path,
                 )
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)
@@ -683,8 +742,14 @@ class Pipeline:
             _emit_stage(on_progress, "critique", "error", n, f"critique unavailable: {exc}")
             return None
 
-    def _guide(self, on_progress, intent: str, code: str, verdict, export_dir, n: int):
+    def _guide(
+        self, on_progress, intent: str, code: str, verdict, export_dir, n: int, *, asked=True
+    ):
         """How the accepted parts go together, or ``None`` where there is no assembly.
+
+        Only a turn that asked for an assembly has its parts named by the writer's
+        model; any other build is described in plain words, so measuring every
+        build of several parts adds no model call to a turn that did not ask.
 
         Never fatal, and for a sharper reason than the critique's: by this point
         the parts are built, measured and accepted, so a turn that failed here
@@ -720,7 +785,7 @@ class Pipeline:
             joints = verdict.get("joints") or []
             written = (
                 self._guide_writer.write(intent, code, order, joints)
-                if self._guide_writer
+                if self._guide_writer and asked
                 else plain_guide(order, joints)
             )
             frames = self._draw_guide(export_dir, order, verdict.get("releases") or [])

@@ -19,7 +19,9 @@ call per candidate would erase the benefit.
 - `cadless/judge.py:select_winner` picks the winner by climbing a
   **cheap-first ladder**, short-circuiting as soon as a rung is decisive
   (the `Rung` enum records which one decided, for inspection):
-  1. **filter** — hard disqualifiers: failed builds, degenerate geometry.
+  1. **filter** — hard disqualifiers: failed builds, degenerate geometry, and
+     — while another candidate's parts pass — a build handed over with its parts
+     found not to go together.
   2. **assertions** — deterministic geometry post-conditions, when given.
   3. **vlm** — render critique, when the judge is handed a critic. The live call
      site passed none for as long as this ladder existed, so the rung never fired

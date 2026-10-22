@@ -31,6 +31,7 @@ class FakeGen:
         self.repairs = 0
         self.last_refine_assembly = None
         self.repair_may_resplits: list[bool] = []
+        self.repair_assemblies: list = []
 
     def generate(
         self,
@@ -52,6 +53,7 @@ class FakeGen:
         self.repairs += 1
         self.last_repair_error = error
         self.repair_may_resplits.append(may_resplit)
+        self.repair_assemblies.append(assembly)
         return self._output
 
 
@@ -190,12 +192,14 @@ def test_an_edit_to_an_assembly_reaches_the_generator_with_the_spec(monkeypatch)
     assert gen.last_refine_assembly is SPEC
 
 
-def test_a_turn_that_did_not_ask_never_runs_the_stage(monkeypatch):
+def test_a_turn_that_did_not_ask_still_has_its_parts_measured(monkeypatch):
+    """The worker measures only a build of several parts, so asking costs a
+    one-part build nothing; whether the turn asked decides how it is judged."""
     captured = {}
     result, events = _run(FakeGen(), _sound(), monkeypatch, assembly=None, captured=captured)
     assert result.ok
-    assert captured["check_assembly"] is False
-    assert not [phase for phase, _ in _stages(events) if phase == "assembly"]
+    assert captured["check_assembly"] is True
+    assert ("assembly", "ok") in _stages(events)
 
 
 def test_a_single_part_result_never_runs_the_stage(monkeypatch):
@@ -400,9 +404,100 @@ def test_what_the_result_carries_survives_the_trip_to_the_model(monkeypatch):
     assert json.loads(json.dumps(result.assembly)) == result.assembly
 
 
-def test_a_result_from_a_turn_that_did_not_ask_carries_nothing(monkeypatch):
+def test_a_multi_part_build_that_did_not_ask_carries_its_verdict(monkeypatch):
     result, _ = _run(FakeGen(), _sound(), monkeypatch, assembly=None)
-    assert result.assembly is None
+    assert result.assembly is not None
+    assert result.assembly["measured"] is True
+    assert result.assembly["ok"] is True
+    assert result.assembly["order"] == [0, 1]
+
+
+def _loose_and_oversized() -> AssemblyMeasurements:
+    return AssemblyMeasurements(
+        part_bboxes=[[999.0, 100.0, 50.0], [100.0, 100.0, 50.0]],
+        overlaps=[],
+        gaps=[[0, 1, 30.0]],
+        order=[0, 1],
+        releases=[[0.0, 0.0, 1.0], []],
+    )
+
+
+def test_a_build_that_did_not_ask_is_not_held_to_the_bed_or_to_touching(monkeypatch):
+    gen = FakeGen()
+    result, _ = _run(gen, _loose_and_oversized(), monkeypatch, assembly=None)
+    assert result.ok
+    assert result.assembly["ok"] is True
+    assert gen.repairs == 0
+
+
+def test_a_turn_that_asked_is_still_held_to_the_bed(monkeypatch):
+    result, _ = _run(FakeGen(), _loose_and_oversized(), monkeypatch, tries=1)
+    assert not result.ok
+    assert "does not fit" in result.error
+
+
+def test_an_unasked_shared_volume_is_repaired_without_the_bed_split_brief(monkeypatch):
+    gen = FakeGen()
+    _run(gen, _overlapping(), monkeypatch, assembly=None, tries=3)
+    assert gen.repairs >= 1
+    assert "share" in gen.last_repair_error
+    assert gen.repair_assemblies == [None] * gen.repairs
+
+
+def test_an_unasked_failure_on_the_last_attempt_is_handed_over_with_its_verdict(monkeypatch):
+    """Nobody asked for an assembly, so the model asked for is handed over with
+    its verdict rather than refused."""
+    result, _ = _run(FakeGen(), _overlapping(), monkeypatch, assembly=None, tries=1)
+    assert result.ok
+    assert result.assembly["ok"] is False
+    assert any("share" in f for f in result.assembly["failures"])
+    assert result.guide is None
+
+
+def test_an_unasked_verdict_that_could_not_be_established_is_not_repaired(monkeypatch):
+    """A check that could not be established found no fault for a repair to fix."""
+    reason = "shared volume between part 1 and part 2: the intersection could not be computed"
+    spent = AssemblyMeasurements(
+        part_bboxes=[[100.0, 100.0, 50.0], [100.0, 100.0, 50.0]],
+        overlaps=[],
+        gaps=[[0, 1, 0.2]],
+        order=[0, 1],
+        unchecked=[reason],
+    )
+    gen = FakeGen()
+    result, _ = _run(gen, spent, monkeypatch, assembly=None, tries=3)
+    assert gen.repairs == 0
+    assert result.ok
+    assert result.assembly["ok"] is False
+    assert result.assembly["unchecked"] == [reason]
+
+
+def test_a_captive_part_is_not_repaired_when_the_turn_did_not_ask(monkeypatch):
+    """A chain or a ball in a cage has no order to come apart in, by design."""
+    captive = AssemblyMeasurements(
+        part_bboxes=[[20.0, 20.0, 4.0], [20.0, 20.0, 4.0]],
+        overlaps=[],
+        gaps=[[0, 1, 2.0]],
+        order=None,
+        trapped=[0, 1],
+    )
+    gen = FakeGen()
+    result, _ = _run(gen, captive, monkeypatch, assembly=None, tries=3)
+    assert gen.repairs == 0
+    assert result.ok
+    assert result.assembly["ok"] is True
+
+
+def test_the_verdict_says_which_checks_the_build_was_held_to(monkeypatch):
+    asked, _ = _run(FakeGen(), _sound(), monkeypatch)
+    unasked, _ = _run(FakeGen(), _sound(), monkeypatch, assembly=None)
+    assert asked.assembly["checks"] == ["fit", "mating", "order", "overlap"]
+    assert unasked.assembly["checks"] == ["overlap"]
+
+
+def test_an_unasked_failure_is_reported_as_a_failed_stage(monkeypatch):
+    _, events = _run(FakeGen(), _overlapping(), monkeypatch, assembly=None, tries=1)
+    assert ("assembly", "error") in _stages(events)
 
 
 # --- the guide ------------------------------------------------------------
@@ -453,10 +548,33 @@ def test_a_verdict_that_did_not_pass_is_not_described_even_holding_an_order():
     assert guide is None
 
 
-def test_a_turn_that_did_not_ask_is_never_described(monkeypatch):
+def test_a_multi_part_build_that_did_not_ask_is_described_too(monkeypatch):
     result, _ = _run(FakeGen(), _sound(), monkeypatch, assembly=None)
     assert result.ok
-    assert result.guide is None
+    assert result.guide is not None
+    assert result.guide["steps"] == ["Start with part 1.", "Fit part 2 to part 1."]
+
+
+class _CountingWriter:
+    def __init__(self):
+        self.calls = 0
+
+    def write(self, intent, code, order, joints):
+        from cadless.guide_writer import plain_guide
+
+        self.calls += 1
+        return plain_guide(order, joints)
+
+
+def test_only_a_turn_that_asked_has_its_parts_named_by_the_writer(monkeypatch):
+    """Measuring every build of several parts adds no model call to a turn that
+    did not ask for an assembly."""
+    unasked = _CountingWriter()
+    _run(FakeGen(), _sound(), monkeypatch, assembly=None, guide_writer=unasked)
+    asked = _CountingWriter()
+    _run(FakeGen(), _sound(), monkeypatch, guide_writer=asked)
+    assert unasked.calls == 0
+    assert asked.calls == 1
 
 
 def test_a_single_part_build_is_not_an_assembly_and_gets_no_guide(monkeypatch):
@@ -717,7 +835,7 @@ def test_the_loop_is_bounded_however_bad_the_split(monkeypatch, tries):
 _TWO_PARTS = "from build123d import *\nresult = Compound(children=[{a}, {b}])\n"
 CLEARED = _TWO_PARTS.format(a="Box(20, 20, 10)", b="Pos(20.2, 0, 0) * Box(20, 20, 10)")
 OVERLAPPING = _TWO_PARTS.format(a="Box(20, 20, 10)", b="Pos(19, 0, 0) * Box(20, 20, 10)")
-TOO_BIG = _TWO_PARTS.format(a="Box(400, 20, 10)", b="Pos(20.2, 0, 0) * Box(20, 20, 10)")
+TOO_BIG = _TWO_PARTS.format(a="Box(400, 20, 10)", b="Pos(210.2, 0, 0) * Box(20, 20, 10)")
 
 
 @pytest.mark.build123d
@@ -754,15 +872,24 @@ def test_a_part_that_will_not_fit_the_bed_is_refused_end_to_end():
 
 
 @pytest.mark.build123d
-def test_the_same_split_is_accepted_when_the_turn_did_not_ask_for_an_assembly():
-    # The overlapping pair is only a defect against the assembly contract. With
-    # the option off it is an ordinary multi-solid build and must behave exactly
-    # as it did before this stage existed.
+def test_the_same_split_is_handed_over_with_its_verdict_when_the_turn_did_not_ask():
+    # Measured all the same, and the shared volume found; but nobody asked for an
+    # assembly, so the last attempt is handed over rather than refused.
     result = Pipeline(generator=FakeGen(OVERLAPPING), config=Settings(repair_max_attempts=1)).run(
         "two blocks", assembly=None
     )
     assert result.ok, result.error
-    assert result.assembly is None
+    assert result.assembly["ok"] is False
+    assert any("share" in f for f in result.assembly["failures"])
+
+
+@pytest.mark.build123d
+def test_a_part_too_big_for_the_bed_passes_when_the_turn_did_not_ask():
+    result = Pipeline(generator=FakeGen(TOO_BIG), config=Settings(repair_max_attempts=1)).run(
+        "a long bar beside a block", assembly=None
+    )
+    assert result.ok, result.error
+    assert result.assembly["ok"] is True
 
 
 # --- what the render reviewer is shown ------------------------------------
@@ -813,9 +940,9 @@ def test_the_reviewer_is_shown_the_whole_assembly_rather_than_one_part(tmp_path)
 def test_a_multi_solid_build_is_reviewed_whole_with_the_option_off_too(tmp_path):
     """The defect was never gated on the assembly option, so neither is the fix.
 
-    Exporting splits on the solid count alone and the option gates only the
-    measurement, so a turn that never asked for an assembly still writes parts
-    and still had its review filed against the first of them.
+    Exporting splits on the solid count alone, so a turn that never asked for an
+    assembly still writes parts and still had its review filed against the first
+    of them.
     """
     critic = _RecordingCritic()
     result = Pipeline(
@@ -825,7 +952,6 @@ def test_a_multi_solid_build_is_reviewed_whole_with_the_option_off_too(tmp_path)
     ).run("two blocks", export_dir=str(tmp_path), assembly=None)
 
     assert result.ok, result.error
-    assert result.assembly is None, "the option was off, so nothing was measured"
     assert critic.subjects, "the reviewer never ran"
     assert _names_shown(critic.subjects[0]) == ["model_p0.stl", "model_p1.stl"]
 

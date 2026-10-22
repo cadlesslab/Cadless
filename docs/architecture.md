@@ -61,8 +61,8 @@ port, bound to loopback.
    is not what this does.
 6. What the unauthenticated settings endpoint can change MUST stay tiered.
    Runtime tuning is settable; anything that multiplies per-turn spend, or that
-   turns on output no later stage checks, is settable only when the launch
-   environment opts in; and configuration that
+   turns on the request the model is least reliable at, is settable only when the
+   launch environment opts in; and configuration that
    moves where code executes, relaxes a sandbox limit, or invalidates stored
    embeddings is never registered and is refused by the
    request model rather than accepted and discarded. Tuning values MUST NOT be
@@ -170,7 +170,7 @@ candidate judging, the identity seam and the image decisions are recorded under
    every one of those calls as well, framed in the same place and the same order.
    A turn asks either by opting in or by editing a model already recorded as an
    assembly — the record lives on the version, so a reload that clears the opt-in
-   does not turn the next edit back into a request for one connected solid. What
+   does not drop the next edit back to the brief of a turn that never asked. What
    the record does *not* hold is the machine: which bed and which clearance apply
    are read from the settings saved now, so changing printer changes what an edit
    must satisfy rather than pinning it to the one it was first built for.
@@ -185,40 +185,57 @@ candidate judging, the identity seam and the image decisions are recorded under
    check carries the whole brief whatever the turn, because there the split is
    what failed and cutting the model differently is the answer. Without that
    exception an edit that broke its assembly could only keep re-offering the same
-   split until the repair budget ran out. A call handed neither works against the
-   closing rule asking for one connected solid, and one solid is an ordinary
-   result that nothing downstream refuses — the assembly check does not fire on
-   it, so such a turn passes every gate and returns the single oversized part the
-   option existed to avoid.
+   split until the repair budget ran out. A call handed neither is closed by the
+   same `result` rule the system prompt states — one solid, or a Compound of
+   separate parts, each placed where it sits assembled and labelled — and
+   whatever parts it returns are held only to the check for a build nobody asked
+   to split, never to the bed, so one oversized part passes every gate there:
+   that is the case the option exists for.
 3. Static validation rejects disallowed syntax and imports before any execution.
 4. `cadless.worker.run_code` sends the program to the worker service when
    `CADLESS_WORKER_URL` is configured; local development and tests use a
    resource-limited subprocess fallback.
 5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
    the shared data volume — one file per kind, or one per solid where the build
-   produced several. Each part's GLB draws the part where it sits in the
-   assembled model: the glTF writer applies its Z-up-to-Y-up turn inside a
-   shape's own placement rather than around it, so the placement is written
-   unturned; a part that keeps a placement of its own — as a solid split out of
-   a result does — is handed over inside a holder that has none, which takes
-   the turn and leaves the placement beneath it. The API persists metadata and
-   serves the artifacts. Not every artifact kind is an export format, and the
-   two are declared in different places: a thumbnail, the drawings of an
-   assembly guide, and the motion an accepted assembly is played from are
-   things the engine made *about* a build rather than formats the build was
-   converted *to*.
-   They are served by media type alone and MUST stay out of the exporter
-   registry, whose per-part file naming they do not meet — a kind added there is
-   written and then never found, with nothing raising. A mirror test holds the
-   declarations of that vocabulary against each other.
+   produced several. It reads the result as the tree build123d makes
+   (`cadless/assembly_tree.py`): the parts are the result's solids in the order
+   `solids()` returns them, which is the order every part file is numbered by,
+   and each is named from the label of the leaf it came from, or `part<i>`.
+   A build of several parts writes each part with its placement baked into its
+   geometry. Each part's GLB draws the part where it sits in the assembled
+   model: the glTF writer applies its Z-up-to-Y-up turn inside a shape's own
+   placement rather than around it, so the placement is written unturned; a
+   one-part build, exported as the shape the code made, keeps any placement of
+   its own and is handed over inside a holder that has none, which takes the
+   turn and leaves the placement beneath it. A build of several parts also gets
+   the whole of itself as one GLB and one STEP, written from the same parts and
+   naming each part and labelled group. The API persists metadata — the part
+   names with the version, checked and bounded where they are stored, and
+   returned only where they number the files the version holds — and serves the
+   artifacts, copying a build's files only from the route's own staging
+   directory, never from a directory a worker's report names. Not every artifact kind is in the exporter registry, and the two
+   are declared in different places: a thumbnail, the drawings of an assembly
+   guide, and the motion an accepted assembly is played from are things the
+   engine made *about* a build rather than formats the build was converted
+   *to*; the whole-assembly files are exports, but one file per build rather
+   than one per part. They are served by media type alone and MUST stay out of
+   the exporter registry, whose per-part file naming they do not meet — a kind
+   added there is written and then never found, with nothing raising. A mirror
+   test holds the declarations of that vocabulary against each other.
 6. An execution failure can return to the provider as a repair prompt, and so can
    a post-build check that ran on a program which executed perfectly well: the
-   render critique, the geometry assertions, and — on a turn that asked for an
-   assembly — whether the parts it produced actually go together. The last of
-   those is the one that can end a turn rather than only prolong it. A build
-   whose parts overlap, do not mate, or admit no collision-free assembly order is
-   refused once the repair budget is gone, so a successful execution is not by
-   itself a stored version. Everything else that succeeds is stored as a project
+   render critique, the geometry assertions, and — on any build of several
+   parts — whether those parts go together. A turn that asked for an assembly is
+   held to every check against its printer; any other build only to whether two
+   parts share volume — the bed, parts that touch nothing, and a part that
+   cannot come out being no fault in a model nobody asked to split, which may be
+   an exploded view or printed in place. That check on an assembly turn is the
+   one that can end a turn rather than only prolong it: a build whose parts
+   overlap, do not fit the bed, do not mate, or admit no collision-free assembly
+   order is refused once the repair budget is gone, so a successful execution is
+   not by itself a stored version. Any other build is handed over with the
+   verdict on it, and one whose check could not be established is not repaired
+   at all. Everything else that succeeds is stored as a project
    version whose source remains available for parameter changes and deterministic
    rebuilds. The exception to the rebuild half is a
    version in several pieces, or one that turns out to rebuild into them: a
@@ -297,10 +314,9 @@ catalog content read-only.
   from it. It blocks raising spend rather than lowering it, so whoever turned
   something on can always turn it off, and closing the gate also stops a raise
   saved while it was open from being replayed at the next boot. Spend is the
-  usual reason to sit behind it but not the only one: a switch that turns on
-  output no later stage checks is gated on the same terms, because what it
-  exposes is a wrong answer rather than a bill, and the gate is closed again the
-  same way once something does check.
+  usual reason to sit behind it but not the only one: the switch that turns on
+  the bed-split brief is gated on the same terms, because a part split badly is
+  a wrong answer rather than a bill.
 - A `Pipeline` copies the settings it was built with, so a turn stays
   attributable to one configuration even though applying a setting mutates the
   shared singleton in place. Grounding retrieval runs outside the pipeline and

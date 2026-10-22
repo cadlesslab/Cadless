@@ -63,6 +63,29 @@ def test_generate_success_persists_version_and_artifacts(client, store, monkeypa
     assert client.get(f"/projects/{pid}").json()["current_version_id"] == data["version"]["id"]
 
 
+def test_generate_stores_the_parts_and_the_whole_assembly(client, store, monkeypatch):
+    parts = [
+        {"index": 0, "name": "body", "path": [], "color": None},
+        {"index": 1, "name": "lid", "path": [], "color": None},
+    ]
+
+    def fake_assembly(intent, export_dir, on_progress=None, prior_code=None):
+        for n in range(2):
+            (Path(export_dir) / f"model_p{n}.stl").write_bytes(bytes([n]) * 84)
+        (Path(export_dir) / "assembly.glb").write_bytes(b"glTF-whole")
+        (Path(export_dir) / "assembly.step").write_text("ISO-10303-21;")
+        return GenerationResult(ok=True, intent=intent, code="result = 1", attempts=[], parts=parts)
+
+    monkeypatch.setattr(gen, "generate_cad", fake_assembly)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    version = client.post(f"/projects/{pid}/generate", json={"prompt": "a box"}).json()["version"]
+
+    assert version["parts"] == parts
+    kinds = {a["kind"] for a in version["artifacts"]}
+    assert {"assembly_glb", "assembly_step"} <= kinds
+
+
 def test_generate_rejects_catalog_item_403(client, store, tmp_path, monkeypatch):
     """Generating into a catalog project appends a version and moves its current
     pointer. The gate fires ahead of the pipeline, so no LLM call is needed to
@@ -218,8 +241,8 @@ def test_a_refinement_keeps_the_assembly_record(client, store, monkeypatch):
 
     This route never sets the flag itself — a fresh prompt is not an assembly and
     the request has no field for one — but dropping it on a refinement would leave
-    the model in pieces with nothing recording why, and the next chat edit would be
-    told to assign the final solid. Read from the store, since the flag is
+    the model in pieces with nothing recording why, and the next chat edit would
+    lose the bed it was split for. Read from the store, since the flag is
     deliberately not on the wire.
     """
     import asyncio

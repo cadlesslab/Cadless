@@ -408,8 +408,7 @@ def test_a_branch_and_a_clone_keep_the_assembly_record(tmp_path):
     """A copy that drops the flag recreates the very bug the column exists to close.
 
     The copied model is still in pieces; only the record of why would be gone, and
-    the first edit to it would be told to assign the final solid — which is an
-    instruction to fuse the parts.
+    the first edit to it would lose the bed and the clearance it was split for.
     """
 
     async def go():
@@ -426,6 +425,75 @@ def test_a_branch_and_a_clone_keep_the_assembly_record(tmp_path):
 
         clone = await s.clone_project(p.id)
         assert (await s.list_versions(clone.id))[0].built_as_assembly is True
+
+    run(go())
+
+
+_PARTS = [
+    {"index": 0, "name": "chassis", "path": ["car"], "color": None},
+    {"index": 1, "name": "wheel", "path": ["car"], "color": [1.0, 0.0, 0.0, 1.0]},
+]
+
+
+def test_version_keeps_the_names_its_build_gave_its_parts(tmp_path):
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        built = await s.add_version(p.id, "a car", "result = Compound()", ok=True, parts=_PARTS)
+        assert built.parts == _PARTS
+        assert (await s.get_version(built.id)).parts == _PARTS
+        assert (await s.list_versions(p.id))[0].parts == _PARTS
+        plain = await s.add_version(p.id, "x", "result=1", ok=True)
+        assert (await s.get_version(plain.id)).parts is None
+
+    run(go())
+
+
+def test_a_branch_and_a_clone_keep_the_part_names(tmp_path):
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        v = await s.add_version(p.id, "a car", "result = Compound()", ok=True, parts=_PARTS)
+        await s.set_current_version(p.id, v.id)
+
+        branch = await s.branch_project(v.id)
+        assert (await s.list_versions(branch.id))[0].parts == _PARTS
+
+        clone = await s.clone_project(p.id)
+        assert (await s.list_versions(clone.id))[0].parts == _PARTS
+
+    run(go())
+
+
+def test_migration_adds_the_parts_column_to_legacy_db(tmp_path):
+    """A database written before parts had names gains the column; its rows hold none."""
+    import sqlite3
+
+    db = tmp_path / "db.sqlite"
+    legacy = sqlite3.connect(db)
+    legacy.executescript(
+        "CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,"
+        " created_at TEXT NOT NULL, updated_at TEXT NOT NULL, current_version_id INTEGER);"
+        "CREATE TABLE script_versions (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " project_id INTEGER NOT NULL, prompt TEXT NOT NULL, code TEXT, ok INTEGER NOT NULL,"
+        " error TEXT, volume REAL, bbox_json TEXT, created_at TEXT NOT NULL);"
+        "INSERT INTO projects(name,created_at,updated_at) VALUES ('old','t','t');"
+        "INSERT INTO script_versions(project_id,prompt,ok,created_at)"
+        " VALUES (1,'legacy',1,'t');"
+    )
+    legacy.commit()
+    legacy.close()
+
+    async def go():
+        s = Store(db_path=db, artifacts_dir=tmp_path / "artifacts")
+        await s.init()
+        (old,) = await s.list_versions(1)
+        assert old.parts is None
+        assert old.prompt == "legacy"
+        nv = await s.add_version(1, "new", "result=1", ok=True, parts=_PARTS)
+        assert (await s.get_version(nv.id)).parts == _PARTS
 
     run(go())
 
@@ -458,6 +526,26 @@ def test_forge_losers_record_the_assembly_they_were_raced_under(tmp_path):
         )
 
         assert [r.built_as_assembly for r in rows] == [True]
+
+    run(go())
+
+
+def test_forge_losers_keep_the_names_their_builds_gave_their_parts(tmp_path):
+    from cadless.forge import persist_losers
+    from cadless.pipeline import GenerationResult
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        winner = await s.add_version(p.id, "a car", "result = Compound()", ok=True)
+        loser = GenerationResult(
+            ok=True, intent="a car", code="result = Compound()", parameters={}, parts=_PARTS
+        )
+
+        rows = await persist_losers(s, p.id, "a car", [loser], winner_version_id=winner.id)
+
+        assert [r.parts for r in rows] == [_PARTS]
 
     run(go())
 
@@ -1273,5 +1361,19 @@ def test_thumbnail_version_ids_spans_chunk_boundaries(tmp_path, monkeypatch):
         # duplicates collapse rather than inflating the parameter count
         dupes = list(expected) + list(expected)
         assert await s.thumbnail_version_ids(dupes) == expected
+
+    run(go())
+
+
+def test_a_part_list_that_cannot_be_read_is_not_kept(tmp_path):
+    """Kept as it came, it would fail every later read of the project's versions."""
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("P")
+        built = await s.add_version(p.id, "x", "result=1", ok=True, parts=[{"index": 0}])
+        assert built.parts is None
+        assert (await s.get_version(built.id)).parts is None
 
     run(go())

@@ -103,8 +103,9 @@ def test_a_repair_site_cannot_inherit_an_answer_it_never_gave():
 
 def test_a_repair_round_carries_the_assembly_spec():
     """Validation failing on attempt 1 is the ordinary case, not a rare one, so a
-    repair that lost the spec would quietly turn most assembly turns back into
-    single solids -- on exactly the request least likely to land first time."""
+    repair that lost the spec would quietly drop the bed and the clearance from
+    most assembly turns -- on exactly the request least likely to land first
+    time."""
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
     )
@@ -461,6 +462,30 @@ def test_failing_assertion_at_budget_end_does_not_hard_stop(monkeypatch):
     # budget exhausted, but the build itself was valid -> returned, not a failure.
     assert result.ok
     assert gen.repairs == 0
+
+
+def test_a_successful_run_carries_the_build_s_part_names(monkeypatch):
+    parts = [{"index": 0, "name": "wheel", "path": [], "color": None}]
+    gen = _pipeline_with_exec(monkeypatch, _exec_ok(parts=parts), [GOOD])
+
+    result = Pipeline(generator=gen).run("x")
+
+    assert result.ok
+    assert result.parts == parts
+
+
+def test_a_successful_run_carries_the_whole_assembly_paths(monkeypatch):
+    exec_result = _exec_ok(
+        assembly_glb_path="/d/assembly.glb", assembly_step_path="/d/assembly.step"
+    )
+    gen = _pipeline_with_exec(monkeypatch, exec_result, [GOOD])
+
+    result = Pipeline(generator=gen).run("x")
+
+    assert (result.assembly_glb_path, result.assembly_step_path) == (
+        "/d/assembly.glb",
+        "/d/assembly.step",
+    )
 
 
 def test_missing_assertions_never_blocks(monkeypatch):

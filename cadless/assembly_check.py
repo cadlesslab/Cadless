@@ -27,6 +27,16 @@ that could not be established therefore lands in ``unchecked``, and an
 ``unchecked`` entry makes the report not ``ok`` exactly as a failure does. The
 report keeps the two apart so the reader can tell "checked and wrong" from "could
 not be checked".
+
+Which checks a build faces
+--------------------------
+A turn that asked for an assembly faces every check, against the printer it is
+for. Any other build of several parts faces :data:`PARTS_CHECKS` alone: whether
+two parts share volume, which is wrong in any model. Fitting the bed is
+:mod:`cadless.print_fit`'s question for a build nobody asked to split, as it is
+for a lone part; parts that touch nothing are not wrong in a model nobody asked
+to join -- an exploded view, a set of separate objects; and a part that cannot
+come out is not wrong in one printed in place -- a chain, a ball in a cage.
 """
 
 from __future__ import annotations
@@ -64,6 +74,11 @@ OVERLAP_EPSILON_MM3 = 1e-9
 #: agreeing: the search writes it, and the policy reads it to tell 'the search
 #: could not rule' from 'it ruled and found nothing'.
 _ORDER_UNCHECKED_PREFIX = "assembly order:"
+# How the measurement words what it could not establish about a pair, so that a
+# report can tell which check each such line bears on.
+_PAIRS_UNCHECKED_PREFIX = "overlap and gap between every pair:"
+_SHARED_UNCHECKED_PREFIX = "shared volume between"
+_GAP_UNCHECKED_PREFIX = "gap between"
 
 
 @dataclass(frozen=True)
@@ -157,31 +172,78 @@ class AssemblyReport:
         return "The parts of this assembly were not accepted:\n" + "\n".join(bullets)
 
 
+#: Every check, for a turn that asked for an assembly.
+ASSEMBLY_CHECKS = frozenset({"fit", "overlap", "mating", "order"})
+
+#: The checks any other build of several parts faces (see the module docstring).
+PARTS_CHECKS = frozenset({"overlap"})
+
+
+def _concerns(reason) -> str | None:
+    """The check an unestablished measurement bears on, or ``None`` where it says not.
+
+    A reason that is not text says nothing about its check, so it counts against
+    every report rather than raising out of a function that must not.
+    """
+    if not isinstance(reason, str):
+        return None
+    if reason.startswith(_ORDER_UNCHECKED_PREFIX):
+        return "order"
+    if reason.startswith(_GAP_UNCHECKED_PREFIX):
+        return "mating"
+    if reason.startswith((_SHARED_UNCHECKED_PREFIX, _PAIRS_UNCHECKED_PREFIX)):
+        return "overlap"
+    return None
+
+
 def evaluate_assembly(
     measurements: AssemblyMeasurements | None,
     spec: AssemblySpec,
+    *,
+    checks: frozenset[str] = ASSEMBLY_CHECKS,
 ) -> AssemblyReport:
     """Check ``measurements`` against ``spec``; pure, and never raises.
 
     A build with nothing measured, or with fewer than two parts, has no relation
     to check and yields an empty passing report -- judging a lone part against the
     build volume belongs to :mod:`cadless.print_fit`, not here.
+
+    ``checks`` names which checks can fail the report. A measurement that could
+    not be taken counts against a check named here, or against every report
+    where it does not say which check it bears on; a name that is no check is
+    reported rather than ignored, so a misspelling cannot pass a build unjudged.
+    The joints are described whichever are named: a guide to parts that came
+    apart still says which ones touch.
     """
     report = AssemblyReport()
+    for name in sorted(checks - ASSEMBLY_CHECKS):
+        report.unchecked.append(f"no check is named {name!r}, so nothing was judged under it")
     if measurements is None:
         return report
     # Carried before the part-count gate below: a payload that measured
     # nothing still has something to say, and dropping it here turned an
     # executor that failed outright into a silent pass.
-    report.unchecked.extend(measurements.unchecked)
+    report.unchecked.extend(
+        reason
+        for reason in measurements.unchecked
+        if _concerns(reason) is None or _concerns(reason) in checks
+    )
     if len(measurements.part_bboxes) < 2:
         return report
 
     report.order = measurements.order
-    _check_fit(measurements, spec, report)
-    _check_overlap(measurements, report)
-    _check_mating(measurements, spec, report)
-    _check_order(measurements, report)
+    if not _is_permutation(report.order, len(measurements.part_bboxes)):
+        # Withheld whatever is judged: an order of other parts would be played
+        # and described as this build's. Why it was withheld is the order
+        # check's to say, below, where that check is faced.
+        report.order = None
+    if "fit" in checks:
+        _check_fit(measurements, spec, report)
+    if "overlap" in checks:
+        _check_overlap(measurements, report)
+    _check_mating(measurements, spec, report, judge="mating" in checks)
+    if "order" in checks:
+        _check_order(measurements, report)
     return report
 
 
@@ -262,12 +324,16 @@ def mating_graph(
     return neighbours, problems
 
 
-def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport) -> None:
+def _check_mating(
+    m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyReport, *, judge: bool
+) -> None:
     count = len(m.part_bboxes)
     tolerance = mating_tolerance(spec.clearance_mm)
     neighbours, problems = mating_graph(m.gaps, count, tolerance)
-    report.unchecked.extend(problems)
     report.joints = [sorted(neighbours[index]) for index in range(count)]
+    if not judge:
+        return
+    report.unchecked.extend(problems)
 
     groups = _groups(neighbours, count)
     if len(groups) == 1:
@@ -286,6 +352,17 @@ def _check_mating(m: AssemblyMeasurements, spec: AssemblySpec, report: AssemblyR
         )
 
 
+def _is_permutation(order, count: int) -> bool:
+    """Whether ``order`` is ``None`` or names every one of ``count`` parts once."""
+    if order is None:
+        return True
+    return (
+        isinstance(order, list)
+        and all(type(index) is int for index in order)
+        and sorted(order) == list(range(count))
+    )
+
+
 def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
     """Rule on the order search's three outcomes, keeping the last two apart.
 
@@ -302,7 +379,7 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport) -> None:
         # assembly from the one measured. Type-checking the list is not enough:
         # an empty one is a list of ints and would otherwise read as "an order
         # was found" for a build with parts in it.
-        if sorted(m.order) != list(range(len(m.part_bboxes))):
+        if not _is_permutation(m.order, len(m.part_bboxes)):
             report.order = None
             report.unchecked.append(
                 f"{_ORDER_UNCHECKED_PREFIX} the order given, {m.order!r}, is not a sequence "
@@ -423,7 +500,8 @@ _AXES = (
 #: spend the executor's entire wall clock on a model with very many parts.
 ORDER_PROBE_BUDGET = 20_000
 
-#: What share of the executor's wall clock the measurement may spend.
+#: What share of the time left on the executor's wall clock the measurement
+#: may spend.
 #:
 #: A second bound beside the probe count, because the two fail differently. The
 #: count stops a model that produced very many parts; the clock stops a single
@@ -494,7 +572,7 @@ def measure_assembly(
                 budget.spend()  # the distance probe
             except _BudgetSpent:
                 unchecked.append(
-                    "overlap and gap between every pair: the measurement ran out of "
+                    f"{_PAIRS_UNCHECKED_PREFIX} the measurement ran out of "
                     f"budget after {done} of "
                     f"{len(parts) * (len(parts) - 1) // 2} pairs"
                 )
@@ -510,7 +588,7 @@ def measure_assembly(
             scene.at_rest[(first, second)] = shared
             if shared is None:
                 unchecked.append(
-                    f"shared volume between {_label(first)} and {_label(second)}: "
+                    f"{_SHARED_UNCHECKED_PREFIX} {_label(first)} and {_label(second)}: "
                     "the intersection could not be computed"
                 )
             elif shared > 0.0:
@@ -520,7 +598,7 @@ def measure_assembly(
             distance = _distance(parts[first], parts[second])
             if distance is None:
                 unchecked.append(
-                    f"gap between {_label(first)} and {_label(second)}: "
+                    f"{_GAP_UNCHECKED_PREFIX} {_label(first)} and {_label(second)}: "
                     "the distance could not be computed"
                 )
             else:

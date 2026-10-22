@@ -109,9 +109,9 @@ export function ChatPanel({
   // Per-turn forge opt-in: when on, the next turn races best-of-N for a
   // fresh generation (server gates it behind the global forge kill-switch too).
   const [forge, setForge] = useState(false);
-  // Per-turn assembly opt-in: when on, the next turn asks for the part as several
-  // interlocking pieces sized to the saved printer rather than one solid (server
-  // gates it behind the global assembly kill-switch too). Independent of forge —
+  // Per-turn assembly opt-in: when on, the next turn asks for the part split into
+  // interlocking pieces that each fit the saved printer's bed (server gates it
+  // behind the global assembly kill-switch too). Independent of forge —
   // one turn may want splitting without racing candidates, or the other way round.
   const [assembly, setAssembly] = useState(false);
   // Reference pictures for the next turn. Per-turn like forge, and held here

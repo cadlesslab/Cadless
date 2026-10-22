@@ -17,8 +17,10 @@ quiet in its own way:
 engine made about a build rather than formats the build was converted to, and
 keeping them out of ``EXPORTERS`` is what keeps them out of the export menu and
 out of the per-part ``model_p*`` naming that ``backend.artifact_io.exported_parts``
-reads. So the containment below is the contract, and an equality here would
-forbid the design.
+reads. ``assembly_glb`` and ``assembly_step`` are served and not exported for the
+second of those reasons: each is one file for the whole build, not one per part.
+So the containment below is the contract, and an equality here would forbid the
+design.
 """
 
 from __future__ import annotations
@@ -92,6 +94,14 @@ def test_a_kind_served_without_being_exported_is_allowed():
         "this test should go; if it is not, a picture kind has been pulled into "
         "EXPORTERS and is now on the per-part naming path it does not fit."
     )
+
+
+def test_the_whole_assembly_files_are_served_and_never_exported():
+    from cadless.exporters import ASSEMBLY_FILES
+
+    assert set(ASSEMBLY_FILES) == {"assembly_glb", "assembly_step"}
+    assert set(ASSEMBLY_FILES) <= set(_MEDIA)
+    assert not set(ASSEMBLY_FILES) & set(EXPORTERS)
 
 
 def test_the_export_menu_labels_and_orders_every_kind_it_can_show():

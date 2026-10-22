@@ -129,9 +129,9 @@ def test_reparametrize_keeps_the_assembly_record(client, store):
 
     This route reaches the same store method the agent's set_parameters tool does,
     and dropping the record here would leave the model in pieces with nothing
-    saying so: the next chat edit would be told to assign the final solid, which is
-    an instruction to fuse it. Read from the store rather than the response because
-    the flag is deliberately not on the wire.
+    saying so: the next chat edit would lose the bed it was split for. Read from
+    the store rather than the response because the flag is deliberately not on
+    the wire.
     """
     pid, vid = _seed(store, built_as_assembly=True)
 
@@ -140,3 +140,14 @@ def test_reparametrize_keeps_the_assembly_record(client, store):
     assert r.status_code == 200, r.text
     new_id = r.json()["version"]["id"]
     assert asyncio.run(store.get_version(new_id)).built_as_assembly is True
+
+
+@pytest.mark.build123d
+def test_reparametrize_stores_the_names_its_rebuild_gives_the_parts(client, store):
+    code = PARAMS_CODE + 'result.label = "block"\n'
+    pid, vid = _seed(store, code=code)
+
+    r = client.post(f"/versions/{vid}/reparametrize", json={"params": {"size": 20}})
+
+    assert r.status_code == 200, r.text
+    assert [p["name"] for p in r.json()["version"]["parts"]] == ["block"]

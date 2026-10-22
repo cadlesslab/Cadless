@@ -10,7 +10,7 @@ Policy shape (PoC level, see ADR-002 §4):
     though most builtins are permitted.
   * **Dunder attribute block** — access to ``__...__`` attributes is rejected
     (blocks ``().__class__.__bases__`` style sandbox escapes).
-  * **Result convention** — the script must bind its final solid to ``result``.
+  * **Result convention** — the script must bind its model to ``result``.
 """
 
 from __future__ import annotations
@@ -75,8 +75,16 @@ BANNED_NAMES: frozenset[str] = frozenset(
     }
 )
 
-# The variable the generated script must assign its final solid to.
+# The variable the generated script must assign its model to.
 RESULT_VARIABLE = "result"
+
+# What ``result`` may be, as the system prompt states it and as the edit and
+# repair rounds of a turn that did not ask for an assembly close on it: one
+# place, so they cannot ask for different things.
+RESULT_SHAPE = (
+    "one solid, or a `Compound(children=[...])` of the separate parts, each placed "
+    "where it sits assembled and given a label"
+)
 
 # Curated description of the allowed build123d surface, injected into the system
 # prompt so the model targets exactly what the validator permits.
@@ -96,10 +104,21 @@ Helpers:                    Axis, Align, Mode, Vector, math module
 
 Rules the generated code MUST follow:
   * Only `from build123d import *`, `import math`, and `import copy` are allowed.
-  * Assign the final solid (a Part/Solid/Compound) to a variable named `result`.
+  * Assign the model (a Part/Solid/Compound) to a variable named `result`.
   * No file, network, OS, or process access of any kind.
-  * Use millimetres as the unit. Keep the model a single connected solid unless
-    the prompt explicitly asks for an assembly.
+  * Use millimetres as the unit.
+
+Assemblies: a model of several parts is a Compound of separate solids.
+  * Build each part on its own, in its own frame, then place it where it sits in
+    the finished product with Pos(...) * Rot(...) * part.
+  * Give every part a name: part.label = "wheel_fl". Give a sub-assembly its own
+    Compound(children=[...], label="front_axle"); nesting is allowed.
+  * Leave clearance at every joint so that no two parts share any volume (the
+    engine measures this), and never fuse two parts that must move or be printed
+    apart -- a part printed in place, like a link of a chain, is still its own
+    part.
+  * result = Compound(children=[...]) of the parts. A one-part model is just that
+    part.
 """
 
 # A minimal example that PASSES the policy.

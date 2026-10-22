@@ -4,7 +4,9 @@ Invoked as a subprocess by :mod:`cadless.worker`. Reads a code file, executes
 it, computes a geometry summary, optionally exports artifacts, and prints a single
 ``__VTRESULT__ {json}`` line to stdout. Kept dependency-light, and side-effect
 free apart from the optional export — which writes one file per solid and first
-removes what an earlier build left of that kind in the same directory.
+removes what an earlier build left of that kind in the same directory, plus one
+GLB and one STEP of the whole for a build of several parts, clearing an earlier
+build's pair by exact name.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
      [<check_assembly>] [<wall_secs>]
@@ -14,13 +16,33 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import traceback
 
 SENTINEL = "__VTRESULT__"
 
+# When this process started: the parent's wall clock runs from about here, so
+# the time left to it is measured from here too.
+_STARTED = time.monotonic()
+
 # Filename used when compiling the generated script; lets us pick its frames out
 # of a traceback so we can anchor the error on a line of the user's code.
 _GENERATED_FILE = "<generated>"
+
+
+def measurement_budget(wall_secs: float, elapsed: float) -> float:
+    """How many seconds the assembly measurement may spend.
+
+    A share of the time left rather than of the whole clock: the clock covers the
+    build, the measurement and the export together, and a build that already ran
+    long would otherwise be pushed past it by the measurement and return nothing.
+    With no clock to divide, the fixed budget.
+    """
+    from cadless import assembly_check  # noqa: PLC0415 - lazy, as below
+
+    if wall_secs <= 0:
+        return assembly_check.MEASUREMENT_TIME_BUDGET_SECONDS
+    return max(0.0, wall_secs - elapsed) * assembly_check.MEASUREMENT_TIME_SHARE
 
 
 def _error_payload(exc: BaseException, code: str, *, prefix: str = "") -> dict:
@@ -81,21 +103,37 @@ def _part_count(result) -> int | None:
         return None
 
 
-def _parts_to_export(shape) -> list:
-    """The pieces to write as separate files: the solids, or the shape itself.
+def _read_tree(result, scale: float):
+    """The build read as a tree of named parts, or ``None`` if its solids cannot be read.
 
-    A one-solid build exports the shape it was handed rather than the solid pulled
+    A shape whose solids cannot be read is exported whole for the same reason
+    ``_part_count`` returns ``None`` there: the fallback is the old behaviour,
+    not a failure. Nothing after that is caught here: a part that cannot be
+    baked or scaled fails the build as a post-process error, as a result that
+    cannot be scaled does.
+    """
+    from cadless.assembly_tree import build_tree  # noqa: PLC0415 - lazy, as the exporters are
+
+    try:
+        result.solids()
+    except Exception:  # noqa: BLE001 - unsplittable shapes export whole, as before
+        return None
+    return build_tree(result, scale)
+
+
+def _parts_to_export(shape, tree) -> list:
+    """The pieces to write as separate files: the tree's parts, or the shape itself.
+
+    A one-part build exports the shape it was handed rather than the part read
     back out of it. They are the same geometry, and passing the original through
     keeps a single-part export identical to what it was before parts existed --
-    which is what the upgrade path rests on. A shape that cannot be split is
-    exported whole for the same reason ``_part_count`` returns ``None`` there:
-    the fallback is the old behaviour, not a failure.
+    which is what the upgrade path rests on. A build of several parts exports
+    each part with its placement already in its geometry, so no reader of a
+    part's file has a Location to compose.
     """
-    try:
-        solids = shape.solids()
-    except Exception:  # noqa: BLE001 - unsplittable shapes export whole, as before
+    if tree is None or len(tree.parts) < 2:
         return [shape]
-    return list(solids) if len(solids) > 1 else [shape]
+    return [part.solid for part in tree.parts]
 
 
 def _clear_previous(export_dir: str, kind: str) -> None:
@@ -117,7 +155,9 @@ def _clear_previous(export_dir: str, kind: str) -> None:
     if not directory.is_dir():
         return
     for stale in [directory / f"model.{kind}", *directory.glob(f"model_p*.{kind}")]:
-        if stale.exists():
+        # ``exists`` follows a link, so a dangling one would be left for the
+        # export to write through.
+        if stale.is_symlink() or stale.exists():
             stale.unlink()
 
 
@@ -139,9 +179,8 @@ def main(argv: list[str]) -> int:
     # Authoring-units -> mm factor applied to *exports only* (issue #18/#20);
     # the geometry summary always stays in the script's authoring units.
     export_scale = float(argv[3]) if len(argv) > 3 and argv[3] else 1.0
-    # Off unless the turn asked for an assembly. A multi-solid result is not by
-    # itself an assembly, and measuring the relations between parts nobody will
-    # read costs the same wall clock the build is running on.
+    # Off unless the caller will read the measurement: measuring the relations
+    # between parts costs the same wall clock the build is running on.
     check_assembly = bool(len(argv) > 4 and argv[4])
     # The parent's wall clock, so the assembly measurement can take a share of
     # it rather than a fixed number of seconds. A clock that runs out up here
@@ -173,22 +212,26 @@ def main(argv: list[str]) -> int:
         # Scaled once, above both readers. The export writes millimetres and the
         # assembly checks are against a build volume in millimetres, so measuring
         # the unscaled result would compare authoring units to millimetres and
-        # never refuse a model authored in metres.
-        shape = result if export_scale == 1.0 else result.scale(export_scale)
-        parts = _parts_to_export(shape)
+        # never refuse a model authored in metres. About the world origin: left to
+        # itself, ``scale`` anchors at the shape's own Location, which would leave
+        # a placed result's position in authoring units while its parts -- baked
+        # first, then scaled -- move to millimetres.
+        shape = result if export_scale == 1.0 else result.scale(export_scale, about=(0, 0, 0))
+        # Each part is scaled after its placement is baked in, the way the whole
+        # shape above is: about the world origin.
+        tree = _read_tree(result, export_scale)
+        summary["parts"] = tree.as_payload()["parts"] if tree is not None else None
+        parts = _parts_to_export(shape, tree)
         if check_assembly and len(parts) > 1:
             from dataclasses import asdict  # noqa: PLC0415 - lazy, as the exporters are
 
-            from cadless import assembly_check  # noqa: PLC0415
             from cadless.assembly_check import measure_assembly  # noqa: PLC0415
 
-            budget = (
-                wall_secs * assembly_check.MEASUREMENT_TIME_SHARE
-                if wall_secs > 0
-                else assembly_check.MEASUREMENT_TIME_BUDGET_SECONDS
-            )
+            budget = measurement_budget(wall_secs, time.monotonic() - _STARTED)
             summary["assembly"] = asdict(measure_assembly(parts, time_budget=budget))
         if export_dir:
+            from pathlib import Path  # noqa: PLC0415 - lazy, as below
+
             from cadless import exporters  # lazy: only when export requested
 
             for kind, export in exporters.EXPORTERS.items():
@@ -205,6 +248,18 @@ def main(argv: list[str]) -> int:
                 # read off the directory rather than carried beside this: a
                 # second field would be a second place for the two to disagree.
                 summary[f"{kind}_path"] = paths[0]
+            # By exact name: ``assembly.json`` beside them is the pipeline's
+            # motion file, not this build's to clear.
+            for name in exporters.ASSEMBLY_FILES.values():
+                stale = Path(export_dir) / name
+                if stale.is_symlink() or stale.exists():
+                    stale.unlink()
+            # A whole file that cannot be written fails the build, as a part file
+            # would, rather than reporting a build of several parts with its
+            # whole files missing and nothing said.
+            if tree is not None and len(tree.parts) > 1:
+                for kind, path in exporters.export_assembly(tree, export_dir).items():
+                    summary[f"{kind}_path"] = path
     except Exception as exc:  # noqa: BLE001
         print(f"{SENTINEL} " + json.dumps(_error_payload(exc, code, prefix="post-process: ")))
         return 1

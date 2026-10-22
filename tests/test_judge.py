@@ -428,3 +428,16 @@ def test_ranking_is_returned_for_inspection():
     assert result.winner is winner
     assert winner in result.ranking
     assert result.ranking[0] is winner  # winner ranked first
+
+
+def test_a_build_whose_parts_were_found_wanting_ranks_below_one_whose_do_not():
+    """Handed over with its verdict, it executed; a sound one is the better answer."""
+    wanting = _ok(code="A", assembly={"ok": False, "failures": ["share"], "measured": True})
+    sound = _ok(code="B", assembly={"ok": True, "measured": True})
+
+    result = select_winner(
+        [wanting, sound], intent="a bracket", critic=_NeverCritic(), provider=_NeverProvider()
+    )
+
+    assert result.winner is sound
+    assert result.rung is Rung.FILTER

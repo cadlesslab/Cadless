@@ -8,7 +8,9 @@ run anyway.
 
 The ladder, in priority order, short-circuiting upward::
 
-  (a) HARD FILTER     drop candidates that did not validate + execute ok.
+  (a) HARD FILTER     drop candidates that did not validate + execute ok, and,
+                      while another's parts pass, one whose parts were found
+                      not to go together.
                       Exactly one survivor -> it wins, no lower rung runs.
                       No survivor -> mark ``no_winner`` and surface the
                       "least-bad" candidate (fewest repair attempts = it got
@@ -92,6 +94,11 @@ class JudgeResult:
     decided: bool = True
 
 
+def _parts_failed(candidate: GenerationResult) -> bool:
+    verdict = candidate.assembly
+    return isinstance(verdict, dict) and verdict.get("ok") is False
+
+
 def select_winner(
     candidates: list[GenerationResult],
     *,
@@ -118,6 +125,11 @@ def select_winner(
         least_bad = _least_bad(candidates)
         ranking = sorted(candidates, key=_repair_attempts)
         return JudgeResult(winner=least_bad, rung=Rung.FILTER, ranking=ranking, no_winner=True)
+    # A build handed over with its parts found not to go together executed, but
+    # one whose parts do is the better answer to the same request.
+    sound = [c for c in ok if not _parts_failed(c)]
+    if sound:
+        ok = sound
     if len(ok) == 1:
         return JudgeResult(winner=ok[0], rung=Rung.FILTER, ranking=ok)
 

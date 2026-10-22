@@ -1223,3 +1223,16 @@ def test_max_tokens_truncated_tool_turn_surfaces_note_and_skips_tool():
     text = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
     assert "cut off" in text
     assert any(e.kind == "turn_end" for e in events)
+
+
+def test_a_parameter_edit_carries_the_rebuild_s_part_names(monkeypatch):
+    from cadless import agent as agent_mod
+    from cadless import worker
+    from cadless.worker import ExecResult
+
+    parts = [{"index": 0, "name": "lid", "path": [], "color": None}]
+    monkeypatch.setattr(worker, "run_code", lambda code: ExecResult(ok=True, parts=parts))
+
+    out = agent_mod._default_reparametrize("params = {'size': 10}\nresult = 1\n", {"size": 20})
+
+    assert agent_mod._reparam_summary(out)["parts"] == parts

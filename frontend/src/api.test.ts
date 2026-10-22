@@ -185,6 +185,30 @@ describe("REST client", () => {
       // a version from before the motion was written has the guide alone.
       expect(api.hasAssemblyMotion(withRows(["glb", "step", "guide"]))).toBe(false);
     });
+
+    it("is not answered by a whole-assembly file", () => {
+      expect(api.hasAssemblyMotion(withRows(["glb", "assembly_glb", "assembly_step"]))).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("whole-assembly files", () => {
+    const withRows = (kinds: string[]) =>
+      ({
+        artifacts: kinds.map((kind) => ({ kind, bytes: 1, part: 0 })),
+      }) as unknown as api.Version;
+
+    it("are addressed by their kind under the API base", () => {
+      expect(api.wholeAssemblyUrl(5, "assembly_glb")).toBe(
+        `${api.BASE}/versions/5/artifacts/assembly_glb`,
+      );
+    });
+
+    it("are found on the version's own rows", () => {
+      expect(api.hasWholeAssembly(withRows(["glb", "assembly_glb"]), "assembly_glb")).toBe(true);
+      expect(api.hasWholeAssembly(withRows(["glb", "assembly"]), "assembly_glb")).toBe(false);
+    });
   });
 });
 

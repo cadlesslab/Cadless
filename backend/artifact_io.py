@@ -13,12 +13,13 @@ module re-exports it for the callers that have always reached it through here.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 from pathlib import Path
 
 from cadless.assembly_guide import MOTION_FILE
-from cadless.exporters import EXPORTERS, exported_parts
+from cadless.exporters import ASSEMBLY_FILES, EXPORTERS, exported_parts
 from cadless.scoped_store import AnyStore
 
 #: The kind guide frames are filed under. Deliberately **not** an ``EXPORTERS``
@@ -53,12 +54,52 @@ def guide_frames(src_dir: Path) -> list[Path]:
     return [path for _, path in sorted(numbered)]
 
 
+def _copy_in(src: Path, dest: Path) -> list[tuple[str, Path]]:
+    """Copy every file of the build into ``dest``; return ``(kind, target)`` in order.
+
+    The order of the list is the order the rows are written in, so it is the
+    numbering: per-part exports kind by kind, then the guide's frames, then the
+    files of which a build has one.
+    """
+    copied: list[tuple[str, Path]] = []
+
+    def take(kind: str, path: Path) -> None:
+        target = dest / path.name
+        shutil.copy(path, target)
+        copied.append((kind, target))
+
+    for kind in EXPORTERS:
+        for path in exported_parts(src, kind):
+            take(kind, path)
+    # The guide's frames go through the same funnel, for the reason the funnel
+    # exists: their ordinals are assigned by the order they are written in, and a
+    # second call site deciding that order is how a frame ends up filed under a
+    # number its name does not match.
+    for path in guide_frames(src):
+        take(GUIDE_KIND, path)
+    # The motion through the same funnel too, as the one file of its kind: part
+    # 0. A build that left none registers none, rather than a row for a file
+    # that is not there.
+    motion = src / MOTION_FILE
+    if motion.is_file():
+        take(ASSEMBLY_KIND, motion)
+    # The whole build as one file of each, on the same terms as the motion.
+    for kind, name in ASSEMBLY_FILES.items():
+        whole = src / name
+        if whole.is_file():
+            take(kind, whole)
+    return copied
+
+
 async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Path) -> int:
     """Copy every exported part in, register each, and return how many were written.
 
     The filename is carried across unchanged, so what is on disk under the version
     is what the build called it, and the part ordinal the row receives is the
-    position in the order above.
+    position in the order ``_copy_in`` copies in.
+
+    The copying runs on a thread, off the event loop; the rows are written after
+    it, one at a time and in its order, because that order is the numbering.
 
     ``store`` is annotated rather than left bare because this is the one place
     every artifact write now passes through, and with nothing said a later caller
@@ -67,31 +108,8 @@ async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Pat
     it; what keeps a *route* on the scoped view is the import check in
     ``tests/test_store_surface.py``, which covers this module by name.
     """
-    src = Path(src_dir)
     dest = Path(store.version_artifact_dir(version_id))
-    written = 0
-    for kind in EXPORTERS:
-        for path in exported_parts(src, kind):
-            target = dest / path.name
-            shutil.copy(path, target)
-            await store.add_artifact(version_id, kind, str(target))
-            written += 1
-    # The guide's frames go through the same funnel, for the reason the funnel
-    # exists: their ordinals are assigned by the order they are written in, and a
-    # second call site deciding that order is how a frame ends up filed under a
-    # number its name does not match.
-    for path in guide_frames(src):
-        target = dest / path.name
-        shutil.copy(path, target)
-        await store.add_artifact(version_id, GUIDE_KIND, str(target))
-        written += 1
-    # The motion through the same funnel too, as the one file of its kind: part
-    # 0. A build that left none registers none, rather than a row for a file
-    # that is not there.
-    motion = src / MOTION_FILE
-    if motion.is_file():
-        target = dest / motion.name
-        shutil.copy(motion, target)
-        await store.add_artifact(version_id, ASSEMBLY_KIND, str(target))
-        written += 1
-    return written
+    copied = await asyncio.to_thread(_copy_in, Path(src_dir), dest)
+    for kind, target in copied:
+        await store.add_artifact(version_id, kind, str(target))
+    return len(copied)

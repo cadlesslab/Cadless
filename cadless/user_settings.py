@@ -170,10 +170,9 @@ _TIER_B_FIELDS: dict[str, str] = {
         "repair_max_attempts",
         "bedrock_max_tokens",
         # Gated for a different reason than the rest of this tier: it does not
-        # multiply spend, it turns on output nothing downstream checks yet. An
-        # assembly turn asks the model for interlocking joints and no stage
-        # verifies that the parts actually interlock, so the switch stays behind
-        # the same launch gate until one does.
+        # multiply spend, it turns on the bed-split brief, the hardest request in
+        # the prompt for the model to get right, so the switch stays behind the
+        # same launch gate.
         "assembly_enabled",
     )
 }
@@ -454,7 +453,7 @@ def _validate_knobs(patch: dict[str, Any]) -> None:
             # it would cost them money, which is a different thing to weigh.
             raise ValueError(
                 f"{', '.join(raised)} would raise what a single turn spends, or turn on "
-                f"output nothing downstream checks yet, so it is settable only when "
+                f"a request the model gets right least often, so it is settable only when "
                 f"{_ADVANCED_GATE} is set in the launch environment"
             )
     for field in _BOOL_FIELDS & patch.keys():

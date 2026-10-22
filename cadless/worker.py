@@ -55,9 +55,17 @@ class ExecResult:
     stl_path: str | None = None
     obj_path: str | None = None
     # How the parts of a multi-part result relate to each other, measured only
-    # when the caller asked for an assembly. ``None`` means nobody asked, which
-    # is not the same as "asked and found nothing wrong".
+    # when the caller asked for it. ``None`` means nothing was measured, which is
+    # not the same as "measured and found nothing wrong".
     assembly: AssemblyMeasurements | None = None
+    # One entry per part, in part order: ``{"index", "name", "path", "color"}``,
+    # as the build's tree names them. ``None`` where the build could not be read
+    # as a tree, or the worker that ran it does not report parts -- which is not
+    # the same as one part.
+    parts: list[dict] | None = None
+    # The whole build as one file of each; ``None`` where the child wrote none.
+    assembly_glb_path: str | None = None
+    assembly_step_path: str | None = None
     repair_context: RepairContext | None = None
 
 
@@ -106,10 +114,8 @@ def run_code(
     summary (volume/bbox) always stays in authoring units.
 
     ``check_assembly`` asks the child to measure how the parts of a multi-part
-    result relate to each other. Off by default, so a caller that did not ask for
-    an assembly gets exactly the run it always got: a result in several solids is
-    not by itself an assembly, and the measurement spends the same wall clock the
-    build does.
+    result relate to each other. Off by default, so a caller that only wants the
+    files does not spend the build's wall clock on a measurement nobody reads.
     """
     cfg = config or settings
     if cfg.worker_url:
@@ -173,6 +179,9 @@ def run_code(
             stl_path=payload.get("stl_path"),
             obj_path=payload.get("obj_path"),
             assembly=AssemblyMeasurements.from_payload(payload.get("assembly")),
+            parts=payload.get("parts"),
+            assembly_glb_path=payload.get("assembly_glb_path"),
+            assembly_step_path=payload.get("assembly_step_path"),
         )
 
 
@@ -226,6 +235,9 @@ def _run_remote(
         stl_path=data.get("stl_path"),
         obj_path=data.get("obj_path"),
         assembly=AssemblyMeasurements.from_payload(data.get("assembly")),
+        parts=data.get("parts"),
+        assembly_glb_path=data.get("assembly_glb_path"),
+        assembly_step_path=data.get("assembly_step_path"),
         repair_context=RepairContext(**rc) if isinstance(rc, dict) else None,
     )
 

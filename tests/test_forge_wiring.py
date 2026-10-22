@@ -29,7 +29,7 @@ class RacePipeline:
         # What each path was told about the printer. Recorded on both because the
         # two gates are independent: a turn can be forging and asking for an
         # assembly at once, and a race that quietly dropped the spec would still
-        # produce a model -- one connected solid, from a turn that asked for parts.
+        # produce a model -- one no longer split for the bed the turn asked about.
         self.run_assemblies: list = []
         self.candidate_assemblies: list = []
 
@@ -151,10 +151,9 @@ def test_an_edit_still_carries_the_assembly_spec():
     and is now answered where it belongs -- in ``cadless/prompts.py``, which frames
     an edit by the constraints alone -- rather than by withholding the spec here.
 
-    Withholding it cost both halves at once: ``build_refinement_message`` falls back
-    to "the final solid", which is an instruction to fuse the assembly the turn
-    asked to edit, and the geometric check is gated on the same value, so nothing
-    measured the result either.
+    Withholding it would cost both halves at once: it would lose the bed and the
+    clearance the model was split for, and its parts would be held only to the
+    check for a build nobody asked to split.
     """
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
