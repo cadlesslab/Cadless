@@ -1,4 +1,4 @@
-"""Where a binary glTF puts its geometry, read back into the CAD frame.
+"""Where a binary glTF puts its geometry, in the CAD frame or as a viewer holds it.
 
 A GLB's vertices are not where its parts are. Each mesh sits under a chain of
 nodes, and every node in the chain moves, turns or scales what is below it, so
@@ -9,10 +9,12 @@ draws somewhere else — which is exactly the kind of misplacement the exporter
 tests exist to catch. So the whole chain is composed here, the way a viewer
 composes it.
 
-The answer is given back in the frame the CAD model was built in — Z up, in
-millimetres — so a test can hold it against the shape's own bounding box
-without converting anything itself. glTF is Y up and in metres; the map back is
-the inverse of the one a Z-up model is exported through, (x, y, z) -> (x, z, -y).
+``glb_world_bounds`` gives the answer back in the frame the CAD model was built
+in — Z up, in millimetres — so a test can hold it against the shape's own
+bounding box without converting anything itself. glTF is Y up and in metres; the
+map back is the inverse of the one a Z-up model is exported through,
+(x, y, z) -> (x, z, -y). ``glb_scene_bounds`` gives the same composed bounds as
+a viewer's scene holds them, for a test that asks what a viewer reads.
 
 Only what the exporter writes is read: float positions in buffer views of the
 file's own binary chunk. Anything else raises rather than being read some
@@ -52,6 +54,16 @@ Point = tuple[float, float, float]
 
 def glb_world_bounds(path: str | Path) -> tuple[Point, Point]:
     """The ``(min, max)`` corners of everything the file draws, Z up, in mm."""
+    return _corners([_to_cad(p) for p in _scene_points(path)])
+
+
+def glb_scene_bounds(path: str | Path) -> tuple[Point, Point]:
+    """The ``(min, max)`` corners of everything the file draws, as a viewer's scene
+    holds it: Y up, in the file's own unit."""
+    return _corners(_scene_points(path))
+
+
+def _scene_points(path: str | Path) -> list[Point]:
     document, binary = read_glb(Path(path))
     scenes = document.get("scenes")
     if not scenes:
@@ -67,7 +79,7 @@ def glb_world_bounds(path: str | Path) -> tuple[Point, Point]:
             for primitive in document["meshes"][node["mesh"]]["primitives"]:
                 accessor = primitive["attributes"]["POSITION"]
                 for position in _positions(document, binary, accessor):
-                    points.append(_to_cad(_apply(world, position)))
+                    points.append(_apply(world, position))
         for child in node.get("children", []):
             visit(child, world)
 
@@ -75,6 +87,10 @@ def glb_world_bounds(path: str | Path) -> tuple[Point, Point]:
         visit(root, _identity())
     if not points:
         raise ValueError(f"{path}: the scene draws no geometry")
+    return points
+
+
+def _corners(points: list[Point]) -> tuple[Point, Point]:
     low = tuple(min(p[axis] for p in points) for axis in range(3))
     high = tuple(max(p[axis] for p in points) for axis in range(3))
     return low, high  # type: ignore[return-value]
