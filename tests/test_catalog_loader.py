@@ -1062,3 +1062,217 @@ def test_a_new_item_keeps_its_part_names_on_the_version(tmp_path):
 def test_a_legacy_item_records_no_part_names(tmp_path):
     version, _ = _loaded(tmp_path, _write_assembly_item(tmp_path / "cat", "old", new=False))
     assert version.parts is None
+
+
+def _write_measured_item(catalog_dir: Path, item_id: str, domain: str, bbox, volume) -> Path:
+    """A one-step item whose step records its size and volume as the bake does: in
+    the units the item's domain is authored in."""
+    item = catalog_dir / item_id
+    (item / "steps").mkdir(parents=True, exist_ok=True)
+    (item / "steps" / "01.py").write_text("result = 1\n")
+    step = {
+        "index": 1,
+        "instruction": "do step 1",
+        "code": "steps/01.py",
+        "artifacts": {},
+        "geometry": {"volume": volume, "bbox": bbox},
+    }
+    manifest = {"id": item_id, "name": item_id, "domain": domain, "steps": [step]}
+    (item / "manifest.json").write_text(json.dumps(manifest))
+    return item
+
+
+def _recorded(tmp_path: Path, item: Path):
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        pid = await load_house(s, Ledger(tmp_path / "ledger.json"), item)
+        version = (await s.list_versions(pid))[-1]
+        return version.bbox, version.volume
+
+    return run(go())
+
+
+def test_an_item_authored_in_metres_records_its_size_and_volume_in_millimetres(tmp_path):
+    item = _write_measured_item(tmp_path / "cat", "house1", "house", [12.4, 8.4, 6.9], 158.0)
+
+    bbox, volume = _recorded(tmp_path, item)
+
+    assert bbox == pytest.approx((12400.0, 8400.0, 6900.0))
+    assert volume == pytest.approx(158.0e9)
+
+
+def test_an_item_authored_in_millimetres_records_its_size_and_volume_as_they_are(tmp_path):
+    item = _write_measured_item(tmp_path / "cat", "part1", "mechanical", [60.0, 40.0, 40.0], 9.5e4)
+
+    bbox, volume = _recorded(tmp_path, item)
+
+    assert bbox == pytest.approx((60.0, 40.0, 40.0))
+    assert volume == pytest.approx(9.5e4)
+
+
+def _hash_recorded_before_millimetres(item: Path) -> str:
+    """What an engine that copied the recorded geometry as it was wrote in the ledger
+    for a one-step item with no source file."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    digest.update((item / "manifest.json").read_bytes())
+    digest.update((item / "steps" / "01.py").read_bytes())
+    return "sha256:" + digest.hexdigest()
+
+
+def _loaded_by_an_earlier_engine(tmp_path: Path, item: Path, monkeypatch):
+    """The item filed as an engine that copied its recorded sizes as they were filed
+    it, then loaded twice by this one. Returns the project and the last version's
+    ``(bbox, volume)`` before the two loads, their answers, and the same after
+    them with the hash the ledger then records."""
+    from cadless.catalog import loader
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        led = Ledger(tmp_path / "ledger.json")
+
+        async def state():
+            pid = await s.project_id_for_catalog_item(item.name)
+            version = (await s.list_versions(pid))[-1]
+            return pid, (version.bbox, version.volume)
+
+        with monkeypatch.context() as earlier:
+            earlier.setattr(loader, "_mm_per_unit", lambda manifest: 1.0)
+            await load_house(s, led, item)
+        assert led.get(item.name)["content_hash"] == _hash_recorded_before_millimetres(item)
+        before = await state()
+        answers = [await load_house(s, led, item), await load_house(s, led, item)]
+        return before, answers, (*await state(), led.get(item.name)["content_hash"])
+
+    return run(go())
+
+
+def test_an_item_in_metres_filed_before_its_sizes_were_converted_is_converted_where_it_is(
+    tmp_path, monkeypatch
+):
+    item = _write_measured_item(tmp_path / "cat", "house1", "house", [12.4, 8.4, 6.9], 158.0)
+
+    from cadless.catalog.loader import item_content_hash
+
+    (pid_before, filed_before), answers, after = _loaded_by_an_earlier_engine(
+        tmp_path, item, monkeypatch
+    )
+    pid_after, filed_after, recorded = after
+
+    assert filed_before[0] == pytest.approx((12.4, 8.4, 6.9))
+    assert answers == [None, None]  # neither load made a new project
+    assert pid_after == pid_before  # so every copy still names its source
+    assert filed_after[0] == pytest.approx((12400.0, 8400.0, 6900.0))  # converted once
+    assert filed_after[1] == pytest.approx(158.0e9)
+    assert recorded == item_content_hash(item)  # so the next start does not look again
+
+
+def test_an_item_in_millimetres_loaded_by_an_earlier_engine_is_left_as_it_is(tmp_path, monkeypatch):
+    item = _write_measured_item(tmp_path / "cat", "part1", "mechanical", [60.0, 40.0, 40.0], 9.5e4)
+
+    (pid_before, filed_before), answers, (pid_after, filed_after, _) = _loaded_by_an_earlier_engine(
+        tmp_path, item, monkeypatch
+    )
+
+    assert answers == [None, None]
+    assert (pid_after, filed_after) == (pid_before, filed_before)
+
+
+def _filed_unconverted(s, led, item, monkeypatch):
+    """File ``item`` as an engine that copied its recorded sizes as they were did."""
+    from cadless.catalog import loader
+
+    async def go():
+        with monkeypatch.context() as earlier:
+            earlier.setattr(loader, "_mm_per_unit", lambda manifest: 1.0)
+            await load_house(s, led, item)
+
+    return go()
+
+
+def test_converting_an_item_in_place_changes_nothing_else_its_entry_says(tmp_path, monkeypatch):
+    from cadless.catalog.loader import item_content_hash
+
+    item = _write_measured_item(tmp_path / "cat", "house1", "house", [12.4, 8.4, 6.9], 158.0)
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        led = Ledger(tmp_path / "ledger.json")
+        await _filed_unconverted(s, led, item, monkeypatch)
+        before = led.get(item.name)
+        await load_house(s, led, item)
+        return before, led.get(item.name)
+
+    before, after = run(go())
+
+    assert after == {**before, "content_hash": item_content_hash(item)}
+
+
+def test_an_item_whose_sizes_could_not_be_set_keeps_the_hash_that_says_so(tmp_path, monkeypatch):
+    item = _write_measured_item(tmp_path / "cat", "house1", "house", [12.4, 8.4, 6.9], 158.0)
+
+    async def refuse(self, project_id, geometry):
+        raise RuntimeError("the store went away")
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        led = Ledger(tmp_path / "ledger.json")
+        await _filed_unconverted(s, led, item, monkeypatch)
+        before = led.get(item.name)["content_hash"]
+        monkeypatch.setattr(Store, "set_catalog_geometry", refuse)
+        with pytest.raises(RuntimeError):
+            await load_house(s, led, item)
+        return before, led.get(item.name)["content_hash"]
+
+    before, after = run(go())
+
+    assert after == before  # so the next load converts it
+
+
+def test_a_ledger_that_cannot_record_the_conversion_does_not_fail_the_load(tmp_path, monkeypatch):
+    from cadless.catalog.ledger import LedgerBusy
+
+    item = _write_measured_item(tmp_path / "cat", "house1", "house", [12.4, 8.4, 6.9], 158.0)
+
+    def busy(self, house_id, content_hash):
+        raise LedgerBusy("another process holds it")
+
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        led = Ledger(tmp_path / "ledger.json")
+        await _filed_unconverted(s, led, item, monkeypatch)
+        monkeypatch.setattr(Ledger, "set_content_hash", busy)
+        answer = await load_house(s, led, item)
+        pid = await s.project_id_for_catalog_item(item.name)
+        return answer, (await s.list_versions(pid))[-1].bbox
+
+    answer, bbox = run(go())
+
+    assert answer is None
+    assert bbox == pytest.approx((12400.0, 8400.0, 6900.0))  # converted; recorded next time
+
+
+def test_catalogue_sizes_are_set_only_on_a_catalogue_project_with_a_version_for_each(tmp_path):
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        own = await s.create_project("mine")
+        await s.add_version(own.id, "p", "result = 1\n", ok=True, volume=1.0, bbox=(1, 1, 1))
+        with pytest.raises(ValueError):
+            await s.set_catalog_geometry(own.id, [(2.0, (2, 2, 2))])
+        item = _write_measured_item(tmp_path / "cat", "house1", "house", [12.4, 8.4, 6.9], 158.0)
+        pid = await load_house(s, Ledger(tmp_path / "ledger.json"), item)
+        with pytest.raises(ValueError):
+            await s.set_catalog_geometry(pid, [(1.0, (1, 1, 1)), (2.0, (2, 2, 2))])
+        return (await s.list_versions(own.id))[0].bbox, (await s.list_versions(pid))[0].bbox
+
+    own_bbox, item_bbox = run(go())
+
+    assert own_bbox == pytest.approx((1, 1, 1))
+    assert item_bbox == pytest.approx((12400.0, 8400.0, 6900.0))

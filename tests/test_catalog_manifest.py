@@ -470,3 +470,19 @@ def test_reading_a_manifest_loads_no_engine_configuration():
     )
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+def test_a_version_s_metrics_written_back_into_an_item_are_what_the_item_recorded():
+    """An item's metrics are filed on a version in millimetres; whatever writes a
+    version's back into an item writes them in the item's own units again."""
+    from cadless.catalog.manifest import StepGeometry
+
+    # The demo house's final step, rounded to the decimals it was authored with.
+    recorded = StepGeometry(volume=158.058, bbox=(12.4, 8.4, 6.9))
+
+    filed = recorded.in_millimetres(1000.0)
+    written_back = filed.in_authoring_units(1000.0)
+
+    assert filed.bbox == pytest.approx((12400.0, 8400.0, 6900.0))
+    assert written_back.volume == 158.058
+    assert written_back.bbox == (12.4, 8.4, 6.9)  # the decimals it was authored with

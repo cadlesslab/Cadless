@@ -74,6 +74,14 @@ describe("ChatMessage", () => {
     expect(avatar?.textContent).not.toContain("◆");
   });
 
+  it("writes a house's recorded size and volume on its result card in metres", () => {
+    const house = { ...okVersion(), volume: 158.058e9, bbox: [12400, 8400, 6900] as [number, number, number] };
+    const { container } = renderMsg({ kind: "assistant", id: "a7", version: house });
+    expect(container.querySelector(".result-metrics")?.textContent).toBe(
+      "158.1 m³ · 12.4 × 8.4 × 6.9 m",
+    );
+  });
+
   it("offers no way to open the code from a result card", () => {
     const { container, queryByText } = renderMsg({ kind: "assistant", id: "a7", version: okVersion() });
     expect(queryByText(/code/i)).toBeNull();
