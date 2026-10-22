@@ -51,6 +51,29 @@ describe("export formats", () => {
     expect(downloadFilename(5, "stl", 2)).toBe("model_5_p2.stl");
   });
 
+  it("puts a piece's name after its number", () => {
+    expect(downloadFilename(5, "stl", 2, "wheel_fl")).toBe("model_5_p2_wheel_fl.stl");
+    expect(downloadFilename(5, "stl", 2, "R\u00e4der vorn")).toBe("model_5_p2_R\u00e4der_vorn.stl");
+  });
+
+  it("cuts a long name by characters, never through one", () => {
+    const kept = downloadFilename(5, "stl", 1, "p".repeat(47) + "😀");
+    expect(kept).toBe(`model_5_p1_${"p".repeat(47)}😀.stl`);
+    const cut = downloadFilename(5, "stl", 1, "p".repeat(48) + "😀");
+    expect(cut).toBe(`model_5_p1_${"p".repeat(48)}.stl`);
+    expect(/\p{Cs}/u.test(cut)).toBe(false);
+  });
+
+  it("writes a name in its composed form", () => {
+    expect(downloadFilename(5, "stl", 1, "caf" + "e\u0301")).toBe("model_5_p1_caf\u00e9.stl");
+  });
+
+  it("keeps out of a piece's name what a file system will not take", () => {
+    expect(downloadFilename(5, "stl", 1, "../lid: top?")).toBe("model_5_p1_lid_top.stl");
+    expect(downloadFilename(5, "stl", 1, "  ")).toBe("model_5_p1.stl");
+    expect(downloadFilename(5, "stl", 1, null)).toBe("model_5_p1.stl");
+  });
+
   it("builds a share URL with the project id in the path and the version in ?v", () => {
     const url = shareUrl("https://app.example", "/apps/cadless/", 2, 5);
     expect(url).toBe("https://app.example/apps/cadless/2?v=5");

@@ -144,7 +144,66 @@ describe("ExportShare", () => {
     vi.stubGlobal("fetch", fetchFn);
     renderShare(versionInPieces(3));
     fireEvent.click(screen.getByRole("button", { name: /STL/ }));
-    await waitFor(() => expect(screen.getByText("1 of 3 pieces saved")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("1 of 3 pieces saved; part 2 did not arrive")).toBeInTheDocument(),
+    );
+  });
+
+  it("saves each piece under the name its build gave it", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["x"]) });
+    vi.stubGlobal("fetch", fetchFn);
+    const saved: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        saved.push(this.download);
+      });
+    const names = ["chassis", "part1", "wheel_fl"];
+    renderShare({
+      ...versionInPieces(3),
+      parts: names.map((name, index) => ({ index, name, path: [], color: null })),
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /STL/ }));
+      await waitFor(() => expect(saved).toHaveLength(3));
+      expect(saved).toEqual(["model_5_p0_chassis.stl", "model_5_p1.stl", "model_5_p2_wheel_fl.stl"]);
+    } finally {
+      click.mockRestore();
+    }
+  });
+
+  it("names the piece that did not arrive", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["x"]) })
+      .mockResolvedValue({ ok: false, status: 404 });
+    vi.stubGlobal("fetch", fetchFn);
+    renderShare({
+      ...versionInPieces(2),
+      parts: ["chassis", "shell"].map((name, index) => ({ index, name, path: [], color: null })),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /STL/ }));
+    await waitFor(() =>
+      expect(screen.getByText("1 of 2 pieces saved; shell did not arrive")).toBeInTheDocument(),
+    );
+  });
+
+  it("tells apart the piece that did not arrive from one of the same name", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["x"]) })
+      .mockResolvedValue({ ok: false, status: 404 });
+    vi.stubGlobal("fetch", fetchFn);
+    renderShare({
+      ...versionInPieces(2),
+      parts: ["wheel", "wheel"].map((name, index) => ({ index, name, path: [], color: null })),
+    });
+    fireEvent.click(screen.getByRole("button", { name: /STL/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("1 of 2 pieces saved; wheel (part 2) did not arrive"),
+      ).toBeInTheDocument(),
+    );
   });
 
   it("says on the chip how many pieces a format is in", () => {
