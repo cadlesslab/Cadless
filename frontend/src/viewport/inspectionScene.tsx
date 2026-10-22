@@ -5,7 +5,13 @@ import { useThree } from "@react-three/fiber";
 import { type RefObject, useEffect } from "react";
 import * as THREE from "three";
 
-import { countTriangles, measureAngle, measureDistance, sectionPlane } from "./inspection";
+import {
+  countTriangles,
+  distanceLabel,
+  markerRadius,
+  measureAngle,
+  sectionPlane,
+} from "./inspection";
 import { useViewport, viewportStore, type Point3 } from "./viewportStore";
 
 function boxOf(group: THREE.Object3D | null): THREE.Box3 | null {
@@ -62,11 +68,12 @@ function mid(a: Point3, b: Point3): Point3 {
 }
 
 /** Markers, segments + distance labels (and an angle label for 3 points). */
-export function Measure() {
+export function Measure({ modelRef }: { modelRef: RefObject<THREE.Group> }) {
   const tool = useViewport((s) => s.tool);
   const pts = useViewport((s) => s.measurePoints);
   if (tool !== "measure" || pts.length === 0) return null;
 
+  const radius = markerRadius(boxOf(modelRef.current));
   const segments: [Point3, Point3][] = [];
   for (let i = 0; i + 1 < pts.length; i++) segments.push([pts[i], pts[i + 1]]);
 
@@ -74,7 +81,7 @@ export function Measure() {
     <group>
       {pts.map((p, i) => (
         <mesh key={i} position={p}>
-          <sphereGeometry args={[0.7, 12, 12]} />
+          <sphereGeometry args={[radius, 12, 12]} />
           <meshBasicMaterial color="#4f8cff" depthTest={false} />
         </mesh>
       ))}
@@ -82,7 +89,7 @@ export function Measure() {
         <group key={`seg-${i}`}>
           <Line points={[s[0], s[1]]} color="#4f8cff" lineWidth={2} />
           <Html position={mid(s[0], s[1])} center>
-            <span className="vp-measure-label">{measureDistance(s[0], s[1]).toFixed(1)} mm</span>
+            <span className="vp-measure-label">{distanceLabel(s[0], s[1])}</span>
           </Html>
         </group>
       ))}

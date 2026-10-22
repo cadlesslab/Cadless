@@ -191,7 +191,7 @@ export function Viewport() {
                 )}
               </Bounds>
               <Ground modelRef={modelRef} extent={apartExtent} />
-              <Measure />
+              <Measure modelRef={modelRef} />
             </Suspense>
           </GltfErrorBoundary>
         )}
