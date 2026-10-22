@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 import backend.routers.chat as chat
 from backend.app import create_app
+from backend.assembly import assembly_findings
 from cadless import printer_profile
 from cadless.config import settings
 from cadless.llm.providers import StreamChunk
@@ -1333,13 +1334,13 @@ def test_a_build_the_check_did_not_rule_on_streams_no_findings(client, store, mo
 def test_findings_of_an_unexpected_shape_are_not_shown(verdict):
     # A turn must not fail on the verdict's shape, nor show a reader characters
     # or objects as sentences.
-    assert chat._assembly_findings(verdict) is None
+    assert assembly_findings(verdict) is None
 
 
 def test_only_the_findings_that_are_words_are_shown():
     verdict = {"ok": False, "failures": ["part 1 overlaps part 2", 7, " "], "unchecked": ["x"]}
 
-    assert chat._assembly_findings(verdict) == {
+    assert assembly_findings(verdict) == {
         "failures": ["part 1 overlaps part 2"],
         "unchecked": ["x"],
     }

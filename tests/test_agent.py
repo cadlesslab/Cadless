@@ -296,7 +296,7 @@ def test_identical_repeated_tool_calls_are_debounced():
 def test_set_parameters_uses_reparametrize_without_model_call():
     calls: list[dict] = []
 
-    def fake_reparametrize(code: str, params: dict) -> dict:
+    def fake_reparametrize(code: str, params: dict, **_kwargs) -> dict:
         calls.append(params)
         return {
             "ok": True,
@@ -1227,12 +1227,114 @@ def test_max_tokens_truncated_tool_turn_surfaces_note_and_skips_tool():
 
 def test_a_parameter_edit_carries_the_rebuild_s_part_names(monkeypatch):
     from cadless import agent as agent_mod
-    from cadless import worker
     from cadless.worker import ExecResult
 
     parts = [{"index": 0, "name": "lid", "path": [], "color": None}]
-    monkeypatch.setattr(worker, "run_code", lambda code: ExecResult(ok=True, parts=parts))
+    monkeypatch.setattr(
+        "cadless.pipeline.run_code", lambda code, **_kwargs: ExecResult(ok=True, parts=parts)
+    )
 
     out = agent_mod._default_reparametrize("params = {'size': 10}\nresult = 1\n", {"size": 20})
 
     assert agent_mod._reparam_summary(out)["parts"] == parts
+
+
+def test_set_parameters_rebuilds_into_the_turn_s_export_dir_against_the_model_s_assembly():
+    from cadless.printer_profile import AssemblySpec, BuildVolume
+
+    spec = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=0.2)
+    calls: list[tuple] = []
+
+    def fake_reparametrize(code, params, *, export_dir=None, assembly=None):
+        calls.append((export_dir, assembly))
+        return {"ok": True, "code": code, "parameters": params}
+
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1", name="set_parameters", tool_input={"params": {"size": 20}}
+            ),
+            _text_turn("resized"),
+        ]
+    )
+    ctx = _context(reparametrize=fake_reparametrize)
+    ctx.export_dir = "/tmp/turn-staging"
+    # An edit acts on the model that already exists, so what it was built as
+    # counts as much as what this turn asked for.
+    ctx.inherited_assembly = spec
+
+    Agent(provider=provider, model="fake-model").run_turn(user_text="make it 20", context=ctx)
+
+    assert calls == [("/tmp/turn-staging", spec)]
+
+
+def test_a_parameter_edit_s_verdict_and_guide_reach_the_chat_and_the_model():
+    verdict = {"ok": False, "failures": ["left and right share 500.0 mm³"], "checks": ["overlap"]}
+    guide = {"parts": ["left", "right"], "steps": ["Fit right to left."], "frames": 0}
+
+    def fake_reparametrize(code, params, **_kwargs):
+        return {"ok": True, "code": code, "parameters": params, "assembly": verdict, "guide": guide}
+
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1", name="set_parameters", tool_input={"params": {"size": 20}}
+            ),
+            _text_turn("resized"),
+        ]
+    )
+    agent = Agent(provider=provider, model="fake-model")
+    events = list(
+        agent.stream_turn(
+            user_text="make it 20", context=_context(reparametrize=fake_reparametrize)
+        )
+    )
+
+    result = next(e for e in events if e.kind == "tool_result")
+    assert result.data["assembly"] == verdict
+    shown_to_model = next(
+        b
+        for e in events
+        if e.kind == "turn_end"
+        for b in e.data["result"].blocks
+        if b.kind == "tool_result"
+    )
+    assert json.loads(shown_to_model.content)["assembly"] == verdict
+    assert any(
+        b.kind == "guide" for e in events if e.kind == "turn_end" for b in e.data["result"].blocks
+    )
+
+
+TWO_BOXES = (
+    "from build123d import *\n"
+    'params = {"gap": 5}\n'
+    "left = Box(10, 10, 10)\n"
+    'left.label = "left"\n'
+    'right = Pos(10 + params["gap"], 0, 0) * Box(10, 10, 10)\n'
+    'right.label = "right"\n'
+    "result = Compound(children=[left, right])\n"
+)
+
+
+@pytest.mark.build123d
+def test_a_parameter_edit_that_makes_two_parts_overlap_is_caught(tmp_path):
+    from cadless.agent import _default_reparametrize
+
+    out = _default_reparametrize(TWO_BOXES, {"gap": -5}, export_dir=str(tmp_path))
+
+    assert out["ok"] is True  # nobody asked for an assembly, so it is kept...
+    assert out["assembly"]["ok"] is False  # ...with the overlap on it
+    assert any("left and right share" in line for line in out["assembly"]["failures"])
+
+
+@pytest.mark.build123d
+def test_a_parameter_edit_exports_its_files_where_the_turn_collects_them(tmp_path):
+    from pathlib import Path
+
+    from cadless.agent import _default_reparametrize
+
+    out = _default_reparametrize(TWO_BOXES, {"gap": 10}, export_dir=str(tmp_path))
+
+    assert out["ok"] is True, out["error"]
+    assert out["glb_path"] is not None
+    assert Path(out["glb_path"]).parent == tmp_path
