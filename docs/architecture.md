@@ -379,8 +379,14 @@ catalog content read-only.
   millimetres, a domain authored in metres being scaled to them at export. The
   measure tool therefore converts a length measured in the scene before it
   labels it in millimetres; read as millimetres, it is a thousand times short.
-  The size and volume recorded with a version stay in the domain's authoring
-  units.
+  A version's recorded size and volume are filed in millimetres too: a catalog
+  item records them in its domain's authoring units, the loader converts them as
+  it files each step, and an item filed unconverted by an earlier engine is
+  converted where it is. A copy made of such an item before then, and an item
+  whose ledger entry predates content hashing, keep the unit they were filed in.
+  A build that writes a version's back into an item has to convert them to
+  authoring units again (`StepGeometry.in_authoring_units`). The grid and axes
+  are sized from the model in view.
 - `docs/pipeline.md` is the detailed source for repair, progress, thread, and
   process sequencing; this document intentionally does not duplicate it.
 

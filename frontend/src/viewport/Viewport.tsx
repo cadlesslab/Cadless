@@ -19,7 +19,14 @@ import { setThumbnail } from "../panels/thumbnails";
 import { useActiveVersion, useStoreSelector } from "../state";
 import { AssemblyPlayer } from "./AssemblyPlayer";
 import { CameraRig } from "./CameraRig";
-import { Appearance, Ground, SceneEnvironment } from "./effects";
+import {
+  Appearance,
+  gridConfig,
+  Ground,
+  ModelBox,
+  SceneEnvironment,
+  START_CAMERA,
+} from "./effects";
 import { Measure, SectionPlane, TriangleCounter } from "./inspectionScene";
 import { ModelParts } from "./ModelParts";
 import { firstDrawnHitOn, showsModelAsItIs } from "./partView";
@@ -113,11 +120,16 @@ export function Viewport() {
   const { partGroups, onPartGroup } = usePartGroups(version?.id ?? null, accent);
   // Where the parts reach fully apart, for the ground to cover as well.
   const [apartExtent, setApartExtent] = useState<THREE.Box3 | null>(null);
+  // The model framed last, which the grid, the axes and the ground are sized
+  // to. Kept when the view empties, since the camera stays where that model put
+  // it.
+  const [modelBox, setModelBox] = useState<THREE.Box3 | null>(null);
+  const grid = gridConfig(modelBox);
 
   return (
     <div className="viewport" data-testid="viewport">
       <Canvas
-        camera={{ fov: 50, position: [80, 80, 80] }}
+        camera={{ fov: 50, position: START_CAMERA }}
         dpr={[1, 2]}
         shadows
         gl={{ preserveDrawingBuffer: true, logarithmicDepthBuffer: true }}
@@ -128,16 +140,18 @@ export function Viewport() {
         <SceneEnvironment />
         {gridVisible && (
           <Grid
+            // Far wider than the fade at any size, so the grid fades out rather
+            // than ending at the plane's edge.
             args={[200, 200]}
             cellColor={gridMinor}
             sectionColor={gridMajor}
             infiniteGrid
-            fadeDistance={600}
-            cellSize={10}
-            sectionSize={50}
+            fadeDistance={grid.fadeDistance}
+            cellSize={grid.cellSize}
+            sectionSize={grid.sectionSize}
           />
         )}
-        {axesVisible && <axesHelper args={[20]} />}
+        {axesVisible && <axesHelper args={[grid.axes]} />}
 
         {urls.length > 0 && (
           <GltfErrorBoundary onFailed={onFailed}>
@@ -173,6 +187,8 @@ export function Viewport() {
                   />
                 </group>
                 <ViewCommands modelRef={modelRef} />
+                {/* Inside Bounds so it remounts, and measures, with every model. */}
+                <ModelBox modelRef={modelRef} onBox={setModelBox} />
                 <Appearance modelRef={modelRef} />
                 <SectionPlane modelRef={modelRef} />
                 <TriangleCounter modelRef={modelRef} />
@@ -190,7 +206,7 @@ export function Viewport() {
                   />
                 )}
               </Bounds>
-              <Ground modelRef={modelRef} extent={apartExtent} />
+              <Ground model={modelBox} extent={apartExtent} />
               <Measure modelRef={modelRef} />
             </Suspense>
           </GltfErrorBoundary>

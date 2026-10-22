@@ -51,6 +51,25 @@ class StepGeometry(BaseModel):
     volume: float | None = None
     bbox: tuple[float, float, float] | None = None
 
+    def in_millimetres(self, mm_per_unit: float) -> StepGeometry:
+        """These metrics, recorded in a domain's authoring units, in millimetres:
+        lengths times ``mm_per_unit``, the volume times its cube."""
+        return StepGeometry(
+            volume=None if self.volume is None else self.volume * mm_per_unit**3,
+            bbox=None if self.bbox is None else tuple(side * mm_per_unit for side in self.bbox),
+        )
+
+    def in_authoring_units(self, mm_per_unit: float) -> StepGeometry:
+        """These metrics, in millimetres as a version records them, in a domain's
+        authoring units, as a manifest records them: the inverse of
+        :meth:`in_millimetres`, for whatever writes a version's metrics into an
+        item. Divided rather than multiplied by the reciprocal, so the decimals an
+        item was authored with come back as they were."""
+        return StepGeometry(
+            volume=None if self.volume is None else self.volume / mm_per_unit**3,
+            bbox=None if self.bbox is None else tuple(side / mm_per_unit for side in self.bbox),
+        )
+
 
 class StepTranscript(BaseModel):
     """A realistic chat turn for one step (re-authoring).

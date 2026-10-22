@@ -168,14 +168,13 @@ def too_big_for(bbox: Sequence[Any] | None, volume: BuildVolume) -> str:
     of the two; and a bounding box that is not three usable numbers is not
     refused at all.
 
-    **It cannot see units, and that is a known gap.** ``bbox`` is recorded in the
-    project's *authoring* units while the exported STL is always millimetres
-    (``cadless/worker.py`` ``export_scale``), so for a domain authored in metres
-    -- ``house`` is one -- the numbers here are a thousand times too small and
-    nothing is ever refused. That fails **open**: the reader gets the slicer's
-    own message instead of this one, which is worse copy and not a wrong answer.
-    Closing it needs a version-to-domain link the store does not carry, so it is
-    recorded here rather than guessed at.
+    **It reads ``bbox`` as millimetres, and cannot tell when it is not.** That is
+    the unit a version's size is filed in and the exported STL is in. A size
+    filed in another unit -- a copy made of an item in metres before items were
+    filed in millimetres, or an item whose catalogue entry predates content
+    hashing -- reads a thousand times too small here and is never refused. That
+    fails **open**: the reader gets the slicer's own message instead of this
+    one, which is worse copy and not a wrong answer.
     """
     dimensions = _dimensions(bbox)
     if dimensions is None:

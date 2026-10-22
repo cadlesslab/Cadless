@@ -123,11 +123,10 @@ def build_command(
 
     ``fit_to`` shrinks the model until it fits the volume given. The slicer does
     that arithmetic against the **mesh**, which is always millimetres, rather
-    than against the bounding box this project records in the project's own
-    authoring units — so the shrinking itself is unit-correct once it is asked
-    for. It does **not** close :func:`too_big_for`'s units gap: what asks for it
-    is that same bounding-box check, so a model whose box reads a thousand times
-    too small is never refused and never offered this either.
+    than against the bounding box the version records — so the shrinking itself
+    is unit-correct once it is asked for. What asks for it is
+    :func:`too_big_for`'s bounding-box check, so a model whose box was filed in
+    another unit than the millimetre is never offered this either.
 
     ``rotate_degrees`` turns it about Z, only ever :data:`QUARTER_TURN`, for a
     model that fits turned and not as it stands or one whose offered size assumes

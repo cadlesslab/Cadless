@@ -6,6 +6,7 @@
  * panel now; this one answers what you are looking at rather than what you can
  * do with it. */
 import { EmptyState, Panel } from "../components";
+import { measureText } from "../measures";
 import { useActiveVersion } from "../state";
 import { CodePanel } from "./CodePanel";
 import { PartList } from "./PartList";
@@ -21,6 +22,7 @@ export function Inspector() {
     );
   }
 
+  const measures = measureText(version.volume, version.bbox);
   return (
     <Panel title="Details">
       <div className="details">
@@ -28,12 +30,10 @@ export function Inspector() {
           <span className={`status ${version.ok ? "ok" : "bad"}`}>
             {version.ok ? "✅ ok" : "⚠ failed"}
           </span>
-          {version.volume != null && (
-            <span className="metric">{version.volume.toFixed(1)} mm³</span>
-          )}
-          {version.bbox && (
+          {measures.volume && <span className="metric">{measures.volume}</span>}
+          {measures.size && (
             <span className="metric">
-              {version.bbox.map((d) => d.toFixed(1)).join(" × ")} mm
+              {measures.size} {measures.unit}
             </span>
           )}
         </div>

@@ -71,7 +71,13 @@ any of that: it reads the ladder out of the store, copies the exports each step
 already has, and renders the thumbnail from the final mesh
 (`catalog/thumbnail.py`). Nothing is re-run and nothing is re-baked, so the only
 things it has to ask for are the ones a project does not carry — an address, a
-licence and a domain.
+licence and a domain. A version's size and volume are filed in millimetres while
+`geometry` is in the domain's authoring units, so each step's go through
+`StepGeometry.in_authoring_units` with the domain's `export_scale`; copied as
+they are, an item in metres would come back a thousand times too large. A
+version copied from an item in metres before items were filed in millimetres,
+or from an item whose ledger entry predates content hashing, still carries the
+item's own units, and converting it would make it a thousand times too small.
 
 `source.json` also carries `derived_from` when the project it was written from
 is a copy of something fetched from a listing: the `catalog_id`, `version_id`
@@ -97,7 +103,7 @@ entry in `steps` has:
 | `index` | 1-based position in the ladder |
 | `instruction` | the natural-language instruction for this step |
 | `code` | path to the step's script, relative to the item directory and inside it: no absolute path, no `..`, nothing that leaves the item through a link |
-| `geometry` | `volume` / `bbox`, measured when the item was authored |
+| `geometry` | `volume` / `bbox`, measured when the item was authored, in the domain's authoring units; the loader files them on the version in millimetres |
 | `artifacts` | key → relative path, likewise inside the item. The key is the kind (`glb`, `stl`, …) for a step's first file of that kind and `<kind>:<part>` for each later one (`glb:1`, `glb:2`), so a step built as several parts carries one file per part. A step of several parts may also carry its whole build as one file of each, under `assembly_glb` and `assembly_step` — keyed once, and filed as `assembly.glb` / `assembly.step` as a build writes them |
 | `assertions` | optional post-conditions, e.g. `{"volume_tol": 0.05}` |
 | `expected_bodies` | how many disjoint solids the step deliberately produces; absent means 1 |
@@ -224,10 +230,11 @@ register_domain(Domain(
 | `content_dir` | subdirectory name; defaults to `{key}-catalog` |
 
 `authoring_units` matters more than it looks: it becomes the authoring-units →
-millimetre `export_scale` applied to exported artifacts, so declaring it wrong
-produces geometry that is right in the summary and wrong in the file. The house
-domain authors in metres; the mechanical, furniture and fixture domains author
-in millimetres.
+millimetre `export_scale` applied to exported artifacts, and the factor the
+loader applies to each step's recorded size and volume, so declaring it wrong
+leaves both the files and the sizes shown off by that factor. The house domain
+authors in metres; the mechanical, furniture and fixture domains author in
+millimetres.
 
 `eval_metrics` is declared here but read elsewhere — per-item scoring runs in the
 authoring pipeline. Registering a domain without it is not an error; it means

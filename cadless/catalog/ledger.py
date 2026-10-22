@@ -285,6 +285,18 @@ class Ledger:
             data[house_id] = entry
             self._write(data)
 
+    def set_content_hash(self, house_id: str, content_hash: str) -> None:
+        """Replace one entry's ``content_hash``, leaving the rest of it as it is.
+
+        For an item whose rows were brought up to date where they are: it is the
+        same load, so nothing else the entry says has changed.
+        """
+        with _FILE_LOCK, _across_processes(self.lock_path, LOCK_WAIT):
+            data = self._read()
+            if house_id in data:
+                data[house_id] = {**data[house_id], "content_hash": content_hash}
+                self._write(data)
+
     def remove(self, house_id: str) -> None:
         with _FILE_LOCK, _across_processes(self.lock_path, LOCK_WAIT):
             data = self._read()
