@@ -57,9 +57,13 @@ export type ChatMessage =
     }
   // What the assembly check found wrong with one tool's build, read back from the
   // tool result the turn stored: the check's own words, apart from the reply.
-  | { kind: "assembly-findings"; id: string; failures: string[]; unchecked: string[] }
+  | ({ kind: "assembly-findings"; id: string } & BuildFindings)
   // The in-flight `POST /chat` turn, rendered incrementally from its SSE events.
   | { kind: "live-chat"; id: "live-chat"; turn: LiveTurn };
+
+/** The assembly check's findings on one build, and whether that build was kept:
+ * a build nobody asked to be an assembly is handed over with them on it. */
+export type BuildFindings = AssemblyFindings & { kept: boolean };
 
 /** One round of the render critique: the renders the reviewer was shown, and the
  * verdict it wrote about them. `feedback` is empty when `matches` is true. */
@@ -85,8 +89,8 @@ export interface LiveTurn {
   critique: CritiqueRound | null;
   /** The settled tool result, if one arrived. */
   result: { versionId: number | null; ok: boolean; error: string | null } | null;
-  /** The assembly check's findings on each failed tool result that carried any. */
-  findings: AssemblyFindings[];
+  /** The assembly check's findings on each tool result that carried any. */
+  findings: BuildFindings[];
   /** Clarification questions, if the turn ended asking for input. */
   clarification: ClarificationQuestion[] | null;
   /** The ordered plan steps, if the turn emitted a plan before acting. */
@@ -152,23 +156,24 @@ function findingsFrom(verdict: unknown): AssemblyFindings | null {
 
 // Parsed once per stored block: the transcript is rebuilt on every streamed
 // event, and a tool result's content carries the whole script it built.
-const findingsByBlock = new WeakMap<ContentBlock, AssemblyFindings | null>();
+const findingsByBlock = new WeakMap<ContentBlock, BuildFindings | null>();
 
 /** The findings a stored tool result carries in its verdict, or null.
  *
  * The block's content is the JSON the model was handed; the check's verdict sits
- * under `assembly`. Only a result that failed is read, so the box can say its
- * build was not kept. Content that does not parse as JSON yields nothing: an
- * error message, or a result an older engine stored with a note after the JSON. */
-function storedFindings(block: ContentBlock): AssemblyFindings | null {
+ * under `assembly`, and `ok` says whether the build was kept. Content that does
+ * not parse as JSON yields nothing: an error message, or a result an older engine
+ * stored with a note after the JSON. */
+function storedFindings(block: ContentBlock): BuildFindings | null {
   const cached = findingsByBlock.get(block);
   if (cached !== undefined) return cached;
-  let found: AssemblyFindings | null = null;
+  let found: BuildFindings | null = null;
   try {
     const parsed: unknown = JSON.parse(block.content ?? "");
     if (typeof parsed === "object" && parsed !== null) {
       const summary = parsed as Record<string, unknown>;
-      if (summary.ok === false) found = findingsFrom(summary.assembly);
+      const words = findingsFrom(summary.assembly);
+      if (words) found = { ...words, kept: summary.ok !== false };
     }
   } catch {
     found = null;
@@ -290,7 +295,7 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
   const stageEvents: ProgressEvent[] = [];
   let critique: CritiqueRound | null = null;
   let result: LiveTurn["result"] = null;
-  const findings: AssemblyFindings[] = [];
+  const findings: BuildFindings[] = [];
   let clarification: ClarificationQuestion[] | null = null;
   let plan: string[] | null = null;
   const steers: string[] = [];
@@ -320,9 +325,8 @@ export function liveTurnFromEvents(events: ChatEvent[]): LiveTurn {
         break;
       case "tool_result": {
         result = { versionId: e.version_id, ok: e.ok, error: e.error };
-        // Only off a result that failed, so the box can say its build was not kept.
-        const found = e.ok ? null : findingsFrom(e.assembly_findings);
-        if (found) findings.push(found);
+        const found = findingsFrom(e.assembly_findings);
+        if (found) findings.push({ ...found, kept: e.ok });
         break;
       }
       case "clarification":

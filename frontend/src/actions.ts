@@ -127,18 +127,34 @@ export async function rerunVersion(store: Store, id: number): Promise<void> {
   if (pid != null) await loadVersions(store, pid);
 }
 
-/** Deterministic parametric re-run (no LLM): persists a new version, selects it. */
+/** What became of a parameter edit, for the version it is about: the one the
+ * edit made when it was kept, or the one it was made from when it was not. */
+export interface EditOutcome {
+  versionId: number;
+  ok: boolean;
+  error: string | null;
+  findings: api.AssemblyFindings | null;
+}
+
+/** Deterministic parametric re-run (no LLM): persists a new version, selects it
+ * when it was kept, and says what became of it. */
 export async function reparametrize(
   store: Store,
   versionId: number,
   params: Record<string, api.ParamValue>,
-): Promise<void> {
-  await api.reparametrize(versionId, params);
+): Promise<EditOutcome> {
+  const res = await api.reparametrize(versionId, params);
   const pid = store.get().activeProjectId;
   if (pid != null) {
     await refreshProjects(store);
     await loadVersions(store, pid);
   }
+  return {
+    versionId: res.ok ? res.version.id : versionId,
+    ok: res.ok,
+    error: res.error,
+    findings: res.assembly_findings ?? null,
+  };
 }
 
 /** Common SSE wiring for both fresh generation and refinement. */

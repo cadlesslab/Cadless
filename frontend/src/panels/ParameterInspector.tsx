@@ -2,9 +2,11 @@
  * deterministically via reparametrize (no LLM) on commit. */
 import { useEffect, useState } from "react";
 
+import type { EditOutcome } from "../actions";
 import { Slider } from "../components";
 import { useActiveVersion } from "../state";
 import { useApp } from "../useApp";
+import { AssemblyCheck } from "./AssemblyCheck";
 
 /** A sensible slider range for a parameter given its current value. */
 export function sliderRange(value: number): { min: number; max: number; step: number } {
@@ -21,6 +23,7 @@ export function ParameterInspector({ readOnly = false }: { readOnly?: boolean } 
 
   const [draft, setDraft] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<EditOutcome | null>(null);
 
   // re-sync the editable copy whenever the active version changes
   useEffect(() => {
@@ -50,11 +53,15 @@ export function ParameterInspector({ readOnly = false }: { readOnly?: boolean } 
     if (!version) return;
     setBusy(true);
     try {
-      await app.reparametrize(version.id, { [key]: value });
+      setOutcome((await app.reparametrize(version.id, { [key]: value })) ?? null);
     } finally {
       setBusy(false);
     }
   }
+
+  // Only beside the version it is about: once another one is on screen, what
+  // the check said of this edit says nothing about the model in view.
+  const shown = outcome?.versionId === version.id ? outcome : null;
 
   return (
     <div className="params">
@@ -80,6 +87,12 @@ export function ParameterInspector({ readOnly = false }: { readOnly?: boolean } 
           </div>
         );
       })}
+      {shown && !shown.ok && (
+        <p className="params-error" role="alert">
+          The edit was not kept{shown.error ? `: ${shown.error}` : "."}
+        </p>
+      )}
+      {shown?.findings && <AssemblyCheck {...shown.findings} kept={shown.ok} />}
     </div>
   );
 }

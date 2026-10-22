@@ -610,6 +610,8 @@ export interface ReparametrizeResponse {
   ok: boolean;
   error: string | null;
   version: Version;
+  // Optional as well as nullable: a server older than the field leaves it out.
+  assembly_findings?: AssemblyFindings | null;
 }
 
 // ---- generation / versions ----

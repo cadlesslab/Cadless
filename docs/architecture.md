@@ -242,7 +242,11 @@ candidate judging, the identity seam and the image decisions are recorded under
    verdict on it, and one whose check could not be established is not repaired
    at all. Everything else that succeeds is stored as a project
    version whose source remains available for parameter changes and deterministic
-   rebuilds. The exception to the rebuild half is a
+   rebuilds. A parameter change, from the chat or the parameter panel, is rebuilt
+   once with no model and judged as a build's last attempt is: an edit of a model
+   built as an assembly is refused when its parts fail, any other is kept with the
+   verdict on it, and its findings go back to where the edit was made. The
+   exception to the rebuild half is a
    version in several pieces, or one that turns out to rebuild into them: a
    single file per kind matches none of the pieces recorded, and choosing
    between filing it as one more piece and leaving every recorded piece stale

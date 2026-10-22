@@ -153,9 +153,10 @@ critique round — the verdict and the views the reviewer was shown — relayed
 live from the agent's `on_critique` hook) and `error` (a failure detail when
 the turn raises). A `tool_result` carries `assembly_findings`
 — the assembly check's failures and the lines it could not establish, as the
-check worded them — whenever the verdict has any, and the chat shows them for a
-build that was refused; the stored tool result holds the same
-verdict, so a reloaded transcript shows them too.
+check worded them — whenever the verdict has any, and the chat shows them,
+saying whether the build was kept: a model built as an assembly is refused when
+its parts fail, any other is handed over with the findings on it. The stored
+tool result holds the same verdict, so a reloaded transcript shows them too.
 
 The agent exposes five tools to the model (`build_tools()`):
 
@@ -163,7 +164,7 @@ The agent exposes five tools to the model (`build_tools()`):
 |---|---|
 | `generate_model(spec)` | Fresh pipeline run. |
 | `edit_model(change)` | Refinement run on the current version's code. |
-| `set_parameters(params)` | Deterministic `params`-block override + rebuild (`params.py`) — no LLM in the loop. |
+| `set_parameters(params)` | Deterministic `params`-block override + rebuild (`params.py`, `pipeline.rebuild`) — no LLM in the loop. Its parts are measured and judged as a generated build's last attempt is, and its files land in the turn's export directory. |
 | `ask_clarification(questions)` | Ends the turn and asks the user (max 3 questions). |
 | `submit_plan(steps)` | Streams a brief plan (max 8 steps); does **not** end the turn. |
 
