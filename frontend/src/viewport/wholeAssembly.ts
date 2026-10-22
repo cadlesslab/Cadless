@@ -69,9 +69,9 @@ function lift(gltf: Loaded, nodes: THREE.Object3D[]): THREE.Object3D[] | null {
  *
  * Read from the name the loader keeps as the file spells it, beside the one it
  * makes safe for animation tracks. A file may spell a name outside ASCII as its
- * UTF-8 bytes read one to a character — the engine's own files have, because
- * the writer they come through reads a name that way — and a file once written
- * stays written, so that spelling is the same name. */
+ * UTF-8 bytes read one to a character — the engine's files did, while they came
+ * through a writer that reads a name that way — and a file once written stays
+ * written, so that spelling is the same name. */
 function spells(part: THREE.Object3D, name: string): boolean {
   const spelled = (part.userData.name as string | undefined) ?? part.name;
   if (spelled === name) return true;
