@@ -212,10 +212,10 @@ def build_tools() -> list[ToolDef]:
 
 # --- tool execution context -------------------------------------------------
 
-# A reparametrize callable: (code, overrides) -> result dict. Defaults to the
-# pipeline-free :func:`_default_reparametrize` built on the existing
-# ``apply_param_overrides`` primitive + the execution worker.
-ReparametrizeFn = Callable[[str, dict], dict]
+# A reparametrize callable: (code, overrides, *, export_dir, assembly) -> result
+# dict. Defaults to the model-free :func:`_default_reparametrize` built on the
+# existing ``apply_param_overrides`` primitive + the pipeline's ``rebuild``.
+ReparametrizeFn = Callable[..., dict]
 
 
 @dataclass
@@ -293,20 +293,30 @@ class ToolContext:
             self.reparametrize = _default_reparametrize
 
 
-def _default_reparametrize(code: str, overrides: dict) -> dict:
+def _default_reparametrize(
+    code: str,
+    overrides: dict,
+    *,
+    export_dir: str | None = None,
+    assembly: AssemblySpec | None = None,
+) -> dict:
     """Deterministic, LLM-free re-run using the existing ``params`` primitive.
 
     Splices ``overrides`` into the script's ``params`` literal
-    (:func:`cadless.params.apply_param_overrides`) and executes the edited
-    script via the same sandbox worker the pipeline uses. No model call.
+    (:func:`cadless.params.apply_param_overrides`) and rebuilds the edited script
+    with :func:`cadless.pipeline.rebuild`, so its parts are measured and judged
+    as a generated build's are and its files land where the turn collects them.
+    ``assembly`` is the machine the model is built for, if it is an assembly.
+    No model call.
     """
-    from cadless.worker import run_code
+    from cadless.pipeline import rebuild
 
     new_code = apply_param_overrides(code, overrides)
-    res = run_code(new_code)
+    rb = rebuild(new_code, export_dir=export_dir, assembly=assembly)
+    res = rb.result
     return {
-        "ok": res.ok,
-        "error": res.error,
+        "ok": rb.ok,
+        "error": rb.error,
         "code": new_code,
         "parameters": {**extract_params(code), **overrides},
         "volume": res.volume,
@@ -316,6 +326,8 @@ def _default_reparametrize(code: str, overrides: dict) -> dict:
         "stl_path": res.stl_path,
         "obj_path": res.obj_path,
         "parts": res.parts,
+        "assembly": rb.assembly,
+        "guide": rb.guide,
     }
 
 
@@ -421,11 +433,19 @@ def _guide_block(raw: Any) -> ContentBlock | None:
 
 
 def _reparam_summary(out: dict) -> dict:
+    """What :func:`_result_summary` carries for a generated build, for an edit.
+
+    ``assembly`` and ``guide`` are here for the reasons they are there: the
+    orchestrator otherwise reports a set of parts with no idea whether they go
+    together, and the chat shows the reader what the check found.
+    """
     bbox = out.get("bbox")
     return {
         "ok": out.get("ok"),
         "error": out.get("error"),
         "code": out.get("code"),
+        "assembly": out.get("assembly"),
+        "guide": out.get("guide"),
         "metrics": {
             "volume": out.get("volume"),
             "bbox": list(bbox) if bbox else None,
@@ -1342,7 +1362,15 @@ class Agent:
             elif name == SET_PARAMETERS:
                 if not context.current_code:
                     raise ValueError("no current model to re-parametrize")
-                out = context.reparametrize(context.current_code, args.get("params", {}))
+                out = context.reparametrize(
+                    context.current_code,
+                    args.get("params", {}),
+                    export_dir=context.export_dir,
+                    # As for edit_model: an edit acts on the model that already
+                    # exists, so what it was built as counts as much as what this
+                    # turn asked for.
+                    assembly=context.assembly or context.inherited_assembly,
+                )
                 payload = _reparam_summary(out)
                 if out.get("ok"):
                     self._adopt(context, out.get("code"), out.get("parameters"))

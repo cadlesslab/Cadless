@@ -16,11 +16,13 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from backend import artifact_io
+from backend.assembly import assembly_findings, assembly_spec_for
 from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.schemas import VersionOut
 from cadless.exporters import EXPORTERS
 from cadless.params import apply_param_overrides
+from cadless.pipeline import rebuild
 from cadless.scoped_store import ScopedStore
 from cadless.worker import run_code  # monkeypatchable in tests
 
@@ -45,6 +47,9 @@ class ReparametrizeResponse(BaseModel):
     ok: bool
     error: str | None = None
     version: VersionOut
+    # What the assembly check found wrong with the rebuild, in the chat's shape,
+    # or None where it found nothing: the panel has no turn to show them in.
+    assembly_findings: dict | None = None
 
 
 async def _version_out(store: ScopedStore, vid: int) -> VersionOut:
@@ -179,16 +184,21 @@ async def reparametrize_version(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     merged = {**version.parameters, **body.params}
+    # Judged as the chat judges the same edit: a model built as an assembly is
+    # held to every check against the printer saved now, any other to the parts
+    # checks alone.
+    spec = await assembly_spec_for(version.built_as_assembly)
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
     staging.mkdir(parents=True, exist_ok=True)
     try:
-        res = await run_in_threadpool(run_code, new_code, export_dir=str(staging))
+        rb = await run_in_threadpool(rebuild, new_code, export_dir=str(staging), assembly=spec)
+        res = rb.result
         new_version = await store.add_version(
             version.project_id,
             version.prompt,
             new_code,
-            res.ok,
-            res.error,
+            rb.ok,
+            rb.error,
             res.volume,
             res.bbox,
             parameters=merged,
@@ -201,13 +211,16 @@ async def reparametrize_version(
             built_as_assembly=version.built_as_assembly,
             parts=res.parts,
         )
-        if res.ok:
+        if rb.ok:
             await artifact_io.copy_and_register(store, new_version.id, staging)
             await store.set_current_version(version.project_id, new_version.id)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return ReparametrizeResponse(
-        ok=res.ok, error=res.error, version=await _version_out(store, new_version.id)
+        ok=rb.ok,
+        error=rb.error,
+        version=await _version_out(store, new_version.id),
+        assembly_findings=assembly_findings(rb.assembly),
     )
 
 

@@ -39,10 +39,11 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
 from backend import artifact_io
+from backend.assembly import assembly_findings, assembly_spec_for
 from backend.catalog_state import reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
-from cadless import printer_profile, user_settings
+from cadless import user_settings
 from cadless.agent import GENERATE_MODEL, Agent, SessionSteerRegistry, ToolContext
 from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
@@ -297,32 +298,6 @@ def _critique_line(event: dict) -> str:
     return f"{_CRITIQUE_PREFIX}{seen}: {finding}."
 
 
-def _assembly_findings(verdict: object) -> dict | None:
-    """What the assembly check found wrong with a tool's build, for the chat.
-
-    The check's own sentences, failures kept apart from what it could not
-    establish, so a reader can ask for the fix in the chat without the model
-    having to relay them. ``None`` where there is nothing to show: no verdict, a
-    build that was no assembly, or one the check accepted.
-
-    Read defensively, keeping only lists of non-blank strings: a turn must not
-    fail on the verdict's shape, nor show a reader anything but sentences.
-    """
-    if not isinstance(verdict, dict):
-        return None
-
-    def sentences(raw: object) -> list[str]:
-        if not isinstance(raw, list):
-            return []
-        return [line for line in raw if isinstance(line, str) and line.strip()]
-
-    failures = sentences(verdict.get("failures"))
-    unchecked = sentences(verdict.get("unchecked"))
-    if not failures and not unchecked:
-        return None
-    return {"failures": failures, "unchecked": unchecked}
-
-
 def _replayed_block(block: ContentBlock, role: str = "user") -> str:
     """What one stored block contributes to the replayed conversation, as text.
 
@@ -511,18 +486,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # N times, with nothing stopping the two halves disagreeing mid-turn.
     # Asking on this turn is one way in; the other is editing a model that was
     # already built as one, because the option is per-turn and a reload puts it back
-    # to off while the model stays in pieces. The kill-switch stays outermost of
-    # both: a version's record must not keep the feature alive after it has been
-    # switched off, or turning it off would fail for exactly the projects that used
-    # it. What the spec SAYS still comes from the settings saved now, so changing
-    # printer changes what an edit has to satisfy -- the version remembers that it
-    # is an assembly, never which machine it was once built for.
-    wants_assembly = settings.assembly_enabled and (body.assembly or current_is_assembly)
-    spec = (
-        printer_profile.assembly_spec(await asyncio.to_thread(user_settings.load))
-        if wants_assembly
-        else None
-    )
+    # to off while the model stays in pieces.
+    spec = await assembly_spec_for(bool(body.assembly or current_is_assembly))
     # The same spec, split by where the answer came from, because the two are not
     # entitled to the same tools: a fresh generation starts a new model and may only
     # be an assembly if this turn asked, while an edit acts on the model that already
@@ -710,7 +675,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                             ),
                             "tool": ev.data.get("tool"),
                             "error": ev.data.get("error"),
-                            "assembly_findings": _assembly_findings(ev.data.get("assembly")),
+                            "assembly_findings": assembly_findings(ev.data.get("assembly")),
                         }
                         emit({"event": "tool_result", **data})
                     elif ev.kind == "turn_end":
