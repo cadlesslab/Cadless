@@ -54,6 +54,9 @@ export interface ViewportState {
   assemblySteps: number; // joints the model on screen comes apart by; 0 hides the control
   assemblyPosition: number; // 0 assembled … assemblySteps all out; a fraction is a part on its way
   assemblyPlay: AssemblyPlay | null; // which way the parts move on their own; null when still
+  // parts, by the ordinal their files are numbered by
+  hiddenParts: number[]; // not drawn
+  highlightedPart: number | null; // picked out in the part list
 }
 
 const initial: ViewportState = {
@@ -72,6 +75,8 @@ const initial: ViewportState = {
   assemblySteps: 0,
   assemblyPosition: 0,
   assemblyPlay: null,
+  hiddenParts: [],
+  highlightedPart: null,
 };
 
 type Listener = () => void;
@@ -173,6 +178,28 @@ export class ViewportStore {
   }
   stopAssembly() {
     this.set({ assemblyPlay: null });
+  }
+
+  togglePart(part: number) {
+    const hidden = this.state.hiddenParts;
+    this.set({
+      hiddenParts: hidden.includes(part) ? hidden.filter((p) => p !== part) : [...hidden, part],
+    });
+  }
+  showAllParts() {
+    if (this.state.hiddenParts.length) this.set({ hiddenParts: [] });
+  }
+  // Only on a change: the part list sets this on every pointer movement in and
+  // out of a row, and each set wakes every subscriber.
+  highlightPart(part: number | null) {
+    if (this.state.highlightedPart !== part) this.set({ highlightedPart: part });
+  }
+  /** Forget what was hidden and picked out. Both name parts by ordinal, and the
+   * same ordinal on another model is another part. */
+  resetParts() {
+    if (this.state.hiddenParts.length || this.state.highlightedPart !== null) {
+      this.set({ hiddenParts: [], highlightedPart: null });
+    }
   }
 
   showPreview(preview: Preview) {

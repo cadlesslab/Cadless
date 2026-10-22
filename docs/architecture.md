@@ -213,7 +213,12 @@ candidate judging, the identity seam and the image decisions are recorded under
    names with the version, checked and bounded where they are stored, and
    returned only where they number the files the version holds — and serves the
    artifacts, copying a build's files only from the route's own staging
-   directory, never from a directory a worker's report names. Not every artifact kind is in the exporter registry, and the two
+   directory, never from a directory a worker's report names. The viewport draws
+   a version in parts from its one GLB where the version has it, finding each
+   part by its place among the file's mesh-carrying nodes, depth first, and from
+   the part files where it has none, or the file will not load, does not hold
+   the parts the version numbers, or names them otherwise than the version
+   does. Not every artifact kind is in the exporter registry, and the two
    are declared in different places: a thumbnail, the drawings of an assembly
    guide, and the motion an accepted assembly is played from are things the
    engine made *about* a build rather than formats the build was converted

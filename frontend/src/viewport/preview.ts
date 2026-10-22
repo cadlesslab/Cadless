@@ -10,7 +10,13 @@
  * different objects. Answers that used to agree by construction have to be
  * decided together, so they are decided here, where they can be tested without
  * a Canvas. */
-import { artifactUrl, glbUrl, type Version } from "../api";
+import {
+  artifactUrl,
+  glbUrl,
+  hasWholeAssembly,
+  type Version,
+  wholeAssemblyUrl,
+} from "../api";
 import { partsOf } from "../panels/exportFormats";
 import type { Preview } from "./viewportStore";
 
@@ -22,9 +28,12 @@ const PREVIEW_HAS_NO_MESH = "This catalogue has no model to preview.";
 
 export interface ViewerSubject {
   /** The GLBs to draw, or none when there is nothing to draw: for the active
-   * version one per part, in part order (one for a model printed whole), and
-   * for a preview its one address. */
+   * version in parts its whole-assembly file, or one per part in part order;
+   * one for a model printed whole; and for a preview its one address. */
   urls: string[];
+  /** Whether `urls` is a version's one whole-assembly file, to be drawn as the
+   * parts `parts` names rather than as one object. */
+  fromAssemblyFile: boolean;
   /** Whether what is on screen belongs to something not on this machine. */
   previewing: boolean;
   /** The version to save a thumbnail of, or null to save none. */
@@ -32,19 +41,28 @@ export interface ViewerSubject {
   /** Why the viewport is empty, when it is. Null while something is drawn. */
   emptyReason: string | null;
   /** The GLB part ordinal each of `urls` draws, in the same order — the number
-   * an assembly names that part by. Empty when there are no parts to name: a
-   * model drawn whole, a preview, or nothing at all. */
+   * an assembly names that part by — or, for a whole-assembly file, the ordinal
+   * of each of its parts in turn. Empty when there are no parts to name: a model
+   * printed whole, a preview, or nothing at all. */
   parts: number[];
+  /** What the version calls each of `parts`, in the same order, or null for one
+   * it gives no name — what a whole-assembly file's parts are checked against,
+   * because a file whose parts are in another order is not this model. */
+  names: (string | null)[];
 }
 
 /** What to draw, whether to keep a picture of it, and what to say instead.
  *
  * `failed` is the loader's answer rather than this function's: a GLB that a
- * server answered for can still be unreadable, and only the attempt knows. */
+ * server answered for can still be unreadable, and only the attempt knows.
+ * `wholeRefused` is the same kind of answer about a whole-assembly file — it
+ * would not load, or did not hold the parts — and sends the version back to its
+ * per-part files. */
 export function viewerSubject(
   version: Version | null,
   preview: Preview | null,
   failed: boolean,
+  wholeRefused = false,
 ): ViewerSubject {
   if (preview) {
     // captureVersionId is null on every path through here, whether or not a
@@ -55,34 +73,40 @@ export function viewerSubject(
     if (preview.url == null) {
       return {
         urls: [],
+        fromAssemblyFile: false,
         previewing: true,
         captureVersionId: null,
         emptyReason: preview.note ?? PREVIEW_HAS_NO_MESH,
         parts: [],
+        names: [],
       };
     }
     if (failed) {
       return {
         urls: [],
+        fromAssemblyFile: false,
         previewing: true,
         captureVersionId: null,
         emptyReason: PREVIEW_UNREADABLE,
         parts: [],
+        names: [],
       };
     }
     return {
       urls: [preview.url],
+      fromAssemblyFile: false,
       previewing: true,
       captureVersionId: null,
       emptyReason: null,
       parts: [],
+      names: [],
     };
   }
 
   const hasModel = version?.ok === true && version.artifacts.some((a) => a.kind === "glb");
   if (hasModel && !failed) {
     return {
-      ...modelUrls(version),
+      ...modelUrls(version, wholeRefused),
       previewing: false,
       captureVersionId: version.id,
       emptyReason: null,
@@ -95,25 +119,54 @@ export function viewerSubject(
     : version && !version.ok
       ? GENERATION_FAILED
       : NOTHING_OPEN;
-  return { urls: [], previewing: false, captureVersionId: null, emptyReason, parts: [] };
+  return {
+    urls: [],
+    fromAssemblyFile: false,
+    previewing: false,
+    captureVersionId: null,
+    emptyReason,
+    parts: [],
+    names: [],
+  };
 }
 
-/** Every GLB a version's model is drawn from, in part order, and the part
- * each one is.
+/** Every GLB a version's model is drawn from, and the part each one is.
  *
  * A model printed whole keeps the one address it has always been fetched from.
- * A model in parts is asked for part by part, so each piece is drawn as itself
- * rather than one of them standing in for the rest. The ordinals travel with
- * the addresses because whoever moves a part by its ordinal needs to know which
- * address that is, not where it fell in a list. */
-function modelUrls(version: Version): { urls: string[]; parts: number[] } {
+ * A model in parts is drawn from its whole-assembly file where it has one: one
+ * request rather than one per part, and the file carries the colours its
+ * build gave the parts, which the part files do not. A version written before
+ * there was such a file, or one whose file would not do, is asked for part by
+ * part, so each piece is still drawn as itself rather than one of them standing
+ * in for the rest. The ordinals travel with the addresses because whoever moves
+ * a part by its ordinal needs to know which part that is, not where it fell in
+ * a list. */
+function modelUrls(
+  version: Version,
+  wholeRefused: boolean,
+): { urls: string[]; parts: number[]; names: (string | null)[]; fromAssemblyFile: boolean } {
   const parts = partsOf(version, "glb");
-  return parts.length > 1
-    ? {
-        urls: parts.map((a) => artifactUrl(version.id, "glb", a.part)),
-        parts: parts.map((a) => a.part),
-      }
-    : { urls: [glbUrl(version.id)], parts: [] };
+  if (parts.length < 2) {
+    return { urls: [glbUrl(version.id)], parts: [], names: [], fromAssemblyFile: false };
+  }
+  const ordinals = parts.map((a) => a.part);
+  const names = ordinals.map(
+    (part) => version.parts?.find((p) => p.index === part)?.name ?? null,
+  );
+  if (!wholeRefused && hasWholeAssembly(version, "assembly_glb")) {
+    return {
+      urls: [wholeAssemblyUrl(version.id, "assembly_glb")],
+      parts: ordinals,
+      names,
+      fromAssemblyFile: true,
+    };
+  }
+  return {
+    urls: parts.map((a) => artifactUrl(version.id, "glb", a.part)),
+    parts: ordinals,
+    names,
+    fromAssemblyFile: false,
+  };
 }
 
 export interface ReadoutFields {

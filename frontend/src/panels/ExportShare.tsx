@@ -20,6 +20,7 @@ import { Button, Modal, Tooltip, useToast } from "../components";
 import { errMessage } from "../errors";
 import { BASE_URL } from "../routing";
 import { fetchAndSave } from "./download";
+import { givenName, partLabels } from "./partRows";
 import {
   availableFormats,
   chipLabel,
@@ -146,6 +147,9 @@ export function ExportShare({ version }: { version: Version }) {
     setBusy(kind);
     const label = FORMAT_META[kind].label;
     const pieces = partsOf(version, kind);
+    // What each piece is called, told apart where two would read alike, for the
+    // message if one does not arrive.
+    const labels = partLabels(version, pieces.map((piece) => piece.part));
     let saved = 0;
     try {
       if (pieces.length > 1) {
@@ -156,7 +160,7 @@ export function ExportShare({ version }: { version: Version }) {
         for (const piece of pieces) {
           await fetchAndSave(
             artifactUrl(version.id, kind, piece.part),
-            downloadFilename(version.id, kind, piece.part),
+            downloadFilename(version.id, kind, piece.part, givenName(version, piece.part)),
           );
           saved += 1;
         }
@@ -173,7 +177,7 @@ export function ExportShare({ version }: { version: Version }) {
       toast.error(
         `Couldn't download ${label}`,
         pieces.length > 1
-          ? `${saved} of ${pieces.length} pieces saved`
+          ? `${saved} of ${pieces.length} pieces saved; ${labels[saved]} did not arrive`
           : "the artifact may be unavailable",
       );
     } finally {

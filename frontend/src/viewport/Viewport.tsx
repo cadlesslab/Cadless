@@ -7,7 +7,6 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
   Component,
   Suspense,
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -23,9 +22,11 @@ import { CameraRig } from "./CameraRig";
 import { Appearance, Ground, SceneEnvironment } from "./effects";
 import { Measure, SectionPlane, TriangleCounter } from "./inspectionScene";
 import { ModelParts } from "./ModelParts";
+import { firstDrawnHitOn, showsModelAsItIs } from "./partView";
 import { PreviewBanner } from "./PreviewBanner";
 import { Readout } from "./Readout";
 import { useAssemblyMotion } from "./useAssemblyMotion";
+import { usePartGroups } from "./usePartGroups";
 import { usePreviewSubject } from "./usePreviewSubject";
 import { ViewCommands } from "./ViewCommands";
 import { ViewportToolbar } from "./ViewportToolbar";
@@ -68,13 +69,20 @@ class GltfErrorBoundary extends Component<
   }
 }
 
-/** Capture a thumbnail of the framed model a few frames after it loads. */
+/** Capture a thumbnail of the framed model a few frames after it loads.
+ *
+ * Only frames that show the model as it is are counted, and waiting here rather
+ * than mounting this later keeps it to one picture per model. */
 function ThumbnailCapture({ versionId }: { versionId: number }) {
   const gl = useThree((s) => s.gl);
   const frames = useRef(0);
   const done = useRef(false);
   useFrame(() => {
     if (done.current) return;
+    if (!showsModelAsItIs(viewportStore.get())) {
+      frames.current = 0;
+      return;
+    }
     if (++frames.current > 3) {
       done.current = true;
       try {
@@ -101,13 +109,8 @@ export function Viewport() {
   const axesVisible = useViewport((s) => s.axesVisible);
 
   const motion = useAssemblyMotion(version, subject.previewing, subject.parts);
-  // Each part's own group, by part ordinal, for the player to move. A ref
-  // rather than state: it changes as parts mount, which is no reason to render.
-  const partGroups = useRef(new Map<number, THREE.Group>());
-  const onPartGroup = useCallback((part: number, group: THREE.Group | null) => {
-    if (group) partGroups.current.set(part, group);
-    else partGroups.current.delete(part);
-  }, []);
+  const accent = useCssVar("--accent");
+  const { partGroups, onPartGroup } = usePartGroups(version?.id ?? null, accent);
   // Where the parts reach fully apart, for the ground to cover as well.
   const [apartExtent, setApartExtent] = useState<THREE.Box3 | null>(null);
 
@@ -156,10 +159,18 @@ export function Viewport() {
                   onPointerDown={(e: ThreeEvent<PointerEvent>) => {
                     if (viewportStore.get().tool !== "measure") return;
                     e.stopPropagation();
-                    viewportStore.addMeasurePoint([e.point.x, e.point.y, e.point.z]);
+                    const hit = firstDrawnHitOn(e.intersections, e.eventObject);
+                    if (hit) viewportStore.addMeasurePoint([hit.point.x, hit.point.y, hit.point.z]);
                   }}
                 >
-                  <ModelParts urls={urls} parts={subject.parts} onPartGroup={onPartGroup} />
+                  <ModelParts
+                    urls={urls}
+                    parts={subject.parts}
+                    fromAssemblyFile={subject.fromAssemblyFile}
+                    names={subject.names}
+                    onPartGroup={onPartGroup}
+                    onUnusable={onFailed}
+                  />
                 </group>
                 <ViewCommands modelRef={modelRef} />
                 <Appearance modelRef={modelRef} />
