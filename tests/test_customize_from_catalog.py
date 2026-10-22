@@ -266,3 +266,36 @@ def test_clone_parameters_are_editable_and_original_stays_read_only(
     assert r.status_code == 403
     assert "read-only" in r.json()["detail"].lower()
     assert client.get(f"/versions/{orig_vid}").json()["parameters"]["bore"] == 6
+
+
+def test_customising_a_multi_part_item_keeps_every_part(client, store, tmp_path):
+    """A clone copies each artifact file by its name, so each part needs its own."""
+    house = tmp_path / "catalog" / "two-parts"
+    (house / "steps").mkdir(parents=True)
+    (house / "steps" / "01.py").write_text(STEP1_CODE)
+    (house / "artifacts").mkdir()
+    (house / "artifacts" / "a.glb").write_bytes(b"first part")
+    (house / "artifacts" / "b.glb").write_bytes(b"second part")
+    step = {
+        "index": 1,
+        "instruction": "two parts",
+        "code": "steps/01.py",
+        "artifacts": {"glb": "artifacts/a.glb", "glb:1": "artifacts/b.glb"},
+    }
+    (house / "manifest.json").write_text(
+        json.dumps(
+            {"id": "two-parts", "name": "Two Parts", "domain": "mechanical", "steps": [step]}
+        )
+    )
+    ledger = Ledger(Path(store.db_path).parent / "catalog-ledger.json")
+
+    async def load():
+        await store.init()
+        return await load_house(store, ledger, house)
+
+    pid = asyncio.run(load())
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    clone_vid = client.get(f"/projects/{clone_id}").json()["current_version_id"]
+
+    assert client.get(f"/versions/{clone_vid}/artifacts/glb/0").content == b"first part"
+    assert client.get(f"/versions/{clone_vid}/artifacts/glb/1").content == b"second part"

@@ -757,10 +757,50 @@ def test_a_manifest_the_loader_could_not_read_is_refused_before_anything_is_writ
     assert nothing_imported()
 
 
+def test_a_package_naming_a_later_part_by_number_is_imported(tmp_path):
+    """`glb:1` is the second glb part — the form a package names it in.
+
+    It is not a kind with a colon in it, so the kind check reads the part of the
+    key before the number.
+    """
+    package = carried(
+        a_manifest(
+            steps=[
+                {
+                    "index": 1,
+                    "instruction": "A bracket.",
+                    "code": "steps/01.py",
+                    "artifacts": {"glb": "artifacts/01/a.glb", "glb:1": "artifacts/01/b.glb"},
+                }
+            ]
+        ),
+        {
+            "steps/01.py": ALLOWED_STEP.encode(),
+            "artifacts/01/a.glb": b"first",
+            "artifacts/01/b.glb": b"second",
+        },
+    )
+
+    result = import_package(package, origin="a file")
+
+    store = Store(db_path=tmp_path / "db.sqlite", artifacts_dir=tmp_path / "arts")
+
+    async def go():
+        await store.init()
+        pid = await load_house(store, Ledger(tmp_path / "ledger.json"), result.item_dir)
+        (version,) = await store.list_versions(pid)
+        return sorted(
+            (a.kind, a.part, Path(a.path).read_bytes())
+            for a in await store.list_artifacts(version.id)
+        )
+
+    assert asyncio.run(go()) == [("glb", 0, b"first"), ("glb", 1, b"second")]
+
+
 def test_an_artifact_kind_that_is_not_a_name_is_refused(tmp_path):
     """The kind is not a label — the loader spells a filename out of it.
 
-    `load_house` copies each artifact to `model.{kind}`, so a kind carrying a
+    `load_house` copies each artifact to a file named after its kind, so a kind carrying a
     separator, a control character or three hundred characters is a write that
     fails partway through loading an item already on disk. The id stays taken,
     and every restart tries the same item again and leaves another project

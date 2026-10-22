@@ -15,8 +15,12 @@ import logging
 import shutil
 from pathlib import Path
 
+from cadless import exporters
 from cadless.catalog.importer import discard_item_dir, imported_item_dir
 from cadless.catalog.ledger import Ledger, LedgerBusy, LedgerUnreadable
+from cadless.catalog.manifest import (
+    PART_KEY_SEPARATOR as PART_KEY_SEPARATOR,  # what a reader of baked items asks this loader
+)
 from cadless.catalog.manifest import (
     CatalogManifest,
     CatalogStep,
@@ -74,10 +78,29 @@ def _read_step_code(item: Path, step: CatalogStep) -> str:
     return step_code_path(item, step).read_text()
 
 
-def _copy_step_artifact(
-    store: AnyStore, version_id: int, item: Path, step: CatalogStep, kind: str
-) -> str | None:
-    return _copy_artifact(store, version_id, step_artifact_path(item, step, kind), f"model.{kind}")
+def _copy_step_kind(
+    store: AnyStore, version_id: int, item: Path, step: CatalogStep, kind: str, keys: list[str]
+) -> list[str]:
+    """Copy every part of one kind into the store, in part order, or none of them.
+
+    ``keys`` are the kind's artifact keys in part order. The files are named as
+    the worker names a build's parts, so a loaded item's directory reads back
+    the way a generated one does. A kind with any of its part files missing is
+    left out whole, the parts already copied taken back out: the store numbers
+    parts in the order they are added, so the parts after a gap would each be
+    filed one lower than they are. Each path is checked as its own file is
+    opened, not all of them before the first copy.
+    """
+    copied: list[str] = []
+    for i, key in enumerate(keys):
+        name = f"{exporters.part_name(i, len(keys))}.{kind}"
+        dst = _copy_artifact(store, version_id, step_artifact_path(item, step, key), name)
+        if dst is None:
+            for done in copied:
+                Path(done).unlink()
+            return []
+        copied.append(dst)
+    return copied
 
 
 def _copy_thumbnail(
@@ -172,11 +195,11 @@ async def load_house(
             parameters=extract_params(code),
             parent_version_id=parent,
         )
-        for kind in step.artifacts:
-            dst = await _read_or_clear(
-                store, ledger, manifest, _copy_step_artifact, store, version.id, item, step, kind
+        for kind, keys in step.artifact_parts().items():
+            copied = await _read_or_clear(
+                store, ledger, manifest, _copy_step_kind, store, version.id, item, step, kind, keys
             )
-            if dst is not None:
+            for dst in copied:
                 await store.add_artifact(version.id, kind, dst)
         # Replay a realistic conversation when the step carries a re-authored
         # transcript; otherwise fall back to the legacy placeholder.

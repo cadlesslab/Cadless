@@ -245,3 +245,63 @@ def test_thumbnail_path_needs_a_thumbnail(tmp_path):
     _write_item(item, {"id": "h", "name": "House", "steps": [_step()]})
     with pytest.raises(ValueError, match="no thumbnail"):
         thumbnail_path(item, load_manifest(item))
+
+
+def _item_with_keys(tmp_path: Path, keys: list[str]) -> Path:
+    item = tmp_path / "item"
+    item.mkdir()
+    step = _step(artifacts={key: f"artifacts/{n}.bin" for n, key in enumerate(keys)})
+    _write_item(item, {"id": "h", "name": "House", "steps": [step]})
+    return item
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        ["glb", "glb:"],
+        ["glb", "glb:01"],
+        ["glb", "glb:-1"],
+        ["glb", "glb:x"],
+        ["glb", "glb:1:2"],
+        ["glb", "glb:0"],
+        [":1"],
+        ["glb", "a/b:1"],
+    ],
+)
+def test_a_numbered_key_that_is_not_a_kind_and_a_part_from_one_is_refused(tmp_path, keys):
+    """A numbered key says which part a file is, so it has one spelling per part.
+
+    The first part is the bare kind, which is why `glb:0` is refused rather
+    than read as a second name for it.
+    """
+    with pytest.raises(ValueError, match="is not <kind> or <kind>:<part number from 1>"):
+        load_manifest(_item_with_keys(tmp_path, keys))
+
+
+@pytest.mark.parametrize("key", ["a/b", "..", "x" * 33, "a b", ""])
+def test_a_key_whose_kind_is_not_a_file_extension_is_refused(tmp_path, key):
+    """The kind becomes the extension of the copy the loader writes.
+
+    So it is held to that shape for a manifest under any catalog root, not
+    only for one that arrived in a package.
+    """
+    with pytest.raises(ValueError, match="not a file extension"):
+        load_manifest(_item_with_keys(tmp_path, [key]))
+
+
+@pytest.mark.parametrize("keys", [["glb", "glb:2"], ["glb:1"]])
+def test_a_kind_whose_part_numbers_skip_one_is_refused(tmp_path, keys):
+    """The store files parts in the order they arrive, so a gap cannot be kept."""
+    with pytest.raises(ValueError, match="with one missing below the last"):
+        load_manifest(_item_with_keys(tmp_path, keys))
+
+
+def test_numbered_keys_group_a_kind_s_parts_in_part_order(tmp_path):
+    item = tmp_path / "item"
+    item.mkdir()
+    step = _step(artifacts={"glb:1": "a/1.glb", "stl": "a/0.stl", "glb": "a/0.glb"})
+    _write_item(item, {"id": "h", "name": "House", "steps": [step]})
+    assert load_manifest(item).steps[0].artifact_parts() == {
+        "glb": ["glb", "glb:1"],
+        "stl": ["stl"],
+    }
