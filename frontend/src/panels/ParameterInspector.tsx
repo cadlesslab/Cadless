@@ -53,7 +53,11 @@ export function ParameterInspector({ readOnly = false }: { readOnly?: boolean } 
     if (!version) return;
     setBusy(true);
     try {
-      setOutcome((await app.reparametrize(version.id, { [key]: value })) ?? null);
+      const result = (await app.reparametrize(version.id, { [key]: value })) ?? null;
+      setOutcome(result);
+      // An edit that was not kept leaves this version on screen, so its slider
+      // goes back to the value this version was built with.
+      if (result && !result.ok) setDraft(Object.fromEntries(numeric));
     } finally {
       setBusy(false);
     }
@@ -88,8 +92,10 @@ export function ParameterInspector({ readOnly = false }: { readOnly?: boolean } 
         );
       })}
       {shown && !shown.ok && (
+        // The reason, unless the check's findings below already give it: the
+        // error of a refused assembly restates them.
         <p className="params-error" role="alert">
-          The edit was not kept{shown.error ? `: ${shown.error}` : "."}
+          The edit was not kept{shown.error && !shown.findings ? `: ${shown.error}` : "."}
         </p>
       )}
       {shown?.findings && <AssemblyCheck {...shown.findings} kept={shown.ok} />}

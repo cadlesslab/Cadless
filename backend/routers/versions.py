@@ -43,13 +43,18 @@ class ReparametrizeRequest(BaseModel):
     params: dict[str, Any]
 
 
+class AssemblyFindingsOut(BaseModel):
+    failures: list[str]
+    unchecked: list[str]
+
+
 class ReparametrizeResponse(BaseModel):
     ok: bool
     error: str | None = None
     version: VersionOut
     # What the assembly check found wrong with the rebuild, in the chat's shape,
     # or None where it found nothing: the panel has no turn to show them in.
-    assembly_findings: dict | None = None
+    assembly_findings: AssemblyFindingsOut | None = None
 
 
 async def _version_out(store: ScopedStore, vid: int) -> VersionOut:

@@ -107,9 +107,26 @@ describe("ParameterInspector", () => {
       },
       7,
     );
-    expect((await screen.findByRole("alert")).textContent).toContain(OVERLAP);
+    expect((await screen.findByRole("alert")).textContent).toBe("The edit was not kept.");
     const box = screen.getByRole("group", { name: "Assembly check" });
+    within(box).getByText(OVERLAP);
     within(box).getByText("On a build that was not kept.");
+    // The model on screen is still the one built with gap 5, and so is its slider.
+    expect(document.querySelector(".param-val")?.textContent).toBe("5");
+  });
+
+  it("gives the reason for an edit that failed to build", async () => {
+    await edit(
+      {
+        ok: false, error: "NameError: name 'x' is not defined",
+        version: { ...version({ gap: 6 }), id: 8, ok: false },
+      },
+      7,
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The edit was not kept: NameError: name 'x' is not defined",
+    );
+    expect(screen.queryByRole("group", { name: "Assembly check" })).toBeNull();
   });
 
   it("keeps an edit's findings off another version", async () => {
