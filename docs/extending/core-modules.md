@@ -119,16 +119,17 @@ EXPORTERS = {"step": export_step, "glb": export_glb, "stl": export_stl,
 ```
 
 That makes the child *produce* the file — it iterates `EXPORTERS` — but it is
-not the whole change. Four places still name the four kinds explicitly, and each
-one silently drops a fifth:
+not the whole change. Five places still name the four kinds explicitly. The first
+four silently drop a fifth; a test holds the last to `EXPORTERS`:
 
 | Site | What it does |
 | --- | --- |
 | `ExecResult` in `cadless/worker.py` | declares `step_path` / `glb_path` / `stl_path` / `obj_path` — add yours |
 | `run_code` and `_run_remote` | copy exactly those keys out of the child's payload |
 | `GenerationResult` in `cadless/pipeline.py` | repeats the same four fields |
+| `PART_KINDS` in `cadless/artifact_kinds.py` | the formats a catalog step's parts are counted by, kept apart so that reading a manifest imports no exporter — add yours, or `tests/test_artifact_kind_mirror.py` fails |
 
-The same three places hold for any new *field*, not only a new export kind. `assembly` is the worked example: it is declared on `ExecResult`, read out in **both** `run_code` and `_run_remote`, and mirrored on `GenerationResult`. `parts` (the build's parts as its tree names them) takes the same three places; being a list of plain dicts already, it is passed through as received rather than rebuilt. Two further constraints come with a field the remote path carries — `worker/service.py` returns `asdict(result)` straight to FastAPI, so the value must be a dataclass of JSON primitives or the response 500s; and it is rebuilt key by key rather than with `Type(**payload)`, because an api and a worker on different engine builds disagree about the field set and unpacking turns that into a `TypeError` that fails the whole call.
+The first three rows hold for any new *field*, not only a new export kind. `assembly` is the worked example: it is declared on `ExecResult`, read out in **both** `run_code` and `_run_remote`, and mirrored on `GenerationResult`. `parts` (the build's parts as its tree names them) takes the same three places; being a list of plain dicts already, it is passed through as received rather than rebuilt. Two further constraints come with a field the remote path carries — `worker/service.py` returns `asdict(result)` straight to FastAPI, so the value must be a dataclass of JSON primitives or the response 500s; and it is rebuilt key by key rather than with `Type(**payload)`, because an api and a worker on different engine builds disagree about the field set and unpacking turns that into a `TypeError` that fails the whole call.
 
 Every route that persists a build reads its artifacts off the export directory
 rather than off the result. Three of them do it through
@@ -159,7 +160,7 @@ out of the frontend `ArtifactKind`, and out of the export menu. Putting one in
 `exported_parts` finds nothing and the file is written, ignored, and never
 served — with nothing raising. Such a kind is registered by name in
 `copy_and_register` instead, which is what keeps the ordinal-by-write-order rule
-intact for it. `assembly_glb` and `assembly_step` (`exporters.ASSEMBLY_FILES`)
+intact for it. `assembly_glb` and `assembly_step` (`artifact_kinds.ASSEMBLY_FILES`)
 are kept out the same way for the second reason alone: each is one file for the
 whole build, written by `export_assembly` beside the parts of a build that has
 several, so the per-part naming does not describe it either. They are served on

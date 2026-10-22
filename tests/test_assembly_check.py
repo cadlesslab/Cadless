@@ -535,3 +535,86 @@ def test_an_order_of_other_parts_is_withheld_whatever_is_judged(checks):
     kwargs = {} if checks is None else {"checks": checks}
     report = evaluate_assembly(_m(order=[0, 0]), SPEC, **kwargs)
     assert report.order is None
+
+
+# --- the parts by the names their build gave them ---------------------------
+
+_NAMES = ["chassis", "wheel_fl"]
+
+
+def test_a_failure_names_the_part_its_build_named():
+    report = evaluate_assembly(_m(order=None, trapped=[1]), SPEC, names=_NAMES)
+    assert any("wheel_fl" in f for f in report.failures)
+    assert not any("part 2" in f for f in report.failures)
+
+
+def test_a_shared_volume_names_both_parts():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=_NAMES)
+    assert any("chassis and wheel_fl share" in f for f in report.failures)
+
+
+def test_a_part_its_build_left_unnamed_is_numbered_from_one():
+    report = evaluate_assembly(_m(order=None, trapped=[1]), SPEC, names=["chassis", "part1"])
+    assert any("part 2" in f for f in report.failures)
+
+
+def test_naming_the_parts_changes_the_words_and_nothing_else():
+    named = evaluate_assembly(
+        _m(overlaps=[[0, 1, 40.0]], order=None, trapped=[1]), SPEC, names=_NAMES
+    )
+    numbered = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]], order=None, trapped=[1]), SPEC)
+    assert (named.ok, named.order, named.joints, len(named.failures)) == (
+        numbered.ok,
+        numbered.order,
+        numbered.joints,
+        len(numbered.failures),
+    )
+
+
+def test_two_parts_with_one_name_are_told_apart_by_their_numbers():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["wheel", "wheel"])
+    assert any("wheel (part 1) and wheel (part 2) share" in f for f in report.failures)
+
+
+def test_a_part_too_big_for_the_bed_is_named():
+    report = evaluate_assembly(
+        _m(part_bboxes=[[999.0, 100.0, 50.0], [100.0, 100.0, 50.0]]), SPEC, names=_NAMES
+    )
+    assert any(f.startswith("chassis is") for f in report.failures)
+
+
+def test_a_part_that_touches_nothing_is_named():
+    report = evaluate_assembly(_m(gaps=[[0, 1, 30.0]]), SPEC, names=_NAMES)
+    assert any("chassis, wheel_fl comes no closer" in f for f in report.failures)
+
+
+def test_a_name_that_reads_as_another_part_s_number_is_told_apart():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["part 2", "part1"])
+    assert any("part 2 (part 1) and part 2 share" in f for f in report.failures)
+
+
+@pytest.mark.parametrize("blank", ["   ", "\n"])
+def test_a_blank_label_is_no_name(blank):
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=[blank, "lid"])
+    assert any(f.startswith("part 1 and lid share") for f in report.failures)
+
+
+def test_a_label_over_several_lines_is_put_on_one():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["front\nwheel", "lid"])
+    assert any(f.startswith("front wheel and lid share") for f in report.failures)
+
+
+def test_a_name_holding_a_bidi_override_is_numbered():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["a\u202eb", "lid"])
+    assert any(f.startswith("part 1 and lid share") for f in report.failures)
+
+
+def test_a_name_written_with_a_joiner_is_used():
+    name = "\u06a9\u062a\u0627\u0628\u200c\u062e\u0627\u0646\u0647"
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=[name, "lid"])
+    assert any(f.startswith(f"{name} and lid share") for f in report.failures)
+
+
+def test_a_name_with_nothing_visible_is_numbered():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["\u200b\u200d", "lid"])
+    assert any(f.startswith("part 1 and lid share") for f in report.failures)

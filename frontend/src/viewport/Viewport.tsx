@@ -7,7 +7,6 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
   Component,
   Suspense,
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -20,12 +19,21 @@ import { setThumbnail } from "../panels/thumbnails";
 import { useActiveVersion, useStoreSelector } from "../state";
 import { AssemblyPlayer } from "./AssemblyPlayer";
 import { CameraRig } from "./CameraRig";
-import { Appearance, Ground, SceneEnvironment } from "./effects";
+import {
+  Appearance,
+  gridConfig,
+  Ground,
+  ModelBox,
+  SceneEnvironment,
+  START_CAMERA,
+} from "./effects";
 import { Measure, SectionPlane, TriangleCounter } from "./inspectionScene";
 import { ModelParts } from "./ModelParts";
+import { firstDrawnHitOn, showsModelAsItIs } from "./partView";
 import { PreviewBanner } from "./PreviewBanner";
 import { Readout } from "./Readout";
 import { useAssemblyMotion } from "./useAssemblyMotion";
+import { usePartGroups } from "./usePartGroups";
 import { usePreviewSubject } from "./usePreviewSubject";
 import { ViewCommands } from "./ViewCommands";
 import { ViewportToolbar } from "./ViewportToolbar";
@@ -68,13 +76,20 @@ class GltfErrorBoundary extends Component<
   }
 }
 
-/** Capture a thumbnail of the framed model a few frames after it loads. */
+/** Capture a thumbnail of the framed model a few frames after it loads.
+ *
+ * Only frames that show the model as it is are counted, and waiting here rather
+ * than mounting this later keeps it to one picture per model. */
 function ThumbnailCapture({ versionId }: { versionId: number }) {
   const gl = useThree((s) => s.gl);
   const frames = useRef(0);
   const done = useRef(false);
   useFrame(() => {
     if (done.current) return;
+    if (!showsModelAsItIs(viewportStore.get())) {
+      frames.current = 0;
+      return;
+    }
     if (++frames.current > 3) {
       done.current = true;
       try {
@@ -101,20 +116,20 @@ export function Viewport() {
   const axesVisible = useViewport((s) => s.axesVisible);
 
   const motion = useAssemblyMotion(version, subject.previewing, subject.parts);
-  // Each part's own group, by part ordinal, for the player to move. A ref
-  // rather than state: it changes as parts mount, which is no reason to render.
-  const partGroups = useRef(new Map<number, THREE.Group>());
-  const onPartGroup = useCallback((part: number, group: THREE.Group | null) => {
-    if (group) partGroups.current.set(part, group);
-    else partGroups.current.delete(part);
-  }, []);
+  const accent = useCssVar("--accent");
+  const { partGroups, onPartGroup } = usePartGroups(version?.id ?? null, accent);
   // Where the parts reach fully apart, for the ground to cover as well.
   const [apartExtent, setApartExtent] = useState<THREE.Box3 | null>(null);
+  // The model framed last, which the grid, the axes and the ground are sized
+  // to. Kept when the view empties, since the camera stays where that model put
+  // it.
+  const [modelBox, setModelBox] = useState<THREE.Box3 | null>(null);
+  const grid = gridConfig(modelBox);
 
   return (
     <div className="viewport" data-testid="viewport">
       <Canvas
-        camera={{ fov: 50, position: [80, 80, 80] }}
+        camera={{ fov: 50, position: START_CAMERA }}
         dpr={[1, 2]}
         shadows
         gl={{ preserveDrawingBuffer: true, logarithmicDepthBuffer: true }}
@@ -125,16 +140,18 @@ export function Viewport() {
         <SceneEnvironment />
         {gridVisible && (
           <Grid
+            // Far wider than the fade at any size, so the grid fades out rather
+            // than ending at the plane's edge.
             args={[200, 200]}
             cellColor={gridMinor}
             sectionColor={gridMajor}
             infiniteGrid
-            fadeDistance={600}
-            cellSize={10}
-            sectionSize={50}
+            fadeDistance={grid.fadeDistance}
+            cellSize={grid.cellSize}
+            sectionSize={grid.sectionSize}
           />
         )}
-        {axesVisible && <axesHelper args={[20]} />}
+        {axesVisible && <axesHelper args={[grid.axes]} />}
 
         {urls.length > 0 && (
           <GltfErrorBoundary onFailed={onFailed}>
@@ -156,12 +173,22 @@ export function Viewport() {
                   onPointerDown={(e: ThreeEvent<PointerEvent>) => {
                     if (viewportStore.get().tool !== "measure") return;
                     e.stopPropagation();
-                    viewportStore.addMeasurePoint([e.point.x, e.point.y, e.point.z]);
+                    const hit = firstDrawnHitOn(e.intersections, e.eventObject);
+                    if (hit) viewportStore.addMeasurePoint([hit.point.x, hit.point.y, hit.point.z]);
                   }}
                 >
-                  <ModelParts urls={urls} parts={subject.parts} onPartGroup={onPartGroup} />
+                  <ModelParts
+                    urls={urls}
+                    parts={subject.parts}
+                    fromAssemblyFile={subject.fromAssemblyFile}
+                    names={subject.names}
+                    onPartGroup={onPartGroup}
+                    onUnusable={onFailed}
+                  />
                 </group>
                 <ViewCommands modelRef={modelRef} />
+                {/* Inside Bounds so it remounts, and measures, with every model. */}
+                <ModelBox modelRef={modelRef} onBox={setModelBox} />
                 <Appearance modelRef={modelRef} />
                 <SectionPlane modelRef={modelRef} />
                 <TriangleCounter modelRef={modelRef} />
@@ -179,8 +206,8 @@ export function Viewport() {
                   />
                 )}
               </Bounds>
-              <Ground modelRef={modelRef} extent={apartExtent} />
-              <Measure />
+              <Ground model={modelBox} extent={apartExtent} />
+              <Measure modelRef={modelRef} />
             </Suspense>
           </GltfErrorBoundary>
         )}

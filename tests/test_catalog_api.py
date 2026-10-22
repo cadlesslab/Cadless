@@ -939,3 +939,58 @@ def test_a_cancelled_removal_keeps_the_gate_until_its_worker_is_done(with_receiv
 
     assert held_while_working, "the gate was let go while the removal was still running"
     assert not held_after, "and it has to come back once the removal is over"
+
+
+def test_a_loaded_item_s_version_names_its_parts_and_serves_its_whole_assembly(tmp_path):
+    """The names and the whole file a bake records reach the API as a build's do."""
+    from fastapi.testclient import TestClient
+
+    from backend.app import create_app
+    from cadless.catalog.ledger import Ledger
+    from cadless.catalog.loader import load_house
+    from cadless.store import Store
+
+    house = tmp_path / "cat" / "kit"
+    (house / "steps").mkdir(parents=True)
+    (house / "steps" / "01.py").write_text("result = 1\n")
+    art = house / "artifacts" / "01"
+    art.mkdir(parents=True)
+    for n in range(2):
+        (art / f"model_p{n}.stl").write_bytes(bytes([n]) * 84)
+    (art / "assembly.glb").write_bytes(b"glTF-whole")
+    (house / "manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "kit",
+                "name": "Kit",
+                "steps": [
+                    {
+                        "index": 1,
+                        "instruction": "build it",
+                        "code": "steps/01.py",
+                        "artifacts": {
+                            "stl": "artifacts/01/model_p0.stl",
+                            "stl:1": "artifacts/01/model_p1.stl",
+                            "assembly_glb": "artifacts/01/assembly.glb",
+                        },
+                        "parts": ["base", "lid"],
+                    }
+                ],
+            }
+        )
+    )
+    store = Store(db_path=tmp_path / "db.sqlite", artifacts_dir=tmp_path / "artifacts")
+
+    async def load():
+        await store.init()
+        pid = await load_house(store, Ledger(tmp_path / "ledger.json"), house)
+        return (await store.list_versions(pid))[-1].id
+
+    vid = asyncio.run(load())
+    with TestClient(create_app(store=store)) as client:
+        names = [p["name"] for p in client.get(f"/versions/{vid}").json()["parts"]]
+        whole = client.get(f"/versions/{vid}/artifacts/assembly_glb")
+
+    assert names == ["base", "lid"]
+    assert whole.status_code == 200
+    assert whole.content == b"glTF-whole"

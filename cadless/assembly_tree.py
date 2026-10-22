@@ -18,7 +18,9 @@ import itertools
 import json
 import logging
 import math
+import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +37,32 @@ NAME_MAX = 128
 MAX_PARTS = 2000
 MAX_DEPTH = 16
 MAX_RECORD_BYTES = 256 * 1024
+
+
+#: What a name may not hold. A lone surrogate cannot be encoded, so a record
+#: holding one fails every reader it is sent to; a control character or a line
+#: separator breaks the line a name is printed on; a bidi embedding, override or
+#: isolate reorders the text printed after it; and a tag character carries text
+#: nobody sees but a model reading it may. Named as code points rather than asked
+#: of ``str.isprintable``, which also refuses the joiners and marks real names are
+#: spelled with, and answers by the running interpreter's Unicode table, so a name
+#: one build of the engine kept another would refuse. Only whether a name shows
+#: anything at all asks that table, and only a name of nothing but spaces and
+#: format characters could be judged apart by it.
+_UNREADABLE = re.compile(
+    "[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069\ud800-\udfff\U000e0000-\U000e007f]"
+)
+
+
+def readable(name: str) -> bool:
+    """Whether ``name`` shows something and holds no character a name may not.
+
+    A name of nothing but spaces and invisible format characters -- a zero-width
+    space, a joiner -- is blank however long it is.
+    """
+    return _UNREADABLE.search(name) is None and any(
+        not c.isspace() and unicodedata.category(c) != "Cf" for c in name
+    )
 
 
 def unnamed(index: int) -> str:
@@ -93,15 +121,20 @@ def _children(node) -> list:
 
 
 def _label(node) -> str:
-    """A node's label as a name: text, at most ``NAME_MAX`` long, "" for none.
+    """A node's label as a name: text on one line, at most ``NAME_MAX`` long, "" for none.
 
     ``str`` rather than trusting the type: build123d keeps whatever the code
-    assigned, and a number there is a name the code meant, not a fault.
+    assigned, and a number there is a name the code meant, not a fault. Put on
+    one line here, once, so a label written over several lines is still a name
+    rather than a list the store refuses. A label holding a character no name may
+    hold is no label: that part is numbered, rather than every name of the build
+    refused with it.
     """
     label = getattr(node, "label", None)
     if label is None or label == "":
         return ""
-    return str(label)[:NAME_MAX]
+    name = " ".join(str(label).split())[:NAME_MAX]
+    return name if readable(name) else ""
 
 
 def _rgba(color) -> tuple[float, float, float, float] | None:
@@ -293,7 +326,9 @@ def build_tree(result, scale: float = 1.0) -> BuildTree:
 
 
 def _is_name(value: Any) -> bool:
-    return isinstance(value, str) and 0 < len(value) <= NAME_MAX
+    # Checked again here, on a list that arrives from a worker or a stored row
+    # rather than from ``_label``: either may come from another build.
+    return isinstance(value, str) and 0 < len(value) <= NAME_MAX and readable(value)
 
 
 def _is_component(value: Any) -> bool:

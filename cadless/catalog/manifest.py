@@ -12,8 +12,10 @@ import json
 import re
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from cadless.artifact_kinds import ASSEMBLY_FILES, PART_KINDS
+from cadless.assembly_tree import MAX_PARTS, NAME_MAX, readable
 from cadless.catalog.domains import find_domain
 from cadless.catalog.pack import PackError, safe_entry_name
 
@@ -49,6 +51,25 @@ class StepGeometry(BaseModel):
     volume: float | None = None
     bbox: tuple[float, float, float] | None = None
 
+    def in_millimetres(self, mm_per_unit: float) -> StepGeometry:
+        """These metrics, recorded in a domain's authoring units, in millimetres:
+        lengths times ``mm_per_unit``, the volume times its cube."""
+        return StepGeometry(
+            volume=None if self.volume is None else self.volume * mm_per_unit**3,
+            bbox=None if self.bbox is None else tuple(side * mm_per_unit for side in self.bbox),
+        )
+
+    def in_authoring_units(self, mm_per_unit: float) -> StepGeometry:
+        """These metrics, in millimetres as a version records them, in a domain's
+        authoring units, as a manifest records them: the inverse of
+        :meth:`in_millimetres`, for whatever writes a version's metrics into an
+        item. Divided rather than multiplied by the reciprocal, so the decimals an
+        item was authored with come back as they were."""
+        return StepGeometry(
+            volume=None if self.volume is None else self.volume / mm_per_unit**3,
+            bbox=None if self.bbox is None else tuple(side / mm_per_unit for side in self.bbox),
+        )
+
 
 class StepTranscript(BaseModel):
     """A realistic chat turn for one step (re-authoring).
@@ -82,6 +103,10 @@ class CatalogStep(BaseModel):
     # Re-authoring: a realistic conversation turn for this step. ``None``
     # on legacy manifests so the loader falls back to its placeholder behavior.
     transcript: StepTranscript | None = None
+    # The step's parts by the names its build's tree gives them, in part order.
+    # ``None`` on a step baked before parts had names, which loads as it always
+    # did.
+    parts: list[str] | None = None
 
     @field_validator("artifacts")
     @classmethod
@@ -106,7 +131,41 @@ class CatalogStep(BaseModel):
                     f"artifact keys for {kind!r} name parts {sorted(numbers)}, "
                     "with one missing below the last"
                 )
+            if kind in ASSEMBLY_FILES and len(numbers) > 1:
+                raise ValueError(f"{kind!r} is one file for the whole build, keyed once")
         return artifacts
+
+    @model_validator(mode="after")
+    def _names_its_parts(self) -> CatalogStep:
+        """Refuse names that are not one per part, each a name a reader can read.
+
+        Counted against the step's part files -- the formats each part is
+        exported to -- because those are what a part is numbered by: a list of
+        another length would put a name on the wrong part, which is worse than a
+        number. A name is held to the rule the store keeps names by, so a name
+        loaded here is one the version keeps.
+        """
+        if self.parts is None:
+            return self
+        for name in self.parts:
+            if len(name) > NAME_MAX or not readable(name):
+                raise ValueError(
+                    f"part name {name!r} shows nothing, is longer than {NAME_MAX} characters, "
+                    "or holds a control, line separator, bidi embedding, override or isolate, "
+                    "tag or lone surrogate"
+                )
+        files = [len(keys) for kind, keys in self.artifact_parts().items() if kind in PART_KINDS]
+        held = max(files, default=0)
+        if held > MAX_PARTS:
+            raise ValueError(
+                f"the step's files hold {held} parts, more than the {MAX_PARTS} "
+                "a version keeps names for"
+            )
+        if len(self.parts) != held:
+            raise ValueError(
+                f"`parts` gives {len(self.parts)} names, but the step's files hold {held} parts"
+            )
+        return self
 
     def artifact_parts(self) -> dict[str, list[str]]:
         """Each kind's artifact keys, in part order."""
@@ -201,9 +260,9 @@ def load_manifest(house_dir: Path) -> CatalogManifest:
     Steps are sorted by ``index`` and validated to be contiguous from 1; the
     ``domain`` must be registered in the domain registry; every referenced
     ``code`` file must exist; every ``code``, artifact and ``thumbnail`` path
-    must stay inside ``house_dir``, which itself must not be a symlink; and
-    every artifact key must pass ``CatalogStep``'s key check. Raises
-    ``ValueError`` otherwise.
+    must stay inside ``house_dir``, which itself must not be a symlink; every
+    artifact key must pass ``CatalogStep``'s key check; and a step's ``parts``,
+    if given, must name each of its parts once. Raises ``ValueError`` otherwise.
     """
     house_dir = Path(house_dir)
     if house_dir.is_symlink():

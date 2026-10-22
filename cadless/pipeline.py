@@ -56,6 +56,21 @@ from cadless.worker import run_code
 
 logger = logging.getLogger(__name__)
 
+
+def _part_names(parts, count: int) -> list[str | None] | None:
+    """The ``count`` parts' names in part order, from a worker's part list.
+
+    ``None`` where there is no list, or one that does not line up with the
+    measured parts: the list crosses a process boundary, and a name read
+    against the wrong part is worse than a number.
+    """
+    if not isinstance(parts, list) or len(parts) != count:
+        return None
+    if not all(isinstance(part, dict) and part.get("index") == i for i, part in enumerate(parts)):
+        return None
+    return [part.get("name") for part in parts]
+
+
 # What a build that did not ask for an assembly is measured against. The parts
 # checks it faces need no printer, so the defaults serve only to describe its
 # joints, and nothing here reads a user's settings.
@@ -128,9 +143,10 @@ class GenerationResult:
     #: asked.
     #:
     #: ``order`` is the sequence the parts go together in, **indexed from zero to
-    #: match the exported ``model_p{i}`` files** rather than the part numbers in
-    #: ``failures``, which count from one because a person reads them. Whichever
-    #: the assembly guide shows, it converts here rather than assuming.
+    #: match the exported ``model_p{i}`` files** rather than ``failures``, which
+    #: call a part by its build's name or count from one, because a person reads
+    #: them. Whichever the assembly guide shows, it converts here rather than
+    #: assuming.
     #:
     #: Unlike :attr:`critique` this may carry its findings' text: those are this
     #: engine's own sentences about geometry it measured, not a vision model's
@@ -429,7 +445,12 @@ class Pipeline:
                     asked = assembly is not None
                     checks = ASSEMBLY_CHECKS if asked else PARTS_CHECKS
                     _emit_stage(on_progress, "assembly", "begin", n)
-                    fit = evaluate_assembly(res.assembly, assembly or _UNASKED, checks=checks)
+                    fit = evaluate_assembly(
+                        res.assembly,
+                        assembly or _UNASKED,
+                        checks=checks,
+                        names=_part_names(res.parts, len(res.assembly.part_bboxes)),
+                    )
                     last_assembly = {
                         "ok": fit.ok,
                         "order": fit.order,
@@ -544,6 +565,11 @@ class Pipeline:
                     export_dir,
                     n,
                     asked=assembly is not None,
+                    names=(
+                        _part_names(res.parts, len(res.assembly.part_bboxes))
+                        if res.assembly is not None
+                        else None
+                    ),
                 )
                 self._record(attempts, on_progress, Attempt(n, code, "execute", None))
                 return GenerationResult(
@@ -743,13 +769,23 @@ class Pipeline:
             return None
 
     def _guide(
-        self, on_progress, intent: str, code: str, verdict, export_dir, n: int, *, asked=True
+        self,
+        on_progress,
+        intent: str,
+        code: str,
+        verdict,
+        export_dir,
+        n: int,
+        *,
+        asked=True,
+        names=None,
     ):
         """How the accepted parts go together, or ``None`` where there is no assembly.
 
-        Only a turn that asked for an assembly has its parts named by the writer's
-        model; any other build is described in plain words, so measuring every
-        build of several parts adds no model call to a turn that did not ask.
+        The parts are called what their build named them. Only a turn that asked
+        for an assembly has the parts its build left unnamed named by the writer's
+        model; any other build numbers them, so measuring every build of several
+        parts adds no model call to a turn that did not ask.
 
         Never fatal, and for a sharper reason than the critique's: by this point
         the parts are built, measured and accepted, so a turn that failed here
@@ -784,9 +820,9 @@ class Pipeline:
 
             joints = verdict.get("joints") or []
             written = (
-                self._guide_writer.write(intent, code, order, joints)
+                self._guide_writer.write(intent, code, order, joints, names=names)
                 if self._guide_writer and asked
-                else plain_guide(order, joints)
+                else plain_guide(order, joints, names=names)
             )
             frames = self._draw_guide(export_dir, order, verdict.get("releases") or [])
             _emit_stage(on_progress, "guide", "ok", n)

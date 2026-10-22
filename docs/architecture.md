@@ -213,7 +213,12 @@ candidate judging, the identity seam and the image decisions are recorded under
    names with the version, checked and bounded where they are stored, and
    returned only where they number the files the version holds — and serves the
    artifacts, copying a build's files only from the route's own staging
-   directory, never from a directory a worker's report names. Not every artifact kind is in the exporter registry, and the two
+   directory, never from a directory a worker's report names. The viewport draws
+   a version in parts from its one GLB where the version has it, finding each
+   part by its place among the file's mesh-carrying nodes, depth first, and from
+   the part files where it has none, or the file will not load, does not hold
+   the parts the version numbers, or names them otherwise than the version
+   does. Not every artifact kind is in the exporter registry, and the two
    are declared in different places: a thumbnail, the drawings of an assembly
    guide, and the motion an accepted assembly is played from are things the
    engine made *about* a build rather than formats the build was converted
@@ -255,8 +260,10 @@ candidate judging, the identity seam and the image decisions are recorded under
    graded rather than fatal: a model that declines costs only the names, a render
    that fails costs only the pictures, and the build stands either way. The order
    and the joints it states are the ones the check measured; it re-derives
-   neither, and a model is asked only what to call the parts, so a bad answer
-   costs vocabulary and cannot cost the sequence. The same order, with the
+   neither. The parts are called what their build named them, and a model is
+   asked, on a turn that asked for an assembly, only what to call the ones it
+   left unnamed — never, for a build that named them all — so a bad answer costs
+   vocabulary and cannot cost the sequence. The same order, with the
    heading each part was released along, is handed on unchanged as the
    `assembly` artifact the viewport plays the parts apart and back together
    from, together with how far each part goes — measured from the exported
@@ -368,6 +375,18 @@ catalog content read-only.
   the engine stores and never reads. An item recorded by a build that is not
   installed reads as `unknown` rather than being assigned one of the arrivals
   this build does implement.
+- Every GLB is in metres, glTF's unit: it is written from a build in
+  millimetres, a domain authored in metres being scaled to them at export. The
+  measure tool therefore converts a length measured in the scene before it
+  labels it in millimetres; read as millimetres, it is a thousand times short.
+  A version's recorded size and volume are filed in millimetres too: a catalog
+  item records them in its domain's authoring units, the loader converts them as
+  it files each step, and an item filed unconverted by an earlier engine is
+  converted where it is. A copy made of such an item before then, and an item
+  whose ledger entry predates content hashing, keep the unit they were filed in.
+  A build that writes a version's back into an item has to convert them to
+  authoring units again (`StepGeometry.in_authoring_units`). The grid and axes
+  are sized from the model in view.
 - `docs/pipeline.md` is the detailed source for repair, progress, thread, and
   process sequencing; this document intentionally does not duplicate it.
 

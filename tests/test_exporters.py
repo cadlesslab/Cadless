@@ -39,12 +39,32 @@ def test_glb_export_is_valid_binary_gltf(box, tmp_path):
     assert magic == b"glTF"  # binary glTF container magic
 
 
-def test_glb_deflection_is_configurable(box, tmp_path):
-    from cadless.exporters import export_glb
+def test_glb_deflection_is_configurable(tmp_path):
+    """Meshed at the deflection asked for, as build123d's writer meshes it. The deflection
+    is fine enough that one not passed through would change the mesh."""
+    from build123d import Sphere, export_gltf
 
-    coarse = export_glb(box, str(tmp_path), name="coarse", deflection=1.0)
-    fine = export_glb(box, str(tmp_path), name="fine", deflection=0.01)
-    assert os.path.getsize(coarse) > 0 and os.path.getsize(fine) > 0
+    from cadless.exporters import export_glb
+    from tests.glb_bounds import read_glb
+
+    ours = export_glb(Sphere(150), str(tmp_path), deflection=0.001)
+    theirs = str(tmp_path / "theirs.glb")
+    assert export_gltf(Sphere(150), theirs, binary=True, linear_deflection=0.001)
+
+    assert _shape_of(read_glb(ours)[0]) == _shape_of(read_glb(theirs)[0])
+
+
+def test_a_glb_leaves_no_mesh_behind_for_the_files_written_after_it(tmp_path):
+    """An STL written after the GLB, from the same shape, is the STL written alone."""
+    from build123d import Sphere
+
+    from cadless.exporters import export_glb, export_stl
+
+    alone = Path(export_stl(Sphere(150), str(tmp_path / "alone"))).read_bytes()
+    after = Sphere(150)
+    export_glb(after, str(tmp_path / "glb"))
+
+    assert Path(export_stl(after, str(tmp_path / "after"))).read_bytes() == alone
 
 
 def test_stl_export_is_valid_binary(box, tmp_path):
@@ -401,14 +421,291 @@ def test_sibling_groups_that_share_a_label_are_two_nodes_in_part_order(tmp_path)
     ]
 
 
-def test_a_whole_glb_build123d_did_not_write_fails_the_export(tmp_path, monkeypatch):
-    """build123d says so by its return value; a path to a missing file is not returned."""
-    import build123d
+def test_a_whole_glb_the_writer_could_not_write_fails_the_export_naming_it(tmp_path):
+    """The writer says so by its return value; a path to a missing file is not returned."""
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+
+    (tmp_path / "assembly.glb").mkdir()
+
+    with pytest.raises(RuntimeError, match="assembly.glb"):
+        export_assembly(build_tree(_car()), str(tmp_path))
+
+
+def test_a_part_glb_the_writer_could_not_write_fails_the_export_naming_it(tmp_path):
+    from build123d import Box
+
+    from cadless.exporters import export_glb
+
+    (tmp_path / "model.glb").mkdir()
+
+    with pytest.raises(RuntimeError, match="model.glb"):
+        export_glb(Box(1, 1, 1), str(tmp_path))
+
+
+def _named_outside_ascii():
+    from build123d import Box, Color, Compound, Pos
+
+    front = Box(10, 10, 10)
+    front.label = "\uc55e \ubc14\ud034"
+    seat = Pos(20, 0, 0) * Box(10, 10, 10)
+    seat.label = "caf\u00e9"
+    seat.color = Color(1, 0, 0, 1)
+    lid = Pos(40, 0, 0) * Box(10, 10, 10)
+    lid.label = "lid"
+    body = Compound(children=[front, seat], label="\ucc28\uccb4")
+    return Compound(children=[body, lid], label="toy")
+
+
+def test_the_assembly_glb_names_parts_and_groups_outside_ascii_as_they_are(tmp_path):
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+    from tests.glb_bounds import read_glb
+
+    paths = export_assembly(build_tree(_named_outside_ascii()), str(tmp_path))
+
+    document, _ = read_glb(paths["assembly_glb"])
+    assert [node["name"] for node in _named_nodes(document)] == [
+        "toy",
+        "\ucc28\uccb4",
+        "\uc55e \ubc14\ud034",
+        "caf\u00e9",
+        "lid",
+    ]
+
+
+def test_the_assembly_step_names_products_outside_ascii_as_they_are(tmp_path):
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+
+    paths = export_assembly(build_tree(_named_outside_ascii()), str(tmp_path))
+
+    text = Path(paths["assembly_step"]).read_bytes().decode("utf-8")
+    for label in ("toy", "\ucc28\uccb4", "\uc55e \ubc14\ud034", "caf\u00e9", "lid"):
+        assert f"PRODUCT('{label}'" in text, label
+
+
+def _shape_of(document: dict) -> list:
+    """What a reader of the file finds, without the bytes: each node's name, transform,
+    whether it draws a mesh, how many points each of its primitives holds, and its children,
+    from the scene down; and each mesh's material colour."""
+    nodes = document["nodes"]
+
+    def node(index: int) -> dict:
+        n = nodes[index]
+        mesh = document["meshes"][n["mesh"]] if "mesh" in n else None
+        colours = None
+        if mesh is not None:
+            colours = [
+                document["materials"][p["material"]]["pbrMetallicRoughness"].get("baseColorFactor")
+                if "material" in p
+                else None
+                for p in mesh["primitives"]
+            ]
+        return {
+            "name": n.get("name"),
+            "rotation": [round(v, 6) for v in n.get("rotation", [])],
+            "translation": [round(v, 6) for v in n.get("translation", [])],
+            "points": None
+            if mesh is None
+            else [
+                (
+                    document["accessors"][p["attributes"]["POSITION"]]["count"],
+                    document["accessors"][p["indices"]]["count"],
+                )
+                for p in mesh["primitives"]
+            ],
+            "colours": colours,
+            "children": [node(c) for c in n.get("children", [])],
+        }
+
+    return [node(i) for i in document["scenes"][document.get("scene", 0)]["nodes"]]
+
+
+def test_the_assembly_glb_has_the_shape_build123d_gave_it(tmp_path):
+    """Written by the engine, and read the same way: the same nodes, names, placements,
+    meshes and colours build123d's own writer gives an ASCII-named build."""
+    from build123d import export_gltf
+
+    from cadless.assembly_tree import build_tree
+    from cadless.config import settings
+    from cadless.exporters import _assembly_compound, export_assembly
+    from tests.glb_bounds import read_glb
+
+    tree = build_tree(_car())
+    ours = export_assembly(tree, str(tmp_path / "ours"))["assembly_glb"]
+    theirs = str(tmp_path / "theirs.glb")
+    assert export_gltf(
+        _assembly_compound(tree), theirs, binary=True, linear_deflection=settings.gltf_deflection
+    )
+
+    assert _shape_of(read_glb(ours)[0]) == _shape_of(read_glb(theirs)[0])
+
+
+def test_a_part_file_names_a_label_outside_ascii_as_it_is(tmp_path):
+    """A one-part build is exported as its own result, label and all."""
+    from build123d import Box
+
+    from cadless.exporters import export_glb, export_step
+    from tests.glb_bounds import read_glb
+
+    part = Box(10, 10, 10)
+    part.label = "\ubc14\ud034"
+
+    document, _ = read_glb(export_glb(part, str(tmp_path)))
+    assert [node["name"] for node in _named_nodes(document)] == ["\ubc14\ud034"]
+    text = Path(export_step(part, str(tmp_path))).read_bytes().decode("utf-8")
+    assert "PRODUCT('\ubc14\ud034'" in text
+
+
+def test_a_placed_part_file_has_the_shape_build123d_gave_it(tmp_path):
+    from build123d import Box, Pos, export_gltf
+
+    from cadless.config import settings
+    from cadless.exporters import _location_as_a_child, export_glb
+    from tests.glb_bounds import read_glb
+
+    part = Pos(5, -3, 2) * Box(10, 6, 4)
+    part.label = "block"
+    ours = export_glb(part, str(tmp_path / "ours"))
+    theirs = str(tmp_path / "theirs.glb")
+    assert export_gltf(
+        _location_as_a_child(part), theirs, binary=True, linear_deflection=settings.gltf_deflection
+    )
+
+    assert _shape_of(read_glb(ours)[0]) == _shape_of(read_glb(theirs)[0])
+
+
+def test_a_step_file_the_writer_could_not_write_fails_the_export_naming_it(tmp_path):
+    from build123d import Box
+
+    from cadless.exporters import export_step
+
+    (tmp_path / "model.step").mkdir()
+
+    with pytest.raises(RuntimeError, match="model.step"):
+        export_step(Box(1, 1, 1), str(tmp_path))
+
+
+def _step_data(path: str) -> list[str]:
+    """A STEP file's data section as the entities it holds: each line with the numbers
+    that tie entities together blanked, in sorted order. The writers number and order
+    the entities as they meet them, and the colours of two parts come out in either
+    order; what a reader finds does not depend on it."""
+    import re
+
+    text = Path(path).read_bytes().decode("utf-8")
+    data = text[text.index("DATA;") :]
+    data = re.sub(
+        r"NEXT_ASSEMBLY_USAGE_OCCURRENCE\('[^']*'", "NEXT_ASSEMBLY_USAGE_OCCURRENCE('#'", data
+    )
+    return sorted(re.sub(r"#\d+", "#", data).splitlines())
+
+
+def test_the_assembly_step_has_the_data_build123d_gave_it(tmp_path):
+    """The same products, names, colours, units, tolerances and curves build123d's own
+    writer gives an ASCII-named build."""
+    from build123d import export_step as build123d_export_step
+
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import _assembly_compound, export_assembly
+
+    tree = build_tree(_car())
+    ours = export_assembly(tree, str(tmp_path / "ours"))["assembly_step"]
+    theirs = str(tmp_path / "theirs.step")
+    build123d_export_step(_assembly_compound(tree), theirs)
+
+    assert _step_data(ours) == _step_data(theirs)
+
+
+def test_a_step_names_an_unlabelled_part_and_takes_its_uncertainty_as_build123d_did(tmp_path):
+    """A part with no label is named by the shape tool, and the file's uncertainty is the
+    parts' average tolerance: neither shows on a build whose parts are all labelled and
+    share a tolerance."""
+    from build123d import Box, Compound, Pos
+    from build123d import export_step as build123d_export_step
+    from OCP.ShapeFix import ShapeFix_ShapeTolerance
+
+    from cadless.exporters import export_step
+
+    def kit():
+        loose = Pos(20, 0, 0) * Box(10, 10, 10)
+        loose.label = "loose"
+        ShapeFix_ShapeTolerance().SetTolerance(loose.wrapped, 0.01)
+        return Compound(children=[Box(10, 10, 10), loose], label="kit")
+
+    ours = export_step(kit(), str(tmp_path / "ours"))
+    theirs = str(tmp_path / "theirs.step")
+    build123d_export_step(kit(), theirs)
+
+    assert _step_data(ours) == _step_data(theirs)
+
+
+def test_the_assembly_step_reads_back_with_each_part_s_colour(tmp_path):
+    from build123d import import_step
 
     from cadless.assembly_tree import build_tree
     from cadless.exporters import export_assembly
 
-    monkeypatch.setattr(build123d, "export_gltf", lambda *a, **k: False)
+    paths = export_assembly(build_tree(_car()), str(tmp_path))
 
-    with pytest.raises(RuntimeError, match="assembly.glb"):
-        export_assembly(build_tree(_car()), str(tmp_path))
+    read: dict[str, tuple | None] = {}
+
+    def walk(shape) -> None:
+        read[shape.label] = None if shape.color is None else tuple(shape.color)
+        for child in getattr(shape, "children", ()) or ():
+            walk(child)
+
+    walk(import_step(paths["assembly_step"]))
+    assert read == {
+        "car": None,
+        "chassis": None,
+        "front_axle": None,
+        "axle_f": None,
+        "wheel_fl": (1.0, 0.0, 0.0, 1.0),
+        "wheel_fr": (1.0, 0.0, 0.0, 1.0),
+    }
+
+
+@pytest.mark.parametrize("written", ["a part's STEP", "the whole assembly"])
+def test_the_writers_keep_occt_quiet_on_the_console(written, tmp_path, capfd):
+    """A worker's result is read from its standard output.
+
+    OCCT's messenger is one per process, and any writer that ran before this test has
+    quietened it, so it is set talking first and put back as it was after. A part's
+    STEP is written alone as well: it must not lean on a GLB written before it."""
+    from OCP.Message import Message, Message_Gravity
+
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly, export_step
+
+    printers = list(Message.DefaultMessenger_s().Printers())
+    levels = [printer.GetTraceLevel() for printer in printers]
+    for printer in printers:
+        printer.SetTraceLevel(Message_Gravity.Message_Info)
+    try:
+        if written == "a part's STEP":
+            export_step(_car(), str(tmp_path))
+        else:
+            export_assembly(build_tree(_car()), str(tmp_path))
+    finally:
+        for printer, level in zip(printers, levels, strict=True):
+            printer.SetTraceLevel(level)
+
+    out, _ = capfd.readouterr()
+    assert "Statistics" not in out and str(tmp_path) not in out
+
+
+def test_the_writers_leave_no_document_behind(tmp_path):
+    """A worker writes file after file; a document kept for each would never be let go."""
+    from OCP.XCAFApp import XCAFApp_Application
+
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+
+    application = XCAFApp_Application.GetApplication_s()
+    before = application.NbDocuments()
+
+    export_assembly(build_tree(_car()), str(tmp_path))
+
+    assert application.NbDocuments() == before

@@ -5,12 +5,14 @@
   (mesh fineness) is configurable.
 - STL / OBJ: mesh formats for 3D printing and generic interchange.
 
-STEP/GLB/STL wrap the OCCT writers via build123d; build123d has no OBJ writer,
-so ``export_obj`` is written directly from ``Shape.tessellate`` (a trivial
-``v``/``f`` text format — no extra dependency). Every member of ``EXPORTERS``
-shares the signature ``(result, out_dir, name="model") -> path`` so the registry
-can drive them uniformly; ``export_assembly``, one file of each for the whole
-build, is outside it.
+STEP and GLB are written by the OCCT writers from a document built here
+rather than through build123d's writers (see ``_xcaf_document``); STL wraps
+build123d's writer; build123d has no OBJ writer, so ``export_obj`` is written
+directly from ``Shape.tessellate`` (a trivial ``v``/``f`` text format — no extra
+dependency). Every member of ``EXPORTERS`` shares the signature
+``(result, out_dir, name="model") -> path`` so the registry can drive them
+uniformly; ``export_assembly``, one file of each for the whole build, is outside
+it.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import os
 import re
 from pathlib import Path
 
+from cadless.artifact_kinds import ASSEMBLY_FILES as ASSEMBLY_FILES
 from cadless.config import settings
 
 #: How one part of a build is named, and how that name is read back.
@@ -84,26 +87,192 @@ def exported_parts(src_dir: Path, kind: str) -> list[Path]:
     return [path for _, path in sorted(numbered)]
 
 
+#: The length one unit of a build stands for, in metres: builds are in mm.
+_METRES_PER_UNIT = 0.001
+
+#: The angle a tessellated curve may turn between segments, in radians: the
+#: value every GLB has been meshed at, so a file's mesh stays as fine as it was.
+_ANGULAR_DEFLECTION = 0.1
+
+#: STEP settings the files have always been written with: each edge's curves on
+#: the faces it bounds written too, and the file's uncertainty taken from the
+#: shapes' average tolerance.
+_STEP_WRITE_PCURVES = 1
+_STEP_PRECISION_AVERAGE = 0
+
+
+def _quiet_occt() -> None:
+    """Quieten OCCT's default messenger to failures, for the rest of the
+    process, as build123d's writers did.
+
+    OCCT's writers otherwise print a report of every transfer, path included,
+    onto the standard output a worker's result is read from.
+    """
+    from OCP.Message import Message, Message_Gravity
+
+    for printer in Message.DefaultMessenger_s().Printers():
+        printer.SetTraceLevel(Message_Gravity.Message_Fail)
+
+
+def _xcaf_document(shape, *, auto_naming: bool):
+    """An XCAF document of ``shape``'s tree: a label per node, named and
+    coloured as its shape is.
+
+    Built here rather than by build123d's writers, which make every name from
+    the label's UTF-8 bytes read one to a character, so a name outside ASCII
+    reaches the file as other characters. A name is made here by the multibyte
+    constructor, which reads it as the text it is. The document holds a root
+    shape, a component per child in tree order, and a name and a colour on each
+    instance and on the shape it refers to, in the build's length unit.
+
+    The document is initialised here and never opened by the XCAF application:
+    the application's ``NewDocument`` opens a document of its own, which it then
+    holds for as long as the process lives, one per file written.
+
+    ``auto_naming`` is the shape tool's own naming of what has no label: off for
+    the GLB, where it would put its names on nodes that have none, and on for the
+    STEP, where every product carries a name and one with no label is given the
+    shape tool's.
+    """
+    from OCP.TCollection import TCollection_ExtendedString
+    from OCP.TDataStd import TDataStd_Name
+    from OCP.TDF import TDF_Label
+    from OCP.TDocStd import TDocStd_Document
+    from OCP.XCAFApp import XCAFApp_Application
+    from OCP.XCAFDoc import XCAFDoc_ColorType, XCAFDoc_DocumentTool, XCAFDoc_ShapeTool
+
+    doc = TDocStd_Document(TCollection_ExtendedString("XmlOcaf"))
+    XCAFApp_Application.GetApplication_s().InitDocument(doc)
+    XCAFDoc_DocumentTool.SetLengthUnit_s(doc, _METRES_PER_UNIT)
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    shape_tool.SetAutoNaming_s(auto_naming)
+
+    def referred(label):
+        """The shape a component refers to, or the label itself."""
+        if XCAFDoc_ShapeTool.IsReference_s(label):
+            shape = TDF_Label()
+            if XCAFDoc_ShapeTool.GetReferredShape_s(label, shape) and not shape.IsNull():
+                return shape
+        return label
+
+    def add(node, parent) -> None:
+        if node.wrapped is None:
+            return
+        if parent is None:
+            label = shape_tool.AddShape(node.wrapped, False)
+        else:
+            label = shape_tool.AddComponent(referred(parent), node.wrapped)
+        if label.IsNull():
+            return
+        # On the instance and on the shape it refers to, as STEP keeps a
+        # product's name and colour on the latter.
+        for target in (label, referred(label)):
+            if node.label:
+                TDataStd_Name.Set_s(target, TCollection_ExtendedString(node.label, True))
+            if node.color is not None:
+                color_tool.SetColor(target, node.color.wrapped, XCAFDoc_ColorType.XCAFDoc_ColorGen)
+        for child in getattr(node, "children", ()) or ():
+            add(child, label)
+
+    add(shape, None)
+    shape_tool.UpdateAssemblies()
+    return doc
+
+
+def _write_glb(shape, path: str, deflection: float) -> None:
+    """Write ``shape`` to ``path`` as a binary glTF, from ``_xcaf_document``.
+
+    Turned from the build's Z up to glTF's Y up by a rotation on the right of
+    the root's own location, as build123d's writer turns it, so every file is
+    drawn in the frame it always was. The mesh is taken off the shape again
+    afterwards, as build123d's writer took it off: an STL or OBJ written from the
+    same shape later would otherwise be cut from this mesh rather than its own.
+    Raises when the writer reports it wrote nothing: a path returned for a file
+    that is not there would be served as one that is.
+    """
+    from build123d import Location
+    from OCP.BRepTools import BRepTools
+    from OCP.Message import Message_ProgressRange
+    from OCP.RWGltf import RWGltf_CafWriter
+    from OCP.TCollection import TCollection_AsciiString
+    from OCP.TColStd import TColStd_IndexedDataMapOfStringString
+
+    _quiet_occt()
+    placed = shape.location
+    shape.location = placed * Location((0, 0, 0), (1, 0, 0), -90)
+    try:
+        stack = [shape]
+        while stack:
+            node = stack.pop()
+            if node.wrapped is not None:
+                node.mesh(deflection, _ANGULAR_DEFLECTION)
+            stack.extend(getattr(node, "children", ()) or ())
+        doc = _xcaf_document(shape, auto_naming=False)
+        writer = RWGltf_CafWriter(TCollection_AsciiString(path), True)
+        writer.SetParallel(True)
+        written = writer.Perform(
+            doc, TColStd_IndexedDataMapOfStringString(), Message_ProgressRange()
+        )
+    finally:
+        BRepTools.Clean_s(shape.wrapped)
+        shape.location = placed
+    if not written:
+        raise RuntimeError(f"the glTF writer did not write {path}")
+
+
+def _write_step(shape, path: str) -> None:
+    """Write ``shape`` to ``path`` as STEP, from ``_xcaf_document``, with the
+    names and colours of its products. Raises unless the writer reports the file
+    written."""
+    from OCP.APIHeaderSection import APIHeaderSection_MakeHeader
+    from OCP.IFSelect import IFSelect_ReturnStatus
+    from OCP.Interface import Interface_Static
+    from OCP.STEPCAFControl import STEPCAFControl_Controller, STEPCAFControl_Writer
+    from OCP.STEPControl import STEPControl_Controller, STEPControl_StepModelType
+    from OCP.TCollection import TCollection_HAsciiString
+    from OCP.XSControl import XSControl_WorkSession
+
+    _quiet_occt()
+    doc = _xcaf_document(shape, auto_naming=True)
+    writer = STEPCAFControl_Writer(XSControl_WorkSession(), False)
+    writer.SetColorMode(True)
+    writer.SetLayerMode(True)
+    writer.SetNameMode(True)
+    header = APIHeaderSection_MakeHeader(writer.Writer().Model())
+    if not header.IsDone():
+        header = APIHeaderSection_MakeHeader(0)
+        header.Apply(writer.Writer().Model())
+    if shape.label:
+        header.SetName(TCollection_HAsciiString(shape.label))
+    header.SetOriginatingSystem(TCollection_HAsciiString("Cadless"))
+    STEPCAFControl_Controller.Init_s()
+    STEPControl_Controller.Init_s()
+    Interface_Static.SetIVal_s("write.surfacecurve.mode", _STEP_WRITE_PCURVES)
+    Interface_Static.SetIVal_s("write.precision.mode", _STEP_PRECISION_AVERAGE)
+    writer.Transfer(doc, STEPControl_StepModelType.STEPControl_AsIs)
+    if writer.Write(path) != IFSelect_ReturnStatus.IFSelect_RetDone:
+        raise RuntimeError(f"the STEP writer did not write {path}")
+
+
 def export_step(result, out_dir: str, name: str = "model") -> str:
     """Write `result` to ``<out_dir>/<name>.step`` and return the path."""
-    from build123d import export_step as _export_step
-
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{name}.step")
-    _export_step(result, path)
+    _write_step(result, path)
     return path
 
 
 def _location_as_a_child(shape):
     """`shape` with any Location of its own moved one level down, as a child's.
 
-    build123d turns a Z-up model into glTF's Y-up by multiplying the rotation
-    onto the right of the exported shape's own Location. That is the right
-    side for the geometry and the wrong side for the Location: a shape that sits
-    where it is because of its Location keeps its geometry turned but has its
-    placement written unturned, so it is drawn somewhere else -- as a one-part
-    build placed with ``Pos(...) * shape`` would be. Inside a compound with no
-    Location of its own, the turn lands on the compound and the shape's
+    ``_write_glb`` turns a Z-up model into glTF's Y-up by multiplying the
+    rotation onto the right of the exported shape's own Location. That is the
+    right side for the geometry and the wrong side for the Location: a shape
+    that sits where it is because of its Location keeps its geometry turned but
+    has its placement written unturned, so it is drawn somewhere else -- as a
+    one-part build placed with ``Pos(...) * shape`` would be. Inside a compound
+    with no Location of its own, the turn lands on the compound and the shape's
     Location is composed beneath it, which is the order a viewer needs.
 
     A shape already at the identity is handed back as it is. Its file is then
@@ -135,15 +304,12 @@ def export_glb(
     `deflection` is the OCCT linear deflection (smaller = finer mesh); defaults to
     ``settings.gltf_deflection``.
     """
-    from build123d import export_gltf
-
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{name}.glb")
-    export_gltf(
+    _write_glb(
         _location_as_a_child(result),
         path,
-        binary=True,
-        linear_deflection=deflection if deflection is not None else settings.gltf_deflection,
+        deflection if deflection is not None else settings.gltf_deflection,
     )
     return path
 
@@ -209,11 +375,6 @@ EXPORTERS = {
     "obj": export_obj,
 }
 
-#: The whole-assembly files, keyed by artifact kind. Not in ``EXPORTERS``: each
-#: is one file for the whole build, not one per part, so the per-part naming
-#: above does not describe it.
-ASSEMBLY_FILES = {"assembly_glb": "assembly.glb", "assembly_step": "assembly.step"}
-
 
 def _assembly_compound(tree):
     """The tree's parts as one Compound: each named and coloured, under its groups.
@@ -273,21 +434,12 @@ def export_assembly(tree, out_dir: str) -> dict[str, str]:
 
     The GLB carries a node per part and per labelled group, named as the tree
     names them, and a material per colour; the STEP names its products the same
-    way. Written at the GLB deflection every part file is written at.
-
-    Raises when the GLB is not written: build123d reports that by its return
-    value, and a path returned for a file that is not there would be served as
-    one that is.
+    way. Written at the GLB deflection every part file is written at. Raises
+    when either file is not written.
     """
-    from build123d import export_gltf
-    from build123d import export_step as _export_step
-
     compound = _assembly_compound(tree)
     os.makedirs(out_dir, exist_ok=True)
     paths = {kind: os.path.join(out_dir, name) for kind, name in ASSEMBLY_FILES.items()}
-    if not export_gltf(
-        compound, paths["assembly_glb"], binary=True, linear_deflection=settings.gltf_deflection
-    ):
-        raise RuntimeError(f"build123d did not write {paths['assembly_glb']}")
-    _export_step(compound, paths["assembly_step"])
+    _write_glb(compound, paths["assembly_glb"], settings.gltf_deflection)
+    _write_step(compound, paths["assembly_step"])
     return paths

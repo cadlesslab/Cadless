@@ -173,6 +173,42 @@ describe("ViewportStore", () => {
     );
   });
 
+  it("hides a part and shows it again, by ordinal", () => {
+    const s = new ViewportStore();
+    s.togglePart(2);
+    s.togglePart(0);
+    expect(s.get().hiddenParts).toEqual([2, 0]);
+    s.togglePart(2);
+    expect(s.get().hiddenParts).toEqual([0]);
+    s.showAllParts();
+    expect(s.get().hiddenParts).toEqual([]);
+  });
+
+  it("forgets what was hidden and picked out when told the parts are others", () => {
+    const s = new ViewportStore();
+    s.togglePart(1);
+    s.highlightPart(1);
+    s.resetParts();
+    expect(s.get()).toMatchObject({ hiddenParts: [], highlightedPart: null });
+  });
+
+  it("tells nobody when the part picked out has not changed", () => {
+    const s = new ViewportStore();
+    s.highlightPart(3);
+    let calls = 0;
+    s.subscribe(() => calls++);
+    s.highlightPart(3);
+    expect(calls).toBe(0);
+  });
+
+  it("tells nobody when there is nothing to forget", () => {
+    const s = new ViewportStore();
+    let calls = 0;
+    s.subscribe(() => calls++);
+    s.resetParts();
+    expect(calls).toBe(0);
+  });
+
   it("clearing a preview nobody is showing tells nobody", () => {
     // Every return to this machine's work calls it, and most of those times
     // there was nothing to end.

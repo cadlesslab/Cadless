@@ -288,13 +288,15 @@ SYSTEM = Principal(SYSTEM_KEY, "This build")
 
 
 class BuildStore(ScopedStore):
-    """The store as the build itself, with the two powers a request must not have.
+    """The store as the build itself, with the powers a request must not have.
 
-    Both of these make a row that belongs to the installation and is read by
-    every principal. Neither belongs on :class:`ScopedStore`: a route that could
-    reach them could hand its own project to everybody, or mint a project that
-    refuses every mutation, cannot be deleted through the project route, and
-    cannot be reached through the catalogue route either.
+    ``create_project`` and ``set_catalog_item_id`` make a row that belongs to the
+    installation and is read by every principal. Neither belongs on
+    :class:`ScopedStore`: a route that could reach them could hand its own
+    project to everybody, or mint a project that refuses every mutation, cannot
+    be deleted through the project route, and cannot be reached through the
+    catalogue route either. ``set_catalog_geometry`` rewrites such rows, which a
+    route could otherwise use to change what everybody reads.
 
     Kept as a subclass rather than a flag so the difference is visible in the
     type, and so `tests/test_store_surface.py` keeps measuring the request-facing
@@ -308,6 +310,13 @@ class BuildStore(ScopedStore):
 
     async def set_catalog_item_id(self, project_id: int, item_id: str | None) -> None:
         return await self._store.set_catalog_item_id(project_id, item_id)
+
+    async def set_catalog_geometry(
+        self,
+        project_id: int,
+        geometry: Sequence[tuple[float | None, Sequence[float] | None]],
+    ) -> None:
+        return await self._store.set_catalog_geometry(project_id, geometry)
 
 
 def system_view(store: AnyStore) -> BuildStore:

@@ -724,6 +724,43 @@ class Store:
                 )
             await db.commit()
 
+    async def set_catalog_geometry(
+        self,
+        project_id: int,
+        geometry: Sequence[tuple[float | None, Sequence[float] | None]],
+    ) -> None:
+        """Set each version's recorded volume and size on a catalogue project, one
+        ``(volume, bbox)`` per version in the order they were filed.
+
+        For an item filed before its sizes were converted to millimetres. Writing
+        them where they are keeps the project, and with it every copy that names
+        the project as its source, where loading the item again would replace it.
+        Setting values rather than scaling the ones there makes it safe to repeat.
+
+        Raises ``ValueError`` unless the project is a catalogue item with one
+        version for each entry. Unscoped, and absent from the request-facing
+        view, as ``set_catalog_item_id`` is: the rows it writes belong to the build.
+        """
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT v.id FROM script_versions v JOIN projects p ON p.id = v.project_id "
+                    "WHERE v.project_id=? AND p.catalog_item_id IS NOT NULL ORDER BY v.id",
+                    (project_id,),
+                )
+            ).fetchall()
+            if len(rows) != len(geometry):
+                raise ValueError(
+                    f"project {project_id} has {len(rows)} catalogue versions, "
+                    f"not the {len(geometry)} given"
+                )
+            for (version_id,), (volume, bbox) in zip(rows, geometry, strict=True):
+                await db.execute(
+                    "UPDATE script_versions SET volume=?, bbox_json=? WHERE id=?",
+                    (volume, json.dumps(list(bbox)) if bbox else None, version_id),
+                )
+            await db.commit()
+
     async def list_projects(self, *, owner: Owner = UNSCOPED) -> list[Project]:
         pred, params = _owner_sql(owner)
         async with self._connect() as db:

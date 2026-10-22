@@ -26,11 +26,33 @@ export function sectionPlane(
   return { normal: AXIS_NORMAL[axis], constant: -cut };
 }
 
+/** Millimetres in one scene unit. A GLB is in metres, glTF's unit, and the
+ * measure tool labels millimetres. */
+export const MM_PER_SCENE_UNIT = 1000;
+
+/** A measured point's marker, as a share of the model's largest dimension. */
+const MARKER_SHARE = 0.01;
+
+/** A measured point's marker radius, in scene units: the same share of every
+ * model, since a fixed length that shows on a part is lost on a house, and one
+ * that shows on a house swallows a part. Zero with no model to measure. */
+export function markerRadius(model: THREE.Box3 | null): number {
+  if (!model || model.isEmpty()) return 0;
+  const size = model.getSize(new THREE.Vector3());
+  return Math.max(size.x, size.y, size.z) * MARKER_SHARE;
+}
+
+/** Distance between two points, in scene units. */
 export function measureDistance(
   a: [number, number, number],
   b: [number, number, number],
 ): number {
   return Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+}
+
+/** The distance between two points in the scene, as the measure tool labels it. */
+export function distanceLabel(a: [number, number, number], b: [number, number, number]): string {
+  return `${(measureDistance(a, b) * MM_PER_SCENE_UNIT).toFixed(1)} mm`;
 }
 
 /** Interior angle at vertex `b` (degrees) for the path a-b-c. */

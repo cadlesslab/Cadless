@@ -6,6 +6,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { attachmentUrl, guideFrameUrl } from "../api";
 import type { AssemblyFindings, ClarificationQuestion, Version } from "../api";
 import { IconButton, CadlessIcon } from "../components";
+import { measureText } from "../measures";
 import { useStoreSelector } from "../state";
 import type { useApp } from "../useApp";
 import type { CritiqueRound, LiveTurn, ChatMessage as Msg } from "./chatModel";
@@ -29,9 +30,10 @@ function Thumb({ id, ok }: { id: number; ok: boolean }) {
 }
 
 function metricsLine(v: Version): string {
+  const { unit, size, volume } = measureText(v.volume, v.bbox);
   const parts: string[] = [];
-  if (v.volume != null) parts.push(`${v.volume.toFixed(1)} mm³`);
-  if (v.bbox) parts.push(v.bbox.map((d) => d.toFixed(1)).join(" × ") + " mm");
+  if (volume) parts.push(volume);
+  if (size) parts.push(`${size} ${unit}`);
   return parts.join(" · ");
 }
 

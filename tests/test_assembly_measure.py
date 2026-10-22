@@ -918,3 +918,24 @@ def test_a_part_that_cannot_be_swept_is_ruled_within_a_small_budget():
     m = measure_assembly(_curved_bar_in_a_channel(), probe_budget=60)
     assert m.unchecked == []
     assert m.order is not None
+
+
+def test_what_the_measurement_could_not_establish_names_the_parts():
+    """The same sentence a reader is shown, so the same names."""
+    m = measure_assembly([_Awkward(), _Awkward(centre=(30.0, 0.0, 0.0))], names=["base", "lid"])
+    assert len(m.unchecked) >= 2
+    assert all("base and lid" in reason for reason in m.unchecked)
+
+
+def test_a_clash_probe_that_cannot_run_names_the_parts(monkeypatch):
+    import cadless.assembly_check as module
+
+    monkeypatch.setattr(module, "_shared_volume", lambda first, second: None)
+    m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)], names=["base", "lid"])
+    assert any("could not measure base and lid" in reason for reason in m.unchecked)
+
+
+def test_parts_the_walk_cannot_see_past_are_named_by_their_build():
+    pair = [_as_nurbs(Box(20, 20, 10)), _as_nurbs(Pos(20, 0, 0) * Box(20, 20, 10))]
+    m = measure_assembly(pair, names=["base", "lid"])
+    assert any("base and lid touch" in reason for reason in m.unchecked)

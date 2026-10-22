@@ -61,18 +61,17 @@ class TestWhetherItCouldFitAtAll:
         assert why
         assert "500" in why
 
-    def test_a_bbox_in_authoring_units_is_not_refused_and_that_is_known(self):
-        """The gap this check cannot see, pinned so it cannot be forgotten.
+    def test_a_bbox_filed_in_metres_is_not_refused_and_that_is_known(self):
+        """The case this check cannot see, pinned so it cannot be forgotten.
 
-        ``bbox`` is in the project's authoring units while the exported STL is
-        always millimetres, so a domain authored in metres -- the shipped
-        ``house`` one is -- produces numbers a thousand times too small here.
-        The 12 x 8 x 0.3 in this case is the demo house's real manifest: twelve
-        metres, and this returns "fits".
+        A version's size is filed in millimetres, but a copy made of an item in
+        metres before items were filed that way, or an item whose catalogue entry
+        predates content hashing, still carries the item's own numbers: the demo
+        house's first step is 12 x 8 x 0.3, twelve metres, and this returns
+        "fits".
 
         It fails **open**, which is why it is recorded rather than guarded: the
-        reader gets the slicer's own message instead of this one. Closing it
-        needs a version-to-domain link the store does not carry.
+        reader gets the slicer's own message instead of this one.
         """
         assert print_fit.too_big_for([12.0, 8.0, 0.3], self.default()) == ""
         # The same object in millimetres is refused, which is what shows the

@@ -41,6 +41,10 @@ UNSCOPED_BY_DESIGN = {
     # because a catalogue item is the build's — so a route able to call it could
     # hand its own project to every principal by declaring it one.
     "set_catalog_item_id",
+    # Rewrites a catalogue item's recorded sizes in place, for the loader. The
+    # rows are the build's, so a route able to call it could change the sizes
+    # every principal reads.
+    "set_catalog_geometry",
 }
 
 # On the scoped view but taking no owner, because they read no rows.

@@ -508,7 +508,7 @@ def test_the_child_measures_on_a_share_of_the_time_left(tmp_path, monkeypatch, c
 
     seen = {}
 
-    def fake_measure(parts, time_budget):
+    def fake_measure(parts, time_budget, names=None):
         seen["budget"] = time_budget
         return AssemblyMeasurements(part_bboxes=[], gaps=[], order=None)
 
@@ -523,3 +523,30 @@ def test_the_child_measures_on_a_share_of_the_time_left(tmp_path, monkeypatch, c
     capsys.readouterr()
 
     assert 0.0 < seen["budget"] <= (30.0 - 12.0) * assembly_check.MEASUREMENT_TIME_SHARE
+
+
+def test_the_child_hands_the_tree_s_names_to_the_measurement(tmp_path, monkeypatch, capsys):
+    from cadless import _worker_child, assembly_check
+    from cadless.assembly_check import AssemblyMeasurements
+
+    seen = {}
+
+    def fake_measure(parts, time_budget, names=None):
+        seen["names"] = names
+        return AssemblyMeasurements(part_bboxes=[], gaps=[], order=None)
+
+    monkeypatch.setattr(assembly_check, "measure_assembly", fake_measure)
+    code_file = tmp_path / "m.py"
+    code_file.write_text(
+        "from build123d import *\n"
+        "a = Box(1, 1, 1)\n"
+        "a.label = 'base'\n"
+        "b = Pos(5, 0, 0) * Box(1, 1, 1)\n"
+        "b.label = 'lid'\n"
+        "result = Compound(children=[a, b])\n"
+    )
+
+    _worker_child.main(["prog", str(code_file), "", "1", "1", "30"])
+    capsys.readouterr()
+
+    assert seen["names"] == ["base", "lid"]

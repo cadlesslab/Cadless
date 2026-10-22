@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 
 from cadless import exporters
+from cadless.catalog.domains import get_domain
 from cadless.catalog.importer import discard_item_dir, imported_item_dir
 from cadless.catalog.ledger import Ledger, LedgerBusy, LedgerUnreadable
 from cadless.catalog.manifest import (
@@ -45,9 +46,28 @@ def item_content_hash(house_dir: Path, manifest: CatalogManifest | None = None) 
     or re-author changes this hash even when the step code is untouched;
     ``source.json`` is included so a provenance-only correction also counts as
     a change. Pass an already-loaded ``manifest`` to skip re-parsing it.
+
+    An item authored in another unit than the millimetre is filed with its
+    sizes converted (``_mm_per_unit``), and the factor is hashed too, so the
+    hash an engine that filed them unconverted recorded no longer matches and
+    the item's rows are converted in place (``load_house``). A millimetre item's
+    hash is what it always was.
     """
     house_dir = Path(house_dir)
     manifest = manifest or load_manifest(house_dir)
+    mm_per_unit = _mm_per_unit(manifest)
+    conversion = b""
+    if mm_per_unit != 1.0:
+        conversion = f"geometry recorded in millimetres, x{mm_per_unit!r}".encode()
+    return _content_hash(house_dir, manifest, conversion)
+
+
+def _hash_before_conversion(house_dir: Path, manifest: CatalogManifest) -> str:
+    """The content hash an engine that filed an item's sizes unconverted recorded."""
+    return _content_hash(Path(house_dir), manifest)
+
+
+def _content_hash(house_dir: Path, manifest: CatalogManifest, extra: bytes = b"") -> str:
     item = house_dir.resolve()
     digest = hashlib.sha256()
     digest.update((house_dir / "manifest.json").read_bytes())
@@ -56,7 +76,24 @@ def item_content_hash(house_dir: Path, manifest: CatalogManifest | None = None) 
     source_path = house_dir / "source.json"
     if source_path.exists():
         digest.update(source_path.read_bytes())
+    digest.update(extra)
     return "sha256:" + digest.hexdigest()
+
+
+def _mm_per_unit(manifest: CatalogManifest) -> float:
+    """Millimetres in one of the units the item is authored in: its domain's.
+
+    A step records its size and volume in those units; a version's are filed in
+    millimetres.
+    """
+    return get_domain(manifest.domain).export_scale
+
+
+def _filed_geometry(manifest: CatalogManifest) -> list[tuple[float | None, tuple | None]]:
+    """Each step's ``(volume, bbox)`` as a version files it: in millimetres."""
+    mm_per_unit = _mm_per_unit(manifest)
+    filed = [step.geometry.in_millimetres(mm_per_unit) for step in manifest.steps]
+    return [(geometry.volume, geometry.bbox) for geometry in filed]
 
 
 def _copy_artifact(store: AnyStore, version_id: int, src: Path, filename: str) -> str | None:
@@ -74,6 +111,13 @@ def _copy_artifact(store: AnyStore, version_id: int, src: Path, filename: str) -
     return str(dst)
 
 
+def _part_record(names: list[str] | None) -> list[dict] | None:
+    """A step's part names as the store keeps a build's parts, or ``None``."""
+    if names is None:
+        return None
+    return [{"index": i, "name": name, "path": [], "color": None} for i, name in enumerate(names)]
+
+
 def _read_step_code(item: Path, step: CatalogStep) -> str:
     return step_code_path(item, step).read_text()
 
@@ -89,11 +133,12 @@ def _copy_step_kind(
     left out whole, the parts already copied taken back out: the store numbers
     parts in the order they are added, so the parts after a gap would each be
     filed one lower than they are. Each path is checked as its own file is
-    opened, not all of them before the first copy.
+    opened, not all of them before the first copy. A whole-assembly file takes
+    the name the worker gives it, as a part file does.
     """
     copied: list[str] = []
     for i, key in enumerate(keys):
-        name = f"{exporters.part_name(i, len(keys))}.{kind}"
+        name = exporters.ASSEMBLY_FILES.get(kind) or f"{exporters.part_name(i, len(keys))}.{kind}"
         dst = _copy_artifact(store, version_id, step_artifact_path(item, step, key), name)
         if dst is None:
             for done in copied:
@@ -137,6 +182,10 @@ async def load_house(
     behavior — always skipped unless ``reload`` is set (without paying for
     a hash).
 
+    An item whose only change is that it was filed with its sizes unconverted
+    has its versions' sizes set in place instead of being reloaded: a reload
+    makes a new project, and every copy of the old one would lose its source.
+
     Loaded as the build regardless of who is asking. A catalogue item lives in a
     shared directory and is read-only, so it belongs to the installation rather
     than to whoever triggered the load — and normalising here rather than at each
@@ -169,11 +218,25 @@ async def load_house(
         content_hash = await asyncio.to_thread(item_content_hash, house_dir, manifest)
         if stored == content_hash:
             return None
+        if stored == await asyncio.to_thread(_hash_before_conversion, house_dir, manifest):
+            # The sizes are set before the hash is recorded, so a load stopped
+            # between the two sets the same values again next time. A ledger that
+            # cannot be written leaves the old hash, with the same result.
+            await store.set_catalog_geometry(loaded_as, _filed_geometry(manifest))
+            try:
+                await asyncio.to_thread(ledger.set_content_hash, manifest.id, content_hash)
+            except (LedgerUnreadable, LedgerBusy):
+                logger.warning(
+                    "converted %s's sizes but could not record it; the next load does it again",
+                    manifest.id,
+                )
+            return None
         reload = True  # content changed on disk: refresh the loaded copy
     if reload and loaded_as is not None:
         await clear_house(store, ledger, manifest.id)
     if content_hash is None:
         content_hash = await asyncio.to_thread(item_content_hash, house_dir, manifest)
+    filed_geometry = _filed_geometry(manifest)
 
     # Marked as a catalog item in the same insert that creates it, so there is no
     # moment where it exists on disk as an ordinary, editable project.
@@ -181,7 +244,7 @@ async def load_house(
     session = await store.get_or_create_session(project.id)
     parent: int | None = None
     last_vid: int | None = None
-    for step in manifest.steps:
+    for step, (volume, bbox) in zip(manifest.steps, filed_geometry, strict=True):
         code = await _read_or_clear(store, ledger, manifest, _read_step_code, item, step)
         # Surface the script's editable ``params`` block the same way
         # the live generation path does, so catalog items are parametric in the UI.
@@ -190,10 +253,11 @@ async def load_house(
             step.instruction,
             code,
             ok=True,
-            volume=step.geometry.volume,
-            bbox=step.geometry.bbox,
+            volume=volume,
+            bbox=bbox,
             parameters=extract_params(code),
             parent_version_id=parent,
+            parts=_part_record(step.parts),
         )
         for kind, keys in step.artifact_parts().items():
             copied = await _read_or_clear(
