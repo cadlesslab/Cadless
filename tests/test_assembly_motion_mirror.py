@@ -12,20 +12,14 @@ hold them together.
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 from cadless import assembly_guide
+from tests.ts_constants import FRONTEND_SRC, ts_number
 
-_MOTION_TS = (
-    Path(__file__).resolve().parents[1] / "frontend" / "src" / "viewport" / "assemblyMotion.ts"
-)
+_MOTION_TS = FRONTEND_SRC / "viewport" / "assemblyMotion.ts"
 
 
 def _ts_number(name: str) -> float:
-    found = re.search(rf"^const {name} = ([0-9.eE+-]+);", _MOTION_TS.read_text(), re.MULTILINE)
-    assert found, f"{name} is no longer a numeric constant in {_MOTION_TS.name}"
-    return float(found.group(1))
+    return ts_number(_MOTION_TS, name)
 
 
 def test_the_viewport_and_the_engine_agree_on_what_is_a_heading():
