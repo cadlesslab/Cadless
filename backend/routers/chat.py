@@ -604,13 +604,15 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 plan_step,
                                 parent_version_id=chain_parent,
                                 staging=staging,
-                                # A fresh generation starts a new model, so it is
-                                # an assembly only if this turn asked; anything
-                                # else derives from the current one and keeps its
-                                # answer. Read from the turn rather than from the
-                                # spec because the kill-switch being off must
-                                # leave the memory alone rather than erase it.
-                                built_as_assembly=bool(body.assembly)
+                                # An assembly when this turn built it as one --
+                                # asked for, with the switch on to give it the
+                                # spec -- or when it derives from a current model
+                                # that is one. A fresh generation starts a new
+                                # model and derives from nothing. The inherited
+                                # half reads the current version's record rather
+                                # than the spec, because the kill-switch being off
+                                # must leave that memory alone rather than erase it.
+                                built_as_assembly=asked_spec is not None
                                 or (ev.data.get("tool") != GENERATE_MODEL and inherits_assembly),
                             ),
                             loop,
@@ -656,7 +658,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                     parent_version_id=parent_version_id,
                                     # A forge race is always a fresh generation, so
                                     # its losers follow the winner's rule above.
-                                    built_as_assembly=bool(body.assembly),
+                                    built_as_assembly=asked_spec is not None,
                                 ),
                                 loop,
                             ).result()

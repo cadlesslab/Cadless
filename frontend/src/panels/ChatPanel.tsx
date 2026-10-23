@@ -4,6 +4,8 @@
  * ChatComposer and ChatMessage are presentational. */
 import { useEffect, useRef, useState } from "react";
 
+import * as api from "../api";
+
 import { Button, IconButton } from "../components";
 import { useActiveProject, useStoreSelector } from "../state";
 import { useApp } from "../useApp";
@@ -77,6 +79,8 @@ function threadRows(messages: Msg[]): ThreadRow[] {
   return rows;
 }
 
+const NOTHING_OFFERED = { forge: false, assembly: false };
+
 /** @param visible — whether this panel is actually on screen. It is not always:
  *  in the narrow layout the shell keeps the panel mounted and hides it, so that
  *  a half-typed prompt survives the drawer closing. Anything that measures or
@@ -114,6 +118,32 @@ export function ChatPanel({
   // behind the global assembly kill-switch too). Independent of forge —
   // one turn may want splitting without racing candidates, or the other way round.
   const [assembly, setAssembly] = useState(false);
+  // Which of those opt-ins the server will act on. Each is offered only while
+  // its switch is on: with the switch off the server ignores it, so the toggle
+  // would change nothing about the turn. The switches are read from the
+  // settings, and only where settings can be configured: elsewhere a front door
+  // may refuse the read, and a request spent on that on every mount is noise
+  // nobody can act on. A switch that cannot be read is taken as off: hiding an
+  // option the server would honour costs one opt-in, where offering one it
+  // ignores is the fault this fixes.
+  const [offered, setOffered] = useState(NOTHING_OFFERED);
+  useEffect(() => {
+    let alive = true;
+    api
+      .fetchPrintCapability()
+      .then((c) => (c.can_configure === true ? api.getSettings() : null))
+      .then((s) => {
+        const next = s && { forge: s.forge_enabled === true, assembly: s.assembly_enabled === true };
+        // Both off is how the panel starts, so there is nothing to set.
+        if (alive && next && (next.forge || next.assembly)) setOffered(next);
+      })
+      .catch(() => {
+        if (alive) setOffered(NOTHING_OFFERED);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
   // Reference pictures for the next turn. Per-turn like forge, and held here
   // rather than in the composer so that clearing them is part of the same step
   // that clears the field once a turn has gone out.
@@ -294,9 +324,9 @@ export function ChatPanel({
         generating={generating}
         disabled={activeProjectId == null || readOnly}
         forge={forge}
-        onToggleForge={() => setForge((f) => !f)}
+        onToggleForge={offered.forge ? () => setForge((f) => !f) : undefined}
         assembly={assembly}
-        onToggleAssembly={() => setAssembly((a) => !a)}
+        onToggleAssembly={offered.assembly ? () => setAssembly((a) => !a) : undefined}
         attachments={attachments}
         onAttachmentsChange={setAttachments}
       />
