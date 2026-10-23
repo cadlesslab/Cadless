@@ -21,7 +21,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.routers.chat as chat
-import backend.routers.versions as versions_router
 from backend.app import create_app
 from cadless.catalog.ledger import Ledger
 from cadless.catalog.loader import load_house
@@ -250,7 +249,7 @@ def test_clone_parameters_are_editable_and_original_stays_read_only(
 ):
     """Regression: the clone is absent from the ledger, so reparametrize works —
     while the same call against the catalog original keeps being refused."""
-    monkeypatch.setattr(versions_router, "run_code", _fake_run_code)
+    monkeypatch.setattr("cadless.pipeline.run_code", _fake_run_code)
     pid = _load_catalog_item(store, tmp_path)
     clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
 
@@ -259,6 +258,8 @@ def test_clone_parameters_are_editable_and_original_stays_read_only(
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True
     assert r.json()["version"]["parameters"]["bore"] == 10
+    # The stand-in's volume, so a rebuild that stopped reaching it shows here.
+    assert r.json()["version"]["volume"] == 1.0
 
     # The catalog original still refuses the same edit, and its params are intact.
     orig_vid = client.get(f"/projects/{pid}").json()["current_version_id"]

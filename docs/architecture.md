@@ -242,7 +242,7 @@ candidate judging, the identity seam and the image decisions are recorded under
    verdict on it, and one whose check could not be established is not repaired
    at all. Everything else that succeeds is stored as a project
    version whose source remains available for parameter changes and deterministic
-   rebuilds. The exception to the rebuild half is a
+   rebuilds. The exception to a plain re-run of a version's own code is a
    version in several pieces, or one that turns out to rebuild into them: a
    single file per kind matches none of the pieces recorded, and choosing
    between filing it as one more piece and leaving every recorded piece stale
@@ -251,6 +251,12 @@ candidate judging, the identity seam and the image decisions are recorded under
    several files of a kind has one row per kind whatever its geometry — so a
    rebuild runs into a staging directory and is discarded there. A version's own
    artifacts are never the target of a build that may turn out not to match them.
+   A parameter change, from the chat or the parameter panel, is a new version
+   rather than a re-run: rebuilt once with no model and judged as a build's last
+   attempt is — held to every check when the turn asked for an assembly or the
+   model was built as one, and refused when its parts fail or cannot be checked;
+   any other is kept with the verdict on it — and its findings go back to where
+   the edit was made.
 7. After the checks accept a multi-part build, and only then, the turn describes
    it: named parts, the order the check established, and drawings of the parts
    coming apart. Like the render critique, it runs in the API process rather than
@@ -261,8 +267,9 @@ candidate judging, the identity seam and the image decisions are recorded under
    that fails costs only the pictures, and the build stands either way. The order
    and the joints it states are the ones the check measured; it re-derives
    neither. The parts are called what their build named them, and a model is
-   asked, on a turn that asked for an assembly, only what to call the ones it
-   left unnamed — never, for a build that named them all — so a bad answer costs
+   asked, for a generated build on a turn that asked for an assembly, only what
+   to call the ones it left unnamed — never for a build that named them all, nor
+   for a parameter change, which numbers them — so a bad answer costs
    vocabulary and cannot cost the sequence. The same order, with the
    heading each part was released along, is handed on unchanged as the
    `assembly` artifact the viewport plays the parts apart and back together

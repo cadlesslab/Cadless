@@ -116,6 +116,21 @@ def test_forge_active_generate_uses_race_not_single_run():
     assert payload["code"] == "result = Box(2,2,2)"
 
 
+def test_a_forge_generation_replaces_the_model_a_later_edit_inherits_from():
+    """A raced fresh model replaces the one the turn started on, as a single run's
+    does, so an edit after it is not judged as the model it replaced."""
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2
+    )
+    pipe = RacePipeline([_cand("result = Box(2,2,2)", ok=True, volume=8.0)])
+    ctx = ToolContext(pipeline=pipe, forge=True, forge_n=3, inherited_assembly=spec)
+
+    _agent()._execute_one(_gen_block(), ctx)
+
+    assert pipe.candidate_calls == [3]  # the race ran
+    assert ctx.inherited_assembly is None
+
+
 def test_a_forge_turn_still_carries_the_assembly_spec():
     """The two gates are independent, so a turn can be forging AND asking for an
     assembly. A race that dropped the spec would still return a model -- one

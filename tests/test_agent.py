@@ -1227,12 +1227,125 @@ def test_max_tokens_truncated_tool_turn_surfaces_note_and_skips_tool():
 
 def test_a_parameter_edit_carries_the_rebuild_s_part_names(monkeypatch):
     from cadless import agent as agent_mod
-    from cadless import worker
     from cadless.worker import ExecResult
 
     parts = [{"index": 0, "name": "lid", "path": [], "color": None}]
-    monkeypatch.setattr(worker, "run_code", lambda code: ExecResult(ok=True, parts=parts))
+    monkeypatch.setattr(
+        "cadless.pipeline.run_code", lambda code, **_kwargs: ExecResult(ok=True, parts=parts)
+    )
 
     out = agent_mod._default_reparametrize("params = {'size': 10}\nresult = 1\n", {"size": 20})
 
     assert agent_mod._reparam_summary(out)["parts"] == parts
+
+
+def _spec():
+    from cadless.printer_profile import AssemblySpec, BuildVolume
+
+    return AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=0.2)
+
+
+def _record_default_edits(monkeypatch) -> list[tuple]:
+    """Stand in for the model-free rebuild behind the context's default edit."""
+    calls: list[tuple] = []
+
+    def fake(code, overrides, *, export_dir=None, assembly=None):
+        calls.append((export_dir, assembly))
+        return {"ok": True, "code": code, "parameters": overrides}
+
+    monkeypatch.setattr("cadless.agent._default_reparametrize", fake)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "asked", [True, False], ids=["the turn asked", "the model was built as one"]
+)
+def test_set_parameters_rebuilds_into_the_turn_s_export_dir_against_its_assembly(
+    monkeypatch, asked
+):
+    calls = _record_default_edits(monkeypatch)
+    spec = _spec()
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1", name="set_parameters", tool_input={"params": {"size": 20}}
+            ),
+            _text_turn("resized"),
+        ]
+    )
+    ctx = _context()
+    ctx.export_dir = "/tmp/turn-staging"
+    # An edit acts on the model that already exists, so what it was built as
+    # counts as much as what this turn asked for.
+    if asked:
+        ctx.assembly = spec
+    else:
+        ctx.inherited_assembly = spec
+
+    Agent(provider=provider, model="fake-model").run_turn(user_text="make it 20", context=ctx)
+
+    assert calls == [("/tmp/turn-staging", spec)]
+
+
+def test_a_parameter_edit_s_verdict_and_guide_reach_the_chat_and_the_model():
+    verdict = {"ok": False, "failures": ["left and right share 500.0 mm³"], "checks": ["overlap"]}
+    guide = {"parts": ["left", "right"], "steps": ["Fit right to left."], "frames": 0}
+
+    def fake_reparametrize(code, params):
+        return {"ok": True, "code": code, "parameters": params, "assembly": verdict, "guide": guide}
+
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1", name="set_parameters", tool_input={"params": {"size": 20}}
+            ),
+            _text_turn("resized"),
+        ]
+    )
+    agent = Agent(provider=provider, model="fake-model")
+    events = list(
+        agent.stream_turn(
+            user_text="make it 20", context=_context(reparametrize=fake_reparametrize)
+        )
+    )
+
+    result = next(e for e in events if e.kind == "tool_result")
+    assert result.data["assembly"] == verdict
+    shown_to_model = next(
+        b
+        for e in events
+        if e.kind == "turn_end"
+        for b in e.data["result"].blocks
+        if b.kind == "tool_result"
+    )
+    assert json.loads(shown_to_model.content)["assembly"] == verdict
+    assert any(
+        b.kind == "guide" for e in events if e.kind == "turn_end" for b in e.data["result"].blocks
+    )
+
+
+@pytest.mark.parametrize(
+    "pipeline", [SpyPipeline, FailingPipeline], ids=["it built", "it failed to build"]
+)
+def test_a_parameter_edit_after_a_fresh_build_is_not_judged_as_the_model_it_replaced(
+    monkeypatch, pipeline
+):
+    # Built or not, the fresh attempt's code is the code the edit then works on.
+    calls = _record_default_edits(monkeypatch)
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+            _tool_turn(
+                tool_use_id="tu-2", name="set_parameters", tool_input={"params": {"size": 20}}
+            ),
+            _text_turn("done"),
+        ]
+    )
+    ctx = _context(pipeline=pipeline())
+    # The turn started on a model built as an assembly...
+    ctx.inherited_assembly = _spec()
+
+    Agent(provider=provider, model="fake-model").run_turn(user_text="a cube", context=ctx)
+
+    # ...and the edit acts on the fresh cube, which nobody asked to be one.
+    assert [assembly for _, assembly in calls] == [None]

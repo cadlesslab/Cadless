@@ -151,3 +151,62 @@ def test_reparametrize_stores_the_names_its_rebuild_gives_the_parts(client, stor
 
     assert r.status_code == 200, r.text
     assert [p["name"] for p in r.json()["version"]["parts"]] == ["block"]
+
+
+TWO_BOXES = (
+    "from build123d import *\n"
+    'params = {"gap": 5}\n'
+    "left = Box(10, 10, 10)\n"
+    'left.label = "left"\n'
+    'right = Pos(10 + params["gap"], 0, 0) * Box(10, 10, 10)\n'
+    'right.label = "right"\n'
+    "result = Compound(children=[left, right])\n"
+)
+
+
+@pytest.mark.build123d
+def test_an_edit_that_makes_two_parts_overlap_is_kept_with_its_findings(client, store):
+    """Nobody asked for an assembly, so the edit stands -- with the overlap said."""
+    pid, vid = _seed(store, code=TWO_BOXES, params={"gap": 5})
+
+    r = client.post(f"/versions/{vid}/reparametrize", json={"params": {"gap": -5}})
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["ok"] is True, data["error"]
+    assert any("left and right share" in line for line in data["assembly_findings"]["failures"])
+    assert client.get(f"/projects/{pid}").json()["current_version_id"] == data["version"]["id"]
+
+
+@pytest.mark.build123d
+def test_an_edit_that_breaks_an_assembly_is_refused_with_its_findings(client, store, monkeypatch):
+    from cadless.config import settings
+
+    monkeypatch.setattr(settings, "assembly_enabled", True)
+    pid, vid = _seed(store, code=TWO_BOXES, params={"gap": 5}, built_as_assembly=True)
+
+    r = client.post(f"/versions/{vid}/reparametrize", json={"params": {"gap": -5}})
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["ok"] is False
+    assert data["error"].startswith("assembly: ")
+    assert any("left and right share" in line for line in data["assembly_findings"]["failures"])
+    # Recorded as failed, so nothing that looks for the last good version picks it.
+    assert data["version"]["ok"] is False
+    # Refused: the rebuild is recorded but never becomes the model on screen.
+    assert client.get(f"/projects/{pid}").json()["current_version_id"] != data["version"]["id"]
+
+
+@pytest.mark.build123d
+def test_an_accepted_edit_keeps_its_motion_and_draws_no_guide(client, store):
+    """The viewport plays the motion; the guide's drawings are read in the chat,
+    and this edit has no turn to show them in."""
+    _pid, vid = _seed(store, code=TWO_BOXES, params={"gap": 5})
+
+    r = client.post(f"/versions/{vid}/reparametrize", json={"params": {"gap": 10}})
+
+    assert r.status_code == 200, r.text
+    kinds = {a["kind"] for a in r.json()["version"]["artifacts"]}
+    assert "assembly" in kinds
+    assert "guide" not in kinds

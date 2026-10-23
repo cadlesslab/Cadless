@@ -18,11 +18,16 @@ export async function refreshProjects(store: Store): Promise<void> {
   store.set({ projects: await api.listProjects() });
 }
 
-export async function loadVersions(store: Store, projectId: number): Promise<void> {
+/** Load a project's versions and show its current one, or `keep` when given. */
+export async function loadVersions(
+  store: Store,
+  projectId: number,
+  keep?: number,
+): Promise<void> {
   viewportStore.clearPreview();
   const versions = await api.listVersions(projectId);
   const project = store.get().projects.find((p) => p.id === projectId);
-  const activeId = project?.current_version_id ?? versions.at(-1)?.id ?? null;
+  const activeId = keep ?? project?.current_version_id ?? versions.at(-1)?.id ?? null;
   store.set({ versions, activeVersionId: activeId });
 }
 
@@ -127,18 +132,37 @@ export async function rerunVersion(store: Store, id: number): Promise<void> {
   if (pid != null) await loadVersions(store, pid);
 }
 
-/** Deterministic parametric re-run (no LLM): persists a new version, selects it. */
+/** What became of a parameter edit, for the version it is about: the one the
+ * edit made when it was kept, or the one it was made from when it was not. */
+export interface EditOutcome {
+  versionId: number;
+  ok: boolean;
+  error: string | null;
+  findings: api.AssemblyFindings | null;
+}
+
+/** Deterministic parametric re-run (no LLM): persists a new version, selects it
+ * when it was kept, and says what became of it. */
 export async function reparametrize(
   store: Store,
   versionId: number,
   params: Record<string, api.ParamValue>,
-): Promise<void> {
-  await api.reparametrize(versionId, params);
+): Promise<EditOutcome> {
+  const res = await api.reparametrize(versionId, params);
   const pid = store.get().activeProjectId;
   if (pid != null) {
     await refreshProjects(store);
-    await loadVersions(store, pid);
+    // An edit that was not kept leaves the version it was made from on screen,
+    // which need not be the project's current one -- an older version opened
+    // from the history can be edited too.
+    await loadVersions(store, pid, res.ok ? undefined : versionId);
   }
+  return {
+    versionId: res.ok ? res.version.id : versionId,
+    ok: res.ok,
+    error: res.error,
+    findings: res.assembly_findings ?? null,
+  };
 }
 
 /** Common SSE wiring for both fresh generation and refinement. */

@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../api";
@@ -58,6 +58,118 @@ describe("ParameterInspector", () => {
       activeVersionId: 7,
     });
     expect(container.querySelector(".params")).toBeNull();
+  });
+
+  const OVERLAP = "left and right share 500.0 mm^3 of interior volume";
+
+  /** Commit one slider step, after setting what the edit comes back as. */
+  async function edit(
+    response: api.ReparametrizeResponse,
+    current: number,
+  ): Promise<ReturnType<typeof renderWithProviders>> {
+    vi.mocked(api.reparametrize).mockResolvedValueOnce(response);
+    vi.mocked(api.listProjects).mockResolvedValueOnce([{ ...project, current_version_id: current }]);
+    vi.mocked(api.listVersions).mockResolvedValueOnce([
+      version({ gap: 5 }),
+      { ...version({ gap: 6 }), id: 8, ok: response.ok },
+    ]);
+    const rendered = renderWithProviders(<ParameterInspector />, {
+      activeProjectId: 1,
+      projects: [project],
+      versions: [version({ gap: 5 })],
+      activeVersionId: 7,
+    });
+    const slider = screen.getByRole("slider");
+    slider.focus();
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+    await waitFor(() => expect(api.listVersions).toHaveBeenCalled());
+    return rendered;
+  }
+
+  it("shows what the check found on an edit it kept", async () => {
+    await edit(
+      {
+        ok: true, error: null, version: { ...version({ gap: 6 }), id: 8 },
+        assembly_findings: { failures: [OVERLAP], unchecked: [] },
+      },
+      8,
+    );
+    const box = await screen.findByRole("group", { name: "Assembly check" });
+    within(box).getByText(OVERLAP);
+    within(box).getByText("On the build that was kept.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps an older version on screen when an edit of it is not kept", async () => {
+    // Version 9 is current; version 7, opened from the history, is the one edited.
+    vi.mocked(api.reparametrize).mockResolvedValueOnce({
+      ok: false, error: `assembly: ${OVERLAP}`, version: { ...version({ gap: 6 }), id: 10, ok: false },
+      assembly_findings: { failures: [OVERLAP], unchecked: [] },
+    });
+    vi.mocked(api.listProjects).mockResolvedValueOnce([{ ...project, current_version_id: 9 }]);
+    vi.mocked(api.listVersions).mockResolvedValueOnce([
+      version({ gap: 5 }),
+      { ...version({ gap: 8 }), id: 9 },
+      { ...version({ gap: 6 }), id: 10, ok: false },
+    ]);
+    const { store } = renderWithProviders(<ParameterInspector />, {
+      activeProjectId: 1,
+      projects: [{ ...project, current_version_id: 9 }],
+      versions: [version({ gap: 5 }), { ...version({ gap: 8 }), id: 9 }],
+      activeVersionId: 7,
+    });
+    const slider = screen.getByRole("slider");
+    slider.focus();
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+
+    expect((await screen.findByRole("alert")).textContent).toBe("The edit was not kept.");
+    expect(store.get().activeVersionId).toBe(7);
+    expect(document.querySelector(".param-val")?.textContent).toBe("5");
+  });
+
+  it("says why an edit was not kept", async () => {
+    await edit(
+      {
+        ok: false, error: `assembly: ${OVERLAP}`, version: { ...version({ gap: 6 }), id: 8, ok: false },
+        assembly_findings: { failures: [OVERLAP], unchecked: [] },
+      },
+      7,
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe("The edit was not kept.");
+    const box = screen.getByRole("group", { name: "Assembly check" });
+    within(box).getByText(OVERLAP);
+    within(box).getByText("On a build that was not kept.");
+    // The model on screen is still the one built with gap 5, and so is its slider.
+    expect(document.querySelector(".param-val")?.textContent).toBe("5");
+  });
+
+  it("gives the reason for an edit that failed to build", async () => {
+    await edit(
+      {
+        ok: false, error: "NameError: name 'x' is not defined",
+        version: { ...version({ gap: 6 }), id: 8, ok: false },
+      },
+      7,
+    );
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The edit was not kept: NameError: name 'x' is not defined",
+    );
+    expect(screen.queryByRole("group", { name: "Assembly check" })).toBeNull();
+  });
+
+  it("keeps an edit's findings off another version opened afterwards", async () => {
+    const { store } = await edit(
+      {
+        ok: true, error: null, version: { ...version({ gap: 6 }), id: 8 },
+        assembly_findings: { failures: [OVERLAP], unchecked: [] },
+      },
+      8,
+    );
+    await screen.findByRole("group", { name: "Assembly check" });
+
+    act(() => store.set({ activeVersionId: 7 }));
+
+    expect(screen.queryByRole("group", { name: "Assembly check" })).toBeNull();
   });
 
   it("readOnly mode shows values without sliders and never reparametrizes", () => {

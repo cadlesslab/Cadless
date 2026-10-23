@@ -223,6 +223,25 @@ describe("messagesFromBlocks", () => {
     ]);
   });
 
+  it("shows the guide of the turn's last build when the turn built twice", () => {
+    // A generated model and then an edit of its numbers both describe their
+    // parts; the card, and the drawings read off its version, are the edit's.
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 9,
+        role: "assistant",
+        version_id: 43,
+        blocks: [
+          { kind: "guide", input: { parts: ["base"], steps: ["Start with the first build."], frames: 1 } },
+          { kind: "guide", input: { parts: ["base"], steps: ["Start with the edit."], frames: 1 } },
+        ],
+      }),
+    ]);
+    expect(msgs.filter((m) => m.kind === "guide")).toEqual([
+      expect.objectContaining({ versionId: 43, steps: ["Start with the edit."] }),
+    ]);
+  });
+
   it("keeps a guide whose drawings were never made", () => {
     // A build whose release headings went unmeasured still has an order worth
     // reading, so the steps must not depend on there being pictures.
@@ -261,6 +280,7 @@ describe("messagesFromBlocks", () => {
       id: "m21-a0",
       failures: [FAILURE],
       unchecked: [UNCHECKED],
+      kept: false,
     });
   });
 
@@ -280,12 +300,14 @@ describe("messagesFromBlocks", () => {
     expect(messagesFromBlocks([storedResult(content)]).map((m) => m.kind)).toEqual(["text"]);
   });
 
-  it("shows nothing for a stored result that was kept, whatever its verdict says", () => {
-    // The box says its build was not kept, so only a failed result is read.
+  it("shows a stored result's findings on a build that was kept, saying so", () => {
+    // A build nobody asked to be an assembly is handed over with its verdict on
+    // it, and the reader is the one left to act on what the check found.
     const msgs = messagesFromBlocks([
       storedResult({ ok: true, assembly: { ok: false, failures: [FAILURE], unchecked: [] } }),
     ]);
-    expect(msgs.map((m) => m.kind)).toEqual(["text"]);
+    expect(msgs.map((m) => m.kind)).toEqual(["text", "assembly-findings"]);
+    expect(msgs[1]).toMatchObject({ failures: [FAILURE], kept: true });
   });
 
   it("keeps only the findings that are words", () => {
@@ -306,8 +328,8 @@ describe("messagesFromBlocks", () => {
       }),
     ]);
     expect(msgs).toEqual([
-      { kind: "assembly-findings", id: "m21-a0", failures: ["first"], unchecked: [] },
-      { kind: "assembly-findings", id: "m21-a1", failures: ["second"], unchecked: [] },
+      { kind: "assembly-findings", id: "m21-a0", failures: ["first"], unchecked: [], kept: false },
+      { kind: "assembly-findings", id: "m21-a1", failures: ["second"], unchecked: [], kept: false },
     ]);
   });
 
@@ -493,7 +515,7 @@ describe("liveTurnFromEvents", () => {
     expect(turn.done).toBe(true);
   });
 
-  it("collects the assembly check's findings from a refused tool result, not a kept one", () => {
+  it("collects the assembly check's findings from a refused tool result, as not kept", () => {
     const events: ChatEvent[] = [
       {
         event: "tool_result", version_id: null, ok: false, metrics: null, thumbnail: null,
@@ -506,7 +528,7 @@ describe("liveTurnFromEvents", () => {
       },
     ];
     expect(liveTurnFromEvents(events).findings).toEqual([
-      { failures: [FAILURE], unchecked: [UNCHECKED] },
+      { failures: [FAILURE], unchecked: [UNCHECKED], kept: false },
     ]);
   });
 
@@ -517,19 +539,21 @@ describe("liveTurnFromEvents", () => {
       assembly_findings: { failures: [failure], unchecked: [] },
     });
     expect(liveTurnFromEvents([refusal("first"), refusal("second")]).findings).toEqual([
-      { failures: ["first"], unchecked: [] },
-      { failures: ["second"], unchecked: [] },
+      { failures: ["first"], unchecked: [], kept: false },
+      { failures: ["second"], unchecked: [], kept: false },
     ]);
   });
 
-  it("collects no findings off a tool result that was kept, whatever it carries", () => {
+  it("collects the findings a kept tool result carries, as kept", () => {
     const events: ChatEvent[] = [
       {
         event: "tool_result", version_id: 13, ok: true, metrics: null, thumbnail: null,
-        tool: "edit_model", error: null, assembly_findings: { failures: [FAILURE], unchecked: [] },
+        tool: "set_parameters", error: null, assembly_findings: { failures: [FAILURE], unchecked: [] },
       },
     ];
-    expect(liveTurnFromEvents(events).findings).toEqual([]);
+    expect(liveTurnFromEvents(events).findings).toEqual([
+      { failures: [FAILURE], unchecked: [], kept: true },
+    ]);
   });
 
   it.each([

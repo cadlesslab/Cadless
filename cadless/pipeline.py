@@ -39,7 +39,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cadless.assembly_check import ASSEMBLY_CHECKS, PARTS_CHECKS, evaluate_assembly
+from cadless.assembly_check import (
+    ASSEMBLY_CHECKS,
+    PARTS_CHECKS,
+    AssemblyReport,
+    evaluate_assembly,
+)
 from cadless.assertions import (
     GeometryAssertions,
     GeometrySignature,
@@ -52,7 +57,7 @@ from cadless.params import extract_params
 from cadless.printer_profile import AssemblySpec, assembly_spec
 from cadless.prompts import CodeGenerator
 from cadless.validation import validate_code
-from cadless.worker import run_code
+from cadless.worker import ExecResult, run_code
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +80,54 @@ def _part_names(parts, count: int) -> list[str | None] | None:
 # checks it faces need no printer, so the defaults serve only to describe its
 # joints, and nothing here reads a user's settings.
 _UNASKED = assembly_spec()
+
+
+def _judge_parts(
+    res: ExecResult, assembly: AssemblySpec | None, attempt: int
+) -> tuple[dict | None, AssemblyReport | None]:
+    """The verdict on a build's parts, and the report it was read from.
+
+    A build that asked for an assembly (``assembly`` given) is held to every check
+    against its printer; any other build of several parts to the parts checks
+    alone (see :mod:`cadless.assembly_check`). Where nothing was measured, a build
+    that asked gets a verdict saying so and no report, and any other gets
+    ``(None, None)``.
+
+    The verdict is the dict :attr:`GenerationResult.assembly` documents.
+    """
+    if res.assembly is None:
+        if assembly is None:
+            return None, None
+        # Asked, and nothing came back. Ordinarily that means the model produced
+        # one solid, which is not an assembly and is print_fit's question; it also
+        # covers a worker too old to know the flag, and a shape whose solids could
+        # not be split. Recorded rather than passed over silently, so a reader can
+        # tell this from a build that never asked -- both of which otherwise leave
+        # the result carrying nothing at all.
+        return {"ok": None, "order": None, "attempt": attempt, "measured": False}, None
+    checks = ASSEMBLY_CHECKS if assembly is not None else PARTS_CHECKS
+    report = evaluate_assembly(
+        res.assembly,
+        assembly or _UNASKED,
+        checks=checks,
+        names=_part_names(res.parts, len(res.assembly.part_bboxes)),
+    )
+    verdict = {
+        "ok": report.ok,
+        "order": report.order,
+        "attempt": attempt,
+        "measured": True,
+        "failures": list(report.failures),
+        "unchecked": list(report.unchecked),
+        "joints": report.joints,
+        # Off the measurements rather than the verdict: which way a part came out
+        # is something measured, not something ruled, and the report carries
+        # rulings.
+        "releases": list(res.assembly.releases),
+        "checks": sorted(checks),
+    }
+    return verdict, report
+
 
 # Lifecycle phases emitted as {"event": "stage", "phase": ..., "status": ...}.
 STAGE_PHASES = (
@@ -432,39 +485,12 @@ class Pipeline:
                 # not ask, the last attempt is handed over with the verdict on
                 # it: nobody asked for an assembly, and a model whose parts were
                 # found wanting is still the model that was asked for.
-                if assembly is not None and res.assembly is None:
-                    # The turn asked and nothing came back. Ordinarily that means
-                    # the model produced one solid, which is not an assembly and
-                    # is print_fit's question; it also covers a worker too old to
-                    # know the flag, and a shape whose solids could not be split.
-                    # Recorded rather than passed over silently, so a reader can
-                    # tell this from a turn that never asked -- both of which
-                    # otherwise leave the result carrying nothing at all.
-                    last_assembly = {"ok": None, "order": None, "attempt": n, "measured": False}
-                if res.assembly is not None:
+                parts_verdict, fit = _judge_parts(res, assembly, n)
+                if parts_verdict is not None:
+                    last_assembly = parts_verdict
+                if fit is not None:
                     asked = assembly is not None
-                    checks = ASSEMBLY_CHECKS if asked else PARTS_CHECKS
                     _emit_stage(on_progress, "assembly", "begin", n)
-                    fit = evaluate_assembly(
-                        res.assembly,
-                        assembly or _UNASKED,
-                        checks=checks,
-                        names=_part_names(res.parts, len(res.assembly.part_bboxes)),
-                    )
-                    last_assembly = {
-                        "ok": fit.ok,
-                        "order": fit.order,
-                        "attempt": n,
-                        "measured": True,
-                        "failures": list(fit.failures),
-                        "unchecked": list(fit.unchecked),
-                        "joints": fit.joints,
-                        # Off the measurements rather than the verdict: which way
-                        # a part came out is something measured, not something
-                        # ruled, and the report carries rulings.
-                        "releases": list(res.assembly.releases),
-                        "checks": sorted(checks),
-                    }
                     signal = fit.repair_signal()
                     if signal is not None and not asked:
                         last_error = "assembly: " + signal
@@ -782,60 +808,21 @@ class Pipeline:
     ):
         """How the accepted parts go together, or ``None`` where there is no assembly.
 
-        The parts are called what their build named them. Only a turn that asked
-        for an assembly has the parts its build left unnamed named by the writer's
-        model; any other build numbers them, so measuring every build of several
-        parts adds no model call to a turn that did not ask.
-
-        Never fatal, and for a sharper reason than the critique's: by this point
-        the parts are built, measured and accepted, so a turn that failed here
-        would throw away a finished capability over its description.
-
-        The drawings are written beside the exports rather than returned, because
-        this has no store of its own to put them in: the export directory is the
-        hand-off, and what it holds when a build finishes is what is taken up.
-        That is also why the sweep below runs before anything else and on every
-        accepted build, rather than where the drawing happens: callers reuse one
-        export directory across the builds of a turn, so a build that draws
-        nothing would otherwise leave the previous one's frames to be taken up as
-        its own -- describing one model with pictures of another.
-
-        The motion the viewport plays is written the same way, swept the same
-        way, and before the description rather than inside it: it is the
-        measured order and headings, not anything said about them, so a writer
-        or a drawing that fails costs the guide and leaves the motion standing.
+        Only a turn that asked for an assembly has the parts its build left
+        unnamed named by the writer's model; any other build numbers them, so
+        measuring every build of several parts adds no model call to a turn that
+        did not ask. The rest is :func:`_write_guide`'s.
         """
-        _clear_guide_frames(export_dir)
-        _clear_assembly_motion(export_dir)
-        if not (verdict and verdict.get("ok") and verdict.get("order")):
-            return None
-        order = verdict["order"]
-        if len(order) < 2:
-            return None
-
-        self._write_motion(export_dir, order, verdict.get("releases") or [])
-        try:
-            _emit_stage(on_progress, "guide", "begin", n)
-            from cadless.guide_writer import plain_guide  # noqa: PLC0415
-
-            joints = verdict.get("joints") or []
-            written = (
-                self._guide_writer.write(intent, code, order, joints, names=names)
-                if self._guide_writer and asked
-                else plain_guide(order, joints, names=names)
-            )
-            frames = self._draw_guide(export_dir, order, verdict.get("releases") or [])
-            _emit_stage(on_progress, "guide", "ok", n)
-            return {**written.as_payload(), "frames": frames}
-        except Exception as exc:  # noqa: BLE001 — a description, never the build
-            logger.warning("assembly guide unavailable, skipping: %s", exc, exc_info=True)
-            # Returning nothing has to mean nothing on disk, here as well as one
-            # level down: frames can already be written by the time something
-            # after them raises, and left there they are filed against a version
-            # whose guide is absent.
-            _clear_guide_frames(export_dir)
-            _emit_stage(on_progress, "guide", "error", n, f"guide unavailable: {exc}")
-            return None
+        return _write_guide(
+            on_progress,
+            intent,
+            code,
+            verdict,
+            export_dir,
+            n,
+            writer=self._guide_writer if asked else None,
+            names=names,
+        )
 
     @staticmethod
     def _write_motion(export_dir, order, releases) -> None:
@@ -986,6 +973,129 @@ def _candidate_dir(export_dir: str | None, idx: int) -> str | None:
     cand = os.path.join(export_dir, f"candidate-{idx}")
     os.makedirs(cand, exist_ok=True)
     return cand
+
+
+def _write_guide(
+    on_progress,
+    intent: str,
+    code: str,
+    verdict,
+    export_dir,
+    n: int,
+    *,
+    writer=None,
+    names=None,
+    describe: bool = True,
+):
+    """How the accepted parts go together, or ``None`` where there is no assembly.
+
+    The parts are called what their build named them. ``writer`` names the parts
+    its build left unnamed with a model; without one they are numbered, and the
+    sentences are the engine's either way. ``describe=False`` stops after the
+    motion, returning ``None``.
+
+    Never fatal, and for a sharper reason than the critique's: by this point the
+    parts are built, measured and accepted, so a build that failed here would
+    throw away a finished capability over its description.
+
+    The drawings are written beside the exports rather than returned, because
+    this has no store of its own to put them in: the export directory is the
+    hand-off, and what it holds when a build finishes is what is taken up. That
+    is also why the sweep below runs before anything else and on every call,
+    rather than where the drawing happens: callers reuse one export directory
+    across the builds of a turn, so a build that draws nothing would otherwise
+    leave the previous one's frames to be taken up as its own -- describing one
+    model with pictures of another.
+
+    The motion the viewport plays is written the same way, swept the same way,
+    and before the description rather than inside it: it is the measured order
+    and headings, not anything said about them, so a writer or a drawing that
+    fails costs the guide and leaves the motion standing.
+    """
+    _clear_guide_frames(export_dir)
+    _clear_assembly_motion(export_dir)
+    if not (verdict and verdict.get("ok") and verdict.get("order")):
+        return None
+    order = verdict["order"]
+    if len(order) < 2:
+        return None
+
+    Pipeline._write_motion(export_dir, order, verdict.get("releases") or [])
+    if not describe:
+        return None
+    try:
+        _emit_stage(on_progress, "guide", "begin", n)
+        from cadless.guide_writer import plain_guide  # noqa: PLC0415
+
+        joints = verdict.get("joints") or []
+        written = (
+            writer.write(intent, code, order, joints, names=names)
+            if writer
+            else plain_guide(order, joints, names=names)
+        )
+        frames = Pipeline._draw_guide(export_dir, order, verdict.get("releases") or [])
+        _emit_stage(on_progress, "guide", "ok", n)
+        return {**written.as_payload(), "frames": frames}
+    except Exception as exc:  # noqa: BLE001 — a description, never the build
+        logger.warning("assembly guide unavailable, skipping: %s", exc, exc_info=True)
+        # Returning nothing has to mean nothing on disk, here as well as one level
+        # down: frames can already be written by the time something after them
+        # raises, and left there they are filed against a version whose guide is
+        # absent.
+        _clear_guide_frames(export_dir)
+        _emit_stage(on_progress, "guide", "error", n, f"guide unavailable: {exc}")
+        return None
+
+
+@dataclass(frozen=True)
+class Rebuild:
+    """One run of edited code, judged as the loop judges its last attempt.
+
+    ``result`` is the worker's own. ``ok`` is false where the build failed or
+    where an assembly's parts were refused; ``assembly`` and ``guide`` are what
+    :class:`GenerationResult` carries under the same names.
+    """
+
+    result: ExecResult
+    ok: bool
+    error: str | None
+    assembly: dict | None
+    guide: dict | None
+
+
+def rebuild(
+    code: str,
+    *,
+    export_dir: str | None = None,
+    assembly: AssemblySpec | None = None,
+    describe: bool = True,
+) -> Rebuild:
+    """Run ``code`` once and judge its parts as :meth:`Pipeline.run` judges a build.
+
+    For code that is not the model's to repair -- an edit to a model's numbers --
+    so there is one attempt, and it is judged as the loop judges its last: a
+    build that asked for an assembly (``assembly`` given) is refused when its
+    parts fail or cannot be checked, and any other is handed over with its
+    verdict on it. An accepted build of several parts has its motion and the
+    guide's drawings written beside the exports and the guide returned, with no
+    model call: nothing that edits numbers should cost one.
+
+    ``describe=False`` writes the motion alone, for a caller with nowhere to show
+    a guide: its drawings are rendered on the CPU and would be made for nobody.
+    """
+    res = run_code(code, export_dir=export_dir, check_assembly=True)
+    if not res.ok:
+        return Rebuild(res, False, res.error, None, None)
+    verdict, report = _judge_parts(res, assembly, 1)
+    signal = report.repair_signal() if report is not None else None
+    if signal is not None and assembly is not None:
+        # Swept rather than left: the export directory is shared by a turn's builds,
+        # and a refused build must not hand on an earlier build's motion as its own.
+        _write_guide(None, "", code, None, export_dir, 1)
+        return Rebuild(res, False, "assembly: " + signal, verdict, None)
+    names = _part_names(res.parts, len(res.assembly.part_bboxes)) if res.assembly else None
+    guide = _write_guide(None, "", code, verdict, export_dir, 1, names=names, describe=describe)
+    return Rebuild(res, True, None, verdict, guide)
 
 
 def _signature(res) -> GeometrySignature:

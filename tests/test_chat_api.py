@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 import backend.routers.chat as chat
 from backend.app import create_app
+from backend.assembly import assembly_findings
 from cadless import printer_profile
 from cadless.config import settings
 from cadless.llm.providers import StreamChunk
@@ -1333,13 +1334,13 @@ def test_a_build_the_check_did_not_rule_on_streams_no_findings(client, store, mo
 def test_findings_of_an_unexpected_shape_are_not_shown(verdict):
     # A turn must not fail on the verdict's shape, nor show a reader characters
     # or objects as sentences.
-    assert chat._assembly_findings(verdict) is None
+    assert assembly_findings(verdict) is None
 
 
 def test_only_the_findings_that_are_words_are_shown():
     verdict = {"ok": False, "failures": ["part 1 overlaps part 2", 7, " "], "unchecked": ["x"]}
 
-    assert chat._assembly_findings(verdict) == {
+    assert assembly_findings(verdict) == {
         "failures": ["part 1 overlaps part 2"],
         "unchecked": ["x"],
     }
@@ -1527,6 +1528,61 @@ def test_an_edit_keeps_the_assembly_the_version_was_built_with(client, store, mo
     assert edited is not None
     assert built.clearance_mm == printer_profile.DEFAULT_JOINT_CLEARANCE
     assert edited.clearance_mm == 0.35
+
+
+class _SecondFreshBuildFails(StubPipeline):
+    """The second fresh build fails and leaves its code behind, as the repair loop
+    does when its budget runs out -- code the agent then edits."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fresh = 0
+
+    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, **kwargs):
+        if prior_code is None:
+            self.fresh += 1
+            if self.fresh == 2:
+                self.assemblies.append(kwargs.get("assembly"))
+                return GenerationResult(
+                    ok=False,
+                    intent=intent,
+                    code='params = {"size": 10}\nresult = None\n',
+                    error="execute: boom",
+                )
+        return super().run(intent, export_dir, on_progress, prior_code, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "pipeline", [StubPipeline, _SecondFreshBuildFails], ids=["it built", "it failed to build"]
+)
+def test_an_edit_after_a_fresh_build_in_the_same_turn_follows_the_fresh_model(
+    client, store, monkeypatch, pipeline
+):
+    """A turn that starts on an assembly, builds a new model and then edits it.
+
+    The edit acts on the new model, which is an assembly only if this turn asked:
+    held to the starting model's answer it would be judged against a printer bed
+    and recorded as split, as if it were the model it replaced.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    turns = [
+        _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+        _text_turn("Done."),
+        _tool_turn(tool_use_id="tu-2", name="generate_model", tool_input={"spec": "a cube"}),
+        _tool_turn(tool_use_id="tu-3", name="edit_model", tool_input={"change": "taller"}),
+        _text_turn("Edited."),
+    ]
+    stub = pipeline()
+    _install(monkeypatch, ScriptedProvider(turns), pipeline=stub)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    _stream_assembly(client, pid, assembly=False, text="forget that, a simple cube, then taller")
+
+    assert stub.assemblies[0] is not None
+    assert stub.assemblies[1:] == [None, None]
+    current = client.get(f"/projects/{pid}").json()["current_version_id"]
+    assert asyncio.run(store.get_version(current)).built_as_assembly is False
 
 
 def test_an_edit_to_a_model_never_built_as_an_assembly_still_sends_nothing(

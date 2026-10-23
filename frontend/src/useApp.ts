@@ -26,13 +26,15 @@ export function useApp() {
   const store = useStore();
   const toast = useToast();
 
-  function guard<A extends unknown[]>(fn: (...a: A) => Promise<void> | void) {
-    return async (...args: A) => {
+  // What an action returns is passed on; one that failed returns undefined.
+  function guard<A extends unknown[], R>(fn: (...a: A) => Promise<R> | R) {
+    return async (...args: A): Promise<R | undefined> => {
       try {
-        await fn(...args);
+        return await fn(...args);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         toast.error("Action failed", msg);
+        return undefined;
       }
     };
   }

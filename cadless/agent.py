@@ -33,7 +33,7 @@ primitive, reused unchanged:
   * ``generate_model(spec)`` — fresh build123d model via the pipeline.
   * ``edit_model(change)``   — refine the current code via the pipeline.
   * ``set_parameters(params)`` — deterministic re-run via ``reparametrize`` (no
-    LLM, no pipeline call).
+    LLM; rebuilt and judged by the pipeline's ``rebuild``, never ``Pipeline.run``).
 
 ``run_turn`` returns the assembled neutral blocks for persistence.
 """
@@ -212,9 +212,10 @@ def build_tools() -> list[ToolDef]:
 
 # --- tool execution context -------------------------------------------------
 
-# A reparametrize callable: (code, overrides) -> result dict. Defaults to the
-# pipeline-free :func:`_default_reparametrize` built on the existing
-# ``apply_param_overrides`` primitive + the execution worker.
+
+# A reparametrize callable: (code, overrides) -> result dict. Defaults to
+# :meth:`ToolContext.edit_parameters`, which hands the turn's export directory and
+# assembly to the model-free :func:`_default_reparametrize`.
 ReparametrizeFn = Callable[[str, dict], dict]
 
 
@@ -290,23 +291,50 @@ class ToolContext:
         if self.pipeline is None:
             self.pipeline = Pipeline()
         if self.reparametrize is None:
-            self.reparametrize = _default_reparametrize
+            self.reparametrize = self.edit_parameters
+
+    def edit_parameters(self, code: str, overrides: dict) -> dict:
+        """The default parameter edit, rebuilt where this turn collects its files.
+
+        Read from the context when called rather than when bound, because a turn
+        can replace the model it started on before it edits one. An edit acts on
+        the model that already exists, so -- as for ``edit_model`` -- what it was
+        built as counts as much as what this turn asked for. Kept to the
+        two-argument shape a :data:`ReparametrizeFn` has, so one supplied from
+        outside, or one wrapping this, is called as it always was.
+        """
+        return _default_reparametrize(
+            code,
+            overrides,
+            export_dir=self.export_dir,
+            assembly=self.assembly or self.inherited_assembly,
+        )
 
 
-def _default_reparametrize(code: str, overrides: dict) -> dict:
+def _default_reparametrize(
+    code: str,
+    overrides: dict,
+    *,
+    export_dir: str | None = None,
+    assembly: AssemblySpec | None = None,
+) -> dict:
     """Deterministic, LLM-free re-run using the existing ``params`` primitive.
 
     Splices ``overrides`` into the script's ``params`` literal
-    (:func:`cadless.params.apply_param_overrides`) and executes the edited
-    script via the same sandbox worker the pipeline uses. No model call.
+    (:func:`cadless.params.apply_param_overrides`) and rebuilds the edited script
+    with :func:`cadless.pipeline.rebuild`, so its parts are measured and judged
+    as a generated build's are and its files land where the turn collects them.
+    ``assembly`` is the machine the model is built for, if it is an assembly.
+    No model call.
     """
-    from cadless.worker import run_code
+    from cadless.pipeline import rebuild
 
     new_code = apply_param_overrides(code, overrides)
-    res = run_code(new_code)
+    rb = rebuild(new_code, export_dir=export_dir, assembly=assembly)
+    res = rb.result
     return {
-        "ok": res.ok,
-        "error": res.error,
+        "ok": rb.ok,
+        "error": rb.error,
         "code": new_code,
         "parameters": {**extract_params(code), **overrides},
         "volume": res.volume,
@@ -316,6 +344,8 @@ def _default_reparametrize(code: str, overrides: dict) -> dict:
         "stl_path": res.stl_path,
         "obj_path": res.obj_path,
         "parts": res.parts,
+        "assembly": rb.assembly,
+        "guide": rb.guide,
     }
 
 
@@ -421,11 +451,19 @@ def _guide_block(raw: Any) -> ContentBlock | None:
 
 
 def _reparam_summary(out: dict) -> dict:
+    """What :func:`_result_summary` carries for a generated build, for an edit.
+
+    ``assembly`` and ``guide`` are here for the reasons they are there: the
+    orchestrator otherwise reports a set of parts with no idea whether they go
+    together, and the chat shows the reader what the check found.
+    """
     bbox = out.get("bbox")
     return {
         "ok": out.get("ok"),
         "error": out.get("error"),
         "code": out.get("code"),
+        "assembly": out.get("assembly"),
+        "guide": out.get("guide"),
         "metrics": {
             "volume": out.get("volume"),
             "bbox": list(bbox) if bbox else None,
@@ -1303,6 +1341,13 @@ class Agent:
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
+                if payload.get("code"):
+                    # A fresh model replaces the one the turn started on, so what
+                    # that one was built as no longer describes the model a later
+                    # edit in this turn acts on: it is an assembly only if asked.
+                    # Keyed on the code, as adopting it is, built or not: a later
+                    # edit works on whatever code was adopted.
+                    context.inherited_assembly = None
             elif name == EDIT_MODEL:
                 res = context.pipeline.run(
                     args.get("change", ""),

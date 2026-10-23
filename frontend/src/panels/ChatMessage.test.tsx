@@ -203,6 +203,7 @@ describe("ChatMessage", () => {
       id: "m21-a0",
       failures: [failure],
       unchecked: [undecided],
+      kept: false,
     });
     const box = getByRole("group", { name: "Assembly check" });
     within(box).getByText("On a build that was not kept.");
@@ -212,12 +213,26 @@ describe("ChatMessage", () => {
     );
   });
 
+  it("says when the build its findings are about was kept", () => {
+    const { getByRole } = renderMsg({
+      kind: "assembly-findings",
+      id: "m21-a0",
+      failures: ["left and right share 500.0 mm^3 of interior volume"],
+      unchecked: [],
+      kept: true,
+    });
+    const box = getByRole("group", { name: "Assembly check" });
+    within(box).getByText("On the build that was kept.");
+    expect(within(box).queryByText("On a build that was not kept.")).toBeNull();
+  });
+
   it("leaves out a heading whose list is empty", () => {
     const { queryByText } = renderMsg({
       kind: "assembly-findings",
       id: "m21-a0",
       failures: ["part 1 does not fit the build volume"],
       unchecked: [],
+      kept: false,
     });
     expect(queryByText("Could not be established")).toBeNull();
   });
@@ -228,8 +243,8 @@ describe("ChatMessage", () => {
       id: "live-chat",
       turn: liveTurn({
         findings: [
-          { failures: ["part 2 is trapped by part 1"], unchecked: [] },
-          { failures: ["part 3 does not fit the build volume"], unchecked: [] },
+          { failures: ["part 2 is trapped by part 1"], unchecked: [], kept: false },
+          { failures: ["part 3 does not fit the build volume"], unchecked: [], kept: true },
         ],
       }),
     });
@@ -238,6 +253,7 @@ describe("ChatMessage", () => {
       "part 2 is trapped by part 1",
       "part 3 does not fit the build volume",
     ]);
+    within(boxes[1]).getByText("On the build that was kept.");
   });
 
   it("shows no assembly check on a live turn with no findings", () => {
