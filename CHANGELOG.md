@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.2.1...backend-v1.3.0) (2026-10-23)
+
+
+### Features
+
+* measure every multi-part build and ask for placed, labelled parts ([#59](https://github.com/cadlesslab/Cadless/issues/59)) ([ef433b1](https://github.com/cadlesslab/Cadless/commit/ef433b1bd6ab69180eb8096de84e1ea5aa5acbe0))
+* name the parts from the check to the viewer, and fix assembly names and units ([#65](https://github.com/cadlesslab/Cadless/issues/65)) ([80c9b21](https://github.com/cadlesslab/Cadless/commit/80c9b214613c4cf4e9313fb7d3756a894550790a))
+* show the assembly check's findings in the chat ([#55](https://github.com/cadlesslab/Cadless/issues/55)) ([e2877e3](https://github.com/cadlesslab/Cadless/commit/e2877e32adffa45496a27fd351beda1c34988f30))
+
+
+### Fixes
+
+* load a catalog step's later parts under their kind and number ([#54](https://github.com/cadlesslab/Cadless/issues/54)) ([291ffdf](https://github.com/cadlesslab/Cadless/commit/291ffdf95aa58ee65172baf048a0b4b872572e60))
+* measure and judge a parameter edit as a generated build is ([#66](https://github.com/cadlesslab/Cadless/issues/66)) ([8d0d58e](https://github.com/cadlesslab/Cadless/commit/8d0d58e4a245e4af3fe0cb4e295254467837d3ee))
+* pass documented settings through compose and show assembly playback ([#52](https://github.com/cadlesslab/Cadless/issues/52)) ([1773012](https://github.com/cadlesslab/Cadless/commit/17730120d3b683c02ebafda327dfacb5a180a7c0))
+
 ## [1.2.1](https://github.com/cadlesslab/Cadless/compare/backend-v1.2.0...backend-v1.2.1) (2026-10-19)
 
 
