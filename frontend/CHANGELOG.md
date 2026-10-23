@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/cadlesslab/Cadless/compare/frontend-v1.2.0...frontend-v1.3.0) (2026-10-23)
+
+
+### Features
+
+* measure every multi-part build and ask for placed, labelled parts ([#59](https://github.com/cadlesslab/Cadless/issues/59)) ([ef433b1](https://github.com/cadlesslab/Cadless/commit/ef433b1bd6ab69180eb8096de84e1ea5aa5acbe0))
+* name the parts from the check to the viewer, and fix assembly names and units ([#65](https://github.com/cadlesslab/Cadless/issues/65)) ([80c9b21](https://github.com/cadlesslab/Cadless/commit/80c9b214613c4cf4e9313fb7d3756a894550790a))
+* show the assembly check's findings in the chat ([#55](https://github.com/cadlesslab/Cadless/issues/55)) ([e2877e3](https://github.com/cadlesslab/Cadless/commit/e2877e32adffa45496a27fd351beda1c34988f30))
+
+
+### Fixes
+
+* measure and judge a parameter edit as a generated build is ([#66](https://github.com/cadlesslab/Cadless/issues/66)) ([8d0d58e](https://github.com/cadlesslab/Cadless/commit/8d0d58e4a245e4af3fe0cb4e295254467837d3ee))
+
 ## [1.2.0](https://github.com/cadlesslab/Cadless/compare/frontend-v1.1.0...frontend-v1.2.0) (2026-10-19)
 
 
