@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Version } from "../api";
@@ -97,6 +97,34 @@ describe("ParameterInspector", () => {
     const box = await screen.findByRole("group", { name: "Assembly check" });
     within(box).getByText(OVERLAP);
     within(box).getByText("On the build that was kept.");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps an older version on screen when an edit of it is not kept", async () => {
+    // Version 9 is current; version 7, opened from the history, is the one edited.
+    vi.mocked(api.reparametrize).mockResolvedValueOnce({
+      ok: false, error: `assembly: ${OVERLAP}`, version: { ...version({ gap: 6 }), id: 10, ok: false },
+      assembly_findings: { failures: [OVERLAP], unchecked: [] },
+    });
+    vi.mocked(api.listProjects).mockResolvedValueOnce([{ ...project, current_version_id: 9 }]);
+    vi.mocked(api.listVersions).mockResolvedValueOnce([
+      version({ gap: 5 }),
+      { ...version({ gap: 8 }), id: 9 },
+      { ...version({ gap: 6 }), id: 10, ok: false },
+    ]);
+    const { store } = renderWithProviders(<ParameterInspector />, {
+      activeProjectId: 1,
+      projects: [{ ...project, current_version_id: 9 }],
+      versions: [version({ gap: 5 }), { ...version({ gap: 8 }), id: 9 }],
+      activeVersionId: 7,
+    });
+    const slider = screen.getByRole("slider");
+    slider.focus();
+    fireEvent.keyDown(slider, { key: "ArrowRight" });
+
+    expect((await screen.findByRole("alert")).textContent).toBe("The edit was not kept.");
+    expect(store.get().activeVersionId).toBe(7);
+    expect(document.querySelector(".param-val")?.textContent).toBe("5");
   });
 
   it("says why an edit was not kept", async () => {
@@ -129,16 +157,18 @@ describe("ParameterInspector", () => {
     expect(screen.queryByRole("group", { name: "Assembly check" })).toBeNull();
   });
 
-  it("keeps an edit's findings off another version", async () => {
-    // Kept as version 8, while version 7 is the one on screen.
-    await edit(
+  it("keeps an edit's findings off another version opened afterwards", async () => {
+    const { store } = await edit(
       {
         ok: true, error: null, version: { ...version({ gap: 6 }), id: 8 },
         assembly_findings: { failures: [OVERLAP], unchecked: [] },
       },
-      7,
+      8,
     );
-    await waitFor(() => expect(screen.queryByText("rebuilding…")).toBeNull());
+    await screen.findByRole("group", { name: "Assembly check" });
+
+    act(() => store.set({ activeVersionId: 7 }));
+
     expect(screen.queryByRole("group", { name: "Assembly check" })).toBeNull();
   });
 

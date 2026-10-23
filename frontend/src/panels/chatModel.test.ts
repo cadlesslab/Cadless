@@ -223,6 +223,25 @@ describe("messagesFromBlocks", () => {
     ]);
   });
 
+  it("shows the guide of the turn's last build when the turn built twice", () => {
+    // A generated model and then an edit of its numbers both describe their
+    // parts; the card, and the drawings read off its version, are the edit's.
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 9,
+        role: "assistant",
+        version_id: 43,
+        blocks: [
+          { kind: "guide", input: { parts: ["base"], steps: ["Start with the first build."], frames: 1 } },
+          { kind: "guide", input: { parts: ["base"], steps: ["Start with the edit."], frames: 1 } },
+        ],
+      }),
+    ]);
+    expect(msgs.filter((m) => m.kind === "guide")).toEqual([
+      expect.objectContaining({ versionId: 43, steps: ["Start with the edit."] }),
+    ]);
+  });
+
   it("keeps a guide whose drawings were never made", () => {
     // A build whose release headings went unmeasured still has an order worth
     // reading, so the steps must not depend on there being pictures.

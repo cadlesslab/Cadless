@@ -192,15 +192,21 @@ def test_an_edit_that_breaks_an_assembly_is_refused_with_its_findings(client, st
     assert data["ok"] is False
     assert data["error"].startswith("assembly: ")
     assert any("left and right share" in line for line in data["assembly_findings"]["failures"])
+    # Recorded as failed, so nothing that looks for the last good version picks it.
+    assert data["version"]["ok"] is False
     # Refused: the rebuild is recorded but never becomes the model on screen.
     assert client.get(f"/projects/{pid}").json()["current_version_id"] != data["version"]["id"]
 
 
 @pytest.mark.build123d
-def test_an_edit_of_a_single_part_has_no_findings(client, store):
-    _pid, vid = _seed(store)
+def test_an_accepted_edit_keeps_its_motion_and_draws_no_guide(client, store):
+    """The viewport plays the motion; the guide's drawings are read in the chat,
+    and this edit has no turn to show them in."""
+    _pid, vid = _seed(store, code=TWO_BOXES, params={"gap": 5})
 
-    r = client.post(f"/versions/{vid}/reparametrize", json={"params": {"size": 20}})
+    r = client.post(f"/versions/{vid}/reparametrize", json={"params": {"gap": 10}})
 
     assert r.status_code == 200, r.text
-    assert r.json()["assembly_findings"] is None
+    kinds = {a["kind"] for a in r.json()["version"]["artifacts"]}
+    assert "assembly" in kinds
+    assert "guide" not in kinds

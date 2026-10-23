@@ -1530,6 +1530,36 @@ def test_an_edit_keeps_the_assembly_the_version_was_built_with(client, store, mo
     assert edited.clearance_mm == 0.35
 
 
+def test_an_edit_after_a_fresh_build_in_the_same_turn_follows_the_fresh_model(
+    client, store, monkeypatch
+):
+    """A turn that starts on an assembly, builds a new model and then edits it.
+
+    The edit acts on the new model, which is an assembly only if this turn asked:
+    held to the starting model's answer it would be judged against a printer bed
+    and recorded as split, as if it were the model it replaced.
+    """
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    turns = [
+        _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+        _text_turn("Done."),
+        _tool_turn(tool_use_id="tu-2", name="generate_model", tool_input={"spec": "a cube"}),
+        _tool_turn(tool_use_id="tu-3", name="edit_model", tool_input={"change": "taller"}),
+        _text_turn("Edited."),
+    ]
+    pipeline = StubPipeline()
+    _install(monkeypatch, ScriptedProvider(turns), pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    _stream_assembly(client, pid, assembly=False, text="forget that, a simple cube, then taller")
+
+    assert pipeline.assemblies[0] is not None
+    assert pipeline.assemblies[1:] == [None, None]
+    current = client.get(f"/projects/{pid}").json()["current_version_id"]
+    assert asyncio.run(store.get_version(current)).built_as_assembly is False
+
+
 def test_an_edit_to_a_model_never_built_as_an_assembly_still_sends_nothing(
     client, store, monkeypatch
 ):

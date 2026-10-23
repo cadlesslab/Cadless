@@ -1,9 +1,7 @@
 """A rebuild of edited code judged as the pipeline judges a build's last attempt.
 
-The geometry is scripted rather than built, as in ``tests/test_pipeline_assembly.py``:
-what is under test is what a rebuild asks of the worker and what it does with the
-verdict. ``tests/test_reparametrize_api.py`` and ``tests/test_agent.py`` build the
-real thing through the two edit paths.
+The geometry is scripted rather than built: what is under test is what a rebuild
+asks of the worker and what it does with the verdict.
 """
 
 import json
@@ -126,6 +124,17 @@ def test_an_accepted_rebuild_writes_its_motion_and_its_guide(monkeypatch, tmp_pa
     assert json.loads((tmp_path / MOTION_FILE).read_text())["order"] == [0, 1]
     assert rb.guide["parts"] == ["base", "lid"]
     assert rb.guide["steps"]
+
+
+def test_a_rebuild_told_not_to_describe_writes_its_motion_alone(monkeypatch, tmp_path):
+    _stub_run_code(monkeypatch, _built(_sound()))
+
+    rb = rebuild("code", export_dir=str(tmp_path), describe=False)
+
+    assert rb.ok is True
+    assert (tmp_path / MOTION_FILE).exists()
+    assert rb.guide is None
+    assert not list(tmp_path.glob("guide_f*.png"))
 
 
 def test_a_refused_rebuild_leaves_no_motion_from_an_earlier_build(monkeypatch, tmp_path):

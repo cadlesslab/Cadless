@@ -271,7 +271,7 @@ def test_forge_never_applies_to_set_parameters():
     pipe = RacePipeline([_cand("result = Box(1,1,1)", ok=True)])
     recorded = {}
 
-    def reparam(code, overrides, **_kwargs):
+    def reparam(code, overrides):
         recorded["called"] = (code, overrides)
         return {"ok": True, "code": code, "parameters": overrides}
 
