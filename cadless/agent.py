@@ -33,7 +33,7 @@ primitive, reused unchanged:
   * ``generate_model(spec)`` — fresh build123d model via the pipeline.
   * ``edit_model(change)``   — refine the current code via the pipeline.
   * ``set_parameters(params)`` — deterministic re-run via ``reparametrize`` (no
-    LLM, no pipeline call).
+    LLM; rebuilt and judged by the pipeline's ``rebuild``, never ``Pipeline.run``).
 
 ``run_turn`` returns the assembled neutral blocks for persistence.
 """
@@ -212,10 +212,11 @@ def build_tools() -> list[ToolDef]:
 
 # --- tool execution context -------------------------------------------------
 
-# A reparametrize callable: (code, overrides, *, export_dir, assembly) -> result
-# dict. Defaults to the model-free :func:`_default_reparametrize` built on the
-# existing ``apply_param_overrides`` primitive + the pipeline's ``rebuild``.
-ReparametrizeFn = Callable[..., dict]
+
+# A reparametrize callable: (code, overrides) -> result dict. Defaults to
+# :meth:`ToolContext.edit_parameters`, which hands the turn's export directory and
+# assembly to the model-free :func:`_default_reparametrize`.
+ReparametrizeFn = Callable[[str, dict], dict]
 
 
 @dataclass
@@ -290,7 +291,24 @@ class ToolContext:
         if self.pipeline is None:
             self.pipeline = Pipeline()
         if self.reparametrize is None:
-            self.reparametrize = _default_reparametrize
+            self.reparametrize = self.edit_parameters
+
+    def edit_parameters(self, code: str, overrides: dict) -> dict:
+        """The default parameter edit, rebuilt where this turn collects its files.
+
+        Read from the context when called rather than when bound, because a turn
+        can replace the model it started on before it edits one. An edit acts on
+        the model that already exists, so -- as for ``edit_model`` -- what it was
+        built as counts as much as what this turn asked for. Kept to the
+        two-argument shape a :data:`ReparametrizeFn` has, so one supplied from
+        outside, or one wrapping this, is called as it always was.
+        """
+        return _default_reparametrize(
+            code,
+            overrides,
+            export_dir=self.export_dir,
+            assembly=self.assembly or self.inherited_assembly,
+        )
 
 
 def _default_reparametrize(
@@ -1323,6 +1341,11 @@ class Agent:
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
+                if payload.get("ok"):
+                    # A fresh model replaces the one the turn started on, so what
+                    # that one was built as no longer describes the model a later
+                    # edit in this turn acts on: it is an assembly only if asked.
+                    context.inherited_assembly = None
             elif name == EDIT_MODEL:
                 res = context.pipeline.run(
                     args.get("change", ""),
@@ -1362,15 +1385,7 @@ class Agent:
             elif name == SET_PARAMETERS:
                 if not context.current_code:
                     raise ValueError("no current model to re-parametrize")
-                out = context.reparametrize(
-                    context.current_code,
-                    args.get("params", {}),
-                    export_dir=context.export_dir,
-                    # As for edit_model: an edit acts on the model that already
-                    # exists, so what it was built as counts as much as what this
-                    # turn asked for.
-                    assembly=context.assembly or context.inherited_assembly,
-                )
+                out = context.reparametrize(context.current_code, args.get("params", {}))
                 payload = _reparam_summary(out)
                 if out.get("ok"):
                     self._adopt(context, out.get("code"), out.get("parameters"))

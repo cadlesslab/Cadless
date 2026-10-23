@@ -570,10 +570,13 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             # onto the previous one, starting from the model the turn began on, so a
             # chat turn refines its predecessor instead of forking a new root.
             chain_parent = parent_version_id
+            # Whether the model a non-generating tool acts on was built as an
+            # assembly: the starting model's answer until the turn replaces it.
+            inherits_assembly = current_is_assembly
 
             def drive() -> None:
                 nonlocal produced_blocks, any_failure, last_good
-                nonlocal plan_total, plan_cursor, chain_parent
+                nonlocal plan_total, plan_cursor, chain_parent, inherits_assembly
                 for ev in agent.stream_turn(
                     user_text=body.message,
                     context=context,
@@ -608,12 +611,17 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 # spec because the kill-switch being off must
                                 # leave the memory alone rather than erase it.
                                 built_as_assembly=bool(body.assembly)
-                                or (ev.data.get("tool") != GENERATE_MODEL and current_is_assembly),
+                                or (ev.data.get("tool") != GENERATE_MODEL and inherits_assembly),
                             ),
                             loop,
                         ).result()
                         if version_id is not None:
                             chain_parent = version_id  # next tool chains onto this one
+                            # A fresh model replaces the one the turn started on, so
+                            # a later edit in this turn derives from it, not from
+                            # what the starting model was built as.
+                            if ev.data.get("tool") == GENERATE_MODEL:
+                                inherits_assembly = False
                         # Blueprint rollback policy (D3): on a failed step
                         # WITHIN a planned (Blueprint) turn, auto-revert current to
                         # the last OK version straight away (reusing D1's last_ok

@@ -1,9 +1,8 @@
 """The assembly check at the API's edge: which spec a build is held to, and what
 its verdict shows a reader.
 
-Shared by every route that builds a version -- the chat and the parameter panel
--- so a model is held to the same rule and its findings read the same wherever
-it was changed.
+In one place so that a model is held to the same rule, and its findings read the
+same, whichever route changed it.
 """
 
 from __future__ import annotations

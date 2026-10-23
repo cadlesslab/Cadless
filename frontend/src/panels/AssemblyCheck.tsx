@@ -11,9 +11,9 @@ import type { AssemblyFindings } from "../api";
  * wrong" from "could not be checked". A heading with nothing under it is left
  * out, and each list is named by its heading.
  *
- * Whether the build was kept is said because both happen: a model built as an
- * assembly is refused when its parts fail, while any other is handed over with
- * the findings on it, and the reader is the one left to act on them. */
+ * Whether the build was kept is said because findings arrive on both, and they
+ * ask different things of a reader: about the model in front of them, or about
+ * one that was set aside. */
 export function AssemblyCheck({ failures, unchecked, kept }: AssemblyFindings & { kept: boolean }) {
   const id = useId();
   const sections = [

@@ -196,7 +196,10 @@ async def reparametrize_version(
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
     staging.mkdir(parents=True, exist_ok=True)
     try:
-        rb = await run_in_threadpool(rebuild, new_code, export_dir=str(staging), assembly=spec)
+        # Motion only: a guide is read in the chat, and this edit has no turn.
+        rb = await run_in_threadpool(
+            rebuild, new_code, export_dir=str(staging), assembly=spec, describe=False
+        )
         res = rb.result
         new_version = await store.add_version(
             version.project_id,

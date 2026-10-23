@@ -82,15 +82,16 @@ def _part_names(parts, count: int) -> list[str | None] | None:
 _UNASKED = assembly_spec()
 
 
-def judge_parts(
+def _judge_parts(
     res: ExecResult, assembly: AssemblySpec | None, attempt: int
 ) -> tuple[dict | None, AssemblyReport | None]:
     """The verdict on a build's parts, and the report it was read from.
 
     A build that asked for an assembly (``assembly`` given) is held to every check
     against its printer; any other build of several parts to the parts checks
-    alone (see :mod:`cadless.assembly_check`). ``(None, None)`` where there was
-    nothing to judge: one part, on a build that did not ask.
+    alone (see :mod:`cadless.assembly_check`). Where nothing was measured, a build
+    that asked gets a verdict saying so and no report, and any other gets
+    ``(None, None)``.
 
     The verdict is the dict :attr:`GenerationResult.assembly` documents.
     """
@@ -484,9 +485,9 @@ class Pipeline:
                 # not ask, the last attempt is handed over with the verdict on
                 # it: nobody asked for an assembly, and a model whose parts were
                 # found wanting is still the model that was asked for.
-                verdict, fit = judge_parts(res, assembly, n)
-                if verdict is not None:
-                    last_assembly = verdict
+                parts_verdict, fit = _judge_parts(res, assembly, n)
+                if parts_verdict is not None:
+                    last_assembly = parts_verdict
                 if fit is not None:
                     asked = assembly is not None
                     _emit_stage(on_progress, "assembly", "begin", n)
@@ -975,13 +976,23 @@ def _candidate_dir(export_dir: str | None, idx: int) -> str | None:
 
 
 def _write_guide(
-    on_progress, intent: str, code: str, verdict, export_dir, n: int, *, writer=None, names=None
+    on_progress,
+    intent: str,
+    code: str,
+    verdict,
+    export_dir,
+    n: int,
+    *,
+    writer=None,
+    names=None,
+    describe: bool = True,
 ):
     """How the accepted parts go together, or ``None`` where there is no assembly.
 
     The parts are called what their build named them. ``writer`` names the parts
     its build left unnamed with a model; without one they are numbered, and the
-    sentences are the engine's either way.
+    sentences are the engine's either way. ``describe=False`` stops after the
+    motion, returning ``None``.
 
     Never fatal, and for a sharper reason than the critique's: by this point the
     parts are built, measured and accepted, so a build that failed here would
@@ -1010,6 +1021,8 @@ def _write_guide(
         return None
 
     Pipeline._write_motion(export_dir, order, verdict.get("releases") or [])
+    if not describe:
+        return None
     try:
         _emit_stage(on_progress, "guide", "begin", n)
         from cadless.guide_writer import plain_guide  # noqa: PLC0415
@@ -1051,21 +1064,29 @@ class Rebuild:
 
 
 def rebuild(
-    code: str, *, export_dir: str | None = None, assembly: AssemblySpec | None = None
+    code: str,
+    *,
+    export_dir: str | None = None,
+    assembly: AssemblySpec | None = None,
+    describe: bool = True,
 ) -> Rebuild:
     """Run ``code`` once and judge its parts as :meth:`Pipeline.run` judges a build.
 
     For code that is not the model's to repair -- an edit to a model's numbers --
     so there is one attempt, and it is judged as the loop judges its last: a
     build that asked for an assembly (``assembly`` given) is refused when its
-    parts fail, and any other is handed over with its verdict on it. An accepted
-    build of several parts has its motion and guide written beside the exports,
-    with no model call: nothing that edits numbers should cost one.
+    parts fail or cannot be checked, and any other is handed over with its
+    verdict on it. An accepted build of several parts has its motion and the
+    guide's drawings written beside the exports and the guide returned, with no
+    model call: nothing that edits numbers should cost one.
+
+    ``describe=False`` writes the motion alone, for a caller with nowhere to show
+    a guide: its drawings are rendered on the CPU and would be made for nobody.
     """
     res = run_code(code, export_dir=export_dir, check_assembly=True)
     if not res.ok:
         return Rebuild(res, False, res.error, None, None)
-    verdict, report = judge_parts(res, assembly, 1)
+    verdict, report = _judge_parts(res, assembly, 1)
     signal = report.repair_signal() if report is not None else None
     if signal is not None and assembly is not None:
         # Swept rather than left: the export directory is shared by a turn's builds,
@@ -1073,7 +1094,7 @@ def rebuild(
         _write_guide(None, "", code, None, export_dir, 1)
         return Rebuild(res, False, "assembly: " + signal, verdict, None)
     names = _part_names(res.parts, len(res.assembly.part_bboxes)) if res.assembly else None
-    guide = _write_guide(None, "", code, verdict, export_dir, 1, names=names)
+    guide = _write_guide(None, "", code, verdict, export_dir, 1, names=names, describe=describe)
     return Rebuild(res, True, None, verdict, guide)
 
 

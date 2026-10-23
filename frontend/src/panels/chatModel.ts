@@ -61,8 +61,8 @@ export type ChatMessage =
   // The in-flight `POST /chat` turn, rendered incrementally from its SSE events.
   | { kind: "live-chat"; id: "live-chat"; turn: LiveTurn };
 
-/** The assembly check's findings on one build, and whether that build was kept:
- * a build nobody asked to be an assembly is handed over with them on it. */
+/** The assembly check's findings on one build, and whether that build was kept,
+ * since findings arrive on builds of both kinds. */
 export type BuildFindings = AssemblyFindings & { kept: boolean };
 
 /** One round of the render critique: the renders the reviewer was shown, and the
@@ -244,16 +244,19 @@ export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
         error: m.error,
       });
     }
-    // After the card, which shows the build that was kept: each box is about a
-    // build that was not, in the order the turn made them.
+    // After the card, which shows the build that was kept: each box is about one
+    // of the turn's builds, in the order it made them, and says whether it was
+    // the one kept.
     m.blocks
       .filter((b) => b.kind === "tool_result")
       .forEach((b, index) => {
         const found = storedFindings(b);
         if (found) out.push({ kind: "assembly-findings", id: `${id}-a${index}`, ...found });
       });
-    // After the card, because it describes what the card produced.
-    const guideBlock = m.blocks.find((b) => b.kind === "guide");
+    // After the card, because it describes what the card produced: the last
+    // guide, since the card shows the turn's last build and its drawings are
+    // read off that build's version.
+    const guideBlock = m.blocks.filter((b) => b.kind === "guide").at(-1);
     if (guideBlock) {
       const guide = guideFromInput(guideBlock.input);
       if (guide.steps.length)

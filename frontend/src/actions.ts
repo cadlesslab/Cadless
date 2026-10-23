@@ -148,6 +148,10 @@ export async function reparametrize(
   if (pid != null) {
     await refreshProjects(store);
     await loadVersions(store, pid);
+    // An edit that was not kept leaves the version it was made from on screen,
+    // which need not be the project's current one -- an older version opened
+    // from the history can be edited too.
+    if (!res.ok) store.set({ activeVersionId: versionId });
   }
   return {
     versionId: res.ok ? res.version.id : versionId,
