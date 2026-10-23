@@ -321,6 +321,39 @@ def test_render_item_thumbnail_reads_the_final_step_mesh(tmp_path):
     assert (tmp_path / "artifacts" / "thumbnail.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def test_render_item_thumbnail_draws_the_first_part_of_a_step_built_as_several(tmp_path):
+    """A listing gets one picture, and it is the first part's.
+
+    The later parts are not meshes, so drawing either of them fails; and the
+    keys are listed out of part order, so the first one listed is not the first
+    part.
+    """
+    (tmp_path / "artifacts" / "01").mkdir(parents=True)
+    _write_binary_stl(tmp_path / "artifacts" / "01" / "base.stl")
+    for name in ("arm.stl", "pin.stl"):
+        (tmp_path / "artifacts" / "01" / name).write_text("not a mesh")
+    manifest = _item_with(
+        tmp_path,
+        {
+            "stl:2": "artifacts/01/pin.stl",
+            "stl": "artifacts/01/base.stl",
+            "stl:1": "artifacts/01/arm.stl",
+        },
+    )
+
+    assert thumb.render_item_thumbnail(tmp_path, manifest) == "artifacts/thumbnail.png"
+    assert (tmp_path / "artifacts" / "thumbnail.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_render_item_thumbnail_reads_a_step_that_names_no_stl(tmp_path):
+    """A kind the final step does not name at all is passed over, not looked up."""
+    (tmp_path / "artifacts" / "01").mkdir(parents=True)
+    _write_obj(tmp_path / "artifacts" / "01" / "model.obj")
+    manifest = _item_with(tmp_path, {"obj": "artifacts/01/model.obj"})
+    assert thumb.render_item_thumbnail(tmp_path, manifest) == "artifacts/thumbnail.png"
+    assert (tmp_path / "artifacts" / "thumbnail.png").exists()
+
+
 def test_render_item_thumbnail_falls_through_to_the_next_mesh_kind(tmp_path):
     """An stl the manifest names but the item lacks is skipped in favour of the obj."""
     (tmp_path / "artifacts" / "01").mkdir(parents=True)
