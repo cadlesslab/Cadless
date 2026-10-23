@@ -253,9 +253,10 @@ export function messagesFromBlocks(messages: MessageOut[]): ChatMessage[] {
         const found = storedFindings(b);
         if (found) out.push({ kind: "assembly-findings", id: `${id}-a${index}`, ...found });
       });
-    // After the card, because it describes what the card produced: the last
-    // guide, since the card shows the turn's last build and its drawings are
-    // read off that build's version.
+    // After the card, because it describes what the card produced. The turn's
+    // last guide, since the card shows its last build and the drawings are read
+    // off that build's version: where that build wrote none, an earlier one's
+    // still shows, as when only the first was read.
     const guideBlock = m.blocks.filter((b) => b.kind === "guide").at(-1);
     if (guideBlock) {
       const guide = guideFromInput(guideBlock.input);

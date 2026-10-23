@@ -617,11 +617,12 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                         ).result()
                         if version_id is not None:
                             chain_parent = version_id  # next tool chains onto this one
-                            # A fresh model replaces the one the turn started on, so
-                            # a later edit in this turn derives from it, not from
-                            # what the starting model was built as.
-                            if ev.data.get("tool") == GENERATE_MODEL:
-                                inherits_assembly = False
+                        # A fresh model replaces the one the turn started on, so a
+                        # later edit in this turn derives from it, not from what
+                        # the starting model was built as -- once its code is the
+                        # one the agent edits, which holds whether or not it built.
+                        if ev.data.get("tool") == GENERATE_MODEL and ev.data.get("code"):
+                            inherits_assembly = False
                         # Blueprint rollback policy (D3): on a failed step
                         # WITHIN a planned (Blueprint) turn, auto-revert current to
                         # the last OK version straight away (reusing D1's last_ok

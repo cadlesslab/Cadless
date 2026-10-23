@@ -1341,10 +1341,12 @@ class Agent:
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
-                if payload.get("ok"):
+                if payload.get("code"):
                     # A fresh model replaces the one the turn started on, so what
                     # that one was built as no longer describes the model a later
                     # edit in this turn acts on: it is an assembly only if asked.
+                    # Keyed on the code, as adopting it is, built or not: a later
+                    # edit works on whatever code was adopted.
                     context.inherited_assembly = None
             elif name == EDIT_MODEL:
                 res = context.pipeline.run(
