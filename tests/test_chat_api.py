@@ -1530,8 +1530,33 @@ def test_an_edit_keeps_the_assembly_the_version_was_built_with(client, store, mo
     assert edited.clearance_mm == 0.35
 
 
+class _SecondFreshBuildFails(StubPipeline):
+    """The second fresh build fails and leaves its code behind, as the repair loop
+    does when its budget runs out -- code the agent then edits."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fresh = 0
+
+    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, **kwargs):
+        if prior_code is None:
+            self.fresh += 1
+            if self.fresh == 2:
+                self.assemblies.append(kwargs.get("assembly"))
+                return GenerationResult(
+                    ok=False,
+                    intent=intent,
+                    code='params = {"size": 10}\nresult = None\n',
+                    error="execute: boom",
+                )
+        return super().run(intent, export_dir, on_progress, prior_code, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "pipeline", [StubPipeline, _SecondFreshBuildFails], ids=["it built", "it failed to build"]
+)
 def test_an_edit_after_a_fresh_build_in_the_same_turn_follows_the_fresh_model(
-    client, store, monkeypatch
+    client, store, monkeypatch, pipeline
 ):
     """A turn that starts on an assembly, builds a new model and then edits it.
 
@@ -1547,15 +1572,15 @@ def test_an_edit_after_a_fresh_build_in_the_same_turn_follows_the_fresh_model(
         _tool_turn(tool_use_id="tu-3", name="edit_model", tool_input={"change": "taller"}),
         _text_turn("Edited."),
     ]
-    pipeline = StubPipeline()
-    _install(monkeypatch, ScriptedProvider(turns), pipeline=pipeline)
+    stub = pipeline()
+    _install(monkeypatch, ScriptedProvider(turns), pipeline=stub)
     pid = client.post("/projects", json={"name": "P"}).json()["id"]
 
     _stream_assembly(client, pid, assembly=True)
     _stream_assembly(client, pid, assembly=False, text="forget that, a simple cube, then taller")
 
-    assert pipeline.assemblies[0] is not None
-    assert pipeline.assemblies[1:] == [None, None]
+    assert stub.assemblies[0] is not None
+    assert stub.assemblies[1:] == [None, None]
     current = client.get(f"/projects/{pid}").json()["current_version_id"]
     assert asyncio.run(store.get_version(current)).built_as_assembly is False
 

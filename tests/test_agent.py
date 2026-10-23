@@ -1324,7 +1324,13 @@ def test_a_parameter_edit_s_verdict_and_guide_reach_the_chat_and_the_model():
     )
 
 
-def test_a_parameter_edit_after_a_fresh_build_is_not_judged_as_the_model_it_replaced(monkeypatch):
+@pytest.mark.parametrize(
+    "pipeline", [SpyPipeline, FailingPipeline], ids=["it built", "it failed to build"]
+)
+def test_a_parameter_edit_after_a_fresh_build_is_not_judged_as_the_model_it_replaced(
+    monkeypatch, pipeline
+):
+    # Built or not, the fresh attempt's code is the code the edit then works on.
     calls = _record_default_edits(monkeypatch)
     provider = ScriptedProvider(
         [
@@ -1335,7 +1341,7 @@ def test_a_parameter_edit_after_a_fresh_build_is_not_judged_as_the_model_it_repl
             _text_turn("done"),
         ]
     )
-    ctx = _context()
+    ctx = _context(pipeline=pipeline())
     # The turn started on a model built as an assembly...
     ctx.inherited_assembly = _spec()
 

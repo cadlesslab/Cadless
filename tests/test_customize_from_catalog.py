@@ -249,7 +249,6 @@ def test_clone_parameters_are_editable_and_original_stays_read_only(
 ):
     """Regression: the clone is absent from the ledger, so reparametrize works —
     while the same call against the catalog original keeps being refused."""
-    # The route rebuilds through the pipeline's rebuild, which calls run_code there.
     monkeypatch.setattr("cadless.pipeline.run_code", _fake_run_code)
     pid = _load_catalog_item(store, tmp_path)
     clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
@@ -259,6 +258,8 @@ def test_clone_parameters_are_editable_and_original_stays_read_only(
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True
     assert r.json()["version"]["parameters"]["bore"] == 10
+    # The stand-in's volume, so a rebuild that stopped reaching it shows here.
+    assert r.json()["version"]["volume"] == 1.0
 
     # The catalog original still refuses the same edit, and its params are intact.
     orig_vid = client.get(f"/projects/{pid}").json()["current_version_id"]
