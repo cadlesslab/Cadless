@@ -1448,6 +1448,53 @@ def test_assembly_opt_in_but_switch_off_sends_nothing(client, store, monkeypatch
     assert pipeline.assemblies == [None]
 
 
+def test_a_build_asked_for_as_an_assembly_while_the_switch_is_off_is_not_one(
+    client, store, monkeypatch
+):
+    """Built without the spec it is one solid. Remembered as an assembly, the
+    first edit after the switch came on would be held to a printer bed and asked
+    to split a model nobody split."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", False)
+    pipeline = _build_then_edit(monkeypatch)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    _stream_assembly(client, pid, assembly=False, text="make it taller")
+
+    assert pipeline.assemblies == [None, None]
+
+
+def test_forge_losers_asked_for_as_an_assembly_while_the_switch_is_off_are_not_one(
+    client, store, monkeypatch
+):
+    """The race's losers are kept as candidates to switch to, and follow the
+    winner's rule: an assembly only when the turn was built as one."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", False)
+    monkeypatch.setattr(chat.settings, "forge_enabled", True)
+    monkeypatch.setattr(chat.settings, "forge_budget", 6)
+    monkeypatch.setattr(chat.settings, "forge_candidate_cost", 2)
+    monkeypatch.setattr(chat.settings, "forge_min_n", 2)
+    monkeypatch.setattr(chat.settings, "forge_max_n", 5)
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("Done."),
+        ]
+    )
+    _install(monkeypatch, provider, pipeline=ForgePipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    body = {"message": "make a cube", "forge": True, "assembly": True}
+    with client.stream("POST", f"/projects/{pid}/chat", json=body) as r:
+        events = _events("".join(r.iter_text()))
+    winner_id = next(e for e in events if e["event"] == "tool_result")["version_id"]
+
+    candidates = asyncio.run(store.list_candidate_versions(winner_id))
+    assert candidates
+    assert [c.built_as_assembly for c in candidates] == [False] * len(candidates)
+
+
 def test_assembly_switch_on_but_opt_out_sends_nothing(client, store, monkeypatch):
     """The switch alone is necessary and not sufficient — the turn must opt in."""
     monkeypatch.setattr(chat.settings, "assembly_enabled", True)

@@ -20,6 +20,14 @@ vi.mock("./useApp", () => ({
   useApp: () => ({ bootstrap: vi.fn(), openShared: vi.fn() }),
   useProjectActions: () => ({ selectProject: vi.fn(), refreshProjects: vi.fn() }),
 }));
+// The chat panel asks which of its options the server acts on when it mounts;
+// answered here as a build whose settings cannot be configured, so it reads no
+// further and offers neither.
+vi.mock("./api", async (orig) => ({
+  ...(await orig<typeof import("./api")>()),
+  fetchPrintCapability: vi.fn(async () => ({ can_configure: false })),
+  getSettings: vi.fn(),
+}));
 
 /** A matchMedia that answers for the width query only, and can be made to
  *  change the way a browser does. Keyed on the query rather than answering

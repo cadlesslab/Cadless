@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatEvent, MessageOut, Version } from "../api";
@@ -24,12 +24,30 @@ vi.mock("../api", async (orig) => ({
   listProjects: vi.fn(async () => []),
   listVersions: vi.fn(async () => []),
   getMessages: vi.fn(async () => []),
+  fetchPrintCapability: vi.fn(async () => ({ can_configure: true })),
+  getSettings: vi.fn(async () => settingsWith({})),
   cloneProject: vi.fn(async (_pid: number, name?: string) => ({
     id: 999, name: name ?? "copy", created_at: "", updated_at: "", current_version_id: null,
   })),
 }));
 
 const project = { id: 1, name: "P", created_at: "", updated_at: "", current_version_id: null };
+
+// Only the switches the panel reads; the rest of the status is the settings
+// panels' business.
+function settingsWith(switches: Partial<api.SettingsStatus>): api.SettingsStatus {
+  return switches as api.SettingsStatus;
+}
+
+// Waits for the panel's capability and settings reads to land, so an option
+// that is missing is the panel's answer rather than a read still in flight.
+async function readsSettled() {
+  await waitFor(() => expect(api.fetchPrintCapability).toHaveBeenCalled());
+  await act(async () => {
+    await Promise.allSettled(vi.mocked(api.fetchPrintCapability).mock.results.map((r) => r.value));
+    await Promise.allSettled(vi.mocked(api.getSettings).mock.results.map((r) => r.value));
+  });
+}
 
 function okVersion(): Version {
   return {
@@ -202,22 +220,59 @@ describe("ChatPanel", () => {
     expect(api.streamChat).toHaveBeenCalledWith(1, expect.stringContaining("plate"), expect.any(Function), expect.any(Object), false, [], false);
   });
 
-  it("opts the turn into forge mode when the Forge toggle is on", () => {
+  it("opts the turn into forge mode when the Forge toggle is on", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ forge_enabled: true }));
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
-    fireEvent.click(screen.getByRole("button", { name: /Forge/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Forge/i }));
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(api.streamChat).toHaveBeenCalledWith(1, "a cube", expect.any(Function), expect.any(Object), true, [], false);
   });
 
-  it("opts the turn into assembly output when the Assembly toggle is on", () => {
+  it("opts the turn into assembly output when the Assembly toggle is on", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
-    fireEvent.click(screen.getByRole("button", { name: /Assembly/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Assembly/i }));
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     // The two per-turn opt-ins are independent: turning this one on must not
     // drag forge along with it, which a copy-pasted handler would do silently.
     expect(api.streamChat).toHaveBeenCalledWith(1, "a cube", expect.any(Function), expect.any(Object), false, [], true);
+  });
+
+  it.each([
+    ["Assembly", "assembly_enabled", "Forge"],
+    ["Forge", "forge_enabled", "Assembly"],
+  ] as const)("offers the %s option while the server's switch for it is on", async (name, flag, other) => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ [flag]: true }));
+    renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
+    expect(await screen.findByRole("button", { name: new RegExp(name) })).toBeInTheDocument();
+    // Its own switch, not either one: the other option's switch is off.
+    expect(screen.queryByRole("button", { name: new RegExp(other) })).toBeNull();
+  });
+
+  it.each([
+    ["its switch is off", () => Promise.resolve(settingsWith({ assembly_enabled: false, forge_enabled: false }))],
+    ["the settings name no switch for it", () => Promise.resolve(settingsWith({}))],
+    ["the settings read is refused", () => Promise.reject(new Error("401"))],
+  ])("offers neither Assembly nor Forge when %s", async (_, answer) => {
+    vi.mocked(api.getSettings).mockImplementationOnce(answer);
+    renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
+    await readsSettled();
+    expect(api.getSettings).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Assembly/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Forge/i })).toBeNull();
+  });
+
+  it("asks for no settings where they cannot be configured", async () => {
+    // Where settings cannot be configured a front door may refuse the read, so
+    // the panel spends no request on it and offers neither option.
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce({ can_configure: false } as api.PrintCapability);
+    renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
+    await readsSettled();
+    expect(api.getSettings).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Assembly/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Forge/i })).toBeNull();
   });
 
   it("renders the block-based transcript with markdown and a result card", () => {

@@ -668,6 +668,10 @@ export interface TuningKnobs {
   bedrock_model_slug_source?: string;
   bedrock_fast_model_slug?: string;
   bedrock_fast_model_slug_source?: string;
+  /** The server's switches for a chat turn's Forge and Assembly options: with
+   * one off, the server ignores that option. */
+  forge_enabled?: boolean;
+  assembly_enabled?: boolean;
 }
 
 export interface SettingsStatus extends TuningKnobs {
