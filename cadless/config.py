@@ -268,6 +268,12 @@ class Settings(BaseSettings):
     # the checks an assembly turn is held to; every build of several parts is
     # measured whatever it says.
     assembly_enabled: bool = False
+    # The codegen output cap for a call on an assembly turn, in place of
+    # bedrock_max_tokens. The brief asks for interlocking joints and clearances
+    # on every seam, and the script that answers it does not fit the plain cap.
+    # Raised here rather than for every call, because a plain part's script fits
+    # the smaller cap and a cap is what stops a runaway reply.
+    assembly_max_tokens: int = 6000
 
     def forge_scaled_n(self) -> int:
         """Budget-scaled candidate count for an active forge turn (pure helper).
@@ -292,7 +298,8 @@ class Settings(BaseSettings):
     agent_token_budget: int = 200_000  # cumulative tokens/turn before forced stop
     agent_time_budget_secs: float = 120.0  # wall-clock/turn before forced stop
     # Per-CALL output cap for the orchestrator. Distinct from the codegen
-    # bedrock_max_tokens (2000, fine for short build123d scripts): an orchestrator
+    # bedrock_max_tokens (2000, fine for short build123d scripts; an assembly
+    # turn takes assembly_max_tokens instead): an orchestrator
     # turn streams extended thinking PLUS text PLUS a tool call, and 2000 truncates
     # that — a cut-off tool call arrives with empty input and stop_reason=max_tokens,
     # so the action silently never runs. Give the agent ample headroom.

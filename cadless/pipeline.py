@@ -55,8 +55,8 @@ from cadless.exporters import exported_parts
 from cadless.llm.types import ContentBlock
 from cadless.params import extract_params
 from cadless.printer_profile import AssemblySpec, assembly_spec
-from cadless.prompts import CodeGenerator
-from cadless.validation import validate_code
+from cadless.prompts import CodeGenerator, CutOffScript
+from cadless.validation import ValidationResult, validate_code
 from cadless.worker import ExecResult, run_code
 
 logger = logging.getLogger(__name__)
@@ -361,7 +361,7 @@ class Pipeline:
 
         _emit_stage(on_progress, mode, "begin", 1)
         if prior_code:
-            # Refine is out of streaming scope: keep the one-shot call.
+            # Refine's deltas are not shown live, so it takes no token sink.
             code = self._gen.refine(
                 intent, prior_code, images=images, on_reading=on_reading, assembly=assembly
             )
@@ -370,7 +370,8 @@ class Pipeline:
             # the chat layer can show the code being written live. The
             # token sink is wired ONLY when a progress listener is present, so the
             # forge fan-out (candidates run without on_progress) and offline callers
-            # keep the exact one-shot call shape (no ``on_token`` kwarg at all).
+            # pass no ``on_token`` kwarg at all, and a generator that predates it is
+            # called as it always was.
             on_token = _codegen_on_token(on_progress)
             extra = {"on_token": on_token} if on_token is not None else {}
             code = self._gen.generate(
@@ -397,7 +398,13 @@ class Pipeline:
             last_critique = None
             last_assembly = None
             _emit_stage(on_progress, "validate", "begin", n)
-            verdict = validate_code(code)
+            # A script the provider cut off is judged on that, not on the
+            # syntax error the cut left: a repair asked to fix the syntax
+            # writes the same script again, and is cut again.
+            if isinstance(code, CutOffScript):
+                verdict = ValidationResult(ok=False, reasons=[code.reason])
+            else:
+                verdict = validate_code(code)
             if not verdict.ok:
                 last_error = "validation: " + "; ".join(verdict.reasons)
                 _emit_stage(on_progress, "validate", "error", n, last_error)
@@ -1178,8 +1185,8 @@ def _emit(on_progress, event: dict) -> None:
 def _codegen_on_token(on_progress):
     """A token sink that re-emits each codegen delta as a ``codegen`` progress event.
 
-    Returns ``None`` when there is no progress listener, so the generator keeps its
-    one-shot ``complete()`` path (forge candidates, offline callers) —.
+    Returns ``None`` when there is no progress listener, so the generator's deltas
+    go nowhere (forge candidates, offline callers).
     """
     if on_progress is None:
         return None

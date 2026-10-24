@@ -76,8 +76,8 @@ Providers get the same treatment rather than a new one.
   than something a user picks in the UI. Reconciling the two lists is left
   open on purpose; it is a question about what a hosted build shows its users,
   not about this seam.
-- **Nothing outside a provider can count generation.** `complete()` and
-  `embed()` are called on the provider object from seven places inside the
+- **Nothing outside a provider can count generation.** `stream_turn()`,
+  `complete()` and `embed()` are called on the provider object from inside the
   engine — `cadless/prompts.py`, `cadless/judge.py`, `cadless/compaction.py`,
   `cadless/distill.py` and `cadless/rag.py` — and none of those calls crosses
   an HTTP boundary, so anything sitting in front of the engine's routes sees

@@ -13,8 +13,9 @@ import pytest
 from cadless.agent import Agent, ToolContext
 from cadless.assembly_check import AssemblyMeasurements
 from cadless.config import Settings
+from cadless.llm.providers import StreamChunk
 from cadless.llm.providers.fake import FakeChatProvider
-from cadless.llm.types import ContentBlock
+from cadless.llm.types import ContentBlock, StreamEvent
 from cadless.pipeline import STAGE_PHASES, Pipeline, critique_subject
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import CodeGenerator, _assembly_edit_rules, _assembly_rules
@@ -64,8 +65,8 @@ TWO_PART = "from build123d import *\nresult = Compound([Box(10,10,10), Box(10,10
 
 
 class _RecordingProvider(FakeChatProvider):
-    """Records the user message of every completion, so a test can read the
-    prompt a round actually sent.
+    """Records the user message of every turn, so a test can read the prompt a
+    round actually sent.
 
     The doubles above replace the generator, which is what makes them cheap --
     and also what makes them blind here: a fake generator composes no prompt, so
@@ -77,13 +78,12 @@ class _RecordingProvider(FakeChatProvider):
     def __init__(self):
         super().__init__()
         # Not ``calls``: the base class keeps its own list of dicts under that
-        # name, and shadowing it would make a later test that passes images fail
-        # with a type error rather than an assertion anyone can read.
+        # name, and a reader who knows the base would take this for that list.
         self.user_messages: list[str] = []
 
-    def complete(self, *, model, system, user, temperature: float | None = None):
-        self.user_messages.append(user)
-        return NEVER_VALIDATES
+    def stream_turn(self, *, model, system, messages, tools, params):
+        self.user_messages.append("".join(b.text or "" for b in messages[-1].content if b.text))
+        yield StreamChunk(StreamEvent.TEXT_DELTA, {"text": NEVER_VALIDATES})
 
 
 def _sound() -> AssemblyMeasurements:

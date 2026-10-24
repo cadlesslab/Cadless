@@ -248,17 +248,19 @@ def test_grounding_reaches_provider_prompt():
     """end-to-end through the real CodeGenerator -> provider prompt.
 
     Asserts the grounding text appears in the user message the provider sees, via
-    a fake provider spy on complete().
+    a fake provider spy on stream_turn().
     """
+    from cadless.llm.providers import StreamChunk
+    from cadless.llm.types import StreamEvent
     from cadless.prompts import CodeGenerator
 
     class SpyProvider:
         def __init__(self):
             self.last_user = None
 
-        def complete(self, *, model, system, user, temperature=None):
-            self.last_user = user
-            return f"```python\n{BANNED}```"
+        def stream_turn(self, *, model, system, messages, tools, params):
+            self.last_user = "".join(b.text or "" for b in messages[-1].content if b.text)
+            yield StreamChunk(StreamEvent.TEXT_DELTA, {"text": f"```python\n{BANNED}```"})
 
     spy = SpyProvider()
     gen = CodeGenerator(provider=spy, model="fake-model")
@@ -266,6 +268,22 @@ def test_grounding_reaches_provider_prompt():
         "a bracket", grounding="SOME GROUNDING"
     )
     assert "SOME GROUNDING" in spy.last_user
+
+
+def test_a_cut_off_script_fails_validation_as_cut_off_and_the_repair_is_told():
+    # The syntax error a cut script produces is a symptom; the repair is asked
+    # to fix the cause, which is the length.
+    from cadless.prompts import CutOffScript
+
+    cut = CutOffScript("from build123d import *\nresult = Box(", limit=2000)
+    gen = FakeGen([cut, BANNED])
+    result = Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run("a bookshelf")
+
+    first = result.attempts[0]
+    assert first.stage == "validate"
+    assert "cut off" in first.error and "2000" in first.error
+    assert "syntax error" not in first.error
+    assert gen.last_repair_error == first.error
 
 
 def test_run_without_grounding_is_unchanged():

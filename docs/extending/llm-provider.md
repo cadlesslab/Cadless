@@ -79,7 +79,11 @@ Tool arguments arrive as JSON fragments. Accumulate them and finish with
 `parse_partial_json` from `cadless.llm.providers`: on a turn that was cut off
 mid-call it returns `{"__partial_json__": <raw>}` instead of raising, so the loop
 can still inspect what was attempted. Normalise the vendor's stop reason onto
-`StopReason` (`end_turn`, `tool_use`, `max_tokens`, `stop_sequence`).
+`StopReason` (`end_turn`, `tool_use`, `max_tokens`, `stop_sequence`). Code
+generation reads `TURN_DELTA`'s `stop_reason` on every call: a reply your
+vendor cut at its output limit has to arrive as `max_tokens`, or the truncated
+script goes back into the repair loop as a syntax error. Those calls set
+`TurnParams.max_tokens` on an assembly turn, so honour it.
 
 Read `_translate_stream` in any of the three network-backed adapters for a
 worked example. (`fake` has no such function — it replays a script.)

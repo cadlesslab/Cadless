@@ -209,6 +209,15 @@ def test_operator_only_field_is_refused_not_ignored(client, field):
     assert field in r.text
 
 
+def test_every_tuning_knob_is_reachable_through_the_request_model():
+    # A knob the settings layer knows but the request model does not answers 422
+    # before the layer sees it, which is the refusal reserved for operator-only
+    # fields; the gate's own 400 never gets a say.
+    from backend.routers.settings import SettingsUpdate
+
+    assert set(user_settings._TUNING_FIELDS) <= set(SettingsUpdate.model_fields)
+
+
 def test_cost_multiplying_knob_returns_400_without_the_gate(client):
     r = client.post("/settings", json={"forge_enabled": True})
     assert r.status_code == 400

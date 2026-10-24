@@ -1,9 +1,9 @@
 """Prompt assembly + code extraction.
 
 Turns a natural-language intent into an LLM request (system prompt + few-shot
-+ the request) routed through the provider seam's single-shot ``complete()``
-, and extracts the build123d code from the model's reply. Also builds
-the *repair* message used by the pipeline's repair loop.
++ the request) routed through the provider seam's ``stream_turn``, and extracts
+the build123d code from the model's reply. Also builds the *repair* message
+used by the pipeline's repair loop.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from cadless.llm.registry import build_provider
 from cadless.llm.types import (
     ContentBlock,
     Message,
+    StopReason,
     StreamEvent,
     TurnParams,
 )
@@ -32,18 +33,64 @@ if TYPE_CHECKING:
     from cadless.worker import RepairContext
 
 _FENCE = re.compile(r"```(?:python)?\s*\n?(.*?)```", re.DOTALL)
+# An opening fence on a line of its own: what a reply cut off mid-script leaves
+# behind. Anchored to the line start so a fence inside a script's own text is
+# not taken for one.
+_OPEN_FENCE = re.compile(r"(?m)^```(?:python)?[ \t]*\n")
 
 
 def extract_code(text: str) -> str:
     """Pull the Python out of a model reply.
 
-    Prefers the first fenced ```python block; falls back to the whole reply with
-    a leading 'Response:' label stripped.
+    Prefers the first fenced ```python block. Without a closing fence, takes
+    everything after the opening one -- a reply the provider cut off still opened
+    with a fence, and keeping it made the cut read as a syntax error on line 1.
+    Otherwise falls back to the whole reply with a leading 'Response:' label
+    stripped.
     """
     match = _FENCE.search(text)
-    code = match.group(1) if match else text
+    if match:
+        code = match.group(1)
+    else:
+        opened = _OPEN_FENCE.search(text)
+        code = text[opened.end() :] if opened else text
     code = re.sub(r"^\s*Response:\s*", "", code)
     return code.strip() + "\n"
+
+
+class CutOffScript(str):
+    """A script the provider stopped writing at its output-token limit.
+
+    A ``str`` so it flows through every path that carries code -- the attempt
+    record, the repair prompt, the transcript -- without a signature change, and
+    whatever judges a script before running it can ask what it is. A cut script
+    usually fails to parse, but a syntax error is the symptom, and asking the
+    model to fix the syntax asks it to write the same script again.
+
+    ``limit`` is the cap this call asked for, or ``None`` where it left the cap
+    to the provider's default, which this module cannot see.
+    """
+
+    limit: int | None
+
+    def __new__(cls, code: str, *, limit: int | None) -> CutOffScript:
+        self = super().__new__(cls, code)
+        self.limit = limit
+        return self
+
+    def __getnewargs_ex__(self) -> tuple[tuple[str], dict[str, int | None]]:
+        # ``str`` hands copy and pickle only the text; ``limit`` has to travel too.
+        return (str(self),), {"limit": self.limit}
+
+    @property
+    def reason(self) -> str:
+        """Why the script cannot be run, worded for the repair prompt."""
+        where = f"the {self.limit}-token output limit" if self.limit else "its output-token limit"
+        return (
+            f"the reply was cut off at {where} before the script ended; write a "
+            "shorter script, with fewer helper functions and comments and no detail "
+            "the request does not need"
+        )
 
 
 #: Asked for only on a turn that carries a picture, so a text-only codegen prompt
@@ -378,10 +425,13 @@ class CodeGenerator:
     """Generates build123d code from intent (and repairs it) via the LLM seam.
 
     Routes every call through a :class:`~cadless.llm.provider.ChatProvider`'s
-    single-shot ``complete()`` — the one wire-format layer shared with the
-    conversational agent. ``provider`` defaults to the configured provider
-    (``CADLESS_LLM_PROVIDER``); ``model`` is a slug (defaults to the codegen model
-    ``settings.bedrock_model_slug``) that the adapter resolves to a runtime ID.
+    ``stream_turn`` -- the wire-format layer the conversational agent uses --
+    rather than the single-shot ``complete()``, because only the stream says why
+    the reply stopped: a script cut off at the output-token limit comes back as a
+    :class:`CutOffScript` instead of as something to validate. ``provider``
+    defaults to the configured provider (``CADLESS_LLM_PROVIDER``); ``model`` is a
+    slug (defaults to the codegen model ``settings.bedrock_model_slug``) that the
+    adapter resolves to a runtime ID.
     """
 
     def __init__(self, provider: ChatProvider | None = None, model: str | None = None):
@@ -408,14 +458,13 @@ class CodeGenerator:
         the best-of-N fan-out raises it for candidate diversity. ``None`` (the
         default) keeps the configured single-run temperature unchanged.
 
-        ``on_token`` makes the call stream: each text delta is passed to
-        it as the model writes the code, so the chat layer can show the codegen
-        live. ``None`` (the default) keeps the one-shot ``complete()`` path byte-
-        for-byte — used by refine/repair and the non-chat callers (eval, distill).
+        ``on_token`` hears each text delta as the model writes the code, so the
+        chat layer can show the codegen live. ``None`` (the default) sends the
+        same request and only drops the deltas -- refine, repair and the non-chat
+        callers (eval, distill) run this way.
 
-        ``images`` are the turn's reference pictures. They force the message path
-        whatever ``on_token`` is, because ``complete()`` takes a bare string; an
-        empty sequence (the default) leaves the routing above exactly as it was.
+        ``images`` are the turn's reference pictures, placed before the words; an
+        empty sequence (the default) sends the message the builders produced.
 
         ``assembly`` is the printer this turn is building for, present only when
         the turn asked for a part-wise model. ``None`` (the default) is what every
@@ -426,35 +475,31 @@ class CodeGenerator:
             _with_reference_instruction(build_user_message(intent, grounding), images),
             assembly,
         )
-        if on_token is None and not images:
-            text = self._provider.complete(
-                model=self._model,
-                system=SYSTEM_PROMPT,
-                user=user,
-                temperature=temperature,
-            )
-        else:
-            text = self._stream_complete(user, temperature, on_token, images)
+        text, cut_off, limit = self._complete(user, temperature, on_token, images, assembly)
         _emit_reading(text, images, on_reading)
-        return extract_code(text)
+        return _script(text, cut_off, limit)
 
-    def _stream_complete(
+    def _complete(
         self,
         user: str,
         temperature: float | None,
         on_token: Callable[[str], None] | None,
         images: Sequence[ContentBlock] = (),
-    ) -> str:
-        """Mirror ``complete()`` over the message path, optionally streaming.
+        assembly: AssemblySpec | None = None,
+    ) -> tuple[str, bool, int | None]:
+        """One codegen turn over the message path.
 
-        This is the only shape on the seam that can carry anything but a string,
-        so it is where an image has to go. ``on_token`` is optional here (unlike
-        in ``generate``): a call routed through this path only because it carries
-        a picture still has no listener for the deltas.
+        Returns the reply's text, whether the provider stopped it at its output
+        limit, and the cap this call asked for (``None`` where it left the cap to
+        the provider). The call streams whether or not ``on_token`` listens: the
+        stop reason arrives only on the stream.
 
         The pictures go **before** the words. ``user`` ends on ``Response:``, the
         model's cue to start writing, so anything appended after it lands between
         the cue and the answer.
+
+        A call on an assembly turn asks for ``assembly_max_tokens``; any other
+        leaves the cap to the provider's default.
         """
         if images and not self._provider.capabilities(self._model).supports_images:
             # The backstop the request boundary makes unnecessary — for the callers
@@ -470,13 +515,15 @@ class CodeGenerator:
             )
 
         parts: list[str] = []
+        cut_off = False
+        max_tokens = settings.assembly_max_tokens if assembly is not None else None
         content = [*images, ContentBlock.of_text(user)]
         for chunk in self._provider.stream_turn(
             model=self._model,
             system=SYSTEM_PROMPT,
             messages=[Message(role="user", content=content)],
             tools=[],
-            params=TurnParams(temperature=temperature),
+            params=TurnParams(temperature=temperature, max_tokens=max_tokens),
         ):
             if chunk.event == StreamEvent.TEXT_DELTA:
                 token = chunk.payload.get("text", "")
@@ -484,7 +531,10 @@ class CodeGenerator:
                     parts.append(token)
                     if on_token is not None:
                         on_token(token)
-        return "".join(parts)
+            elif chunk.event == StreamEvent.TURN_DELTA:
+                if chunk.payload.get("stop_reason") == StopReason.MAX_TOKENS:
+                    cut_off = True
+        return "".join(parts), cut_off, max_tokens
 
     def refine(
         self,
@@ -496,8 +546,8 @@ class CodeGenerator:
     ) -> str:
         """Edit existing code to satisfy a change request (the delta ``intent``).
 
-        ``images`` route the call through the message path — without them it stays
-        on the one-shot ``complete()`` exactly as before.
+        ``images`` are the turn's reference pictures, placed before the words as
+        ``generate`` places them.
 
         ``assembly`` is here for the same reason it is on ``generate``: an edit to
         an assembly is still an assembly, and a round that lost the spec would be
@@ -513,16 +563,9 @@ class CodeGenerator:
             ),
             assembly,
         )
-        if images:
-            text = self._stream_complete(user, None, None, images)
-        else:
-            text = self._provider.complete(
-                model=self._model,
-                system=SYSTEM_PROMPT,
-                user=user,
-            )
+        text, cut_off, limit = self._complete(user, None, None, images, assembly)
         _emit_reading(text, images, on_reading)
-        return extract_code(text)
+        return _script(text, cut_off, limit)
 
     def repair(
         self,
@@ -566,12 +609,11 @@ class CodeGenerator:
             ),
             assembly,
         )
-        if images:
-            text = self._stream_complete(user, None, None, images)
-        else:
-            text = self._provider.complete(
-                model=self._model,
-                system=SYSTEM_PROMPT,
-                user=user,
-            )
-        return extract_code(text)
+        text, cut_off, limit = self._complete(user, None, None, images, assembly)
+        return _script(text, cut_off, limit)
+
+
+def _script(text: str, cut_off: bool, limit: int | None) -> str:
+    """The code in a reply, marked as cut when the provider stopped it early."""
+    code = extract_code(text)
+    return CutOffScript(code, limit=limit) if cut_off else code

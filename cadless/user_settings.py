@@ -169,6 +169,7 @@ _TIER_B_FIELDS: dict[str, str] = {
         "forge_max_n",
         "repair_max_attempts",
         "bedrock_max_tokens",
+        "assembly_max_tokens",
         # Gated for a different reason than the rest of this tier: it does not
         # multiply spend, it turns on the bed-split brief, the hardest request in
         # the prompt for the model to get right, so the switch stays behind the
@@ -179,7 +180,7 @@ _TIER_B_FIELDS: dict[str, str] = {
 _TUNING_FIELDS.update(_TIER_B_FIELDS)
 _SETTINGS_ATTR.update({field: field for field in _TIER_B_FIELDS})
 _BOOL_FIELDS |= {"vlm_critique_enabled", "forge_enabled", "assembly_enabled"}
-_INT_FIELDS |= {"vlm_critique_view_count"}
+_INT_FIELDS |= {"vlm_critique_view_count", "assembly_max_tokens"}
 # What each gated knob was set to when this process started — the environment's
 # value where one was pinned, the shipped default otherwise. Read once, here,
 # for the same reason the gate itself is: a saved value must not be able to move
@@ -199,6 +200,7 @@ _RANGES.update(
         "forge_max_n": (2, 10),
         "repair_max_attempts": (1, 10),
         "bedrock_max_tokens": (1, 64_000),
+        "assembly_max_tokens": (1, 64_000),
         # A literal rather than the renderer's own count, so that importing the
         # settings layer does not drag numpy and Pillow in behind it.
         "vlm_critique_view_count": (1, 7),

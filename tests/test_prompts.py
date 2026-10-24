@@ -2,10 +2,14 @@
 
 import pytest
 
+from cadless.config import settings
+from cadless.llm.providers import StreamChunk
+from cadless.llm.types import StopReason, StreamEvent
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
     REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
+    CutOffScript,
     _assembly_edit_rules,
     _assembly_rules,
     build_refinement_message,
@@ -30,6 +34,22 @@ def test_extract_plain_unfenced():
     code = extract_code(text)
     assert code.startswith("from build123d import *")
     assert "Response:" not in code
+
+
+def test_extract_strips_an_opening_fence_that_never_closes():
+    # A reply cut off mid-script still opened with a fence; what follows it is
+    # the code, not a syntax error on line 1.
+    text = "```python\nfrom build123d import *\nresult = Box(1,1,1) - Box("
+    code = extract_code(text)
+    assert code.startswith("from build123d import *")
+    assert "```" not in code
+
+
+def test_extract_leaves_a_fence_inside_the_script_alone():
+    # Only a fence on a line of its own opens a block; one quoted inside the
+    # script is part of the script.
+    text = 'from build123d import *\nlabel = "```"\nresult = Box(1,1,1)\n'
+    assert extract_code(text) == text
 
 
 def test_extract_first_block_only():
@@ -91,22 +111,35 @@ def test_build_repair_message_with_structured_context_is_line_anchored():
 
 
 class _FakeProvider:
-    """Records the last ``complete()`` call and replays a canned reply.
+    """Records the last ``stream_turn`` call and replays a canned reply.
 
-    Mirrors the single-shot half of the :class:`ChatProvider` protocol so
-    ``CodeGenerator`` can be unit-tested without Bedrock.
+    Mirrors the streaming half of the :class:`ChatProvider` protocol so
+    ``CodeGenerator`` can be unit-tested without Bedrock. ``stop_reason`` is
+    what the reply ends on; a cut-off reply ends on ``max_tokens``.
     """
 
-    def __init__(self, reply):
+    def __init__(self, reply, stop_reason=StopReason.END_TURN):
         self.reply = reply
+        self.stop_reason = stop_reason
         self.last = None
+        self.last_params = None
         self.calls = 0
 
-    def complete(self, *, model, system, user, temperature=None):
+    def stream_turn(self, *, model, system, messages, tools, params):
         self.calls += 1
+        user = "".join(b.text or "" for b in messages[-1].content if b.text)
         self.last = (system, user, model)
-        self.last_temperature = temperature
-        return self.reply
+        self.last_params = params
+        self.last_temperature = params.temperature
+        yield StreamChunk(StreamEvent.TURN_START)
+        yield StreamChunk(StreamEvent.TEXT_DELTA, {"text": self.reply})
+        yield StreamChunk(StreamEvent.TURN_DELTA, {"stop_reason": self.stop_reason})
+        yield StreamChunk(StreamEvent.TURN_STOP)
+
+    def capabilities(self, model):
+        from cadless.llm.types import Capabilities
+
+        return Capabilities(supports_images=True)
 
 
 def test_generator_generate_extracts_code():
@@ -117,15 +150,15 @@ def test_generator_generate_extracts_code():
     assert "Request: a 3mm cube" in fake.last[1]
 
 
-def test_generator_routes_through_provider_complete():
-    """CodeGenerator must call the injected provider's complete() (the seam)."""
+def test_generator_routes_through_provider_stream_turn():
+    """CodeGenerator must call the injected provider's stream_turn() (the seam)."""
     fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
-    gen = CodeGenerator(provider=fake, model="sonnet-4-6")
+    gen = CodeGenerator(provider=fake, model="haiku-4-5")
     gen.generate("a cube")
     assert fake.calls == 1
     system, _user, model = fake.last
     assert system  # SYSTEM_PROMPT forwarded
-    assert model == "sonnet-4-6"
+    assert model == "haiku-4-5"  # the injected slug, not the configured default
 
 
 def test_an_assembly_turn_tells_the_model_which_printer_it_is_building_for():
@@ -400,14 +433,6 @@ def test_generator_streams_tokens_via_on_token():
     assert "Box(5, 5, 5)" in code  # assembled from the stream + extracted
 
 
-def test_generator_without_on_token_does_not_stream():
-    """The default (no on_token) path stays one-shot complete() — no streaming."""
-    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
-    gen = CodeGenerator(provider=fake)
-    gen.generate("a cube")  # _FakeProvider has no stream_turn; must use complete()
-    assert fake.calls == 1
-
-
 def _image_block():
     from cadless.llm.types import ContentBlock
 
@@ -500,21 +525,19 @@ def test_a_blind_provider_still_serves_a_text_only_call():
     assert "Box(1,1,1)" in CodeGenerator(provider=fake).generate("a cube")
 
 
-def test_a_text_only_call_still_goes_through_complete_untouched():
-    """The seam's one-shot signature must stay the path for every text-only call.
+@pytest.mark.parametrize("how", ["generate", "refine", "repair"])
+def test_every_codegen_call_is_one_stream_turn_and_never_complete(how):
+    """The stop reason arrives only on the stream, so no codegen call may take the
+    one-shot ``complete()``, which cannot carry it. ``complete()`` stays on the
+    seam for its other callers and is not widened."""
 
-    ``complete()`` cannot carry an image and is deliberately not widened: adapters
-    installed outside this tree implement that exact signature (ADR-0008). What
-    proves the change is additive is that a call with no image never leaves it.
-    """
-    for call in (
-        lambda gen: gen.generate("a cube"),
-        lambda gen: gen.refine("taller", "result = Box(1,1,1)"),
-        lambda gen: gen.repair("a cube", "bad", "boom"),
-    ):
-        fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
-        call(CodeGenerator(provider=fake))  # _FakeProvider has no stream_turn at all
-        assert fake.calls == 1
+    class _NoComplete(_FakeProvider):
+        def complete(self, **kw):
+            raise AssertionError("codegen took the one-shot path")
+
+    fake = _NoComplete("```python\nresult = Box(1,1,1)\n```")
+    _call(CodeGenerator(provider=fake), how)
+    assert fake.calls == 1
 
 
 @pytest.mark.parametrize(
@@ -839,3 +862,69 @@ def test_the_system_prompt_teaches_a_tree_of_placed_labelled_parts():
     assert 'part.label = "wheel_fl"' in SYSTEM_PROMPT
     assert 'Compound(children=[...], label="front_axle")' in SYSTEM_PROMPT
     assert "one solid, or a `Compound(children=[...])`" in SYSTEM_PROMPT
+
+
+# --- a reply the provider cut off -------------------------------------------
+
+_CUT = "```python\nfrom build123d import *\nparts = []\nresult = Box("
+_SPEC = AssemblySpec(volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2)
+
+
+def _call(gen, how, **kw):
+    if how == "generate":
+        return gen.generate("a bookshelf", **kw)
+    if how == "refine":
+        return gen.refine("taller", "result = Box(1,1,1)", **kw)
+    return gen.repair("a bookshelf", "result = Box(1,1,1)", "validation: boom", **kw)
+
+
+@pytest.mark.parametrize("how", ["generate", "refine", "repair"])
+def test_a_reply_cut_at_the_token_limit_comes_back_saying_so(how):
+    # The partial script is still handed over, so the repair sees what was
+    # written; what it is told about it is that the reply was cut, not a
+    # syntax error. A plain call left the cap to the provider, so it names none.
+    fake = _FakeProvider(_CUT, stop_reason=StopReason.MAX_TOKENS)
+    code = _call(CodeGenerator(provider=fake), how)
+    assert isinstance(code, CutOffScript)
+    assert code.limit is None
+    assert code.startswith("from build123d import *")
+    assert "cut off" in code.reason
+
+
+def test_a_cut_script_survives_a_copy_with_its_limit():
+    # An attempt record is copied by the eval harness; ``str`` alone would
+    # hand a copy only the text.
+    import copy
+    import pickle
+
+    cut = CutOffScript("result = Box(", limit=1234)
+    for twin in (copy.copy(cut), copy.deepcopy(cut), pickle.loads(pickle.dumps(cut))):
+        assert isinstance(twin, CutOffScript)
+        assert twin == cut and twin.limit == 1234
+
+
+@pytest.mark.parametrize("how", ["generate", "refine", "repair"])
+def test_a_reply_that_ended_on_its_own_is_plain_code(how):
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    assert not isinstance(_call(CodeGenerator(provider=fake), how), CutOffScript)
+
+
+def test_a_cut_reply_names_the_limit_it_was_actually_given(monkeypatch):
+    monkeypatch.setattr(settings, "assembly_max_tokens", 5000)
+    fake = _FakeProvider(_CUT, stop_reason=StopReason.MAX_TOKENS)
+    code = CodeGenerator(provider=fake).generate("a bookshelf", assembly=_SPEC)
+    assert code.limit == 5000
+    assert "5000" in code.reason
+
+
+@pytest.mark.parametrize("how", ["generate", "refine", "repair"])
+def test_an_assembly_turn_asks_for_its_own_token_cap(how, monkeypatch):
+    # The brief asks for joints the plain cap does not fit, so an assembly
+    # call carries the larger cap and a plain call carries none.
+    monkeypatch.setattr(settings, "assembly_max_tokens", 5000)
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    _call(gen, how, assembly=_SPEC)
+    assert fake.last_params.max_tokens == 5000
+    _call(gen, how)
+    assert fake.last_params.max_tokens is None

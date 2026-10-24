@@ -96,6 +96,7 @@ class SettingsUpdate(BaseModel):
     forge_max_n: int | None = None
     repair_max_attempts: int | None = None
     bedrock_max_tokens: int | None = None
+    assembly_max_tokens: int | None = None
     assembly_enabled: bool | None = None
 
 
