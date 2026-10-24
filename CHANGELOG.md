@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.0...backend-v1.3.1) (2026-10-24)
+
+
+### Fixes
+
+* offer the Assembly and Forge options only when the server acts on them ([#67](https://github.com/cadlesslab/Cadless/issues/67)) ([da0b955](https://github.com/cadlesslab/Cadless/commit/da0b955da6b0bbe681ef2d8af3e0f39272c355e3))
+
 ## [1.3.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.2.1...backend-v1.3.0) (2026-10-23)
 
 
