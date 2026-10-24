@@ -68,16 +68,17 @@ pipeline measures and fills in.
 
 A build that publishes produces this same shape from a project without running
 any of that: it reads the ladder out of the store, copies the exports each step
-already has, and renders the thumbnail from the final mesh
-(`catalog/thumbnail.py`). Nothing is re-run and nothing is re-baked, so the only
-things it has to ask for are the ones a project does not carry — an address, a
-licence and a domain. A version's size and volume are filed in millimetres while
-`geometry` is in the domain's authoring units, so each step's go through
-`StepGeometry.in_authoring_units` with the domain's `export_scale`; copied as
-they are, an item in metres would come back a thousand times too large. A
-version copied from an item in metres before items were filed in millimetres,
-or from an item whose ledger entry predates content hashing, still carries the
-item's own units, and converting it would make it a thousand times too small.
+already has, and renders the thumbnail from the final step's mesh — its first
+part, for a step built as several parts (`catalog/thumbnail.py`). Nothing is
+re-run and nothing is re-baked, so the only things it has to ask for are the
+ones a project does not carry — an address, a licence and a domain. A version's
+size and volume are filed in millimetres while `geometry` is in the domain's
+authoring units, so each step's go through `StepGeometry.in_authoring_units`
+with the domain's `export_scale`; copied as they are, an item in metres would
+come back a thousand times too large. A version copied from an item in metres
+before items were filed in millimetres, or from an item whose ledger entry
+predates content hashing, still carries the item's own units, and converting it
+would make it a thousand times too small.
 
 `source.json` also carries `derived_from` when the project it was written from
 is a copy of something fetched from a listing: the `catalog_id`, `version_id`

@@ -362,20 +362,32 @@ def render_item_thumbnail(item_dir: Path, manifest: CatalogManifest) -> str | No
     `catalog/pack.py` did; both are held for the same reason, and both are
     unreferenced in this tree on purpose rather than by oversight.
 
+    **It draws one part.** A step built as several parts holds several meshes
+    of a kind, and the picture is of the first of them: the part the kind's
+    bare key names. A picture of one part still shows a reader something true
+    about the model, where a size or a volume taken from one part would be wrong
+    for the whole -- so a picture can answer where a measurement has to decline.
+    A listing needs one, and blocking a publish over its preview would be the
+    worse failure.
+
     The renderer chain is headless-safe (software rasterizer primary), so this
     works in containers with no GL context. Returns the manifest-relative PNG
-    path, or ``None`` when the final step exported no readable mesh; raises
-    ``ValueError`` before reading anything when the mesh path the manifest
-    names does not stay inside the item.
+    path, or ``None`` when neither an stl nor an obj of the final step has its
+    first part's file present. Raises ``ValueError`` before reading anything
+    when the mesh path the manifest names does not stay inside the item, and
+    whatever :func:`render_thumbnail` raises when a file that is present cannot
+    be drawn.
     """
     if not manifest.steps:
         return None
     final = manifest.steps[-1]
     item = Path(item_dir).resolve()
+    parts = final.artifact_parts()
     for kind in _THUMBNAIL_SOURCES:
-        if kind not in final.artifacts:
+        keys = parts.get(kind)
+        if not keys:
             continue
-        mesh = step_artifact_path(item, final, kind)
+        mesh = step_artifact_path(item, final, keys[0])
         if mesh.exists():
             render_thumbnail(mesh, item_dir / _THUMBNAIL_REL)
             return _THUMBNAIL_REL
