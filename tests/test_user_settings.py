@@ -41,6 +41,7 @@ _MANAGED_ATTRS = (
     "forge_max_n",
     "repair_max_attempts",
     "bedrock_max_tokens",
+    "assembly_max_tokens",
     "assembly_enabled",
 )
 _MANAGED_ENV = (
@@ -572,6 +573,19 @@ def test_gate_allows_reducing_a_numeric_budget():
     assert settings.forge_candidate_count == 2
     with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
         user_settings.save({"forge_candidate_count": 9})
+
+
+def test_the_assembly_token_cap_is_a_gated_budget_like_the_plain_one():
+    # Reachable through the settings file at all, lowerable without the gate,
+    # and a raise past the launch baseline refused like any other budget.
+    user_settings.save({"assembly_max_tokens": 3000})
+    assert settings.assembly_max_tokens == 3000
+    with pytest.raises(ValueError, match="CADLESS_SETTINGS_ADVANCED"):
+        user_settings.save({"assembly_max_tokens": 9000})
+    # Lowering needs no gate, but a cap of nothing is no cap: the range holds.
+    with pytest.raises(ValueError, match="outside the accepted range"):
+        user_settings.save({"assembly_max_tokens": 0})
+    assert settings.assembly_max_tokens == 3000
 
 
 @pytest.mark.parametrize(

@@ -146,11 +146,12 @@ port, bound to loopback.
    refusal happens at the request boundary because an exception raised inside a
    running turn settles it as failed and reverts the project to its last good
    version. `ChatProvider.complete()` stays text-only — code outside this tree
-   implements that exact signature — so an image-carrying call takes the
-   message-based path instead, on every codegen call of the turn rather than
-   only the first. The bytes are scoped to the turn that carried them; later
-   turns are given the written reading stored beside the block. Recorded in
-   ADR-0009 and enforced by the seam, chat and prompt tests.
+   implements that exact signature — and every codegen call of the turn takes
+   the message-based path, `stream_turn`, with or without an image: it is the
+   one path that carries the image blocks and the stop reason that tells a
+   cut-off reply from a finished one. The bytes are scoped to the turn that
+   carried them; later turns are given the written reading stored beside the
+   block. Recorded in ADR-0009 and enforced by the seam, chat and prompt tests.
 
 The provider seam, sandbox layers, local-first posture, embeddings behavior,
 candidate judging, the identity seam and the image decisions are recorded under

@@ -64,6 +64,12 @@ for n in range(1, max_tries + 1):
 - `max_tries` counts **total attempts including the first**, not just
   repairs. The default budget is therefore: one generation plus up to two
   repairs.
+- A reply the provider stopped at its output-token limit fails validation as
+  "cut off", with the limit named, rather than as the syntax error the cut
+  left; the repair is asked for a shorter script. A call on an assembly turn
+  asks for `assembly_max_tokens` (default 6000) in place of
+  `bedrock_max_tokens` (default 2000), because the script the brief asks for
+  does not fit the smaller cap.
 - `_repair()` returns `None` (ending the loop) when the budget is exhausted —
   unless the repair is *forced* (critique/assert), and those paths only fire
   while `n < max_tries`, so a forced repair always has an attempt left to
