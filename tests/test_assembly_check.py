@@ -169,6 +169,38 @@ def test_a_shared_volume_of_pure_boolean_noise_is_not_an_overlap():
     assert report.ok
 
 
+def test_a_tab_s_worth_of_shared_volume_is_blamed_on_the_socket():
+    # A thousand cubic millimetres is a whole tab sitting in solid material: the
+    # socket was cut outside the receiving part, on the wrong face, or not at
+    # all. Telling the model to widen a clearance there sent it the wrong way.
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 1000.0]]), SPEC)
+    why = report.failures[0]
+    assert "a tab sitting in solid material" in why
+    assert why.endswith(
+        "subtract the socket, the tab's shape enlarged by the clearance on every side, "
+        "from the receiving part at the place the tab occupies when assembled"
+    )
+    assert "widen" not in why
+
+
+def test_a_sliver_of_shared_volume_is_blamed_on_a_socket_that_does_not_clear_its_tab():
+    # A socket cut to the tab's exact size only touches it, and touching measures
+    # zero: a sliver is a socket narrower than the tab or off its place, and the
+    # fix is the same construction as for a whole tab, not a wider clearance.
+    report = evaluate_assembly(_m(overlaps=[[0, 1, 5.0]]), SPEC)
+    why = report.failures[0]
+    assert "narrower than its tab or off its place" in why
+    assert "subtract the socket" in why
+    assert "sitting in solid material" not in why
+
+
+def test_the_line_between_a_sliver_and_a_tab_is_fifty_cubic_millimetres():
+    at_the_line = evaluate_assembly(_m(overlaps=[[0, 1, 50.0]]), SPEC).failures[0]
+    just_below = evaluate_assembly(_m(overlaps=[[0, 1, 49.9]]), SPEC).failures[0]
+    assert "a tab sitting in solid material" in at_the_line
+    assert "narrower than its tab" in just_below
+
+
 # --- the parts mate into one connected assembly ---------------------------
 
 
@@ -517,6 +549,16 @@ def test_the_parts_checks_catch_two_parts_in_one_space():
     report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, checks=PARTS_CHECKS)
     assert not report.ok
     assert any("share" in f for f in report.failures)
+
+
+@pytest.mark.parametrize("shared", [1000.0, 5.0])
+def test_the_parts_checks_tell_a_build_nobody_asked_to_join_only_to_trim_the_parts_apart(shared):
+    # No seam, tab or clearance was ever named to such a build, so the sentence
+    # can lean on none of them, on either side of the line.
+    report = evaluate_assembly(_m(overlaps=[[0, 1, shared]]), SPEC, checks=PARTS_CHECKS)
+    why = report.failures[0]
+    assert "so they only touch" in why
+    assert "socket" not in why and "clearance" not in why
 
 
 def test_the_parts_checks_let_a_captive_part_stay():
