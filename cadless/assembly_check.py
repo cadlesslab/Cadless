@@ -34,9 +34,11 @@ A turn that asked for an assembly faces every check, against the printer it is
 for. Any other build of several parts faces :data:`PARTS_CHECKS` alone: whether
 two parts share volume, which is wrong in any model. Fitting the bed is
 :mod:`cadless.print_fit`'s question for a build nobody asked to split, as it is
-for a lone part; parts that touch nothing are not wrong in a model nobody asked
-to join -- an exploded view, a set of separate objects; and a part that cannot
-come out is not wrong in one printed in place -- a chain, a ball in a cage.
+for a lone part nobody asked to split -- a lone part on a turn that did ask is
+held to the bed here, by :func:`evaluate_lone_part`; parts that touch nothing
+are not wrong in a model nobody asked to join -- an exploded view, a set of
+separate objects; and a part that cannot come out is not wrong in one printed in
+place -- a chain, a ball in a cage.
 """
 
 from __future__ import annotations
@@ -210,7 +212,8 @@ def evaluate_assembly(
 
     A build with nothing measured, or with fewer than two parts, has no relation
     to check and yields an empty passing report -- judging a lone part against the
-    build volume belongs to :mod:`cadless.print_fit`, not here.
+    build volume belongs to :func:`evaluate_lone_part` on a turn that asked, and
+    to :mod:`cadless.print_fit` otherwise.
 
     ``checks`` names which checks can fail the report. A measurement that could
     not be taken counts against a check named here, or against every report
@@ -258,6 +261,40 @@ def evaluate_assembly(
 def mating_tolerance(clearance_mm: float) -> float:
     """How close two parts must come to count as joined, in millimetres."""
     return max(clearance_mm * MATING_TOLERANCE_FACTOR, MATING_TOLERANCE_FLOOR_MM)
+
+
+def evaluate_lone_part(
+    bbox: Sequence[float] | None, spec: AssemblySpec, *, export_scale: float = 1.0
+) -> AssemblyReport:
+    """Check a build that came back as one solid against the printer it is for.
+
+    A one-part build has no joints, overlaps or order to check, so this is the fit
+    alone. It is held to on a turn that asked for an assembly because the model
+    giving up on the split and returning the whole thing is the one answer the
+    per-part checks never see, and it was being kept as the assembly it is not.
+    The refusal is worded as a part's, cuts included, so the repair that follows
+    is told the same thing a refused part tells it. ``bbox`` is the worker's, in
+    authoring units, and ``export_scale`` brings it to the millimetres the part
+    boxes and the bed are in; a box that cannot be read is reported rather than
+    passed, before any scaling, as the per-part fit does.
+    """
+    report = AssemblyReport()
+    size = _dimensions(bbox)
+    if size is None:
+        report.unchecked.append(
+            "build volume fit for the one part: its bounding box is not three finite numbers"
+        )
+        return report
+    size = tuple(extent * export_scale for extent in size)
+    volume = spec.volume
+    if too_big_for(size, volume):
+        report.failures.append(
+            f"the build is one part, {_size(size)} mm, and does not fit the printer's "
+            f"{_size((volume.width, volume.depth, volume.height))} mm build volume; "
+            f"cut it into {_cuts(size, volume)}, joined as the brief asks, and keep "
+            "the model's size: do not shrink it"
+        )
+    return report
 
 
 def _check_fit(

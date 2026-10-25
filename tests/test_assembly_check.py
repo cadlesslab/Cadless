@@ -15,6 +15,7 @@ from cadless.assembly_check import (
     AssemblyMeasurements,
     AssemblyReport,
     evaluate_assembly,
+    evaluate_lone_part,
     mating_tolerance,
 )
 from cadless.printer_profile import AssemblySpec, BuildVolume
@@ -48,7 +49,8 @@ def test_no_measurements_passes_with_no_signal():
 def test_single_part_is_not_an_assembly_and_is_never_checked():
     # A one-part result has no relation to check. Its box is deliberately far too
     # big for the bed: even so, nothing here may fire -- judging a single part
-    # against the build volume is print_fit's job, not this module's.
+    # against the build volume is evaluate_lone_part's job on a turn that asked
+    # and print_fit's otherwise, not evaluate_assembly's.
     report = evaluate_assembly(_m(part_bboxes=[[9999.0, 9999.0, 9999.0]], gaps=[], order=[0]), SPEC)
     assert report.ok
     assert report.failures == []
@@ -125,6 +127,32 @@ def test_a_side_exactly_the_bed_needs_no_cut_and_no_turn():
     assert "3 along its height" in why
     assert "along its width" not in why
     assert "turned" not in why
+
+
+# --- a build that came back as one solid ------------------------------------
+
+
+def test_a_lone_part_larger_than_the_bed_is_refused_with_its_cuts():
+    # A model the turn asked to split, returned whole: 300 x 250 x 18 needs two
+    # pieces along its width and two along its depth, turned or not.
+    report = evaluate_lone_part((300.0, 250.0, 18.0), SPEC)
+    assert not report.ok
+    why = report.failures[0]
+    assert "one part" in why
+    assert "300 x 250 x 18" in why
+    assert "2 along its width and 2 along its depth" in why
+    assert "do not shrink" in why
+
+
+def test_a_lone_part_that_fits_passes():
+    assert evaluate_lone_part((100.0, 100.0, 50.0), SPEC).ok
+
+
+def test_a_lone_part_with_an_unreadable_box_is_unchecked_rather_than_passed():
+    report = evaluate_lone_part(None, SPEC)
+    assert not report.ok
+    assert report.failures == []
+    assert report.unchecked
 
 
 @pytest.mark.parametrize(

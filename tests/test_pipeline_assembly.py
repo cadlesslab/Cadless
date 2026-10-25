@@ -107,22 +107,27 @@ def _overlapping() -> AssemblyMeasurements:
     )
 
 
-def _exec(measurements=None) -> ExecResult:
+def _exec(measurements=None, *, bbox=(10.0, 10.0, 10.0), part_count=None) -> ExecResult:
+    # The worker counts the solids it found: two where it measured a split, and
+    # one where there was nothing to measure, unless a test says otherwise.
+    if part_count is None:
+        part_count = 2 if measurements is not None else 1
     return ExecResult(
         ok=True,
         volume=1000.0,
-        bbox=(10.0, 10.0, 10.0),
-        part_count=2,
+        bbox=bbox,
+        part_count=part_count,
         stl_path="/tmp/model.stl",
         assembly=measurements,
     )
 
 
-def _stub_run_code(monkeypatch, measurements, captured=None):
+def _stub_run_code(monkeypatch, measurements, captured=None, *, bbox=None, part_count=None):
     def fake(code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None):
         if captured is not None:
             captured["check_assembly"] = check_assembly
-        return _exec(measurements if check_assembly else None)
+        extra = {} if bbox is None else {"bbox": bbox}
+        return _exec(measurements if check_assembly else None, part_count=part_count, **extra)
 
     monkeypatch.setattr("cadless.pipeline.run_code", fake)
 
@@ -141,8 +146,11 @@ def _run(
     captured=None,
     guide_writer=None,
     export_dir=None,
+    bbox=None,
+    part_count=None,
+    export_scale=1.0,
 ):
-    _stub_run_code(monkeypatch, measurements, captured)
+    _stub_run_code(monkeypatch, measurements, captured, bbox=bbox, part_count=part_count)
     events = []
     result = Pipeline(
         generator=gen,
@@ -153,6 +161,7 @@ def _run(
         on_progress=events.append,
         assembly=assembly,
         export_dir=None if export_dir is None else str(export_dir),
+        export_scale=export_scale,
     )
     return result, events
 
@@ -202,9 +211,9 @@ def test_a_turn_that_did_not_ask_still_has_its_parts_measured(monkeypatch):
     assert ("assembly", "ok") in _stages(events)
 
 
-def test_a_single_part_result_never_runs_the_stage(monkeypatch):
+def test_a_single_part_that_fits_never_runs_the_stage(monkeypatch):
     # The worker reports nothing to check when there is only one solid, and a lone
-    # part against the build volume is print_fit's question, not this stage's.
+    # part that fits the bed has nothing else this stage judges.
     result, events = _run(FakeGen(), None, monkeypatch)
     assert result.ok
     assert not [phase for phase, _ in _stages(events) if phase == "assembly"]
@@ -223,6 +232,64 @@ def test_an_assembly_turn_that_measured_nothing_says_so(monkeypatch):
 def test_a_turn_that_never_asked_is_distinguishable_from_one_that_did(monkeypatch):
     result, _ = _run(FakeGen(), None, monkeypatch, assembly=None)
     assert result.assembly is None
+
+
+# --- a lone part on a turn that asked is held to the bed --------------------
+
+
+def test_a_lone_part_larger_than_the_bed_on_an_assembly_turn_is_refused(monkeypatch):
+    # The model gave up on the split and returned the whole board as one solid.
+    gen = FakeGen()
+    result, events = _run(gen, None, monkeypatch, bbox=(300.0, 250.0, 18.0), tries=2)
+    assert not result.ok
+    assert ("assembly", "error") in _stages(events)
+    assert result.assembly["measured"] is True
+    assert result.assembly["ok"] is False
+    assert "2 along its width and 2 along its depth" in gen.last_repair_error
+
+
+def test_a_lone_part_larger_than_the_bed_is_kept_when_no_assembly_was_asked(monkeypatch):
+    # print_fit's question, as before: nobody asked for a split.
+    result, events = _run(FakeGen(), None, monkeypatch, assembly=None, bbox=(300.0, 250.0, 18.0))
+    assert result.ok
+    assert not [phase for phase, _ in _stages(events) if phase == "assembly"]
+
+
+def test_a_lone_part_is_judged_in_millimetres(monkeypatch):
+    # The worker's box is in authoring units; a model authored in metres at
+    # export_scale 1000 is the same board.
+    result, _ = _run(
+        FakeGen(), None, monkeypatch, bbox=(0.3, 0.25, 0.018), export_scale=1000.0, tries=1
+    )
+    assert not result.ok
+    assert "300 x 250 x 18" in result.assembly["failures"][0]
+
+
+def test_a_multi_part_build_that_measured_nothing_keeps_the_not_measured_verdict(monkeypatch):
+    # Its box spans every solid, so judging it as one part would refuse pieces
+    # that each fit; that case stays "not measured".
+    result, _ = _run(FakeGen(), None, monkeypatch, bbox=(300.0, 250.0, 18.0), part_count=2)
+    assert result.ok
+    assert result.assembly["measured"] is False
+
+
+def test_a_build_whose_solids_could_not_be_counted_keeps_the_not_measured_verdict(monkeypatch):
+    # No part count is the worker failing to read the solids at all; the box then
+    # spans whatever it exported and says nothing about any one part.
+    uncounted = ExecResult(
+        ok=True,
+        volume=1000.0,
+        bbox=(300.0, 250.0, 18.0),
+        part_count=None,
+        stl_path="/tmp/model.stl",
+        assembly=None,
+    )
+    monkeypatch.setattr("cadless.pipeline.run_code", lambda code, **kw: uncounted)
+    result = Pipeline(generator=FakeGen(), config=Settings(repair_max_attempts=1)).run(
+        "a bracket", assembly=SPEC
+    )
+    assert result.ok
+    assert result.assembly["measured"] is False
 
 
 # --- a failure is an ordinary repair signal -------------------------------

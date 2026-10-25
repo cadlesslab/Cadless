@@ -103,6 +103,20 @@ def test_a_rebuild_of_an_assembly_that_measured_nothing_says_so(monkeypatch):
     assert rb.assembly["measured"] is False
 
 
+def test_a_rebuild_of_an_assembly_into_one_part_too_big_for_the_bed_is_refused(monkeypatch):
+    # A parameter edit that grows a model built as an assembly past the bed, in
+    # one piece: the lone part is held to the bed as any part is.
+    _stub_run_code(
+        monkeypatch,
+        ExecResult(ok=True, volume=2000.0, bbox=(300.0, 250.0, 18.0), part_count=1, assembly=None),
+    )
+
+    rb = rebuild("code", assembly=SPEC)
+
+    assert rb.ok is False
+    assert "one part" in rb.assembly["failures"][0]
+
+
 def test_a_build_that_failed_is_reported_as_it_failed(monkeypatch):
     _stub_run_code(monkeypatch, ExecResult(ok=False, error="NameError: x"))
 
