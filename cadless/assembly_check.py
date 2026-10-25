@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 
 from cadless.assembly_tree import readable, unnamed
 from cadless.print_fit import _dimensions, too_big_for
-from cadless.printer_profile import AssemblySpec
+from cadless.printer_profile import AssemblySpec, BuildVolume
 
 #: How far apart two parts may sit and still count as mating, as a multiple of the
 #: joint clearance.
@@ -283,8 +283,44 @@ def _check_fit(
             report.failures.append(
                 f"{label} is {_size(size)} mm and does not fit the printer's "
                 f"{_size((volume.width, volume.depth, volume.height))} mm build volume; "
-                "split the model into more parts, or move the seam"
+                f"cut it into {_cuts(size, volume)}, or move its seams so each piece "
+                "fits, and keep the model's size: do not shrink it"
             )
+
+
+def _cuts(size: tuple[float, float, float], volume: BuildVolume) -> str:
+    """How many pieces each exceeded axis needs, as the model reads it.
+
+    Said per axis because "split the model into more parts" was answered with
+    another cut along the axis already cut, or with a smaller model: a count on
+    each axis the part exceeds is an instruction that can be followed only one
+    way. Counted in both footprint orientations, because a part may be placed on
+    the bed turned a quarter and the fit it is held to allows that; the
+    orientation needing fewer pieces is the one said, and the turn is named when
+    it is the turned one, so the count asks for no cut the fit would not.
+    """
+    as_is = _pieces(size, (volume.width, volume.depth, volume.height))
+    turned = _pieces(size, (volume.depth, volume.width, volume.height))
+    if math.prod(turned) < math.prod(as_is):
+        counts, note = turned, ", turned a quarter on the bed"
+    else:
+        counts, note = as_is, ""
+    cuts = " and ".join(
+        f"{count} along its {axis}"
+        for axis, count in zip(("width", "depth", "height"), counts, strict=True)
+        if count > 1
+    )
+    return cuts + note
+
+
+def _pieces(
+    size: tuple[float, float, float], limits: tuple[float, float, float]
+) -> tuple[int, int, int]:
+    """Pieces per axis that straight cuts leave, each extent within its limit."""
+    width, depth, height = (
+        max(1, math.ceil(extent / limit)) for extent, limit in zip(size, limits, strict=True)
+    )
+    return width, depth, height
 
 
 def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str]) -> None:

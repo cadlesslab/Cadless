@@ -148,6 +148,35 @@ def test_an_assembly_turn_tells_the_model_which_printer_it_is_building_for():
     assert "Request: a bookshelf" in user
 
 
+def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
+    """A brief that only said "fits" was met with a split along the width alone,
+    the depth and the height left whole, and a shrink when the parts were refused.
+    The rule has to be arithmetic on every axis, and the example in this
+    printer's own numbers."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.generate("a bookshelf", assembly=spec)
+
+    user = fake.last[1]
+    assert "every axis" in user
+    assert "262.5 mm wide and 487.5 mm tall" in user
+    assert "2 along its width and 3 along its height" in user
+    assert "never shrink" in user.lower()
+
+
+def test_an_edit_on_an_assembly_is_told_all_three_axes_and_not_to_shrink():
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+    rules = _assembly_edit_rules(spec)
+    assert "all three axes at once" in rules
+    assert "never shrink" in rules.lower()
+
+
 def test_a_turn_that_did_not_ask_for_an_assembly_is_unchanged_to_the_byte():
     """The whole guarantee of the option being off. An unconditional prefix, or a
     spec that leaked in from somewhere, is caught here rather than by a reader

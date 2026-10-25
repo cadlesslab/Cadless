@@ -175,10 +175,13 @@ candidate judging, the identity seam and the image decisions are recorded under
    are read from the settings saved now, so changing printer changes what an edit
    must satisfy rather than pinning it to the one it was first built for.
    What they say differs by round, and deliberately: a fresh run is entitled to
-   decide the split, so it carries the whole brief — how few parts, where the
-   seams fall, how they interlock; an edit is not, because the split already
-   exists and asking for it again argues with that same message's instruction to
-   edit in place rather than redesign, so an edit carries the constraints alone.
+   decide the split, so it carries the whole brief — how few parts, along which
+   axes, where the seams fall, how they interlock; an edit is not, because the
+   split already exists and asking for it again argues with that same message's
+   instruction to edit in place rather than redesign, so an edit carries the
+   constraints alone: the bed each part fits along every axis at once, the
+   clearance a joint keeps, and that the model keeps its size rather than
+   shrinking to fit, unless the request itself resizes it.
    A repair holds no entitlement of its own and inherits the one belonging to the
    turn it is repairing — the whole brief beneath a fresh run, the constraints
    alone beneath an edit — with one exception: a repair forced by the assembly
