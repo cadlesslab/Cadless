@@ -26,7 +26,10 @@ Hard caps (a misbehaving model can never loop unboundedly):
     the repair loop's ``attempt_count``/``last_stage`` are surfaced in the tool
     result, and repeated failures at the same stage append guidance steering the
     model to ``ask_clarification`` instead of burning the repair budget.
-  * per-turn token + wall-clock budget.
+  * per-turn token + wall-clock budget — an assembly turn, asked for or inherited,
+    runs under a wall-clock budget of its own.
+A cap that stops the turn — the iteration cap or a budget — ends it with a line
+naming the cap, in the transcript and, when the turn is streamed, in the stream.
 
 Tools (lean, high-impact) — wrappers over the EXISTING pipeline / reparametrize
 primitive, reused unchanged:
@@ -698,6 +701,23 @@ class AgentResult:
 CLARIFICATION_STOP = "clarification"
 
 
+# The line a turn ends on when the loop, not the model, stopped it. Appended to
+# the transcript and streamed, so a stopped turn reads as stopped rather than as
+# a model that fell silent after a red step. The blank line in front keeps it
+# off the end of whatever the model last streamed.
+def _cap_note(what: str) -> str:
+    return f"\n\n[agent] {what} reached; stopping this turn."
+
+
+# What the user reads when the provider cut the model's reply at its output
+# limit — often mid tool-call, so the action never ran and the turn would
+# otherwise end looking like a silent success.
+_CUT_OFF_NOTE = (
+    "\n\n_My response was cut off before I could finish that step — please send "
+    "the request again (a bit more specific helps)._"
+)
+
+
 def _drain_steer(steer: SteerSource | None) -> list[ContentBlock]:
     """Drain all currently-queued steer messages into neutral user text blocks.
 
@@ -800,6 +820,7 @@ class Agent:
         max_tool_iters: int | None = None,
         token_budget: int | None = None,
         time_budget_secs: float | None = None,
+        assembly_time_budget_secs: float | None = None,
     ) -> None:
         cfg = config or settings
         self._provider = provider
@@ -813,9 +834,35 @@ class Agent:
         self._time_budget = (
             time_budget_secs if time_budget_secs is not None else cfg.agent_time_budget_secs
         )
+        self._assembly_time_budget = (
+            assembly_time_budget_secs
+            if assembly_time_budget_secs is not None
+            else cfg.assembly_agent_time_budget_secs
+        )
         self._same_stage_escalation = max(1, cfg.agent_same_stage_escalation)
         self._max_tokens = cfg.agent_max_tokens
         self._caps = provider.capabilities(self._model)
+
+    def _time_budget_for(self, context: ToolContext) -> float:
+        """The wall-clock this turn may use before the loop stops it.
+
+        An assembly turn gets its own budget. Each build it makes writes a
+        multi-part script, runs the repair loop on it and then measures every
+        part, so the plain budget leaves no room to retry a refused build. A
+        turn is an assembly turn whether it asked for one or is editing a model
+        already built as one, since both run those builds.
+        """
+        if context.assembly is not None or context.inherited_assembly is not None:
+            return self._assembly_time_budget
+        return self._time_budget
+
+    def _budget_reached(self, result: AgentResult, start: float, time_budget: float) -> str | None:
+        """The turn budget that is spent, named for the closing line, or ``None``."""
+        if result.input_tokens + result.output_tokens >= self._token_budget:
+            return "turn token budget"
+        if time.monotonic() - start >= time_budget:
+            return "turn time budget"
+        return None
 
     def _turn_params(self) -> TurnParams:
         """Per-turn generation knobs, gated on the model's capabilities.
@@ -878,6 +925,7 @@ class Agent:
         seen_calls: set[str] = set()
         stage_failures: dict[str, int] = {}
         start = time.monotonic()
+        time_budget = self._time_budget_for(context)
 
         while True:
             # Boundary: drain any queued steer message into the conversation so
@@ -904,6 +952,8 @@ class Agent:
             produced.extend(turn.blocks)
 
             if turn.stop_reason != "tool_use" or not turn.tool_uses:
+                if turn.stop_reason == "max_tokens":
+                    produced.append(ContentBlock.of_text(_CUT_OFF_NOTE))
                 result.stop_reason = turn.stop_reason
                 break
 
@@ -936,9 +986,7 @@ class Agent:
                     messages.append(Message(role="user", content=plan_results))
                 result.stopped_on_cap = True
                 result.stop_reason = "tool_use"
-                produced.append(
-                    ContentBlock.of_text("[agent] tool-iteration cap reached; stopping this turn.")
-                )
+                produced.append(ContentBlock.of_text(_cap_note("tool-iteration cap")))
                 break
 
             if action_uses:
@@ -954,12 +1002,11 @@ class Agent:
             produced.extend(guide_blocks)
 
             # Budget caps: stop *after* feeding results so the transcript is valid.
-            if (
-                result.input_tokens + result.output_tokens >= self._token_budget
-                or time.monotonic() - start >= self._time_budget
-            ):
+            spent = self._budget_reached(result, start, time_budget)
+            if spent is not None:
                 result.stopped_on_cap = True
                 result.stop_reason = "tool_use"
+                produced.append(ContentBlock.of_text(_cap_note(spent)))
                 break
 
         result.blocks = produced
@@ -1012,6 +1059,7 @@ class Agent:
         seen_calls: set[str] = set()
         stage_failures: dict[str, int] = {}
         start = time.monotonic()
+        time_budget = self._time_budget_for(context)
 
         yield StreamEventOut("turn_start")
 
@@ -1072,13 +1120,8 @@ class Agent:
                 # tool-call, so the action's input is empty and it never ran. Don't
                 # end silently looking successful: surface a note.
                 if turn.stop_reason == "max_tokens":
-                    note = (
-                        "\n\n_My response was cut off before I could finish that "
-                        "step — please send the request again (a bit more specific "
-                        "helps)._"
-                    )
-                    produced.append(ContentBlock.of_text(note))
-                    yield StreamEventOut("text_delta", {"text": note})
+                    produced.append(ContentBlock.of_text(_CUT_OFF_NOTE))
+                    yield StreamEventOut("text_delta", {"text": _CUT_OFF_NOTE})
                 result.stop_reason = turn.stop_reason
                 break
 
@@ -1112,9 +1155,9 @@ class Agent:
                     messages.append(Message(role="user", content=tool_results))
                 result.stopped_on_cap = True
                 result.stop_reason = "tool_use"
-                produced.append(
-                    ContentBlock.of_text("[agent] tool-iteration cap reached; stopping this turn.")
-                )
+                note = _cap_note("tool-iteration cap")
+                produced.append(ContentBlock.of_text(note))
+                yield StreamEventOut("text_delta", {"text": note})
                 break
 
             if action_uses:
@@ -1161,12 +1204,13 @@ class Agent:
             produced.extend(guide_blocks)
             messages.append(Message(role="user", content=tool_results))
 
-            if (
-                result.input_tokens + result.output_tokens >= self._token_budget
-                or time.monotonic() - start >= self._time_budget
-            ):
+            spent = self._budget_reached(result, start, time_budget)
+            if spent is not None:
                 result.stopped_on_cap = True
                 result.stop_reason = "tool_use"
+                note = _cap_note(spent)
+                produced.append(ContentBlock.of_text(note))
+                yield StreamEventOut("text_delta", {"text": note})
                 break
 
         result.blocks = produced

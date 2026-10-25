@@ -184,10 +184,15 @@ picture, extracted from the codegen reply and stored beside the block
 
 Turn hard caps (all in `config.py`): `agent_max_tool_iters=6` tool
 round-trips, `agent_token_budget=200_000` cumulative tokens,
-`agent_time_budget_secs=120` wall clock, plus a duplicate-tool-call debounce
-and a same-stage escalation counter (`agent_same_stage_escalation=2`) that
-nudges the model toward `ask_clarification` when it keeps failing at the
-same stage.
+`agent_time_budget_secs=120` wall clock, or `assembly_agent_time_budget_secs=300`
+on a turn that carries an assembly spec, asked for or inherited (each build
+there writes a multi-part script, runs the repair loop on it and then measures
+every part, so the plain budget leaves no room to retry a refused build), plus
+a duplicate-tool-call debounce and a same-stage escalation counter
+(`agent_same_stage_escalation=2`) that nudges the model toward
+`ask_clarification` when it keeps failing at the same stage. A turn a cap stops
+ends with a line naming the cap, in the transcript and in the stream, as a reply
+the provider cut at its output limit does.
 
 **Direct generation** — `POST /projects/{id}/generate` +
 `GET /projects/{id}/generate/stream` (`backend/routers/generation.py`) runs
