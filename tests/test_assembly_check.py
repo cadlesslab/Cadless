@@ -89,6 +89,44 @@ def test_a_part_taller_than_the_bed_is_refused():
     assert "part 2" in report.failures[0]
 
 
+def test_a_refusal_for_size_names_the_cuts_each_exceeded_axis_needs():
+    # A 12 x 250 x 400 panel on a 210 x 200 x 195 bed: the depth needs two pieces
+    # and the height three, the width none. "Split the model into more parts" left
+    # the model free to cut the axis it had already cut.
+    report = evaluate_assembly(_m(part_bboxes=[[100.0, 100.0, 50.0], [12.0, 250.0, 400.0]]), SPEC)
+    assert not report.ok
+    why = report.failures[0]
+    assert "2 along its depth" in why
+    assert "3 along its height" in why
+    assert "along its width" not in why
+
+
+def test_a_refusal_for_size_says_not_to_shrink():
+    # The other answer the old wording left open: a smaller model that fits.
+    report = evaluate_assembly(_m(part_bboxes=[[100.0, 100.0, 50.0], [12.0, 250.0, 400.0]]), SPEC)
+    assert "do not shrink" in report.failures[0]
+
+
+def test_the_cuts_count_the_quarter_turn_the_fit_check_allows():
+    # 150 x 205 x 400 fits the footprint turned a quarter, so only the height needs
+    # cutting; counted as it stands it would be told to cut the depth as well, a
+    # cut the fit it is held to never asked for.
+    report = evaluate_assembly(_m(part_bboxes=[[100.0, 100.0, 50.0], [150.0, 205.0, 400.0]]), SPEC)
+    why = report.failures[0]
+    assert "3 along its height" in why
+    assert "along its depth" not in why
+    assert "turned a quarter" in why
+
+
+def test_a_side_exactly_the_bed_needs_no_cut_and_no_turn():
+    # 210 wide on a 210 bed as it stands; turned it would be 210 against 200.
+    report = evaluate_assembly(_m(part_bboxes=[[100.0, 100.0, 50.0], [210.0, 12.0, 400.0]]), SPEC)
+    why = report.failures[0]
+    assert "3 along its height" in why
+    assert "along its width" not in why
+    assert "turned" not in why
+
+
 @pytest.mark.parametrize(
     "bad_box",
     [

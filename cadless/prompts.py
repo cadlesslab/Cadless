@@ -309,7 +309,9 @@ def _assembly_rules(spec: AssemblySpec) -> str:
 
     The measurements are interpolated rather than described because the model has
     to size parts against numbers: "make it fit your printer" is not something a
-    generator can act on.
+    generator can act on. The per-axis rule and its worked example are there for
+    the same reason: "fits" alone was answered with a cut along one axis, the
+    other two left whole, and a smaller model once that was refused.
 
     This is the whole brief -- the constraints AND the design decisions -- so it
     belongs to a round entitled to decide the split: a fresh generation and every
@@ -318,12 +320,22 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     :func:`_assembly_edit_rules` instead.
     """
     fits = _fits(spec)
+    volume = spec.volume
     return (
         f"This part is for a 3D printer whose build volume is {fits}, and it is "
         "too large to print in one piece. Build it as an ASSEMBLY of separate "
         "solids:\n"
         f"  * Split it into the FEWEST parts such that each one fits within {fits} "
         "on its own.\n"
+        "  * A part fits only when its width, depth and height each fit the bed at "
+        "once; turning it a quarter on the bed swaps width and depth but never "
+        "helps its height. Along every axis the model is longer than the bed, cut "
+        "it into at least as many pieces as the ratio demands, rounded up: on this "
+        f"printer a panel {fmt(round(max(volume.width, volume.depth) * 1.25, 1))} mm "
+        f"wide and {fmt(round(volume.height * 2.5, 1))} mm tall is cut into 2 along "
+        "its width and 3 along its height, however thin it is.\n"
+        "  * Keep every dimension the request gives. Never shrink the model to fit "
+        "the bed; the split is what makes it fit.\n"
         "  * Put each seam where a cut does least harm: at a natural boundary, not "
         "through a feature and not across a face meant to be seen.\n"
         "  * Join the parts with an interlocking dovetail or jigsaw profile cut "
@@ -351,7 +363,10 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
     edit one round on, fixing what the edit produced. A repair forced by the
     assembly check does not, because there the split is what failed. What any such
     round must still respect is the arithmetic it cannot infer: the bed each solid
-    has to fit, and the gap a joint needs to go together in plastic.
+    has to fit, along every axis at once, and the gap a joint needs to go together
+    in plastic -- and that the bed is met by cutting, never by shrinking, which a
+    round asked only to fix a part would otherwise reach for. A request that
+    itself resizes the model is the one exception, and it is named.
 
     The Compound requirement is deliberately absent. Both builders these rules are
     wrapped around -- :func:`build_refinement_message` and
@@ -370,11 +385,13 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
     fits = _fits(spec)
     return (
         f"This turn is for a 3D printer whose build volume is {fits}. Every separate "
-        f"solid in the result must fit within {fits} on its own, and every mating "
-        f"face must keep {fmt(spec.clearance_mm)} mm of clearance -- a joint that is "
-        "exact in CAD does not go together in plastic. Do not add, remove or move a "
-        "seam unless the change request asks for it; where it does, cut that seam as "
-        "an interlocking dovetail or jigsaw profile rather than a flat butt face, and "
+        f"solid in the result must fit within {fits} on its own, along all three axes "
+        f"at once, and every mating face must keep {fmt(spec.clearance_mm)} mm of "
+        "clearance -- a joint that is exact in CAD does not go together in plastic. "
+        "Keep the model's size: never shrink it to fit the bed, and change its size "
+        "only where the change request asks. Do not add, remove or move a seam "
+        "unless the change request asks for it; where it does, cut that seam as an "
+        "interlocking dovetail or jigsaw profile rather than a flat butt face, and "
         "orient it to print without support."
     )
 
