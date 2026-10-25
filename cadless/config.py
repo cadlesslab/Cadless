@@ -297,6 +297,11 @@ class Settings(BaseSettings):
     agent_max_tool_iters: int = 6  # max tool round-trips per user turn
     agent_token_budget: int = 200_000  # cumulative tokens/turn before forced stop
     agent_time_budget_secs: float = 120.0  # wall-clock/turn before forced stop
+    # An assembly turn's builds write a multi-part script, run the repair loop on
+    # it and then measure every part, so the plain budget leaves no room to retry
+    # a refused build. Used in place of agent_time_budget_secs when the turn
+    # carries an assembly spec, asked for or inherited.
+    assembly_agent_time_budget_secs: float = 300.0
     # Per-CALL output cap for the orchestrator. Distinct from the codegen
     # bedrock_max_tokens (2000, fine for short build123d scripts; an assembly
     # turn takes assembly_max_tokens instead): an orchestrator

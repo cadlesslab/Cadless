@@ -21,6 +21,7 @@ from cadless.agent import (
     ToolContext,
     build_tools,
 )
+from cadless.config import settings
 from cadless.llm.providers import StreamChunk
 from cadless.llm.providers.fake import FakeChatProvider
 from cadless.llm.types import (
@@ -30,6 +31,7 @@ from cadless.llm.types import (
     ToolDef,
     TurnParams,
 )
+from cadless.printer_profile import assembly_spec
 
 # --- fakes -----------------------------------------------------------------
 
@@ -206,13 +208,17 @@ def test_the_loop_refuses_an_image_a_blind_model_cannot_read():
     assert provider.calls == []  # refused before anything was sent
 
 
-def _context(pipeline=None, reparametrize=None, grounding=None) -> ToolContext:
+def _context(
+    pipeline=None, reparametrize=None, grounding=None, assembly=None, inherited_assembly=None
+) -> ToolContext:
     return ToolContext(
         pipeline=pipeline or SpyPipeline(),
         reparametrize=reparametrize,
         current_code='params = {"size": 10}\nresult = None\n',
         current_params={"size": 10},
         grounding=grounding,
+        assembly=assembly,
+        inherited_assembly=inherited_assembly,
     )
 
 
@@ -1223,6 +1229,132 @@ def test_max_tokens_truncated_tool_turn_surfaces_note_and_skips_tool():
     text = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
     assert "cut off" in text
     assert any(e.kind == "turn_end" for e in events)
+
+
+# --- the turn budgets: an assembly turn has its own, and a stop says so -----
+
+
+def _two_builds_then_text() -> ScriptedProvider:
+    """Two tool rounds and then a reply: room for a budget to stop the turn between them."""
+    return ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+            _tool_turn(
+                tool_use_id="tu-2", name="generate_model", tool_input={"spec": "a shelf, split"}
+            ),
+            _text_turn("done"),
+        ]
+    )
+
+
+def _budgets(*, plain: float, assembly: float):
+    return settings.model_copy(
+        update={"agent_time_budget_secs": plain, "assembly_agent_time_budget_secs": assembly}
+    )
+
+
+def test_an_assembly_turn_runs_under_the_assembly_time_budget():
+    pipeline = SpyPipeline()
+    agent = Agent(
+        provider=_two_builds_then_text(),
+        model="fake-model",
+        config=_budgets(plain=0.0, assembly=60.0),
+    )
+    result = agent.run_turn(
+        user_text="a bookshelf, as an assembly",
+        context=_context(pipeline=pipeline, assembly=assembly_spec()),
+    )
+    assert result.stopped_on_cap is False
+    assert result.stop_reason == "end_turn"
+    assert len(pipeline.calls) == 2
+
+
+def test_an_inherited_assembly_turn_runs_under_the_assembly_time_budget():
+    pipeline = SpyPipeline()
+    agent = Agent(
+        provider=_two_builds_then_text(),
+        model="fake-model",
+        config=_budgets(plain=0.0, assembly=60.0),
+    )
+    result = agent.run_turn(
+        user_text="make the shelves thicker",
+        context=_context(pipeline=pipeline, inherited_assembly=assembly_spec()),
+    )
+    assert result.stopped_on_cap is False
+    assert len(pipeline.calls) == 2
+
+
+def test_the_stream_runs_an_assembly_turn_under_the_assembly_time_budget():
+    pipeline = SpyPipeline()
+    agent = Agent(
+        provider=_two_builds_then_text(),
+        model="fake-model",
+        config=_budgets(plain=0.0, assembly=60.0),
+    )
+    events = list(
+        agent.stream_turn(
+            user_text="a bookshelf, as an assembly",
+            context=_context(pipeline=pipeline, assembly=assembly_spec()),
+        )
+    )
+    result = next(e for e in events if e.kind == "turn_end").data["result"]
+    assert result.stopped_on_cap is False
+    assert len(pipeline.calls) == 2
+
+
+def test_a_plain_turn_keeps_the_plain_time_budget():
+    pipeline = SpyPipeline()
+    agent = Agent(
+        provider=_two_builds_then_text(),
+        model="fake-model",
+        config=_budgets(plain=0.0, assembly=60.0),
+    )
+    result = agent.run_turn(user_text="a cube", context=_context(pipeline=pipeline))
+    assert result.stopped_on_cap is True
+    assert len(pipeline.calls) == 1
+
+
+def test_a_turn_the_time_budget_stops_ends_with_a_line_saying_so():
+    agent = Agent(provider=_two_builds_then_text(), model="fake-model", time_budget_secs=0.0)
+    result = agent.run_turn(user_text="a cube", context=_context())
+    assert result.stopped_on_cap is True
+    assert result.blocks[-1].kind == "text"
+    assert "time budget" in result.blocks[-1].text
+
+
+def test_a_turn_the_token_budget_stops_ends_with_a_line_saying_so():
+    agent = Agent(provider=_two_builds_then_text(), model="fake-model", token_budget=0)
+    result = agent.run_turn(user_text="a cube", context=_context())
+    assert result.stopped_on_cap is True
+    assert result.blocks[-1].kind == "text"
+    assert "token budget" in result.blocks[-1].text
+
+
+def test_the_stream_carries_the_line_a_budget_stop_adds():
+    agent = Agent(provider=_two_builds_then_text(), model="fake-model", time_budget_secs=0.0)
+    events = list(agent.stream_turn(user_text="a cube", context=_context()))
+    streamed = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
+    assert "time budget" in streamed
+    result = next(e for e in events if e.kind == "turn_end").data["result"]
+    assert result.blocks[-1].kind == "text"
+    assert "time budget" in result.blocks[-1].text
+
+
+def test_the_stream_carries_the_line_the_iteration_cap_adds():
+    provider = LoopForeverProvider(tool_input={"spec": "a cube"})
+    agent = Agent(provider=provider, model="fake-model", max_tool_iters=2)
+    events = list(agent.stream_turn(user_text="loop forever", context=_context()))
+    streamed = "".join(e.data.get("text", "") for e in events if e.kind == "text_delta")
+    assert "tool-iteration cap" in streamed
+
+
+def test_a_cut_off_reply_in_run_turn_says_so_as_the_stream_does():
+    provider = ScriptedProvider([_truncated_tool_turn(tool_use_id="tu-1", name="generate_model")])
+    agent = Agent(provider=provider, model="fake-model")
+    result = agent.run_turn(user_text="a cube", context=_context())
+    assert result.stop_reason == "max_tokens"
+    assert result.blocks[-1].kind == "text"
+    assert "cut off" in result.blocks[-1].text
 
 
 def test_a_parameter_edit_carries_the_rebuild_s_part_names(monkeypatch):
