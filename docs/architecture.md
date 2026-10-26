@@ -231,36 +231,37 @@ candidate judging, the identity seam and the image decisions are recorded under
    the exporter registry, whose per-part file naming they do not meet — a kind
    added there is written and then never found, with nothing raising. A mirror
    test holds the declarations of that vocabulary against each other.
-6. An execution failure can return to the provider as a repair prompt, and so can
-   a post-build check that ran on a program which executed perfectly well: the
-   render critique, the geometry assertions, and — on any build of several
-   parts — whether those parts go together. A turn that asked for an assembly is
-   held to every check against its printer; any other build only to whether two
-   parts share volume — the bed, parts that touch nothing, and a part that
-   cannot come out being no fault in a model nobody asked to split, which may be
-   an exploded view or printed in place. That check on an assembly turn is the
-   one that can end a turn rather than only prolong it: a build whose parts
-   overlap, do not fit the bed, do not mate, or admit no collision-free assembly
-   order is refused once the repair budget is gone, so a successful execution is
-   not by itself a stored version. Any other build is handed over with the
-   verdict on it, and one whose check could not be established is not repaired
-   at all. Everything else that succeeds is stored as a project
-   version whose source remains available for parameter changes and deterministic
-   rebuilds. The exception to a plain re-run of a version's own code is a
-   version in several pieces, or one that turns out to rebuild into them: a
-   single file per kind matches none of the pieces recorded, and choosing
-   between filing it as one more piece and leaving every recorded piece stale
-   would be inventing a contract rather than reading one. The second case is
-   knowable only after rebuilding — a version recorded before a build could hold
-   several files of a kind has one row per kind whatever its geometry — so a
-   rebuild runs into a staging directory and is discarded there. A version's own
-   artifacts are never the target of a build that may turn out not to match them.
-   A parameter change, from the chat or the parameter panel, is a new version
-   rather than a re-run: rebuilt once with no model and judged as a build's last
-   attempt is — held to every check when the turn asked for an assembly or the
-   model was built as one, and refused when its parts fail or cannot be checked;
-   any other is kept with the verdict on it — and its findings go back to where
-   the edit was made.
+6. An execution failure can return to the provider as a repair prompt, and so
+   can a post-build check that ran on a program which executed perfectly well:
+   the render critique, the geometry assertions, and — on any build of several
+   parts — whether those parts go together, or, on a turn that asked for an
+   assembly, whether a build of one part fits the bed at all. A turn that asked
+   for an assembly is held to every check against its printer; any other build
+   only to whether two parts share volume — the bed, parts that touch nothing,
+   and a part that cannot come out being no fault in a model nobody asked to
+   split, which may be an exploded view or printed in place. That check on an
+   assembly turn is the one that can end a turn rather than only prolong it: a
+   build whose parts overlap, do not fit the bed, do not mate, or admit no
+   collision-free assembly order is refused once the repair budget is gone, so a
+   successful execution is not by itself a stored version. Any other build is
+   handed over with the verdict on it, and one whose check could not be
+   established is not repaired at all. Everything else that succeeds is stored
+   as a project version whose source remains available for parameter changes and
+   deterministic rebuilds. The exception to a plain re-run of a version's own
+   code is a version in several pieces, or one that turns out to rebuild into
+   them: a single file per kind matches none of the pieces recorded, and
+   choosing between filing it as one more piece and leaving every recorded piece
+   stale would be inventing a contract rather than reading one. The second case
+   is knowable only after rebuilding — a version recorded before a build could
+   hold several files of a kind has one row per kind whatever its geometry — so
+   a rebuild runs into a staging directory and is discarded there. A version's
+   own artifacts are never the target of a build that may turn out not to match
+   them. A parameter change, from the chat or the parameter panel, is a new
+   version rather than a re-run: rebuilt once with no model and judged as a
+   build's last attempt is — held to every check when the turn asked for an
+   assembly or the model was built as one, and refused when its parts fail or
+   cannot be checked; any other is kept with the verdict on it — and its
+   findings go back to where the edit was made.
 7. After the checks accept a multi-part build, and only then, the turn describes
    it: named parts, the order the check established, and drawings of the parts
    coming apart. Like the render critique, it runs in the API process rather than

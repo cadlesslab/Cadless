@@ -44,6 +44,7 @@ from cadless.assembly_check import (
     PARTS_CHECKS,
     AssemblyReport,
     evaluate_assembly,
+    evaluate_lone_part,
 )
 from cadless.assertions import (
     GeometryAssertions,
@@ -83,7 +84,7 @@ _UNASKED = assembly_spec()
 
 
 def _judge_parts(
-    res: ExecResult, assembly: AssemblySpec | None, attempt: int
+    res: ExecResult, assembly: AssemblySpec | None, attempt: int, export_scale: float = 1.0
 ) -> tuple[dict | None, AssemblyReport | None]:
     """The verdict on a build's parts, and the report it was read from.
 
@@ -91,19 +92,40 @@ def _judge_parts(
     against its printer; any other build of several parts to the parts checks
     alone (see :mod:`cadless.assembly_check`). Where nothing was measured, a build
     that asked gets a verdict saying so and no report, and any other gets
-    ``(None, None)``.
+    ``(None, None)`` -- except a build that asked and came back as one solid too
+    big for the bed, which gets a refusal and its report: the model giving up on
+    the split is the one answer the per-part checks never see, and the bed is the
+    one thing a lone part can still be held to.
+
+    ``export_scale`` is the authoring-units-to-millimetre factor the worker's
+    ``bbox`` was measured without; the part boxes are already in millimetres.
 
     The verdict is the dict :attr:`GenerationResult.assembly` documents.
     """
     if res.assembly is None:
         if assembly is None:
             return None, None
-        # Asked, and nothing came back. Ordinarily that means the model produced
-        # one solid, which is not an assembly and is print_fit's question; it also
-        # covers a worker too old to know the flag, and a shape whose solids could
-        # not be split. Recorded rather than passed over silently, so a reader can
-        # tell this from a build that never asked -- both of which otherwise leave
-        # the result carrying nothing at all.
+        if res.bbox is not None and res.part_count == 1:
+            lone = evaluate_lone_part(res.bbox, assembly, export_scale=export_scale)
+            if not lone.ok:
+                verdict = {
+                    "ok": False,
+                    "order": None,
+                    "attempt": attempt,
+                    "measured": True,
+                    "failures": list(lone.failures),
+                    "unchecked": list(lone.unchecked),
+                    "joints": None,
+                    "releases": [],
+                    "checks": ["fit"],
+                }
+                return verdict, lone
+        # Asked, and nothing came back: one solid that fits the bed, which is not
+        # an assembly and has nothing else to check; or a shape whose solids could
+        # not be counted or split, whose box spans whatever was exported and so
+        # says nothing about any one part. Recorded rather than
+        # passed over silently, so a reader can tell this from a build that never
+        # asked -- both of which otherwise leave the result carrying nothing at all.
         return {"ok": None, "order": None, "attempt": attempt, "measured": False}, None
     checks = ASSEMBLY_CHECKS if assembly is not None else PARTS_CHECKS
     report = evaluate_assembly(
@@ -190,7 +212,8 @@ class GenerationResult:
     #: silently would arrive on the far side as something else.
     #:
     #: ``measured`` is false when the turn asked but nothing came back — the model
-    #: produced a single solid, or the worker could not split the shape. ``ok`` is
+    #: produced a single solid that fits the bed, or the worker could not split the
+    #: shape; a single solid too big for the bed is measured and refused. ``ok`` is
     #: then ``None`` rather than ``True``: not checked is not the same as passed,
     #: and without this the result is indistinguishable from a turn that never
     #: asked.
@@ -478,9 +501,11 @@ class Pipeline:
                         _emit_stage(on_progress, "critique", "ok", n)
                 # Do the parts actually go together? Once the model produced more
                 # than one part -- a lone part against the build volume is
-                # print_fit's question, not this one. A turn that asked for an
-                # assembly is held to every check against its printer; any other
-                # build to the parts checks alone (see assembly_check).
+                # print_fit's question, except on a turn that asked for an
+                # assembly, where a lone part is the split given up on and is
+                # held to the bed here. A turn that asked is held to every check
+                # against its printer; any other build to the parts checks alone
+                # (see assembly_check).
                 #
                 # Runs on every attempt including the last, for the reason the
                 # critique does: a `n < max_tries` gate leaves the build actually
@@ -492,7 +517,7 @@ class Pipeline:
                 # not ask, the last attempt is handed over with the verdict on
                 # it: nobody asked for an assembly, and a model whose parts were
                 # found wanting is still the model that was asked for.
-                parts_verdict, fit = _judge_parts(res, assembly, n)
+                parts_verdict, fit = _judge_parts(res, assembly, n, export_scale)
                 if parts_verdict is not None:
                     last_assembly = parts_verdict
                 if fit is not None:
