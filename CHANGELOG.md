@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.1](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.0...backend-v1.3.1) (2026-10-26)
+
+
+### Fixes
+
+* give an assembly turn its own time budget, and say which cap stopped a turn ([#72](https://github.com/cadlesslab/Cadless/issues/72)) ([ece78c1](https://github.com/cadlesslab/Cadless/commit/ece78c19cbf35bbfb1415f90990e7abf259cb831))
+* hold a one-part build on an assembly turn to the bed instead of keeping it unmeasured ([#74](https://github.com/cadlesslab/Cadless/issues/74)) ([6afe474](https://github.com/cadlesslab/Cadless/commit/6afe47443d275a0dcd7ed9ac803a71ed32743085))
+* offer the Assembly and Forge options only when the server acts on them ([#67](https://github.com/cadlesslab/Cadless/issues/67)) ([da0b955](https://github.com/cadlesslab/Cadless/commit/da0b955da6b0bbe681ef2d8af3e0f39272c355e3))
+* tell a cut-off codegen reply from a syntax error, and give an assembly brief room ([#71](https://github.com/cadlesslab/Cadless/issues/71)) ([46a59b5](https://github.com/cadlesslab/Cadless/commit/46a59b5fe27421d6d86b87e954e5c3433660a81d))
+* tell an assembly split how a socket is cut, and what a shared volume means ([#75](https://github.com/cadlesslab/Cadless/issues/75)) ([b0c4e68](https://github.com/cadlesslab/Cadless/commit/b0c4e68a9a603a6781c007227286e385cc6b247c))
+* tell an assembly split which axes to cut along, and not to shrink ([#73](https://github.com/cadlesslab/Cadless/issues/73)) ([6bdd0b8](https://github.com/cadlesslab/Cadless/commit/6bdd0b85a248cc18ea32a1974fa84f2a762df262))
+
 ## [1.3.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.2.1...backend-v1.3.0) (2026-10-23)
 
 
