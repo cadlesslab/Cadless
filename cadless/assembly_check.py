@@ -73,6 +73,23 @@ MATING_TOLERANCE_FLOOR_MM = 1.0
 #: distinction between touching and overlapping is the line this module draws.
 OVERLAP_EPSILON_MM3 = 1e-9
 
+#: Below this shared volume the overlap reads as a socket that does not clear
+#: its tab: narrower than the tab, or off its place. At or above it, as a tab
+#: sitting in solid material because the socket was cut outside the receiving
+#: part, on the wrong face, or not at all. The line is drawn to separate the
+#: clearance-sized shared volumes from the tab-sized ones; a socket shrunk by
+#: the clearance all round lands above it on all but the smallest tabs, and
+#: then only the stated reason is off, since both sentences end with the same
+#: fix. It chooses the sentence the model reads, never the verdict: any shared
+#: volume above the epsilon refuses.
+TAB_IN_SOLID_MM3 = 50.0
+
+#: What either sentence ends with: the one construction that clears a tab.
+_SOCKET_FIX = (
+    "subtract the socket, the tab's shape enlarged by the clearance on every side, "
+    "from the receiving part at the place the tab occupies when assembled"
+)
+
 #: Prefix on every reason the order search could not rule.
 #:
 #: A constant rather than a repeated literal because two places depend on it
@@ -251,7 +268,7 @@ def evaluate_assembly(
     if "fit" in checks:
         _check_fit(measurements, spec, report, labels)
     if "overlap" in checks:
-        _check_overlap(measurements, report, labels)
+        _check_overlap(measurements, report, labels, joined="mating" in checks)
     _check_mating(measurements, spec, report, labels, judge="mating" in checks)
     if "order" in checks:
         _check_order(measurements, report, labels)
@@ -360,7 +377,9 @@ def _pieces(
     return width, depth, height
 
 
-def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str]) -> None:
+def _check_overlap(
+    m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str], *, joined: bool
+) -> None:
     for entry in m.overlaps:
         pair = _pair(entry)
         if pair is None:
@@ -371,10 +390,24 @@ def _check_overlap(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequ
             report.unchecked.append(f"overlap entry {entry!r} names a part that does not exist")
             continue
         if shared > OVERLAP_EPSILON_MM3:
+            # A build nobody asked to join was never told of seams, tabs or a
+            # clearance, so its sentence names none of them.
+            if not joined:
+                cause = "cut the shared volume out of one of them so they only touch"
+            elif shared < TAB_IN_SOLID_MM3:
+                cause = (
+                    "a sliver that size is a socket narrower than its tab or off its "
+                    f"place: {_SOCKET_FIX}"
+                )
+            else:
+                cause = (
+                    "that much is a tab sitting in solid material, so the socket was cut "
+                    f"outside the receiving part, on the wrong face, or not at all: {_SOCKET_FIX}"
+                )
             report.failures.append(
                 f"{_at(labels, first)} and {_at(labels, second)} share "
-                f"{shared:g} mm^3 of interior volume; "
-                "two parts cannot occupy the same space, so widen the clearance on that joint"
+                f"{shared:g} mm^3 of interior volume; two parts cannot occupy the same "
+                f"space; {cause}"
             )
 
 

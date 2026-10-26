@@ -181,6 +181,60 @@ def test_an_assembly_turn_tells_the_model_which_printer_it_is_building_for():
     assert "Request: a bookshelf" in user
 
 
+def test_the_brief_says_how_a_socket_is_cut():
+    """Measured: the generator added a tab to one part and cut the socket on the
+    other part's outer face, or not at all, so the tab landed in solid material.
+    A brief that only asked for the socket to be cut larger than the tab said
+    nothing about where the socket is, which part it is cut from, or that it is
+    a cavity inside that part."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.generate("a bookshelf", assembly=spec)
+
+    user = fake.last[1]
+    assert "every tab meets a socket, never a tab facing a tab" in user
+    assert "enlarged by the clearance on every side" in user
+    assert (
+        "placed where the tab sits when the parts are assembled so it lies inside the "
+        "receiving part" in user
+    )
+    assert "open where the tab slides in" in user
+    assert "subtracted from the receiving part" in user
+    assert "removes nothing where the tab sits" in user
+
+
+def test_the_clearance_is_named_before_the_socket_is_built_from_it():
+    """The socket bullet says "the clearance" as a size already given; a brief
+    that gave it one bullet later asked the model to build with a number it had
+    not read yet."""
+    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
+    gen = CodeGenerator(provider=fake)
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+
+    gen.generate("a bookshelf", assembly=spec)
+
+    user = fake.last[1]
+    assert user.index("mm of clearance on every mating face") < user.index(
+        "every tab meets a socket"
+    )
+
+
+def test_an_edit_that_cuts_a_seam_is_told_where_the_socket_goes():
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+    assert (
+        "socket subtracted from the receiving part where the tab sits assembled"
+        in _assembly_edit_rules(spec)
+    )
+
+
 def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
     """A brief that only said "fits" was met with a split along the width alone,
     the depth and the height left whole, and a shrink when the parts were refused.
