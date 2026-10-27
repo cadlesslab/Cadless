@@ -304,6 +304,13 @@ def _fits(spec: AssemblySpec) -> str:
     return f"{fmt(volume.width)} x {fmt(volume.depth)} x {fmt(volume.height)} mm"
 
 
+def _requested(spec: AssemblySpec) -> str:
+    """The overall size the request gave, as both rules state it, or ``""``."""
+    if spec.requested_mm is None:
+        return ""
+    return " x ".join(fmt(value) for value in spec.requested_mm) + " mm"
+
+
 def _assembly_rules(spec: AssemblySpec) -> str:
     """What an assembly turn asks for, written against the printer it is for.
 
@@ -321,6 +328,7 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     """
     fits = _fits(spec)
     volume = spec.volume
+    size = _requested(spec)
     return (
         f"This part is for a 3D printer whose build volume is {fits}, and it is "
         "too large to print in one piece. Build it as an ASSEMBLY of separate "
@@ -334,8 +342,13 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         f"printer a panel {fmt(round(max(volume.width, volume.depth) * 1.25, 1))} mm "
         f"wide and {fmt(round(volume.height * 2.5, 1))} mm tall is cut into 2 along "
         "its width and 3 along its height, however thin it is.\n"
-        "  * Keep every dimension the request gives. Never shrink the model to fit "
-        "the bed; the split is what makes it fit.\n"
+        "  * Keep every dimension the request gives"
+        + (
+            f": it asks for {size} overall, so the assembled parts must measure exactly that"
+            if size
+            else ""
+        )
+        + ". Never shrink the model to fit the bed; the split is what makes it fit.\n"
         "  * Put each seam where a cut does least harm: at a natural boundary, not "
         "through a feature and not across a face meant to be seen.\n"
         "  * Join the parts with an interlocking dovetail or jigsaw profile cut "
@@ -391,13 +404,21 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
     so a butt-jointed or unprintable new seam would pass every check there is.
     """
     fits = _fits(spec)
+    size = _requested(spec)
     return (
         f"This turn is for a 3D printer whose build volume is {fits}. Every separate "
         f"solid in the result must fit within {fits} on its own, along all three axes "
         f"at once, and every mating face must keep {fmt(spec.clearance_mm)} mm of "
         "clearance -- a joint that is exact in CAD does not go together in plastic. "
         "Keep the model's size: never shrink it to fit the bed, and change its size "
-        "only where the change request asks. Do not add, remove or move a seam "
+        "only where the change request asks. "
+        + (
+            f"The request gives the model's overall size as {size}, so the assembled "
+            "parts must measure exactly that. "
+            if size
+            else ""
+        )
+        + "Do not add, remove or move a seam "
         "unless the change request asks for it; where it does, cut that seam as an "
         "interlocking dovetail or jigsaw profile rather than a flat butt face, its "
         "socket subtracted from the receiving part where the tab sits assembled, and "

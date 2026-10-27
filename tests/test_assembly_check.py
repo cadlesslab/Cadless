@@ -16,6 +16,7 @@ from cadless.assembly_check import (
     AssemblyReport,
     evaluate_assembly,
     evaluate_lone_part,
+    evaluate_requested_size,
     mating_tolerance,
 )
 from cadless.printer_profile import AssemblySpec, BuildVolume
@@ -172,6 +173,78 @@ def test_an_unreadable_part_box_refuses_rather_than_passing(bad_box):
     assert not report.ok
     assert report.unchecked
     assert "part 2" in report.unchecked[0]
+
+
+# --- the whole build keeps the size the request gave ------------------------
+
+SIZED = AssemblySpec(
+    volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=0.2, requested_mm=(300.0, 250.0, 18.0)
+)
+
+
+def test_a_build_shrunk_from_the_requested_size_is_refused():
+    # A board asked for at 300 x 250 x 18, handed back as one part that fits the
+    # bed: every check of the parts passes it, and it is not what was asked for.
+    report = evaluate_requested_size((200.0, 200.0, 18.0), SIZED)
+    assert not report.ok
+    why = report.failures[0]
+    assert "200 x 200 x 18" in why
+    assert "300 x 250 x 18" in why
+    assert "never by shrinking or enlarging" in why
+
+
+def test_a_build_thicker_than_the_request_is_refused():
+    assert not evaluate_requested_size((300.0, 250.0, 36.0), SIZED).ok
+
+
+def test_the_requested_size_is_kept_in_any_orientation():
+    # Which way the model lies is the split's business; the size is not.
+    assert evaluate_requested_size((18.0, 300.0, 250.0), SIZED).ok
+
+
+@pytest.mark.parametrize(
+    "bbox, kept",
+    [
+        ((300.0, 250.0, 18.9), True),
+        ((300.0, 250.0, 19.1), False),
+        ((302.9, 250.0, 18.0), True),
+        ((303.1, 250.0, 18.0), False),
+    ],
+    ids=[
+        "a thin side within a millimetre",
+        "a thin side past it",
+        "a long side within one percent",
+        "a long side past it",
+    ],
+)
+def test_the_slack_is_a_millimetre_or_one_percent_whichever_is_larger(bbox, kept):
+    assert evaluate_requested_size(bbox, SIZED).ok is kept
+
+
+def test_the_requested_size_is_judged_in_millimetres():
+    # The worker's box is in authoring units; the same board authored in metres.
+    assert evaluate_requested_size((0.3, 0.25, 0.018), SIZED, export_scale=1000.0).ok
+
+
+def test_a_build_whose_box_cannot_be_read_is_unchecked_rather_than_passed():
+    report = evaluate_requested_size((300.0, float("nan"), 18.0), SIZED)
+    assert not report.ok
+    assert report.failures == []
+    assert report.unchecked
+
+
+@pytest.mark.parametrize("requested", [(300.0, 0.0, 18.0), (300.0, 250.0)])
+def test_a_requested_size_that_cannot_be_read_is_unchecked_rather_than_passed(requested):
+    spec = AssemblySpec(volume=SPEC.volume, clearance_mm=0.2, requested_mm=requested)
+    report = evaluate_requested_size((300.0, 250.0, 18.0), spec)
+    assert not report.ok
+    assert report.failures == []
+    assert report.unchecked
+
+
+def test_a_turn_that_gave_no_size_is_held_to_none():
+    report = evaluate_requested_size((1.0, 1.0, 1.0), SPEC)
+    assert (report.failures, report.unchecked) == ([], [])
 
 
 # --- no two parts share interior volume -----------------------------------

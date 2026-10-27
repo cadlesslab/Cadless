@@ -174,7 +174,14 @@ candidate judging, the identity seam and the image decisions are recorded under
    does not drop the next edit back to the brief of a turn that never asked. What
    the record does *not* hold is the machine: which bed and which clearance apply
    are read from the settings saved now, so changing printer changes what an edit
-   must satisfy rather than pinning it to the one it was first built for.
+   must satisfy rather than pinning it to the one it was first built for. Where
+   the user gave the overall size, that reaches every call too and every build is
+   held to it: the orchestrator states it with the build call, and the first
+   statement in a turn holds for the rest of it — until the user sends another
+   message into the running turn — so a call that restates the request smaller
+   after a refusal, or a parameter change made to the same end, is still judged
+   against the request. A later turn starts with nothing pinned, so a resize the
+   user asks for then is free.
    What they say differs by round, and deliberately: a fresh run is entitled to
    decide the split, so it carries the whole brief — how few parts, along which
    axes, where the seams fall, how they interlock; an edit is not, because the
@@ -235,14 +242,16 @@ candidate judging, the identity seam and the image decisions are recorded under
    can a post-build check that ran on a program which executed perfectly well:
    the render critique, the geometry assertions, and — on any build of several
    parts — whether those parts go together, or, on a turn that asked for an
-   assembly, whether a build of one part fits the bed at all. A turn that asked
+   assembly, whether a build of one part fits the bed at all and whether the
+   whole build is the overall size the request gave. A turn that asked
    for an assembly is held to every check against its printer; any other build
    only to whether two parts share volume — the bed, parts that touch nothing,
    and a part that cannot come out being no fault in a model nobody asked to
    split, which may be an exploded view or printed in place. That check on an
    assembly turn is the one that can end a turn rather than only prolong it: a
    build whose parts overlap, do not fit the bed, do not mate, or admit no
-   collision-free assembly order is refused once the repair budget is gone, so a
+   collision-free assembly order, or that is not the size the request gave, is
+   refused once the repair budget is gone, so a
    successful execution is not by itself a stored version. Any other build is
    handed over with the verdict on it, and one whose check could not be
    established is not repaired at all. Everything else that succeeds is stored
@@ -259,7 +268,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    them. A parameter change, from the chat or the parameter panel, is a new
    version rather than a re-run: rebuilt once with no model and judged as a
    build's last attempt is — held to every check when the turn asked for an
-   assembly or the model was built as one, and refused when its parts fail or
+   assembly or the model was built as one, and to an overall size a build call
+   stated earlier in the same turn, and refused when its parts fail or
    cannot be checked; any other is kept with the verdict on it — and its
    findings go back to where the edit was made.
 7. After the checks accept a multi-part build, and only then, the turn describes

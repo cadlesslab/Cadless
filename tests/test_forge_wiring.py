@@ -12,6 +12,10 @@ Driven entirely offline: a fake pipeline records ``run`` vs ``run_candidates``.
 
 from __future__ import annotations
 
+import dataclasses
+
+import pytest
+
 from cadless.agent import Agent, ToolContext
 from cadless.llm.providers.fake import FakeChatProvider
 from cadless.llm.types import ContentBlock
@@ -304,3 +308,125 @@ def test_forge_never_applies_to_set_parameters():
     assert pipe.candidate_calls == []
     assert recorded["called"] == ("result = Box(1,1,1)", {"size": 5})
     assert payload.get("forge") is None
+
+
+# --- the size the request gave travels with the turn's spec ------------------
+
+_SPEC = AssemblySpec(volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.2)
+_BOARD = (300.0, 250.0, 18.0)
+
+
+def _sized_call(size, *, spec="a shelf board", name="generate_model", call_id="tu-1"):
+    key = "spec" if name == "generate_model" else "change"
+    return ContentBlock.of_tool_use(
+        id=call_id, name=name, input={key: spec, "requested_mm": list(size)}
+    )
+
+
+def _one_build():
+    return RacePipeline([_cand("result = Box(1,1,1)", ok=True, volume=1.0)])
+
+
+def test_a_requested_size_reaches_the_build_on_the_turn_s_spec():
+    pipe = _one_build()
+    ctx = ToolContext(pipeline=pipe, assembly=_SPEC)
+
+    _agent()._execute_one(_sized_call(_BOARD), ctx)
+
+    assert pipe.run_assemblies == [dataclasses.replace(_SPEC, requested_mm=_BOARD)]
+
+
+def test_the_turn_s_own_spec_is_left_without_the_size():
+    # A parameter edit takes the turn's spec, and must stay free to resize.
+    ctx = ToolContext(pipeline=_one_build(), assembly=_SPEC)
+
+    _agent()._execute_one(_sized_call(_BOARD), ctx)
+
+    # Not an equality with _SPEC: a spec changed in place is that same object.
+    assert ctx.assembly.requested_mm is None
+
+
+def test_a_later_build_in_the_turn_is_held_to_the_first_size_asked_for():
+    # Refused, an orchestrator can restate the request smaller; the turn is still
+    # the request it started as.
+    pipe = _one_build()
+    ctx = ToolContext(pipeline=pipe, assembly=_SPEC)
+
+    _agent()._execute_one(_sized_call(_BOARD), ctx)
+    _agent()._execute_one(_sized_call((200.0, 200.0, 18.0), spec="one part", call_id="tu-2"), ctx)
+
+    assert [spec.requested_mm for spec in pipe.run_assemblies] == [_BOARD, _BOARD]
+
+
+def test_a_later_build_that_states_no_size_is_held_to_the_first():
+    pipe = _one_build()
+    ctx = ToolContext(pipeline=pipe, assembly=_SPEC)
+
+    _agent()._execute_one(_sized_call(_BOARD), ctx)
+    _agent()._execute_one(_gen_block("one part"), ctx)
+
+    assert [spec.requested_mm for spec in pipe.run_assemblies] == [_BOARD, _BOARD]
+
+
+def test_a_forge_race_is_held_to_the_requested_size():
+    pipe = RacePipeline([_cand("result = Box(2,2,2)", ok=True, volume=8.0)])
+    ctx = ToolContext(pipeline=pipe, forge=True, forge_n=3, assembly=_SPEC)
+
+    _agent()._execute_one(_sized_call(_BOARD), ctx)
+
+    assert pipe.candidate_assemblies == [dataclasses.replace(_SPEC, requested_mm=_BOARD)]
+
+
+def test_an_edit_of_an_assembly_is_held_to_the_requested_size():
+    pipe = _one_build()
+    ctx = ToolContext(pipeline=pipe, current_code="result = Box(1,1,1)", inherited_assembly=_SPEC)
+
+    _agent()._execute_one(_sized_call(_BOARD, spec="split it", name="edit_model"), ctx)
+
+    assert pipe.run_assemblies == [dataclasses.replace(_SPEC, requested_mm=_BOARD)]
+
+
+def test_a_size_on_a_turn_that_is_no_assembly_holds_nothing():
+    pipe = _one_build()
+    ctx = ToolContext(pipeline=pipe)
+
+    _agent()._execute_one(_sized_call(_BOARD), ctx)
+
+    assert pipe.run_assemblies == [None]
+
+
+@pytest.mark.parametrize(
+    "size",
+    [
+        [300, 250],
+        [300, 0, 18],
+        [300, -1, 18],
+        ["wide", 250, 18],
+        [True, 250, 18],
+        [300, float("inf"), 18],
+        [300, 250, 18, 5],
+        [10**400, 250, 18],
+        "300 x 250 x 18",
+        None,
+    ],
+)
+def test_a_size_that_is_not_three_positive_lengths_is_not_held_to(size):
+    pipe = _one_build()
+    ctx = ToolContext(pipeline=pipe, assembly=_SPEC)
+    call = ContentBlock.of_tool_use(
+        id="tu-1", name="generate_model", input={"spec": "a board", "requested_mm": size}
+    )
+
+    _agent()._execute_one(call, ctx)
+
+    assert pipe.run_assemblies == [_SPEC]
+
+
+def test_a_size_that_could_not_be_read_does_not_take_the_turn_s_pin():
+    pipe = _one_build()
+    ctx = ToolContext(pipeline=pipe, assembly=_SPEC)
+
+    _agent()._execute_one(_sized_call((300.0, -1.0, 18.0)), ctx)
+    _agent()._execute_one(_sized_call(_BOARD, call_id="tu-2"), ctx)
+
+    assert [spec.requested_mm for spec in pipe.run_assemblies] == [None, _BOARD]

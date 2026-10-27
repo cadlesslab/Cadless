@@ -4,12 +4,15 @@ A turn that asks for an assembly gets its parts from the model, which is the onl
 participant that knows where a seam does least harm -- and which has no way to
 guarantee the result fits, mates, or can be put together. This module is where
 that becomes something the engine establishes rather than something the model
-claims. Four checks, each able to name itself when it fails:
+claims. The checks, each able to name itself when it fails:
 
   * **build volume fit** -- every part printable on its own;
   * **no shared interior volume** -- two parts cannot occupy the same space;
   * **mating** -- the parts form one connected assembly rather than loose pieces;
-  * **assembly order** -- an order exists in which each part reaches its place.
+  * **assembly order** -- an order exists in which each part reaches its place;
+  * **requested size** -- the whole build is the size the request gave, where it
+    gave one, because a model shrunk until its parts fit passes every check of
+    the parts and is still not what was asked for.
 
 The split of work mirrors :mod:`cadless.assertions`: an
 :class:`AssemblyMeasurements` carries numbers measured where the solids are live
@@ -38,7 +41,9 @@ for a lone part nobody asked to split -- a lone part on a turn that did ask is
 held to the bed here, by :func:`evaluate_lone_part`; parts that touch nothing
 are not wrong in a model nobody asked to join -- an exploded view, a set of
 separate objects; and a part that cannot come out is not wrong in one printed in
-place -- a chain, a ball in a cage.
+place -- a chain, a ball in a cage. The requested size is held to by
+:func:`evaluate_requested_size` on a turn that asked and gave one, whatever the
+build came back as: one part, a measured split, or parts nothing could measure.
 """
 
 from __future__ import annotations
@@ -89,6 +94,16 @@ _SOCKET_FIX = (
     "subtract the socket, the tab's shape enlarged by the clearance on every side, "
     "from the receiving part at the place the tab occupies when assembled"
 )
+
+#: How far a side of the whole build may stand from the size the request gave,
+#: in millimetres, at the least: enough to absorb the kernel's rounding.
+REQUESTED_SIZE_SLACK_MM = 1.0
+
+#: The same slack as a fraction of the side, used where it is the larger: a long
+#: side, where the cuts and the clearance they leave fall, gets room in
+#: proportion. A model resized to dodge the bed moves a side by far more than
+#: either, so the slack decides nothing but noise.
+REQUESTED_SIZE_SLACK_FRACTION = 0.01
 
 #: Prefix on every reason the order search could not rule.
 #:
@@ -194,11 +209,16 @@ class AssemblyReport:
         return "The parts of this assembly were not accepted:\n" + "\n".join(bullets)
 
 
-#: Every check, for a turn that asked for an assembly.
+#: Every check of the parts, for a turn that asked for an assembly.
 ASSEMBLY_CHECKS = frozenset({"fit", "overlap", "mating", "order"})
 
 #: The checks any other build of several parts faces (see the module docstring).
 PARTS_CHECKS = frozenset({"overlap"})
+
+#: The name the requested-size check goes by in a verdict. In neither set above:
+#: it judges the whole build rather than its parts, through
+#: :func:`evaluate_requested_size`, so :func:`evaluate_assembly` never runs it.
+SIZE_CHECK = "size"
 
 
 def _concerns(reason) -> str | None:
@@ -310,6 +330,49 @@ def evaluate_lone_part(
             f"{_size((volume.width, volume.depth, volume.height))} mm build volume; "
             f"cut it into {_cuts(size, volume)}, joined as the brief asks, and keep "
             "the model's size: do not shrink it"
+        )
+    return report
+
+
+def evaluate_requested_size(
+    bbox: Sequence[float] | None, spec: AssemblySpec, *, export_scale: float = 1.0
+) -> AssemblyReport:
+    """Check the whole build against the overall size the request gave.
+
+    Nothing where ``spec`` carries no requested size. Otherwise ``bbox`` -- the
+    worker's box around every part as placed, in authoring units, brought to
+    millimetres by ``export_scale`` -- is compared with the requested size
+    dimension by dimension, both sorted, so which way the model lies on the bed
+    is left to the split. One sentence names both sizes when a dimension is off
+    by more than its slack; a box or a requested size that is not three usable
+    lengths is reported as unchecked rather than passed, as the fit is.
+    """
+    report = AssemblyReport()
+    if spec.requested_mm is None:
+        return report
+    requested = _dimensions(spec.requested_mm)
+    if requested is None or min(requested) <= 0:
+        report.unchecked.append(
+            "overall size against the request: the requested size is not three "
+            "positive finite lengths"
+        )
+        return report
+    size = _dimensions(bbox)
+    if size is None:
+        report.unchecked.append(
+            "overall size against the request: the build's bounding box is not three finite numbers"
+        )
+        return report
+    size = tuple(extent * export_scale for extent in size)
+    if any(
+        abs(have - want) > max(REQUESTED_SIZE_SLACK_MM, want * REQUESTED_SIZE_SLACK_FRACTION)
+        for have, want in zip(sorted(size), sorted(requested), strict=True)
+    ):
+        report.failures.append(
+            f"the whole build is {_size(size)} mm, but the request asked for "
+            f"{_size(requested)} mm: keep every dimension the request gives and meet "
+            "the bed by splitting the model into parts that each fit it, never by "
+            "shrinking or enlarging the model"
         )
     return report
 

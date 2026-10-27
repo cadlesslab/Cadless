@@ -5,6 +5,7 @@ stage runs, what it does with a verdict, and how the loop ends -- not the
 measurement, which ``tests/test_assembly_measure.py`` covers against real solids.
 """
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -290,6 +291,138 @@ def test_a_build_whose_solids_could_not_be_counted_keeps_the_not_measured_verdic
     )
     assert result.ok
     assert result.assembly["measured"] is False
+
+
+# --- every build on a turn that gave a size is held to it -------------------
+
+SIZED = dataclasses.replace(SPEC, requested_mm=(300.0, 250.0, 18.0))
+
+
+def test_a_lone_part_shrunk_to_fit_the_bed_is_refused(monkeypatch):
+    # It fits the bed, so the lone part's own check passes it; the size is what
+    # was given up.
+    result, events = _run(
+        FakeGen(), None, monkeypatch, assembly=SIZED, bbox=(200.0, 200.0, 18.0), tries=2
+    )
+    assert not result.ok
+    assert ("assembly", "error") in _stages(events)
+    assert result.assembly["checks"] == ["fit", "size"]
+
+
+def test_a_build_refused_for_size_is_repaired_with_the_whole_brief(monkeypatch):
+    gen = FakeGen()
+    _run(gen, None, monkeypatch, assembly=SIZED, bbox=(200.0, 200.0, 18.0), tries=2)
+    assert "300 x 250 x 18" in gen.last_repair_error
+    assert gen.repair_may_resplits == [True]
+    assert gen.repair_assemblies == [SIZED]
+
+
+def test_a_lone_part_of_the_requested_size_that_fits_is_kept(monkeypatch):
+    small = dataclasses.replace(SPEC, requested_mm=(100.0, 100.0, 50.0))
+    result, _ = _run(FakeGen(), None, monkeypatch, assembly=small, bbox=(100.0, 100.0, 50.0))
+    assert result.ok
+    assert result.assembly["measured"] is False
+
+
+def test_a_sound_split_of_the_requested_size_is_kept(monkeypatch):
+    result, _ = _run(FakeGen(), _sound(), monkeypatch, assembly=SIZED, bbox=(300.0, 250.0, 18.0))
+    assert result.ok
+    assert result.assembly["ok"] is True
+    assert "size" in result.assembly["checks"]
+
+
+def test_a_sound_split_of_another_size_is_refused(monkeypatch):
+    # Every part fits and mates; the assembled board is twice as thick as asked.
+    gen = FakeGen()
+    result, _ = _run(gen, _sound(), monkeypatch, assembly=SIZED, bbox=(300.0, 250.0, 36.0), tries=2)
+    assert not result.ok
+    assert result.assembly["ok"] is False
+    assert "300 x 250 x 36" in result.assembly["failures"][0]
+    assert gen.repair_may_resplits == [True]
+
+
+def test_the_size_leads_a_bad_split_s_findings(monkeypatch):
+    # A model of the wrong size is wrong whatever its parts do, so the repair
+    # reads that first.
+    result, _ = _run(
+        FakeGen(), _overlapping(), monkeypatch, assembly=SIZED, bbox=(300.0, 250.0, 36.0), tries=1
+    )
+    failures = result.assembly["failures"]
+    assert len(failures) >= 2
+    assert "300 x 250 x 36" in failures[0]
+    assert "share" in failures[1]
+
+
+def test_a_split_that_could_not_be_measured_is_still_held_to_the_size(monkeypatch):
+    # Its box spans every solid, which is exactly the size to judge.
+    result, _ = _run(
+        FakeGen(),
+        None,
+        monkeypatch,
+        assembly=SIZED,
+        bbox=(200.0, 200.0, 18.0),
+        part_count=2,
+        tries=1,
+    )
+    assert not result.ok
+    assert result.assembly["ok"] is False
+    assert result.assembly["checks"] == ["size"]
+
+
+def test_an_unmeasured_split_of_the_requested_size_keeps_the_not_measured_verdict(monkeypatch):
+    result, _ = _run(
+        FakeGen(), None, monkeypatch, assembly=SIZED, bbox=(300.0, 250.0, 18.0), part_count=2
+    )
+    assert result.ok
+    assert result.assembly["measured"] is False
+
+
+def test_a_lone_part_too_big_and_shrunk_is_told_both(monkeypatch):
+    # 300 x 250 x 9 against 300 x 250 x 18: off the bed and off the size at once.
+    result, _ = _run(
+        FakeGen(), None, monkeypatch, assembly=SIZED, bbox=(300.0, 250.0, 9.0), tries=1
+    )
+    assert not result.ok
+    assert result.assembly["checks"] == ["fit", "size"]
+    assert len(result.assembly["failures"]) == 2
+
+
+def test_a_size_is_judged_in_millimetres(monkeypatch):
+    # The worker's box is in authoring units; the same part authored in metres.
+    small = dataclasses.replace(SPEC, requested_mm=(100.0, 100.0, 50.0))
+    result, _ = _run(
+        FakeGen(), None, monkeypatch, assembly=small, bbox=(0.1, 0.1, 0.05), export_scale=1000.0
+    )
+    assert result.ok
+
+
+@pytest.mark.parametrize(
+    "measurements, part_count",
+    [
+        (None, 2),
+        (
+            dataclasses.replace(_sound(), unchecked=["assembly order: the search ran out of time"]),
+            None,
+        ),
+    ],
+    ids=["parts nothing could measure", "a measured split"],
+)
+def test_a_build_whose_box_cannot_be_read_is_refused_rather_than_held_to_nothing(
+    monkeypatch, measurements, part_count
+):
+    # Not checked is not passed on a turn that asked; the size's line leads.
+    result, _ = _run(
+        FakeGen(),
+        measurements,
+        monkeypatch,
+        assembly=SIZED,
+        bbox=(300.0, float("nan"), 18.0),
+        part_count=part_count,
+        tries=1,
+    )
+    assert not result.ok
+    assert result.assembly["ok"] is False
+    assert result.assembly["unchecked"][0].startswith("overall size against the request")
 
 
 # --- a failure is an ordinary repair signal -------------------------------

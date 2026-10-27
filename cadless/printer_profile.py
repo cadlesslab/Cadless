@@ -203,14 +203,23 @@ def build_volume(saved: Mapping[str, Any] | None = None) -> BuildVolume:
 class AssemblySpec:
     """What a turn asking for an assembly has to tell the model about the machine.
 
-    The two travel together because either alone is misleading: a part sized to a
-    bed it will not be printed on is as wrong as a joint cut to a clearance the
-    printer does not hold. Built once, where the turn is, so the prompt cannot
-    end up describing one printer's bed and another's tolerance.
+    The bed and the clearance travel together because either alone is
+    misleading: a part sized to a bed it will not be printed on is as wrong as a
+    joint cut to a clearance the printer does not hold. Built once, where the
+    turn is, so the prompt cannot end up describing one printer's bed and
+    another's tolerance.
+
+    ``requested_mm`` is the one fact here about the model rather than the
+    machine: the overall size the request gave, where it gave one.
+    :func:`assembly_spec` never sets it, since the machine is the same for every
+    build of a turn and the size is stated with a build. It rides on this spec
+    because everything that must know it already receives the spec: the brief,
+    the repair the check forces, and the check itself.
     """
 
     volume: BuildVolume
     clearance_mm: float
+    requested_mm: tuple[float, float, float] | None = None
 
 
 def assembly_spec(saved: Mapping[str, Any] | None = None) -> AssemblySpec:

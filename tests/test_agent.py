@@ -1481,3 +1481,111 @@ def test_a_parameter_edit_after_a_fresh_build_is_not_judged_as_the_model_it_repl
 
     # ...and the edit acts on the fresh cube, which nobody asked to be one.
     assert [assembly for _, assembly in calls] == [None]
+
+
+# --- the overall size the user asked for -----------------------------------
+
+
+@pytest.mark.parametrize("name", ["generate_model", "edit_model"])
+def test_the_build_tools_take_the_overall_size_the_user_asked_for(name):
+    tool = next(t for t in build_tools() if t.name == name)
+    size = tool.input_schema["properties"]["requested_mm"]
+    assert size["type"] == "array"
+    assert size["items"] == {"type": "number"}
+    assert "converted if the user used another unit" in size["description"]
+    assert "requested_mm" not in tool.input_schema["required"]
+
+
+def test_the_operating_instructions_say_to_pass_the_stated_size_unchanged():
+    from cadless.agent import build_agent_system_prompt
+
+    prompt = " ".join(build_agent_system_prompt().lower().split())
+    assert "pass the three as `requested_mm`" in prompt
+    assert "never change them to fit a printer" in prompt
+    assert "converted if the user used another unit" in prompt
+    assert "on an assembly turn a model larger than the bed is split" in prompt
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_parameter_edit_in_the_turn_is_held_to_the_size_a_build_was_asked_for(monkeypatch, loop):
+    # Refused for size, an orchestrator can reach for a parameter change to make
+    # the model smaller; the turn is still the request the user gave. A turn that
+    # pinned nothing rebuilds against its own spec, as before.
+    from dataclasses import replace
+
+    calls = _record_default_edits(monkeypatch)
+    spec = _spec()
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1",
+                name="generate_model",
+                tool_input={"spec": "a board", "requested_mm": [300, 250, 18]},
+            ),
+            _tool_turn(
+                tool_use_id="tu-2", name="set_parameters", tool_input={"params": {"size": 20}}
+            ),
+            _text_turn("done"),
+        ]
+    )
+    ctx = _context(assembly=spec)
+    ctx.export_dir = "/tmp/turn-staging"
+
+    agent = Agent(provider=provider, model="fake-model")
+    if loop == "run_turn":
+        agent.run_turn(user_text="a board, as an assembly", context=ctx)
+    else:
+        list(agent.stream_turn(user_text="a board, as an assembly", context=ctx))
+
+    assert calls == [("/tmp/turn-staging", replace(spec, requested_mm=(300.0, 250.0, 18.0)))]
+
+
+class _SizeSpy(SpyPipeline):
+    """A pipeline stand-in that also records which spec each build was held to."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.assemblies: list = []
+
+    def run(self, intent, *args, assembly=None, **kwargs):
+        self.assemblies.append(assembly)
+        return super().run(intent, *args, assembly=assembly, **kwargs)
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
+    # The pin keeps the orchestrator to the user's request; a message the user
+    # sends into the running turn is the request again, and may change it.
+    pipeline = _SizeSpy()
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1",
+                name="generate_model",
+                tool_input={"spec": "a shelf", "requested_mm": [500, 250, 400]},
+            ),
+            _tool_turn(
+                tool_use_id="tu-2",
+                name="generate_model",
+                tool_input={"spec": "a wider shelf", "requested_mm": [600, 250, 400]},
+            ),
+            _text_turn("done"),
+        ]
+    )
+    polls = {"n": 0}
+
+    def steer() -> str | None:
+        polls["n"] += 1
+        return "actually make it 600 mm wide" if polls["n"] == 2 else None
+
+    agent = Agent(provider=provider, model="fake-model")
+    context = _context(pipeline=pipeline, assembly=_spec())
+    if loop == "run_turn":
+        agent.run_turn(user_text="a shelf, as an assembly", context=context, steer=steer)
+    else:
+        list(agent.stream_turn(user_text="a shelf, as an assembly", context=context, steer=steer))
+
+    assert [spec.requested_mm for spec in pipeline.assemblies] == [
+        (500.0, 250.0, 400.0),
+        (600.0, 250.0, 400.0),
+    ]
