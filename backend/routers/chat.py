@@ -490,8 +490,9 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     spec = await assembly_spec_for(bool(body.assembly or current_is_assembly))
     # The same spec, split by where the answer came from, because the two are not
     # entitled to the same tools: a fresh generation starts a new model and may only
-    # be an assembly if this turn asked, while an edit acts on the model that already
-    # exists and takes either. Without the split the opt-in would be permanent —
+    # be an assembly if this turn asked, unless it regenerates the model the turn was
+    # editing, while an edit acts on the model that already exists and takes either.
+    # Without the split the opt-in would be permanent —
     # every later turn in the project would inherit, including "forget that, make me
     # a simple cube", and the composer's toggle only ever turns it on.
     asked_spec = spec if body.assembly else None
@@ -570,8 +571,9 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             # onto the previous one, starting from the model the turn began on, so a
             # chat turn refines its predecessor instead of forking a new root.
             chain_parent = parent_version_id
-            # Whether the model a non-generating tool acts on was built as an
-            # assembly: the starting model's answer until the turn replaces it.
+            # Whether the model a non-generating tool, or a regeneration, acts on
+            # was built as an assembly: the starting model's answer until the turn
+            # replaces it.
             inherits_assembly = current_is_assembly
 
             def drive() -> None:
@@ -591,6 +593,9 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                         # thumbnail URL into the UI event (scheduled on the loop).
                         ok = bool(ev.data.get("ok"))
                         any_failure = any_failure or not ok
+                        # A generation the agent marked as regenerating the model
+                        # the turn was editing counts as that model, as an edit does.
+                        regenerates = bool(ev.data.get("regenerates"))
                         plan_step = None
                         if plan_total:
                             plan_cursor = min(plan_cursor + 1, plan_total)
@@ -608,12 +613,16 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                 # asked for, with the switch on to give it the
                                 # spec -- or when it derives from a current model
                                 # that is one. A fresh generation starts a new
-                                # model and derives from nothing. The inherited
-                                # half reads the current version's record rather
-                                # than the spec, because the kill-switch being off
-                                # must leave that memory alone rather than erase it.
+                                # model and derives from nothing, unless it
+                                # regenerates the model the turn was editing. The
+                                # inherited half reads the current version's record
+                                # rather than the spec, because the kill-switch being
+                                # off must leave that memory alone rather than erase it.
                                 built_as_assembly=asked_spec is not None
-                                or (ev.data.get("tool") != GENERATE_MODEL and inherits_assembly),
+                                or (
+                                    (ev.data.get("tool") != GENERATE_MODEL or regenerates)
+                                    and inherits_assembly
+                                ),
                             ),
                             loop,
                         ).result()
@@ -623,7 +632,11 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                         # later edit in this turn derives from it, not from what
                         # the starting model was built as -- once its code is the
                         # one the agent edits, which holds whether or not it built.
-                        if ev.data.get("tool") == GENERATE_MODEL and ev.data.get("code"):
+                        if (
+                            ev.data.get("tool") == GENERATE_MODEL
+                            and ev.data.get("code")
+                            and not regenerates
+                        ):
                             inherits_assembly = False
                         # Blueprint rollback policy (D3): on a failed step
                         # WITHIN a planned (Blueprint) turn, auto-revert current to
@@ -656,9 +669,10 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                     forge_race.get("losers", []),
                                     winner_version_id=version_id,
                                     parent_version_id=parent_version_id,
-                                    # A forge race is always a fresh generation, so
-                                    # its losers follow the winner's rule above.
-                                    built_as_assembly=asked_spec is not None,
+                                    # A forge race is always a generation, so its
+                                    # losers follow the winner's rule above.
+                                    built_as_assembly=asked_spec is not None
+                                    or (regenerates and inherits_assembly),
                                 ),
                                 loop,
                             ).result()

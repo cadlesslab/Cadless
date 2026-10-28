@@ -131,6 +131,19 @@ def _sized(
     return replace(spec, requested_mm=requested)
 
 
+def _generation_spec(context: ToolContext) -> AssemblySpec | None:
+    """The spec a ``generate_model`` call builds against.
+
+    What the turn asked for, or -- once the turn has called ``edit_model`` or
+    ``set_parameters`` -- what the model being edited was built as: a generation
+    after an edit is the orchestrator regenerating that model, not a new one the
+    user asked for.
+    """
+    if context.assembly is not None:
+        return context.assembly
+    return context.inherited_assembly if context.edited_this_turn else None
+
+
 def build_tools() -> list[ToolDef]:
     """The neutral tool definitions exposed to the model.
 
@@ -326,7 +339,8 @@ class ToolContext:
     # generation starts a new model, so only an explicit request may make it an
     # assembly -- inheriting there would make the opt-in permanent, since the
     # composer's toggle only ever turns it on. An edit acts on the model that
-    # already exists, so it takes either.
+    # already exists, so it takes either, and so does a generation that
+    # regenerates the model this turn was editing (``edited_this_turn``).
     inherited_assembly: AssemblySpec | None = None
     # The overall size the user asked for, pinned by the first build call of the
     # turn that stated one. On a turn that asks for an assembly every build is
@@ -339,6 +353,16 @@ class ToolContext:
     # user asks for then is free. Kept off ``assembly`` and ``inherited_assembly``
     # so the turn's own specs never change.
     requested_mm: tuple[float, float, float] | None = None
+    # Whether this turn has called ``edit_model`` or ``set_parameters``, set
+    # before either builds so one that fails or raises counts too. A
+    # ``generate_model`` after one is the orchestrator regenerating the model it
+    # was editing -- the fallback after edits that would not validate -- rather
+    # than a new model the user asked for, so it keeps the spec the edit had and
+    # the model stays an assembly. The fresh build a turn opens with ("forget
+    # that, make me a simple cube") is never a regeneration, since nothing has
+    # set it yet, and a message the user sends into the running turn clears it,
+    # as it clears the pinned size: the user may be asking for a new model.
+    edited_this_turn: bool = False
     # Live token sink for streaming codegen: when set, fresh
     # ``generate_model`` codegen deltas are pushed here AS the code is written
     # (the chat layer wires it to the SSE queue), instead of being collected into
@@ -1008,8 +1032,11 @@ class Agent:
                 messages.append(Message(role="user", content=[block]))
                 produced.append(block)
                 # The pinned size is the request as the user gave it, and this is
-                # the user speaking again: the next size stated holds instead.
+                # the user speaking again: the next size stated holds instead. A
+                # generation after it is whatever the user now asks for, not a
+                # regeneration of the model edited before it.
                 context.requested_mm = None
+                context.edited_this_turn = False
 
             turn = _StreamedTurn()
             turn.consume(
@@ -1147,6 +1174,7 @@ class Agent:
                 messages.append(Message(role="user", content=[block]))
                 produced.append(block)
                 context.requested_mm = None  # as in run_turn: the user spoke again
+                context.edited_this_turn = False
                 yield StreamEventOut("steer", {"text": block.text or ""})
 
             turn = _StreamedTurn()
@@ -1263,6 +1291,9 @@ class Agent:
                     # show its findings to the reader as well as to the model.
                     "assembly": payload.get("assembly"),
                     "parts": payload.get("parts"),
+                    # Whether this generation regenerates the model the turn was
+                    # editing, so the chat records it as what that model was.
+                    "regenerates": bool(payload.get("regenerates")),
                 }
                 # Forge race set: carry the losing candidates through so
                 # the chat layer can persist them as non-current candidate rows. It
@@ -1307,9 +1338,9 @@ class Agent:
         """Execute one tool with progress streaming; return (block, summary payload).
 
         The summary payload is the ``_result_summary``/``_reparam_summary`` dict
-        the model is shown less ``forge`` and ``parts``, so the SSE layer can map
-        it to a ``tool_result`` UI event and the router can persist a version
-        from it.
+        the model is shown less the keys kept for the chat layer, so the SSE
+        layer can map it to a ``tool_result`` UI event and the router can persist
+        a version from it.
         """
         signature = f"{tu.name}:{json.dumps(tu.input or {}, sort_keys=True)}"
         if signature in seen_calls:
@@ -1428,8 +1459,8 @@ class Agent:
 
         ``on_progress`` (when given) receives the wrapped pipeline's progress
         events — the ``stage`` vocabulary the SSE layer nests inside
-        ``tool_progress``. The model is shown the summary payload less ``forge``
-        and ``parts``.
+        ``tool_progress``. The model is shown the summary payload less the keys
+        kept for the chat layer.
         """
         name = tu.name
         args = tu.input or {}
@@ -1437,6 +1468,7 @@ class Agent:
             if name in (GENERATE_MODEL, EDIT_MODEL) and context.requested_mm is None:
                 context.requested_mm = _requested_size(args.get("requested_mm"))
             if name == GENERATE_MODEL:
+                regenerating = context.edited_this_turn
                 # fresh generation gets the turn's RAG grounding; the
                 # edit/refine path below deliberately does not (B4 scope).
                 if context.forge and context.forge_n > 1:
@@ -1461,18 +1493,24 @@ class Agent:
                         grounding=context.grounding,
                         images=context.images,
                         on_reading=context.on_reading,
-                        assembly=_sized(context.assembly, context.requested_mm),
+                        assembly=_sized(_generation_spec(context), context.requested_mm),
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
-                if payload.get("code"):
+                if payload.get("code") and not regenerating:
                     # A fresh model replaces the one the turn started on, so what
                     # that one was built as no longer describes the model a later
                     # edit in this turn acts on: it is an assembly only if asked.
                     # Keyed on the code, as adopting it is, built or not: a later
-                    # edit works on whatever code was adopted.
+                    # edit works on whatever code was adopted. A regeneration is
+                    # that same model rebuilt, so it keeps what it was built as.
                     context.inherited_assembly = None
+                if regenerating:
+                    # For the chat layer's record of the version, which decides
+                    # what the next turn inherits; kept out of the model's view.
+                    payload["regenerates"] = True
             elif name == EDIT_MODEL:
+                context.edited_this_turn = True
                 res = context.pipeline.run(
                     args.get("change", ""),
                     export_dir=context.export_dir,
@@ -1500,10 +1538,10 @@ class Agent:
                     # `cadless.prompts`, which frames an edit by the constraints
                     # alone. Unlike `grounding` above, which refine has no
                     # parameter to receive, this one was plumbed all the way down.
-                    # Either source will do here, unlike the fresh branch above:
-                    # this tool edits the model that already exists, so what that
-                    # model was built as is as good an answer as what the turn
-                    # asked for.
+                    # Either source will do here, unlike the fresh branch above,
+                    # which takes the inherited one only when it regenerates: this
+                    # tool edits the model that already exists, so what that model
+                    # was built as is as good an answer as what the turn asked for.
                     assembly=_sized(
                         context.assembly or context.inherited_assembly, context.requested_mm
                     ),
@@ -1513,6 +1551,7 @@ class Agent:
             elif name == SET_PARAMETERS:
                 if not context.current_code:
                     raise ValueError("no current model to re-parametrize")
+                context.edited_this_turn = True
                 out = context.reparametrize(context.current_code, args.get("params", {}))
                 payload = _reparam_summary(out)
                 if out.get("ok"):
@@ -1535,8 +1574,11 @@ class Agent:
         # persist, but it holds non-JSON GenerationResult objects and is internal —
         # keep it out of the tool_result content the model sees. The part list
         # rides the same way, for the chat layer to store with the version: one
-        # entry per part would otherwise grow every turn the model reads.
-        model_view = {k: v for k, v in payload.items() if k not in ("forge", "parts")}
+        # entry per part would otherwise grow every turn the model reads. So does
+        # the regeneration mark, which is the chat layer's to record.
+        model_view = {
+            k: v for k, v in payload.items() if k not in ("forge", "parts", "regenerates")
+        }
         block = ContentBlock.of_tool_result(
             tool_use_id=tu.id or "",
             content=json.dumps(model_view),
@@ -1574,7 +1616,7 @@ class Agent:
             grounding=context.grounding,
             images=context.images,
             on_reading=context.on_reading,
-            assembly=_sized(context.assembly, context.requested_mm),
+            assembly=_sized(_generation_spec(context), context.requested_mm),
             # Without this the judge's render rung was unreachable: it runs only
             # when handed a reviewer, and nothing ever handed it one, so a ladder
             # rung that looked live had never decided anything. The same failure

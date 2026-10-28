@@ -172,7 +172,7 @@ The agent exposes five tools to the model (`build_tools()`):
 
 | Tool | Effect |
 |---|---|
-| `generate_model(spec, requested_mm)` | Fresh pipeline run. `requested_mm`, optional, is the overall width, depth and height the user gave, in millimetres. On a turn that asked for an assembly the first one stated holds for every build after it until the user sends another message into the running turn, so a later call that restates the request smaller is still judged against the request. |
+| `generate_model(spec, requested_mm)` | Fresh pipeline run. After an `edit_model` or `set_parameters` call in the same turn it regenerates the model being edited instead: it is held to that model's assembly spec and recorded as an assembly when the model was one, until the user sends another message into the running turn. `requested_mm`, optional, is the overall width, depth and height the user gave, in millimetres. On a turn that asked for an assembly the first one stated holds for every build after it until the user sends another message into the running turn, so a later call that restates the request smaller is still judged against the request. |
 | `edit_model(change, requested_mm)` | Refinement run on the current version's code, with the same optional size. |
 | `set_parameters(params)` | Deterministic `params`-block override + rebuild (`params.py`, `pipeline.rebuild`) — no LLM in the loop. Its parts are measured and judged as a generated build's last attempt is, held as well to an overall size a build call pinned earlier in the same turn, and its files land in the turn's export directory. |
 | `ask_clarification(questions)` | Ends the turn and asks the user (max 3 questions). |

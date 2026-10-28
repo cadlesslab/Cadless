@@ -13,6 +13,7 @@ Driven entirely offline: a fake pipeline records ``run`` vs ``run_candidates``.
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -430,3 +431,114 @@ def test_a_size_that_could_not_be_read_does_not_take_the_turn_s_pin():
     _agent()._execute_one(_sized_call(_BOARD, call_id="tu-2"), ctx)
 
     assert [spec.requested_mm for spec in pipe.run_assemblies] == [None, _BOARD]
+
+
+# --- a regeneration after an edit is the model being edited ------------------
+
+_EDITED = "result = Box(1,1,1)"
+
+
+def _edit_call(call_id="tu-e"):
+    return ContentBlock.of_tool_use(id=call_id, name="edit_model", input={"change": "450 mm wide"})
+
+
+def _editing(pipe, **kw):
+    """A turn that opened on a model recorded as an assembly, without asking."""
+    return ToolContext(pipeline=pipe, current_code=_EDITED, inherited_assembly=_SPEC, **kw)
+
+
+class _EditsRaise(RacePipeline):
+    """Every edit dies before it builds anything."""
+
+    def run(self, intent, prior_code=None, **kw):
+        if prior_code is not None:
+            raise RuntimeError("the edit's build died")
+        return super().run(intent, prior_code=prior_code, **kw)
+
+
+def _refuses(code, overrides):
+    return {"ok": False, "error": "part 1 does not fit the printer's build volume"}
+
+
+_SET_WIDTH = ContentBlock.of_tool_use(
+    id="tu-p", name="set_parameters", input={"params": {"width": 450}}
+)
+
+
+@pytest.mark.parametrize(
+    "make_pipe, first_call",
+    [
+        (_one_build, _edit_call()),
+        (lambda: _EditsRaise([_cand("result = Box(1,1,1)", ok=True)]), _edit_call()),
+        (_one_build, _SET_WIDTH),
+    ],
+    ids=["an edit", "an edit that raised", "a refused parameter change"],
+)
+def test_a_generation_after_the_turn_worked_on_the_model_is_held_to_its_spec(make_pipe, first_call):
+    # Edits that would not validate, then "a fresh, clean model instead": the
+    # same design regenerated, for the printer the model was split for.
+    pipe = make_pipe()
+    ctx = _editing(pipe, reparametrize=_refuses)
+
+    _agent()._execute_one(first_call, ctx)
+    _agent()._execute_one(_gen_block("the same shelf, 450 mm wide"), ctx)
+
+    assert pipe.run_assemblies[-1] == _SPEC
+
+
+def test_a_regeneration_leaves_the_edited_model_s_spec_for_the_rest_of_the_turn():
+    # A later edit or parameter change acts on the regenerated model, which is
+    # still the assembly.
+    ctx = _editing(_one_build())
+
+    _agent()._execute_one(_edit_call(), ctx)
+    _agent()._execute_one(_gen_block(), ctx)
+
+    assert ctx.inherited_assembly == _SPEC
+
+
+def test_a_generation_with_no_edit_before_it_still_inherits_nothing():
+    # "Forget that, make me a simple cube": a new model, an assembly only if asked.
+    pipe = _one_build()
+    ctx = _editing(pipe)
+
+    _agent()._execute_one(_gen_block("a simple cube"), ctx)
+
+    assert pipe.run_assemblies == [None]
+    assert ctx.inherited_assembly is None
+
+
+def test_a_forge_regeneration_after_an_edit_is_held_to_the_spec_the_edit_had():
+    pipe = RacePipeline([_cand("result = Box(2,2,2)", ok=True, volume=8.0)])
+    ctx = _editing(pipe, forge=True, forge_n=3)
+
+    _agent()._execute_one(_edit_call(), ctx)
+    _agent()._execute_one(_gen_block(), ctx)
+
+    assert pipe.candidate_assemblies == [_SPEC]
+
+
+def test_a_regeneration_carries_the_size_the_turn_pinned():
+    pipe = _one_build()
+    ctx = _editing(pipe)
+
+    _agent()._execute_one(_sized_call(_BOARD, spec="450 mm wide", name="edit_model"), ctx)
+    _agent()._execute_one(_gen_block(), ctx)
+
+    assert pipe.run_assemblies[1] == dataclasses.replace(_SPEC, requested_mm=_BOARD)
+
+
+def test_a_regeneration_is_marked_for_the_chat_and_not_shown_to_the_model():
+    ctx = _editing(_one_build())
+
+    _agent()._execute_one(_edit_call(), ctx)
+    block, payload = _agent()._execute_one(_gen_block(), ctx)
+
+    assert payload["regenerates"] is True
+    assert "regenerates" not in json.loads(block.content)
+
+
+def test_a_fresh_generation_is_not_marked_as_a_regeneration():
+    _, payload = _agent()._execute_one(_gen_block(), _editing(_one_build()))
+
+    assert not payload.get("regenerates")

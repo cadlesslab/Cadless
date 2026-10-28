@@ -2719,3 +2719,173 @@ def test_a_turn_ending_on_parts_found_wanting_distills_no_earlier_build(client, 
 
     _stream_chat(client, pid)
     assert _kb_entries(store) == []
+
+
+# --- a regeneration after an edit keeps the assembly it replaces -------------
+
+
+class _EditsDoNotValidate(StubPipeline):
+    """Every edit fails at validation and leaves the code it was given behind."""
+
+    def run(self, intent, export_dir=None, on_progress=None, prior_code=None, **kwargs):
+        if prior_code is not None:
+            self.assemblies.append(kwargs.get("assembly"))
+            return GenerationResult(
+                ok=False, intent=intent, code=prior_code, error="validate: syntax error"
+            )
+        return super().run(intent, export_dir, on_progress, prior_code, **kwargs)
+
+
+def _build_then_edit_then_regenerate(monkeypatch, pipeline, *, first="edit_model", after=()):
+    """Turn one builds a shelf; turn two works on it with ``first``, regenerates
+    it, then makes the ``after`` calls."""
+    first_input = {"change": "450 mm wide"} if first == "edit_model" else {"params": {"w": 450}}
+    turns = [
+        _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a shelf"}),
+        _text_turn("Done."),
+        _tool_turn(tool_use_id="tu-2", name=first, tool_input=first_input),
+        _tool_turn(
+            tool_use_id="tu-3",
+            name="generate_model",
+            tool_input={"spec": "the same shelf, 450 mm wide"},
+        ),
+        *after,
+        _text_turn("Regenerated."),
+    ]
+    _install(monkeypatch, ScriptedProvider(turns), pipeline=pipeline)
+
+
+def _forge_on(monkeypatch):
+    monkeypatch.setattr(chat.settings, "forge_enabled", True)
+    monkeypatch.setattr(chat.settings, "forge_budget", 6)
+    monkeypatch.setattr(chat.settings, "forge_candidate_cost", 2)
+    monkeypatch.setattr(chat.settings, "forge_min_n", 2)
+    monkeypatch.setattr(chat.settings, "forge_max_n", 5)
+
+
+def _current_record(client, store, pid):
+    current = client.get(f"/projects/{pid}").json()["current_version_id"]
+    return asyncio.run(store.get_version(current)).built_as_assembly
+
+
+@pytest.mark.parametrize(
+    "pipeline", [StubPipeline, _EditsDoNotValidate], ids=["the edit built", "the edit failed"]
+)
+def test_a_regeneration_after_an_edit_is_held_to_the_assembly_and_recorded_as_one(
+    client, store, monkeypatch, pipeline
+):
+    """The reload case: the option is off, the model is in pieces, the edit is
+    abandoned and the orchestrator regenerates the same design. Judged as a new
+    model it was held to the overlap check alone and kept although its parts did
+    not fit the bed, recorded as a single solid."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    stub = pipeline()
+    _build_then_edit_then_regenerate(monkeypatch, stub)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    _stream_assembly(client, pid, assembly=False, text="make the bookshelf 450 mm wide")
+
+    built, edited, regenerated = stub.assemblies
+    assert regenerated is not None
+    assert _current_record(client, store, pid) is True
+
+
+def test_a_regeneration_after_a_refused_parameter_change_is_recorded_as_the_assembly(
+    client, store, monkeypatch
+):
+    """The operating instructions send a pure resize to ``set_parameters`` first,
+    and a refused one leaves the orchestrator to regenerate the same design."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    monkeypatch.setattr(
+        "cadless.agent._default_reparametrize",
+        lambda code, overrides, **kw: {"ok": False, "error": "part 1 does not fit", "code": code},
+    )
+    stub = StubPipeline()
+    _build_then_edit_then_regenerate(monkeypatch, stub, first="set_parameters")
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    _stream_assembly(client, pid, assembly=False, text="make the bookshelf 450 mm wide")
+
+    built, regenerated = stub.assemblies
+    assert regenerated is not None
+    assert _current_record(client, store, pid) is True
+
+
+def test_a_model_worked_on_after_its_regeneration_is_still_recorded_as_the_assembly(
+    client, store, monkeypatch
+):
+    """The regeneration does not end what the turn inherited: an edit after it
+    acts on the same model, still in pieces, and the next turn has to find it so."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    later_edit = _tool_turn(
+        tool_use_id="tu-4", name="edit_model", tool_input={"change": "round the corners"}
+    )
+    _build_then_edit_then_regenerate(monkeypatch, StubPipeline(), after=[later_edit])
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    _stream_assembly(client, pid, assembly=False, text="make the bookshelf 450 mm wide")
+
+    assert _current_record(client, store, pid) is True
+
+
+def test_a_regeneration_while_the_switch_is_off_keeps_the_record_of_an_assembly(
+    client, store, monkeypatch
+):
+    """The switch is outermost, and it does not erase: the regeneration is the
+    same model, remembered as an assembly exactly as an edit of it would be."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    _build_then_edit_then_regenerate(monkeypatch, StubPipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    monkeypatch.setattr(chat.settings, "assembly_enabled", False)
+    _stream_assembly(client, pid, assembly=False, text="make the bookshelf 450 mm wide")
+
+    assert _current_record(client, store, pid) is True
+
+
+def _regenerate(client, pid, *, forge):
+    """Send the second turn and return the version its last build made."""
+    body = {"message": "make the bookshelf 450 mm wide", "forge": forge, "assembly": False}
+    with client.stream("POST", f"/projects/{pid}/chat", json=body) as r:
+        events = _events("".join(r.iter_text()))
+    return [e for e in events if e["event"] == "tool_result"][-1]["version_id"]
+
+
+def test_the_losers_of_a_regeneration_race_are_recorded_as_the_assembly_too(
+    client, store, monkeypatch
+):
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    _forge_on(monkeypatch)
+    _build_then_edit_then_regenerate(monkeypatch, ForgePipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True)
+    winner_id = _regenerate(client, pid, forge=True)
+
+    candidates = asyncio.run(store.list_candidate_versions(winner_id))
+    assert candidates
+    assert [c.built_as_assembly for c in candidates] == [True] * len(candidates)
+
+
+@pytest.mark.parametrize("forge", [False, True], ids=["single run", "forge race"])
+def test_a_regeneration_of_a_model_never_built_as_an_assembly_is_not_one(
+    client, store, monkeypatch, forge
+):
+    """Remembering is not a second way to opt in: a model built whole is still one
+    solid when the orchestrator regenerates it, winner and losers alike."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    _forge_on(monkeypatch)
+    _build_then_edit_then_regenerate(monkeypatch, ForgePipeline())
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=False)
+    winner_id = _regenerate(client, pid, forge=forge)
+
+    candidates = asyncio.run(store.list_candidate_versions(winner_id))
+    assert bool(candidates) is forge
+    winner = asyncio.run(store.get_version(winner_id))
+    assert [v.built_as_assembly for v in (winner, *candidates)] == [False] * (1 + len(candidates))
