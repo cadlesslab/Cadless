@@ -171,7 +171,12 @@ candidate judging, the identity seam and the image decisions are recorded under
    every one of those calls as well, framed in the same place and the same order.
    A turn asks either by opting in or by editing a model already recorded as an
    assembly — the record lives on the version, so a reload that clears the opt-in
-   does not drop the next edit back to the brief of a turn that never asked. What
+   does not drop the next edit back to the brief of a turn that never asked. A
+   fresh build starts a new model and inherits nothing, with one exception: a
+   build the orchestrator generates after an edit or a parameter change in the
+   same turn regenerates the model being edited, so it keeps that model's spec and
+   is recorded as what that model was, until the user sends another message into
+   the running turn. What
    the record does *not* hold is the machine: which bed and which clearance apply
    are read from the settings saved now, so changing printer changes what an edit
    must satisfy rather than pinning it to the one it was first built for. Where

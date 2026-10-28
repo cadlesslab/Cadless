@@ -1589,3 +1589,58 @@ def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
         (500.0, 250.0, 400.0),
         (600.0, 250.0, 400.0),
     ]
+
+
+def _edit_then_generate_turns():
+    return [
+        _tool_turn(tool_use_id="tu-1", name="edit_model", tool_input={"change": "450 mm wide"}),
+        _tool_turn(
+            tool_use_id="tu-2", name="generate_model", tool_input={"spec": "the same shelf"}
+        ),
+        _text_turn("done"),
+    ]
+
+
+def _drive(loop, agent, context, steer=None):
+    if loop == "run_turn":
+        agent.run_turn(user_text="make it 450 mm wide", context=context, steer=steer)
+        return []
+    return list(agent.stream_turn(user_text="make it 450 mm wide", context=context, steer=steer))
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_regeneration_after_an_edit_is_held_to_the_inherited_spec_in_either_loop(loop):
+    pipeline = _SizeSpy()
+    spec = _spec()
+    agent = Agent(provider=ScriptedProvider(_edit_then_generate_turns()), model="fake-model")
+
+    _drive(loop, agent, _context(pipeline=pipeline, inherited_assembly=spec))
+
+    assert pipeline.assemblies == [spec, spec]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_user_who_speaks_between_the_edit_and_the_generation_gets_a_new_model(loop):
+    # "Forget that, make me a simple cube", sent into the running turn: the
+    # generation that follows is the user's new model, not a regeneration.
+    pipeline = _SizeSpy()
+    spec = _spec()
+    agent = Agent(provider=ScriptedProvider(_edit_then_generate_turns()), model="fake-model")
+    polls = {"n": 0}
+
+    def steer() -> str | None:
+        polls["n"] += 1
+        return "forget that, make me a simple cube" if polls["n"] == 2 else None
+
+    _drive(loop, agent, _context(pipeline=pipeline, inherited_assembly=spec), steer)
+
+    assert pipeline.assemblies == [spec, None]
+
+
+def test_the_stream_tells_the_chat_which_generation_is_a_regeneration():
+    agent = Agent(provider=ScriptedProvider(_edit_then_generate_turns()), model="fake-model")
+
+    events = _drive("stream_turn", agent, _context(pipeline=_SizeSpy(), inherited_assembly=_spec()))
+
+    results = [e.data for e in events if e.kind == "tool_result"]
+    assert [r.get("regenerates") for r in results] == [False, True]
