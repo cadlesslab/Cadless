@@ -42,9 +42,11 @@ from pathlib import Path
 from cadless.assembly_check import (
     ASSEMBLY_CHECKS,
     PARTS_CHECKS,
+    SIZE_CHECK,
     AssemblyReport,
     evaluate_assembly,
     evaluate_lone_part,
+    evaluate_requested_size,
 )
 from cadless.assertions import (
     GeometryAssertions,
@@ -97,29 +99,49 @@ def _judge_parts(
     the split is the one answer the per-part checks never see, and the bed is the
     one thing a lone part can still be held to.
 
+    A build that asked and whose spec carries the size the request gave is held
+    to that size as well, whichever of those it is: the worker's whole box
+    measures any build, and one it could not read is unchecked rather than
+    passed, while a model shrunk until it fits passes everything else. Its
+    finding leads the report, as the one every other depends on.
+
     ``export_scale`` is the authoring-units-to-millimetre factor the worker's
     ``bbox`` was measured without; the part boxes are already in millimetres.
 
     The verdict is the dict :attr:`GenerationResult.assembly` documents.
     """
+    size = (
+        evaluate_requested_size(res.bbox, assembly, export_scale=export_scale)
+        if assembly is not None and assembly.requested_mm is not None
+        else None
+    )
     if res.assembly is None:
         if assembly is None:
             return None, None
-        if res.bbox is not None and res.part_count == 1:
-            lone = evaluate_lone_part(res.bbox, assembly, export_scale=export_scale)
-            if not lone.ok:
-                verdict = {
-                    "ok": False,
-                    "order": None,
-                    "attempt": attempt,
-                    "measured": True,
-                    "failures": list(lone.failures),
-                    "unchecked": list(lone.unchecked),
-                    "joints": None,
-                    "releases": [],
-                    "checks": ["fit"],
-                }
-                return verdict, lone
+        lone_part = res.bbox is not None and res.part_count == 1
+        lone = (
+            evaluate_lone_part(res.bbox, assembly, export_scale=export_scale)
+            if lone_part
+            else AssemblyReport()
+        )
+        _lead_with(lone, size)
+        if not lone.ok:
+            verdict = {
+                "ok": False,
+                "order": None,
+                "attempt": attempt,
+                "measured": True,
+                "failures": list(lone.failures),
+                "unchecked": list(lone.unchecked),
+                "joints": None,
+                "releases": [],
+                "checks": [
+                    check
+                    for check, held in (("fit", lone_part), (SIZE_CHECK, size is not None))
+                    if held
+                ],
+            }
+            return verdict, lone
         # Asked, and nothing came back: one solid that fits the bed, which is not
         # an assembly and has nothing else to check; or a shape whose solids could
         # not be counted or split, whose box spans whatever was exported and so
@@ -134,6 +156,9 @@ def _judge_parts(
         checks=checks,
         names=_part_names(res.parts, len(res.assembly.part_bboxes)),
     )
+    _lead_with(report, size)
+    if size is not None:
+        checks = checks | {SIZE_CHECK}
     verdict = {
         "ok": report.ok,
         "order": report.order,
@@ -149,6 +174,13 @@ def _judge_parts(
         "checks": sorted(checks),
     }
     return verdict, report
+
+
+def _lead_with(report: AssemblyReport, size: AssemblyReport | None) -> None:
+    """Put the requested-size finding ahead of the rest of ``report``'s."""
+    if size is not None:
+        report.failures[:0] = size.failures
+        report.unchecked[:0] = size.unchecked
 
 
 # Lifecycle phases emitted as {"event": "stage", "phase": ..., "status": ...}.
@@ -213,7 +245,8 @@ class GenerationResult:
     #:
     #: ``measured`` is false when the turn asked but nothing came back — the model
     #: produced a single solid that fits the bed, or the worker could not split the
-    #: shape; a single solid too big for the bed is measured and refused. ``ok`` is
+    #: shape; a single solid too big for the bed, or any build whose whole box is
+    #: not the size the request gave, is measured and refused. ``ok`` is
     #: then ``None`` rather than ``True``: not checked is not the same as passed,
     #: and without this the result is indistinguishable from a turn that never
     #: asked.

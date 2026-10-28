@@ -33,8 +33,9 @@ naming the cap, in the transcript and, when the turn is streamed, in the stream.
 
 Tools (lean, high-impact) — wrappers over the EXISTING pipeline / reparametrize
 primitive, reused unchanged:
-  * ``generate_model(spec)`` — fresh build123d model via the pipeline.
-  * ``edit_model(change)``   — refine the current code via the pipeline.
+  * ``generate_model(spec, requested_mm)`` — fresh build123d model via the pipeline.
+  * ``edit_model(change, requested_mm)``   — refine the current code via the pipeline.
+    ``requested_mm``, optional on both, is the overall size the user gave.
   * ``set_parameters(params)`` — deterministic re-run via ``reparametrize`` (no
     LLM; rebuilt and judged by the pipeline's ``rebuild``, never ``Pipeline.run``).
 
@@ -44,10 +45,11 @@ primitive, reused unchanged:
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from cadless.config import Settings, settings
@@ -81,11 +83,60 @@ MAX_CLARIFICATION_QUESTIONS = 3
 MAX_PLAN_STEPS = 8
 
 
-def build_tools() -> list[ToolDef]:
-    """The three neutral tool definitions exposed to the model.
+#: The overall size the user asked for, offered on both build tools. Optional
+#: because most requests give no such thing, and a statement the model cannot
+#: copy is worse than none. No length bounds in the schema: the parser below
+#: holds it to three, and a keyword some provider rejects would fail every turn.
+_REQUESTED_MM = {
+    "type": "array",
+    "items": {"type": "number"},
+    "description": (
+        "The overall width, depth and height the user asked for, as three numbers "
+        "in millimetres: converted if the user used another unit, otherwise "
+        "exactly as given. Omit unless the user gave all three. Never adjust them "
+        "to fit a printer."
+    ),
+}
 
-    Schemas are intentionally minimal — the model fills a single high-signal
-    field per tool — because the heavy lifting happens in the wrapped pipeline.
+
+def _requested_size(value: Any) -> tuple[float, float, float] | None:
+    """A stated overall size as three positive lengths, or ``None``.
+
+    Anything else counts as no statement rather than an error: the size is an
+    extra the orchestrator may leave out, and a malformed one must neither hold
+    the build to a wrong size nor stop the build it came with.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    lengths = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return None
+        try:
+            length = float(item)
+        except OverflowError:
+            return None
+        if not math.isfinite(length) or length <= 0:
+            return None
+        lengths.append(length)
+    return (lengths[0], lengths[1], lengths[2])
+
+
+def _sized(
+    spec: AssemblySpec | None, requested: tuple[float, float, float] | None
+) -> AssemblySpec | None:
+    """``spec`` holding a build to ``requested``, the turn's own copy untouched."""
+    if spec is None or requested is None:
+        return spec
+    return replace(spec, requested_mm=requested)
+
+
+def build_tools() -> list[ToolDef]:
+    """The neutral tool definitions exposed to the model.
+
+    Schemas are intentionally minimal — one high-signal field per tool, plus the
+    optional overall size on the two that build — because the heavy lifting
+    happens in the wrapped pipeline.
     """
     return [
         ToolDef(
@@ -102,7 +153,8 @@ def build_tools() -> list[ToolDef]:
                     "spec": {
                         "type": "string",
                         "description": "Full natural-language description of the part to build.",
-                    }
+                    },
+                    "requested_mm": _REQUESTED_MM,
                 },
                 "required": ["spec"],
             },
@@ -125,7 +177,8 @@ def build_tools() -> list[ToolDef]:
                     "change": {
                         "type": "string",
                         "description": "The change to make, e.g. 'make the hole 8mm'.",
-                    }
+                    },
+                    "requested_mm": _REQUESTED_MM,
                 },
                 "required": ["change"],
             },
@@ -275,6 +328,17 @@ class ToolContext:
     # composer's toggle only ever turns it on. An edit acts on the model that
     # already exists, so it takes either.
     inherited_assembly: AssemblySpec | None = None
+    # The overall size the user asked for, pinned by the first build call of the
+    # turn that stated one. On a turn that asks for an assembly every build is
+    # held to it from then on -- the one that pinned it, and a parameter change
+    # too -- until the user sends another message into the running turn. Pinned
+    # rather than read afresh from each call because an orchestrator refused for
+    # size can restate the request smaller, or reach for a parameter change, and
+    # holding that to its own statement would pass the very build the check
+    # exists to refuse. A later turn starts with nothing pinned, so a resize the
+    # user asks for then is free. Kept off ``assembly`` and ``inherited_assembly``
+    # so the turn's own specs never change.
+    requested_mm: tuple[float, float, float] | None = None
     # Live token sink for streaming codegen: when set, fresh
     # ``generate_model`` codegen deltas are pushed here AS the code is written
     # (the chat layer wires it to the SSE queue), instead of being collected into
@@ -304,13 +368,15 @@ class ToolContext:
         the model that already exists, so -- as for ``edit_model`` -- what it was
         built as counts as much as what this turn asked for. Kept to the
         two-argument shape a :data:`ReparametrizeFn` has, so one supplied from
-        outside, or one wrapping this, is called as it always was.
+        outside, or one wrapping this, is called as it always was. Held to the
+        size the user gave this turn, where one is pinned, as every build of the
+        turn is.
         """
         return _default_reparametrize(
             code,
             overrides,
             export_dir=self.export_dir,
-            assembly=self.assembly or self.inherited_assembly,
+            assembly=_sized(self.assembly or self.inherited_assembly, self.requested_mm),
         )
 
 
@@ -623,13 +689,14 @@ brief clarifying question when a request is ambiguous, and explain what you did
 in plain language after a tool runs.
 
 You have five tools. Choose the most precise one:
-  * `{GENERATE_MODEL}(spec)` — build a brand-new model from scratch. Use when the
-    user wants a different part, not a tweak of the current one.
-  * `{EDIT_MODEL}(change)` — modify the CURRENT model (its code is given to you in
-    the context block). Use for incremental geometry/construction changes. Make a
-    surgical edit: change only what the request requires and keep all other
-    geometry, structure, and parameters identical — never rewrite or simplify the
-    model from scratch. A small request must yield a small diff.
+  * `{GENERATE_MODEL}(spec, requested_mm)` — build a brand-new model from
+    scratch. Use when the user wants a different part, not a tweak of the
+    current one.
+  * `{EDIT_MODEL}(change, requested_mm)` — modify the CURRENT model (its code is
+    given to you in the context block). Use for incremental geometry/construction
+    changes. Make a surgical edit: change only what the request requires and keep
+    all other geometry, structure, and parameters identical — never rewrite or
+    simplify the model from scratch. A small request must yield a small diff.
   * `{SET_PARAMETERS}(params)` — re-run the current model with new values for its
     declared `params` dimensions. Prefer this for pure dimensional changes that
     the existing parameters already express: it is exact and needs no codegen.
@@ -642,6 +709,13 @@ You have five tools. Choose the most precise one:
     `{GENERATE_MODEL}`/`{EDIT_MODEL}`. This does NOT end your turn: call the action
     tool next to carry the plan out. Skip the plan for trivial requests (a simple
     cube, a single dimensional tweak) — it is optional, never required.
+
+When the user gives the overall width, depth and height of what they want, pass
+the three as `requested_mm` on every `{GENERATE_MODEL}` and `{EDIT_MODEL}` call of
+the turn, in millimetres: converted if the user used another unit, otherwise
+exactly as given. Leave it out when they did not give all three. Never change
+them to fit a printer: on an assembly turn a model larger than the bed is split
+into parts that each fit, never resized, and every build is held to that size.
 
 After a tool returns, read its result and either call another tool or give the
 user a short final answer. Do not call a tool with identical arguments twice.
@@ -933,6 +1007,9 @@ class Agent:
             for block in _drain_steer(steer):
                 messages.append(Message(role="user", content=[block]))
                 produced.append(block)
+                # The pinned size is the request as the user gave it, and this is
+                # the user speaking again: the next size stated holds instead.
+                context.requested_mm = None
 
             turn = _StreamedTurn()
             turn.consume(
@@ -1069,6 +1146,7 @@ class Agent:
             for block in _drain_steer(steer):
                 messages.append(Message(role="user", content=[block]))
                 produced.append(block)
+                context.requested_mm = None  # as in run_turn: the user spoke again
                 yield StreamEventOut("steer", {"text": block.text or ""})
 
             turn = _StreamedTurn()
@@ -1356,6 +1434,8 @@ class Agent:
         name = tu.name
         args = tu.input or {}
         try:
+            if name in (GENERATE_MODEL, EDIT_MODEL) and context.requested_mm is None:
+                context.requested_mm = _requested_size(args.get("requested_mm"))
             if name == GENERATE_MODEL:
                 # fresh generation gets the turn's RAG grounding; the
                 # edit/refine path below deliberately does not (B4 scope).
@@ -1381,7 +1461,7 @@ class Agent:
                         grounding=context.grounding,
                         images=context.images,
                         on_reading=context.on_reading,
-                        assembly=context.assembly,
+                        assembly=_sized(context.assembly, context.requested_mm),
                     )
                     payload = _result_summary(res)
                     self._adopt(context, res.code, res.parameters)
@@ -1424,7 +1504,9 @@ class Agent:
                     # this tool edits the model that already exists, so what that
                     # model was built as is as good an answer as what the turn
                     # asked for.
-                    assembly=context.assembly or context.inherited_assembly,
+                    assembly=_sized(
+                        context.assembly or context.inherited_assembly, context.requested_mm
+                    ),
                 )
                 payload = _result_summary(res)
                 self._adopt(context, res.code, res.parameters)
@@ -1492,7 +1574,7 @@ class Agent:
             grounding=context.grounding,
             images=context.images,
             on_reading=context.on_reading,
-            assembly=context.assembly,
+            assembly=_sized(context.assembly, context.requested_mm),
             # Without this the judge's render rung was unreachable: it runs only
             # when handed a reviewer, and nothing ever handed it one, so a ladder
             # rung that looked live had never decided anything. The same failure

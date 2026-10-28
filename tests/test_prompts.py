@@ -1011,3 +1011,30 @@ def test_an_assembly_turn_asks_for_its_own_token_cap(how, monkeypatch):
     assert fake.last_params.max_tokens == 5000
     _call(gen, how)
     assert fake.last_params.max_tokens is None
+
+
+def test_the_brief_states_the_overall_size_the_request_gave():
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0),
+        clearance_mm=0.35,
+        requested_mm=(500.0, 250.0, 400.0),
+    )
+    assert "it asks for 500 x 250 x 400 mm overall" in _assembly_rules(spec)
+
+
+def test_the_edit_rules_state_the_overall_size_the_request_gave():
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0),
+        clearance_mm=0.35,
+        requested_mm=(500.0, 250.0, 400.0),
+    )
+    assert "overall size as 500 x 250 x 400 mm" in _assembly_edit_rules(spec)
+
+
+def test_a_brief_without_a_size_names_none():
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
+    )
+    assert "Keep every dimension the request gives. Never shrink" in _assembly_rules(spec)
+    assert "mm overall" not in _assembly_rules(spec)
+    assert "overall size as" not in _assembly_edit_rules(spec)

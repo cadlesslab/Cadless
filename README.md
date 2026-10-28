@@ -32,8 +32,8 @@ catalog rebuilt as assemblies: a piston assembly and a butt hinge.
 
 Every model of several parts the generator builds is checked for parts that
 share space. Asking for a part split to fit your printer's bed — held to the
-bed, to joints that mate, and to an order the pieces go together in — is off by
-default and needs a model key: set
+bed, to joints that mate, to an order the pieces go together in, and to the
+overall size you asked for — is off by default and needs a model key: set
 `CADLESS_ASSEMBLY_ENABLED=true`, then switch on **Assembly** in the chat
 composer for the turn.
 
