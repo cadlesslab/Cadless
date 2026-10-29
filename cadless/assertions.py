@@ -22,13 +22,19 @@ PoC limitations
 ``min_wall_thickness`` and ``manifold`` are only as good as what the executor can
 compute. When a metric is genuinely unavailable the signature carries ``None`` and
 the corresponding check is *skipped* (never failed) — an assertion must never block
-on a value we could not measure. These are skips, not silent always-passes: a
-metric we *did* measure and that violates its assertion does fail.
+on a value we could not measure. A bounding box or wall thickness that came back
+as anything but finite numbers was not measured either, and is skipped the same
+way rather than compared.
+These are skips, not silent always-passes: a metric we *did* measure and that
+violates its assertion does fail.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+
+from cadless.print_fit import _dimensions
 
 
 @dataclass(frozen=True)
@@ -64,12 +70,13 @@ class GeometryAssertions:
 class GeometrySignature:
     """Cheap, deterministic metrics measured after a successful build.
 
-    ``min_wall_thickness`` and ``manifold`` may be ``None`` when the executor could
-    not compute them; assertions against an unknown metric are skipped, not failed.
+    ``bbox``, ``min_wall_thickness`` and ``manifold`` may be ``None`` when the
+    executor could not compute them; assertions against an unknown metric are
+    skipped, not failed.
     """
 
     volume: float
-    bbox: tuple[float, float, float]
+    bbox: tuple[float, float, float] | None
     part_count: int
     manifold: bool | None = None
     min_wall_thickness: float | None = None
@@ -127,7 +134,10 @@ def evaluate_assertions(
 def _check_bbox(sig: GeometrySignature, a: GeometryAssertions, report: AssertionReport) -> None:
     tol = a.bbox_tolerance
     expected = a.bbox
-    actual = sig.bbox
+    actual = _dimensions(sig.bbox)
+    if actual is None:
+        report.skipped.append("bounding box extents (not measured)")
+        return
     deviations = [
         (axis, exp, act)
         for axis, exp, act in zip("XYZ", expected, actual, strict=True)
@@ -167,8 +177,25 @@ def _check_thickness(
     if sig.min_wall_thickness is None:
         report.skipped.append("min wall thickness (not computed)")
         return
-    if sig.min_wall_thickness < a.min_wall_thickness:
+    thickness = _finite(sig.min_wall_thickness)
+    if thickness is None:
+        report.skipped.append("min wall thickness (not measured)")
+        return
+    if thickness < a.min_wall_thickness:
         report.failures.append(
-            f"min wall thickness {sig.min_wall_thickness:g}mm is below the required "
-            f"{a.min_wall_thickness:g}mm"
+            f"min wall thickness {thickness:g}mm is below the required {a.min_wall_thickness:g}mm"
         )
+
+
+def _finite(value) -> float | None:
+    """``value`` as a finite number, or ``None`` where it is not one.
+
+    Compared as it came, a NaN thickness is never below a minimum, so it passes
+    every one, and one that is not a number at all raises out of a function that
+    must not.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None

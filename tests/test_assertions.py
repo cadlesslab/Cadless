@@ -4,6 +4,10 @@ These exercise the pure assertion-evaluation function with synthetic geometry
 signatures (bbox/volume/part-count/manifold numbers), so they need no live OCCT.
 """
 
+import math
+
+import pytest
+
 from cadless.assertions import (
     GeometryAssertions,
     GeometrySignature,
@@ -75,6 +79,28 @@ def test_min_wall_thickness_unknown_does_not_block():
     a = GeometryAssertions(min_wall_thickness=3.0)
     report = evaluate_assertions(_sig(min_wall_thickness=None), a)
     assert report.ok
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [(math.nan, 10.0, 10.0), (10.0, math.inf, 10.0), None, (10.0, 10.0), (10**400, 10.0, 10.0)],
+    ids=["nan", "inf", "missing", "short", "too-large"],
+)
+def test_a_bbox_that_is_not_three_numbers_is_skipped_not_passed(bbox):
+    a = GeometryAssertions(bbox=(10.0, 10.0, 10.0), bbox_tolerance=0.5)
+    report = evaluate_assertions(_sig(bbox=bbox), a)
+    assert (report.failures, report.skipped) == ([], ["bounding box extents (not measured)"])
+
+
+@pytest.mark.parametrize(
+    "thickness",
+    [math.nan, math.inf, "thin", 10**400, [1.0]],
+    ids=["nan", "inf", "text", "too-large", "list"],
+)
+def test_a_wall_thickness_that_is_not_a_number_is_skipped_not_passed(thickness):
+    a = GeometryAssertions(min_wall_thickness=3.0)
+    report = evaluate_assertions(_sig(min_wall_thickness=thickness), a)
+    assert (report.failures, report.skipped) == ([], ["min wall thickness (not measured)"])
 
 
 # --- manifold / watertight -------------------------------------------------
