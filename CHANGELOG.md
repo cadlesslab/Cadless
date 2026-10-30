@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.2](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.1...backend-v1.3.2) (2026-10-30)
+
+
+### Fixes
+
+* hold an assembly turn's builds to the overall size the user asked for ([#76](https://github.com/cadlesslab/Cadless/issues/76)) ([a736866](https://github.com/cadlesslab/Cadless/commit/a7368669a8e6248eccf97aeae67169766d447020))
+* keep an assembly's spec and record on a model regenerated after an edit ([#78](https://github.com/cadlesslab/Cadless/issues/78)) ([a09e365](https://github.com/cadlesslab/Cadless/commit/a09e3654d960c1833818f641a3b1828853c74b1d))
+* report a measurement that is not a number as unchecked, never as a pass ([#79](https://github.com/cadlesslab/Cadless/issues/79)) ([a93e8e0](https://github.com/cadlesslab/Cadless/commit/a93e8e061d6a58ba20cc17df8c11ce90a1d993c0))
+
 ## [1.3.1](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.0...backend-v1.3.1) (2026-10-26)
 
 
