@@ -4,6 +4,7 @@ The policy that reads these numbers is tested in ``tests/test_assembly_check.py`
 against synthetic values; here the numbers themselves come from real solids.
 """
 
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,8 @@ from build123d import (
 from cadless.assembly_check import _BLOCKED as BLOCKED
 from cadless.assembly_check import _FREE as FREE
 from cadless.assembly_check import _UNDECIDED as UNDECIDED
-from cadless.assembly_check import measure_assembly
+from cadless.assembly_check import evaluate_assembly, measure_assembly
+from cadless.printer_profile import AssemblySpec, BuildVolume
 
 pytestmark = pytest.mark.build123d
 
@@ -261,6 +263,96 @@ def test_a_distance_probe_the_kernel_refuses_is_reported_not_assumed_away():
     m = measure_assembly([_Awkward(), _Awkward(centre=(30.0, 0.0, 0.0))])
     assert any("gap" in reason for reason in m.unchecked)
     assert m.gaps == []
+
+
+_SPEC = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=CLEARANCE)
+
+
+@pytest.fixture(params=[math.nan, math.inf], ids=["nan", "inf"])
+def volumes_are_not_numbers(request, monkeypatch):
+    """Every volume the kernel computes comes back as no measurement."""
+    from OCP.GProp import GProp_GProps
+
+    monkeypatch.setattr(GProp_GProps, "Mass", lambda self: request.param)
+
+
+@pytest.fixture(params=[math.nan, math.inf], ids=["nan", "inf"])
+def distances_are_not_numbers(request, monkeypatch):
+    """Every distance the kernel computes comes back as no measurement."""
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+
+    monkeypatch.setattr(BRepExtrema_DistShapeShape, "Value", lambda self: request.param)
+
+
+def test_a_shared_volume_that_is_not_a_number_is_reported_not_dropped(volumes_are_not_numbers):
+    m = measure_assembly([Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10)])
+    assert m.overlaps == []
+    assert any(
+        reason.startswith("shared volume between part 1 and part 2") for reason in m.unchecked
+    )
+
+
+def test_a_negative_shared_volume_is_no_answer(monkeypatch):
+    # The kernel's volume is signed, and no intersection holds less than nothing.
+    from OCP.GProp import GProp_GProps
+
+    from cadless.assembly_check import _shared_volume
+
+    monkeypatch.setattr(GProp_GProps, "Mass", lambda self: -5.0)
+    assert _shared_volume(Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10)) is None
+
+
+def test_interpenetrating_parts_measured_as_no_number_are_given_no_order(monkeypatch):
+    # NaN alone: an infinite volume ends with no order whether it is refused or
+    # read as a clash, so it could not tell the two apart.
+    from OCP.GProp import GProp_GProps
+
+    monkeypatch.setattr(GProp_GProps, "Mass", lambda self: math.nan)
+    m = measure_assembly([Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10)])
+    assert m.order is None
+
+
+def test_a_distance_that_is_not_a_number_is_reported_not_recorded(distances_are_not_numbers):
+    m = measure_assembly([Box(10, 10, 10), Pos(60, 0, 0) * Box(10, 10, 10)])
+    assert m.gaps == []
+    assert any(reason.startswith("gap between part 1 and part 2") for reason in m.unchecked)
+
+
+def test_a_sound_joint_whose_distance_was_not_measured_is_not_called_loose(
+    distances_are_not_numbers,
+):
+    report = evaluate_assembly(measure_assembly(_mated_pair()), _SPEC)
+    assert report.failures == []
+
+
+def test_parts_the_budget_left_unmeasured_are_not_called_loose():
+    chain = [Box(20, 20, 10), Pos(20.2, 0, 0) * Box(20, 20, 10), Pos(40.4, 0, 0) * Box(20, 20, 10)]
+    report = evaluate_assembly(measure_assembly(chain, probe_budget=2), _SPEC)
+    assert report.failures == []
+
+
+def test_a_prism_volume_that_is_not_a_number_is_no_answer(volumes_are_not_numbers):
+    from cadless.assembly_check import _prism_overlap
+
+    assert (
+        _prism_overlap(Box(20, 20, 10).wrapped, (Pos(10, 0, 0) * Box(20, 20, 10)).wrapped) is None
+    )
+
+
+def test_a_cut_volume_that_is_not_a_number_is_no_answer(volumes_are_not_numbers):
+    from cadless.assembly_check import _cut_volume
+
+    assert _cut_volume(Box(20, 20, 10), Pos(10, 0, 0) * Box(20, 20, 10)) is None
+
+
+def test_a_prism_whose_volume_is_not_a_number_is_no_sweep(volumes_are_not_numbers):
+    # Its sign says which way it faces, and a volume that is not finite says
+    # nothing a finite sweep could enclose.
+    from OCP.gp import gp_Vec
+
+    from cadless.assembly_check import _prism
+
+    assert _prism(Box(10, 10, 10).faces()[0].wrapped, gp_Vec(0, 0, 5)) is None
 
 
 def test_a_part_with_no_measurable_size_stops_the_order_search():

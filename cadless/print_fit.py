@@ -48,14 +48,14 @@ def _dimensions(bbox: Sequence[Any] | None) -> tuple[float, float, float] | None
     """The bounding box as three usable numbers, or ``None``.
 
     ``None`` covers everything that is not three finite numbers: a missing box, a
-    short one, a string where a number should be, a NaN. Every caller here
-    answers that the same way -- say nothing, and let the slicer be the one to
-    speak -- which is why the unpacking is one piece of code rather than three
-    copies drifting apart.
+    short one, a string where a number should be, a NaN, an integer too large to
+    be a float. Every caller here answers that the same way -- say nothing, and
+    let the slicer be the one to speak -- which is why the unpacking is one piece
+    of code rather than copies drifting apart.
     """
     try:
         width, depth, height = (float(value) for value in bbox)  # type: ignore[misc]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not all(math.isfinite(value) for value in (width, depth, height)):
         return None

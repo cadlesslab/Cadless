@@ -7,6 +7,7 @@ live OCCT. The geometry that produces those numbers is tested in
 """
 
 import json
+import math
 
 import pytest
 
@@ -17,6 +18,7 @@ from cadless.assembly_check import (
     evaluate_assembly,
     evaluate_lone_part,
     evaluate_requested_size,
+    mating_graph,
     mating_tolerance,
 )
 from cadless.printer_profile import AssemblySpec, BuildVolume
@@ -339,11 +341,6 @@ def test_a_joint_sitting_at_exactly_the_clearance_is_mated():
     assert report.ok
 
 
-def test_a_pair_missing_from_the_gap_table_is_treated_as_not_mated():
-    report = evaluate_assembly(_m(gaps=[]), SPEC)
-    assert not report.ok
-
-
 def test_the_report_carries_the_joint_graph_it_judged_connectivity_from():
     report = evaluate_assembly(
         _m(
@@ -535,6 +532,228 @@ def test_an_overlap_naming_a_part_that_does_not_exist_refuses():
     report = evaluate_assembly(_m(overlaps=[[0, 99, 5.0]]), SPEC)
     assert not report.ok
     assert any("does not exist" in reason for reason in report.unchecked)
+
+
+# --- values that are not measurements -------------------------------------
+#
+# No intersection or distance the kernel measures is negative or unbounded, so
+# such a value was never measured, whoever sent it. Held to a threshold, NaN
+# and the infinities read as a pass or a fault that no measurement gave.
+
+_NOT_MEASURED = [math.nan, math.inf, -1.0]
+_NOT_MEASURED_IDS = ["nan", "inf", "negative"]
+
+
+def _only(reasons, prefix):
+    return [reason for reason in reasons if reason.startswith(prefix)]
+
+
+@pytest.mark.parametrize("volume", _NOT_MEASURED, ids=_NOT_MEASURED_IDS)
+def test_a_shared_volume_that_was_not_measured_is_unchecked_naming_the_pair(volume):
+    report = evaluate_assembly(_m(overlaps=[[0, 1, volume]]), SPEC)
+    assert report.failures == []
+    assert len(_only(report.unchecked, "shared volume between part 1 and part 2")) == 1
+
+
+def test_a_build_nobody_asked_to_join_is_held_to_the_same_overlap_rule():
+    report = evaluate_assembly(_m(overlaps=[[0, 1, math.nan]]), SPEC, checks=PARTS_CHECKS)
+    assert report.failures == []
+    assert len(_only(report.unchecked, "shared volume between part 1 and part 2")) == 1
+
+
+@pytest.mark.parametrize("distance", _NOT_MEASURED, ids=_NOT_MEASURED_IDS)
+def test_a_gap_that_was_not_measured_is_unchecked_naming_the_pair(distance):
+    # Not a part that "comes no closer" to the others: that sends the repair
+    # after a joint that may be sound, and a negative distance read as joined.
+    report = evaluate_assembly(_m(gaps=[[0, 1, distance]]), SPEC)
+    assert report.failures == []
+    assert len(_only(report.unchecked, "gap between part 1 and part 2")) == 1
+
+
+@pytest.mark.parametrize(
+    "table, prefix",
+    [("overlaps", "shared volume between shelf and leg"), ("gaps", "gap between shelf and leg")],
+)
+def test_a_value_that_was_not_measured_names_the_parts_as_their_build_did(table, prefix):
+    report = evaluate_assembly(_m(**{table: [[0, 1, math.nan]]}), SPEC, names=["shelf", "leg"])
+    assert _only(report.unchecked, prefix)
+
+
+def test_the_joints_described_are_the_measured_ones_only():
+    # A build nobody asked to join is not judged on its joints, so what it
+    # describes is the whole of it: a distance never measured is no joint.
+    report = evaluate_assembly(_m(gaps=[[0, 1, -math.inf]]), SPEC, checks=PARTS_CHECKS)
+    assert report.joints == [[], []]
+
+
+def test_a_pair_missing_from_the_gap_table_is_not_measured_rather_than_far_apart():
+    report = evaluate_assembly(_m(gaps=[]), SPEC)
+    assert report.failures == []
+    assert _only(report.unchecked, "parts mating into one assembly")
+
+
+def test_a_part_whose_only_unmeasured_gap_could_join_it_is_not_called_loose():
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 3,
+            gaps=[[0, 1, 0.2], [1, 2, math.nan], [0, 2, 80.0]],
+            order=[0, 1, 2],
+        ),
+        SPEC,
+    )
+    assert report.failures == []
+
+
+def test_the_distance_that_could_join_the_parts_is_named_as_not_measured():
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 3,
+            gaps=[[0, 1, 0.2], [1, 2, math.nan], [0, 2, 80.0]],
+            order=[0, 1, 2],
+        ),
+        SPEC,
+    )
+    assert _only(report.unchecked, "parts mating into one assembly") == [
+        "parts mating into one assembly: no distance was measured between part 2 and part 3"
+    ]
+
+
+@pytest.mark.parametrize(
+    "gaps, line",
+    [([], "shelf and leg, and 2 other pairs"), ([[0, 1, 0.2]], "shelf and top, and 1 other pair")],
+    ids=["several", "one-other"],
+)
+def test_the_line_counts_the_other_unmeasured_pairs_in_the_build_s_names(gaps, line):
+    report = evaluate_assembly(
+        _m(part_bboxes=[[50.0, 50.0, 50.0]] * 3, gaps=gaps, order=[0, 1, 2]),
+        SPEC,
+        names=["shelf", "leg", "top"],
+    )
+    assert _only(report.unchecked, "parts mating into one assembly") == [
+        f"parts mating into one assembly: no distance was measured between {line}"
+    ]
+
+
+def test_the_joints_described_on_a_judged_build_are_the_measured_ones():
+    # A negative distance, which reads as a joint when taken at its word.
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 3,
+            gaps=[[0, 1, 0.2], [1, 2, -math.inf], [0, 2, 80.0]],
+            order=[0, 1, 2],
+        ),
+        SPEC,
+    )
+    assert report.joints == [[1], [0], []]
+
+
+def test_parts_measured_apart_from_each_other_may_still_join_through_the_rest():
+    # Only parts 1 and 2 were measured, far apart; part 3 could join either.
+    report = evaluate_assembly(
+        _m(part_bboxes=[[50.0, 50.0, 50.0]] * 3, gaps=[[0, 1, 80.0]], order=[0, 1, 2]), SPEC
+    )
+    assert report.failures == []
+
+
+def test_a_part_listed_against_itself_is_no_pair_between_groups():
+    report = evaluate_assembly(_m(gaps=[[0, 1, 0.2], [0, 0, 0.0]]), SPEC)
+    assert report.ok
+
+
+def _one_loose_one_unknown():
+    # Parts 1 and 3 joined; part 2 measured far from every other; part 4 never
+    # measured against 1 or 3, so it may yet join them.
+    return evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 4,
+            gaps=[[0, 2, 0.2], [0, 1, 80.0], [1, 2, 80.0], [1, 3, 80.0]],
+            order=[0, 1, 2, 3],
+        ),
+        SPEC,
+    )
+
+
+def test_a_part_measured_apart_beside_one_nobody_measured_is_still_loose():
+    report = _one_loose_one_unknown()
+    assert [f.split(" comes no closer")[0] for f in report.failures] == ["part 2"]
+
+
+def test_the_unmeasured_pair_is_named_beside_a_loose_part():
+    report = _one_loose_one_unknown()
+    assert _only(report.unchecked, "parts mating into one assembly") == [
+        "parts mating into one assembly: no distance was measured between part 1 and part 4, "
+        "and 1 other pair"
+    ]
+
+
+def test_an_unmeasured_gap_inside_a_joined_group_leaves_the_mating_established():
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 3,
+            gaps=[[0, 1, 0.2], [1, 2, 0.2], [0, 2, math.nan]],
+            order=[0, 1, 2],
+        ),
+        SPEC,
+    )
+    assert _only(report.unchecked, "parts mating into one assembly") == []
+
+
+def test_a_part_measured_far_from_every_other_is_still_loose():
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 3,
+            gaps=[[0, 1, math.nan], [0, 2, 80.0], [1, 2, 90.0]],
+            order=[0, 1, 2],
+        ),
+        SPEC,
+    )
+    assert [f.split(" comes no closer")[0] for f in report.failures] == ["part 3"]
+
+
+def test_groups_an_unmeasured_gap_could_join_are_not_called_separate():
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 4,
+            gaps=[[0, 1, 0.2], [2, 3, 0.2], [1, 2, math.inf], [0, 2, 70.0], [0, 3, 70.0]]
+            + [[1, 3, 70.0]],
+            order=[0, 1, 2, 3],
+        ),
+        SPEC,
+    )
+    assert report.failures == []
+
+
+def test_groups_no_unmeasured_gap_could_join_are_still_separate():
+    # The pair left unmeasured sits inside one group; every pair across the
+    # two was measured far apart.
+    report = evaluate_assembly(
+        _m(
+            part_bboxes=[[50.0, 50.0, 50.0]] * 4,
+            gaps=[[0, 1, math.nan], [2, 3, 0.2], [0, 2, 80.0], [0, 3, 80.0]]
+            + [[1, 2, 80.0], [1, 3, 80.0]],
+            order=[0, 1, 2, 3],
+        ),
+        SPEC,
+    )
+    assert any("separate groups" in f for f in report.failures)
+
+
+def test_the_joint_graph_still_answers_the_joints_and_what_could_not_be_read():
+    # A public name: its answer keeps its two parts.
+    neighbours, problems = mating_graph([[0, 1, 0.2], [0, 1, math.nan]], 2, 1.0)
+    assert (neighbours, len(problems)) == ({0: {1}, 1: {0}}, 1)
+
+
+@pytest.mark.parametrize("table", ["overlaps", "gaps"])
+def test_a_part_index_that_is_infinite_is_an_unreadable_entry_not_a_raise(table):
+    entries = {"overlaps": [[math.inf, 1, 5.0]], "gaps": [[0, 1, 0.2], [0, math.inf, 0.2]]}
+    report = evaluate_assembly(_m(**{table: entries[table]}), SPEC)
+    assert any("unreadable entry" in reason for reason in report.unchecked)
+
+
+def test_a_box_too_large_to_be_a_number_is_unchecked_not_a_raise():
+    report = evaluate_assembly(_m(part_bboxes=[[10**400, 10.0, 10.0], [10.0, 10.0, 10.0]]), SPEC)
+    assert _only(report.unchecked, "build volume fit for part 1")
 
 
 # --- the payload shapes a version skew can produce ------------------------

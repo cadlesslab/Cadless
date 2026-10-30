@@ -111,8 +111,9 @@ REQUESTED_SIZE_SLACK_FRACTION = 0.01
 #: agreeing: the search writes it, and the policy reads it to tell 'the search
 #: could not rule' from 'it ruled and found nothing'.
 _ORDER_UNCHECKED_PREFIX = "assembly order:"
-# How the measurement words what it could not establish about a pair, so that a
-# report can tell which check each such line bears on.
+# How what could not be established about a pair is worded -- by the measurement,
+# and by the checks reading its tables -- so that a report can tell which check
+# each such line bears on.
 _PAIRS_UNCHECKED_PREFIX = "overlap and gap between every pair:"
 _SHARED_UNCHECKED_PREFIX = "shared volume between"
 _GAP_UNCHECKED_PREFIX = "gap between"
@@ -452,6 +453,12 @@ def _check_overlap(
         if not (0 <= first < len(m.part_bboxes) and 0 <= second < len(m.part_bboxes)):
             report.unchecked.append(f"overlap entry {entry!r} names a part that does not exist")
             continue
+        if _measurement(shared) is None:
+            report.unchecked.append(
+                f"{_SHARED_UNCHECKED_PREFIX} {_at(labels, first)} and {_at(labels, second)}: "
+                f"{shared!r} is not a volume that can be measured"
+            )
+            continue
         if shared > OVERLAP_EPSILON_MM3:
             # A build nobody asked to join was never told of seams, tabs or a
             # clearance, so its sentence names none of them.
@@ -479,7 +486,7 @@ def mating_graph(
 ) -> tuple[dict[int, set[int]], list[str]]:
     """Which parts sit close enough to count as joined, and what could not be read.
 
-    One derivation with two readers. Connectivity is ruled on this graph, and so
+    One derivation with two readers. Connectivity is ruled from this graph, and so
     is anything that goes on to describe the joints; deriving it twice would let a
     description name a joint the same build was refused for not having.
 
@@ -487,8 +494,26 @@ def mating_graph(
     an unreadable gap means -- refuse, or pass over -- is the caller's policy and
     not a property of reading the table.
     """
+    neighbours, problems, _ = _read_gaps(gaps, part_count, tolerance)
+    return neighbours, problems
+
+
+def _read_gaps(
+    gaps: list[list[float]],
+    part_count: int,
+    tolerance: float,
+    labels: Sequence[str] | None = None,
+) -> tuple[dict[int, set[int]], list[str], set[frozenset[int]]]:
+    """:func:`mating_graph`, with the pairs whose distance was measured as well.
+
+    Kept apart so the public answer keeps its shape. Which pairs were measured is
+    what tells a pair measured far apart from one nobody measured -- a probe that
+    gave no number, or a pair the table leaves out -- and only the first may call
+    a part loose.
+    """
     neighbours: dict[int, set[int]] = {index: set() for index in range(part_count)}
     problems: list[str] = []
+    measured: set[frozenset[int]] = set()
     for entry in gaps:
         pair = _pair(entry)
         if pair is None:
@@ -501,10 +526,17 @@ def mating_graph(
             # short table read as a fully measured one.
             problems.append(f"gap entry {entry!r} names a part that does not exist")
             continue
+        if _measurement(distance) is None:
+            problems.append(
+                f"{_GAP_UNCHECKED_PREFIX} {_at(labels, first)} and {_at(labels, second)}: "
+                f"{distance!r} is not a distance that can be measured"
+            )
+            continue
+        measured.add(frozenset((first, second)))
         if distance <= tolerance:
             neighbours[first].add(second)
             neighbours[second].add(first)
-    return neighbours, problems
+    return neighbours, problems, measured
 
 
 def _check_mating(
@@ -517,13 +549,27 @@ def _check_mating(
 ) -> None:
     count = len(m.part_bboxes)
     tolerance = mating_tolerance(spec.clearance_mm)
-    neighbours, problems = mating_graph(m.gaps, count, tolerance)
+    neighbours, problems, measured = _read_gaps(m.gaps, count, tolerance, labels)
     report.joints = [sorted(neighbours[index]) for index in range(count)]
     if not judge:
         return
     report.unchecked.extend(problems)
 
-    groups = _groups(neighbours, count)
+    # A part is called loose, or the parts apart, only on distances that were
+    # measured: one nobody took -- a probe with no number, a budget spent, a pair
+    # the table leaves out -- may join what the measured ones leave apart, and
+    # blaming the geometry for it sends the repair after a joint that may be
+    # sound. Where such a pair could join two groups the report says so instead,
+    # so a short table never passes as one that measured the parts apart. The
+    # joints described above stay the measured ones.
+    groups, unknown = _possible_groups(_groups(neighbours, count), measured)
+    if unknown is not None:
+        (first, second), others = unknown
+        more = f", and {others} other pair{'s' if others > 1 else ''}" if others else ""
+        report.unchecked.append(
+            "parts mating into one assembly: no distance was measured between "
+            f"{_at(labels, first)} and {_at(labels, second)}{more}"
+        )
     if len(groups) == 1:
         return
     alone = sorted(next(iter(group)) for group in groups if len(group) == 1)
@@ -608,13 +654,79 @@ def _groups(neighbours: dict[int, set[int]], count: int) -> list[set[int]]:
     return groups
 
 
+def _possible_groups(
+    apart: list[set[int]], measured: set[frozenset[int]]
+) -> tuple[list[set[int]], tuple[tuple[int, int], int] | None]:
+    """The groups the parts could still form, and a pair that could join two of ``apart``.
+
+    ``apart`` are the groups the measured joints make. Two of them could still be
+    one wherever some pair between them was not measured: only a pair measured far
+    apart keeps two parts apart. So the joining runs over the groups rather than
+    over every pair of parts, whose number grows with the square of the part
+    count: two groups count as joinable while the measured pairs between them are
+    fewer than all of them, and a group is held back only by a group it was
+    measured apart from, so the work stays within the parts and the table.
+
+    The second value is one pair between two groups that nobody measured, with how
+    many others there are, or ``None`` where every pair between groups was.
+    """
+    of = {part: number for number, group in enumerate(apart) for part in group}
+    between: Counter[tuple[int, int]] = Counter()
+    for pair in measured:
+        if len(pair) == 2:  # a part listed against itself is no pair
+            first, second = sorted(of[part] for part in pair)
+            if first != second:
+                between[first, second] += 1
+    sizes = [len(group) for group in apart]
+    remaining = list(range(len(apart)))
+    possible: list[set[int]] = []
+    joining: tuple[int, int] | None = None
+    while remaining:
+        members = [remaining.pop(0)]
+        pending = list(members)
+        while pending:
+            here = pending.pop()
+            held = []
+            for there in remaining:
+                key = (min(here, there), max(here, there))
+                if between[key] < sizes[here] * sizes[there]:
+                    joining = joining or key
+                    members.append(there)
+                    pending.append(there)
+                else:
+                    held.append(there)
+            remaining = held
+        possible.append(set().union(*(apart[number] for number in members)))
+    if joining is None:
+        return possible, None
+    parts = sum(sizes)
+    pairs = (parts * (parts - 1) - sum(size * (size - 1) for size in sizes)) // 2
+    one, other = (sorted(apart[number]) for number in joining)
+    example = next(
+        (min(a, b), max(a, b)) for a in one for b in other if frozenset((a, b)) not in measured
+    )
+    return possible, (example, pairs - sum(between.values()) - 1)
+
+
 def _pair(entry: object) -> tuple[int, int, float] | None:
     """An ``[i, j, value]`` entry as usable numbers, or ``None``."""
     try:
         first, second, value = entry  # type: ignore[misc]
         return int(first), int(second), float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # an infinite index, a value past a float
         return None
+
+
+def _measurement(value: float) -> float | None:
+    """``value`` if it can be a volume or distance the kernel measured, else ``None``.
+
+    Neither is ever negative or unbounded, so a value that is was never measured,
+    whoever produced it -- the kernel itself, or a worker of another build. Held
+    to a threshold, NaN and the infinities read as a verdict either way, a pass
+    or a fault, that no measurement gave. One rule for both halves, so a value
+    the checks refuse is never one the measurement keeps.
+    """
+    return value if math.isfinite(value) and value >= 0.0 else None
 
 
 def _index_list(value: object) -> list[int] | None:
@@ -872,14 +984,14 @@ def _shared_volume(first, second) -> float | None:
     if shared is None:
         return 0.0
     try:
-        return float(sum(solid.volume for solid in shared.solids()))
+        return _measurement(float(sum(solid.volume for solid in shared.solids())))
     except Exception:  # noqa: BLE001 - same: report rather than guess
         return None
 
 
 def _distance(first, second) -> float | None:
     try:
-        return float(first.distance_to(second))
+        return _measurement(float(first.distance_to(second)))
     except Exception:  # noqa: BLE001 - same: report rather than guess
         return None
 
@@ -1267,7 +1379,9 @@ def _prism(face, travel):
     reads an inside-out solid as everything outside it: a part sitting wholly
     inside the prism would share none of its volume and pass as clear, while one
     nowhere near it would be read as a clash. Turned so its volume is positive,
-    the prism means what it encloses. One with no volume is no sweep at all.
+    the prism means what it encloses. One with no volume is no sweep at all, nor
+    is one whose volume is not finite: NaN says neither which way it faces, and no
+    face swept a finite distance encloses an unbounded volume.
     """
     from OCP.BRepGProp import BRepGProp
     from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
@@ -1277,7 +1391,7 @@ def _prism(face, travel):
     props = GProp_GProps()
     BRepGProp.VolumeProperties_s(prism, props)
     volume = props.Mass()
-    if volume == 0.0:
+    if volume == 0.0 or not math.isfinite(volume):
         return None
     return prism.Reversed() if volume < 0.0 else prism
 
@@ -1471,7 +1585,7 @@ def _prism_overlap(prism, other) -> float | None:
             BRepGProp.VolumeProperties_s(explorer.Current(), props)
             total += abs(props.Mass())
             explorer.Next()
-        return total
+        return _measurement(total)
     except Exception:  # noqa: BLE001 - same: report rather than guess
         return None
 
@@ -1655,7 +1769,10 @@ def _rod(point, heading, radius, span):
 
 
 def _cut_volume(part, tool) -> float | None:
-    """The volume of ``part`` left outside ``tool``, or ``None`` if it could not be cut."""
+    """The volume of ``part`` left outside ``tool``, or ``None``.
+
+    ``None`` where it could not be cut, or where the volume it gave is no measurement.
+    """
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
@@ -1673,7 +1790,7 @@ def _cut_volume(part, tool) -> float | None:
             BRepGProp.VolumeProperties_s(explorer.Current(), props)
             total += abs(props.Mass())
             explorer.Next()
-        return total
+        return _measurement(total)
     except Exception:  # noqa: BLE001 - same: report rather than guess
         return None
 
