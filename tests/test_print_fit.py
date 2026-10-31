@@ -88,6 +88,12 @@ class TestWhetherItCouldFitAtAll:
         for bbox in (None, [], [1.0, 2.0], ["a", "b", "c"]):
             assert print_fit.too_big_for(bbox, self.default()) == ""
 
+    def test_text_a_flag_or_a_negative_side_is_not_read_as_a_size(self):
+        # Text is no number even where it spells one, a flag is no length, and no
+        # measured side is below zero: each was refused with a size nobody measured.
+        for bbox in (["300", "300", "300"], [True, 300.0, 300.0], [-300.0, 300.0, 10.0]):
+            assert print_fit.too_big_for(bbox, self.default()) == ""
+
 
 class TestOfferingToScaleItDown:
     """Turning "it will not fit" into a question.

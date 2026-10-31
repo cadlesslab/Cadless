@@ -83,7 +83,12 @@ crosses a process boundary as JSON. Three constraints follow from that:
    good payload came earlier. And never write partial output without a trailing
    newline just before the sentinel, or the payload no longer starts its own
    line and is missed entirely. New fields go in that JSON payload and must be
-   JSON-serialisable.
+   JSON-serialisable. Both paths read the result back through one reader
+   (`_read_result` in `cadless/worker.py`) that checks every field against what
+   it holds, because the generated code shares that stdout and can print a line
+   of its own: a field it does not read is dropped, a value that is not what its
+   field holds reads as not measured, and a success without a volume and box it
+   can read is a failed build.
 2. **Only `RLIMIT_CPU` is set, and the absent address-space cap is deliberate**
    — see [ADR-0003](../adr/0003-three-layer-sandbox.md). Do not "fix" it by
    adding `RLIMIT_AS`; memory is bounded at the container level instead.

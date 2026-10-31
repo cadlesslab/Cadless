@@ -3,7 +3,7 @@
 These exercise the pure evaluation function with synthetic measurements (part
 boxes, pairwise overlap volumes and gaps, an assembly order), so they need no
 live OCCT. The geometry that produces those numbers is tested in
-``tests/test_worker.py``.
+``tests/test_assembly_measure.py``.
 """
 
 import json
@@ -158,6 +158,29 @@ def test_a_lone_part_with_an_unreadable_box_is_unchecked_rather_than_passed():
     assert report.unchecked
 
 
+# Scales that bring no box to millimetres. Multiplied through, each turned a part
+# five times the bed into one that fits, one with no readable box, or a size
+# nothing measured.
+_NOT_A_SCALE = [math.nan, math.inf, 0.0, -1.0]
+_NOT_A_SCALE_IDS = ["nan", "inf", "zero", "negative"]
+
+
+@pytest.mark.parametrize("scale", _NOT_A_SCALE, ids=_NOT_A_SCALE_IDS)
+def test_a_lone_part_at_a_scale_that_is_no_length_is_unchecked_rather_than_passed(scale):
+    # Unchecked over the scale, not the box: the box is sound, and a repair told
+    # otherwise goes after the wrong thing.
+    report = evaluate_lone_part((1000.0, 1000.0, 1000.0), SPEC, export_scale=scale)
+    assert report.failures == []
+    assert ["the scale to millimetres" in reason for reason in report.unchecked] == [True]
+
+
+def test_a_box_past_a_float_once_scaled_is_unchecked_rather_than_passed():
+    # Multiplied through, the side became infinite, which the fit passes in silence.
+    report = evaluate_lone_part((1e306, 10.0, 10.0), SPEC, export_scale=1000.0)
+    assert report.failures == []
+    assert report.unchecked
+
+
 @pytest.mark.parametrize(
     "bad_box",
     [
@@ -165,6 +188,10 @@ def test_a_lone_part_with_an_unreadable_box_is_unchecked_rather_than_passed():
         ["wide", 100.0, 50.0],  # not a number
         [float("nan"), 100.0, 50.0],  # not finite
         [float("inf"), 100.0, 50.0],
+        ["300", "300", "300"],  # text that spells a number is still text
+        "123",  # text where the box should be, read a letter to a side
+        [True, 100.0, 50.0],  # a flag is no length
+        [-100.0, 100.0, 50.0],  # no measured side is below zero
     ],
 )
 def test_an_unreadable_part_box_refuses_rather_than_passing(bad_box):
@@ -233,6 +260,12 @@ def test_a_build_whose_box_cannot_be_read_is_unchecked_rather_than_passed():
     assert not report.ok
     assert report.failures == []
     assert report.unchecked
+
+
+def test_the_requested_size_at_a_scale_that_is_no_length_is_unchecked():
+    report = evaluate_requested_size((300.0, 250.0, 18.0), SIZED, export_scale=0.0)
+    assert report.failures == []
+    assert ["the scale to millimetres" in reason for reason in report.unchecked] == [True]
 
 
 @pytest.mark.parametrize("requested", [(300.0, 0.0, 18.0), (300.0, 250.0)])
@@ -470,8 +503,8 @@ def test_measurements_from_a_payload_missing_keys_does_not_raise():
 
 
 def test_measurements_from_a_payload_with_an_unknown_key_does_not_raise():
-    # The neighbouring RepairContext(**rc) raises TypeError here, which turns an
-    # api/worker version skew into a broken call rather than a degraded read.
+    # Unpacked into the dataclass, a key it does not know raises TypeError, which
+    # turns an api/worker version skew into a broken call rather than a degraded read.
     m = AssemblyMeasurements.from_payload({"order": [0, 1], "invented_later": 7})
     assert m is not None
     assert m.order == [0, 1]
@@ -660,6 +693,44 @@ def test_a_part_listed_against_itself_is_no_pair_between_groups():
     assert report.ok
 
 
+def test_a_part_listed_against_itself_is_no_joint_of_its_own():
+    report = evaluate_assembly(_m(gaps=[[0, 1, 0.2], [0, 0, 0.0]]), SPEC)
+    assert report.joints == [[1], [0]]
+
+
+def test_an_overlap_of_a_part_with_itself_is_unreadable_rather_than_a_fault():
+    # Unlike the gaps, nothing checks the overlaps table for the pairs it leaves
+    # out, so an entry that names no pair cannot be passed over the way a gap
+    # entry is: it may be what is left of one that did.
+    report = evaluate_assembly(_m(overlaps=[[0, 0, 5.0]]), SPEC)
+    assert report.failures == []
+    assert not report.ok
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [[0, 1, True], [True, False, 0.2], [0.9, 1.7, 0.2], "015", [0, 1, "0.2"]],
+    ids=[
+        "a flag for a distance",
+        "flags for parts",
+        "fractions for parts",
+        "text for the entry",
+        "text for a distance",
+    ],
+)
+def test_an_entry_read_leniently_into_a_measurement_is_unreadable(entry):
+    # Converted rather than checked, each of these became a pair nobody measured:
+    # a flag became 0 or 1, a fraction the part below it, and text whatever it
+    # spells -- a character to a field where the entry itself is text.
+    neighbours, problems = mating_graph([entry], 2, 1.0)
+    assert neighbours == {0: set(), 1: set()}
+    assert len(problems) == 1
+
+
+def test_an_entry_that_is_a_number_is_unreadable():
+    assert len(mating_graph([5], 2, 1.0)[1]) == 1
+
+
 def _one_loose_one_unknown():
     # Parts 1 and 3 joined; part 2 measured far from every other; part 4 never
     # measured against 1 or 3, so it may yet join them.
@@ -817,6 +888,81 @@ def test_no_order_no_reason_still_refuses():
     report = evaluate_assembly(_m(order=None, trapped=[]), SPEC)
     assert not report.ok
     assert any("no reason" in reason for reason in report.unchecked)
+
+
+def test_a_reason_that_is_not_text_leaves_the_order_unruled_rather_than_raising():
+    # The order check reads every reason as text to find one of its own.
+    report = evaluate_assembly(_m(order=None, unchecked=[5]), SPEC)
+    assert not report.ok
+    assert _only(report.unchecked, "assembly order:")
+
+
+def test_a_reason_that_is_not_text_reaches_the_report_as_text():
+    # The report goes on to the model and to the panel as text.
+    report = evaluate_assembly(_m(unchecked=[{"code": 7}]), SPEC)
+    [reason] = report.unchecked
+    assert isinstance(reason, str)
+    assert "{'code': 7}" in reason
+
+
+def test_a_trapped_part_that_does_not_exist_leaves_the_order_unruled():
+    # Named, it sent the repair after a part 8 of a two-part build.
+    report = evaluate_assembly(_m(order=None, trapped=[0, 7]), SPEC)
+    assert report.failures == []
+    assert _only(report.unchecked, "assembly order:")
+
+
+@pytest.mark.parametrize(
+    "slot, said, bears_on_overlap",
+    [
+        ("part_bboxes", "the parts' bounding boxes:", True),
+        ("overlaps", "shared volume between the parts:", True),
+        ("gaps", "gap between the parts:", False),
+        ("unchecked", "which measurements could not be taken:", True),
+    ],
+)
+def test_a_table_that_is_not_a_list_refuses_the_checks_it_bears_on(slot, said, bears_on_overlap):
+    # A table nobody can read measured nothing, so it says so in the words of
+    # what it would have measured: every check, for the parts or for what could
+    # not be established; the overlap check, for the overlaps; the mating check,
+    # for the gaps.
+    payload = {"part_bboxes": [[10.0, 10.0, 10.0]] * 2, "gaps": [[0, 1, 0.2]], "order": [0, 1]}
+    payload[slot] = -1e308
+    m = AssemblyMeasurements.from_payload(payload)
+    assert len(_only(m.unchecked, said)) == 1
+    assert not evaluate_assembly(m, SPEC).ok
+    assert evaluate_assembly(m, SPEC, checks=PARTS_CHECKS).ok is not bears_on_overlap
+
+
+def test_parts_given_as_text_are_not_read_a_letter_to_a_part():
+    m = AssemblyMeasurements.from_payload({"part_bboxes": "ab", "order": [0, 1]})
+    assert m.part_bboxes == []
+    assert not evaluate_assembly(m, SPEC).ok
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"gaps": "x" * 100_000},
+        {"gaps": [["x" * 100_000, 1, 0.2]]},
+        {"unchecked": [{"x": "y" * 100_000}]},
+        {"order": list(range(100_000))},
+    ],
+    ids=["a table", "an entry", "a reason", "an order"],
+)
+def test_what_a_payload_sent_is_quoted_short(payload):
+    # Quoted whole, each went into the repair prompt as long as it was sent.
+    m = AssemblyMeasurements.from_payload(
+        {"part_bboxes": [[10.0, 10.0, 10.0]] * 2, "order": [0, 1], **payload}
+    )
+    assert len(evaluate_assembly(m, SPEC).repair_signal()) < 1_000
+
+
+def test_releases_that_are_not_a_list_are_no_headings():
+    # Nothing is judged on them, so nothing is refused: the build plays as one
+    # from a worker too old to record them.
+    m = AssemblyMeasurements.from_payload({"order": [0, 1], "releases": -1e308})
+    assert (m.releases, m.unchecked) == ([], [])
 
 
 def test_unchecked_survives_a_payload_with_nothing_measured():

@@ -49,13 +49,14 @@ build came back as: one part, a measured split, or parts nothing could measure.
 from __future__ import annotations
 
 import math
+import reprlib
 import time
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from cadless.assembly_tree import readable, unnamed
-from cadless.print_fit import _dimensions, too_big_for
+from cadless.print_fit import _dimensions, _number, too_big_for
 from cadless.printer_profile import AssemblySpec, BuildVolume
 
 #: How far apart two parts may sit and still count as mating, as a multiple of the
@@ -156,17 +157,30 @@ class AssemblyMeasurements:
         that skew into a ``TypeError`` that fails the whole call. Read this way an
         older reader ignores a field it does not know and a newer one falls back
         to the defaults, which degrades instead of breaking.
+
+        A table that is there but is no list is read as empty and said to be,
+        where read as it came a number raised and text was read a letter to an
+        entry. It is said in the words of the check it measured for, so a check
+        that is not faced is not refused over it; the headings are judged by
+        nothing, so theirs is dropped unsaid.
         """
         if not isinstance(data, dict):
             return None
+        tables = {key: _listed(data.get(key)) for key in _TABLES}
+        unchecked = tables["unchecked"] or []
+        unchecked += [
+            f"{what}: the measurement sent {_quoted(data[key])} rather than a list"
+            for key, what in _TABLES.items()
+            if tables[key] is None and what is not None
+        ]
         return cls(
-            part_bboxes=list(data.get("part_bboxes") or []),
-            overlaps=list(data.get("overlaps") or []),
-            gaps=list(data.get("gaps") or []),
+            part_bboxes=tables["part_bboxes"] or [],
+            overlaps=tables["overlaps"] or [],
+            gaps=tables["gaps"] or [],
             order=_index_list(data.get("order")),
             trapped=_index_list(data.get("trapped")) or [],
-            unchecked=list(data.get("unchecked") or []),
-            releases=list(data.get("releases") or []),
+            unchecked=unchecked,
+            releases=tables["releases"] or [],
         )
 
 
@@ -272,7 +286,7 @@ def evaluate_assembly(
     # nothing still has something to say, and dropping it here turned an
     # executor that failed outright into a silent pass.
     report.unchecked.extend(
-        reason
+        reason if isinstance(reason, str) else f"a reason that is not text: {_quoted(reason)}"
         for reason in measurements.unchecked
         if _concerns(reason) is None or _concerns(reason) in checks
     )
@@ -301,6 +315,27 @@ def mating_tolerance(clearance_mm: float) -> float:
     return max(clearance_mm * MATING_TOLERANCE_FACTOR, MATING_TOLERANCE_FLOOR_MM)
 
 
+def _length_scale(value: object) -> float | None:
+    """``value`` where it can bring a length to millimetres, else ``None``.
+
+    Only a positive finite number can. Multiplied through, NaN or an infinity
+    left a box no check could read, which the fit passes in silence, and zero or
+    a negative scale a size nothing measured: a part five times the bed fitted.
+    """
+    scale = _number(value)
+    return scale if scale is not None and math.isfinite(scale) and scale > 0.0 else None
+
+
+def _millimetres(bbox: Sequence[float] | None, scale: float) -> tuple[float, float, float] | None:
+    """``bbox`` brought to millimetres by ``scale``, or ``None`` where it is no box there.
+
+    Read again after scaling: a side too long for a float once multiplied is no
+    more a length than one that was never there.
+    """
+    size = _dimensions(bbox)
+    return None if size is None else _dimensions(tuple(extent * scale for extent in size))
+
+
 def evaluate_lone_part(
     bbox: Sequence[float] | None, spec: AssemblySpec, *, export_scale: float = 1.0
 ) -> AssemblyReport:
@@ -317,13 +352,19 @@ def evaluate_lone_part(
     passed, before any scaling, as the per-part fit does.
     """
     report = AssemblyReport()
-    size = _dimensions(bbox)
-    if size is None:
+    scale = _length_scale(export_scale)
+    if scale is None:
         report.unchecked.append(
-            "build volume fit for the one part: its bounding box is not three finite numbers"
+            f"build volume fit for the one part: the scale to millimetres, {export_scale!r}, "
+            "is not a positive finite number"
         )
         return report
-    size = tuple(extent * export_scale for extent in size)
+    size = _millimetres(bbox, scale)
+    if size is None:
+        report.unchecked.append(
+            "build volume fit for the one part: its bounding box is not three finite lengths"
+        )
+        return report
     volume = spec.volume
     if too_big_for(size, volume):
         report.failures.append(
@@ -358,13 +399,19 @@ def evaluate_requested_size(
             "positive finite lengths"
         )
         return report
-    size = _dimensions(bbox)
-    if size is None:
+    scale = _length_scale(export_scale)
+    if scale is None:
         report.unchecked.append(
-            "overall size against the request: the build's bounding box is not three finite numbers"
+            f"overall size against the request: the scale to millimetres, {export_scale!r}, "
+            "is not a positive finite number"
         )
         return report
-    size = tuple(extent * export_scale for extent in size)
+    size = _millimetres(bbox, scale)
+    if size is None:
+        report.unchecked.append(
+            "overall size against the request: the build's bounding box is not three finite lengths"
+        )
+        return report
     if any(
         abs(have - want) > max(REQUESTED_SIZE_SLACK_MM, want * REQUESTED_SIZE_SLACK_FRACTION)
         for have, want in zip(sorted(size), sorted(requested), strict=True)
@@ -394,7 +441,7 @@ def _check_fit(
             # would present an unchecked part as a checked one, so the guard sits
             # in front of the call rather than inside it.
             report.unchecked.append(
-                f"build volume fit for {label}: its bounding box is not three finite numbers"
+                f"build volume fit for {label}: its bounding box is not three finite lengths"
             )
             continue
         if too_big_for(box, volume):
@@ -447,11 +494,19 @@ def _check_overlap(
     for entry in m.overlaps:
         pair = _pair(entry)
         if pair is None:
-            report.unchecked.append(f"overlap between two parts: unreadable entry {entry!r}")
+            report.unchecked.append(f"overlap between two parts: unreadable entry {_quoted(entry)}")
             continue
         first, second, shared = pair
         if not (0 <= first < len(m.part_bboxes) and 0 <= second < len(m.part_bboxes)):
-            report.unchecked.append(f"overlap entry {entry!r} names a part that does not exist")
+            report.unchecked.append(
+                f"overlap entry {_quoted(entry)} names a part that does not exist"
+            )
+            continue
+        if first == second:
+            # Unlike a gap entry, one that names no pair cannot be passed over:
+            # nothing checks this table for the pairs it leaves out, so it may be
+            # what is left of one that did.
+            report.unchecked.append(f"overlap entry {_quoted(entry)} names one part twice")
             continue
         if _measurement(shared) is None:
             report.unchecked.append(
@@ -517,14 +572,19 @@ def _read_gaps(
     for entry in gaps:
         pair = _pair(entry)
         if pair is None:
-            problems.append(f"gap between two parts: unreadable entry {entry!r}")
+            problems.append(f"gap between two parts: unreadable entry {_quoted(entry)}")
             continue
         first, second, distance = pair
         if not (0 <= first < part_count and 0 <= second < part_count):
             # The gaps table disagrees with the part list, which is the same
             # corruption the unreadable case refuses. Ignoring it would let a
             # short table read as a fully measured one.
-            problems.append(f"gap entry {entry!r} names a part that does not exist")
+            problems.append(f"gap entry {_quoted(entry)} names a part that does not exist")
+            continue
+        if first == second:
+            # No pair: it joins no part to another and keeps none apart. A pair
+            # it stands in for is one the table leaves out, which is ruled on as
+            # such.
             continue
         if _measurement(distance) is None:
             problems.append(
@@ -616,11 +676,18 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequen
         if not _is_permutation(m.order, len(m.part_bboxes)):
             report.order = None
             report.unchecked.append(
-                f"{_ORDER_UNCHECKED_PREFIX} the order given, {m.order!r}, is not a sequence "
+                f"{_ORDER_UNCHECKED_PREFIX} the order given, {_quoted(m.order)}, is not a sequence "
                 f"of all {len(m.part_bboxes)} parts"
             )
         return
     if m.trapped:
+        if not all(type(index) is int and 0 <= index < len(m.part_bboxes) for index in m.trapped):
+            # Named, a part that is not there sends the repair after it.
+            report.unchecked.append(
+                f"{_ORDER_UNCHECKED_PREFIX} the parts given as trapped, {_quoted(m.trapped)}, are not "
+                f"all among the {len(m.part_bboxes)} parts"
+            )
+            return
         trapped = ", ".join(_at(labels, index) for index in sorted(m.trapped))
         report.failures.append(
             f"no assembly order exists: {trapped} cannot be brought into place without passing "
@@ -630,7 +697,10 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequen
     # The executor normally says why it could not rule, and that reason is
     # already on the report. A payload carrying neither a result nor a reason is
     # inconsistent, and this is the only thing between it and reading as a pass.
-    if not any(reason.startswith(_ORDER_UNCHECKED_PREFIX) for reason in m.unchecked):
+    if not any(
+        isinstance(reason, str) and reason.startswith(_ORDER_UNCHECKED_PREFIX)
+        for reason in m.unchecked
+    ):
         report.unchecked.append(f"{_ORDER_UNCHECKED_PREFIX} no result and no reason was given")
 
 
@@ -673,10 +743,9 @@ def _possible_groups(
     of = {part: number for number, group in enumerate(apart) for part in group}
     between: Counter[tuple[int, int]] = Counter()
     for pair in measured:
-        if len(pair) == 2:  # a part listed against itself is no pair
-            first, second = sorted(of[part] for part in pair)
-            if first != second:
-                between[first, second] += 1
+        first, second = sorted(of[part] for part in pair)
+        if first != second:
+            between[first, second] += 1
     sizes = [len(group) for group in apart]
     remaining = list(range(len(apart)))
     possible: list[set[int]] = []
@@ -709,12 +778,20 @@ def _possible_groups(
 
 
 def _pair(entry: object) -> tuple[int, int, float] | None:
-    """An ``[i, j, value]`` entry as usable numbers, or ``None``."""
-    try:
-        first, second, value = entry  # type: ignore[misc]
-        return int(first), int(second), float(value)
-    except (TypeError, ValueError, OverflowError):  # an infinite index, a value past a float
+    """An ``[i, j, value]`` entry as two part indices and a number, or ``None``.
+
+    Checked rather than converted: ``int`` and ``float`` take a flag, a fraction
+    and text as well, and each became a pair nobody measured -- a flag part 0 or
+    1, a fraction the part below it, text whatever it spells, a character to a
+    field where the entry itself was text.
+    """
+    if not isinstance(entry, list | tuple) or len(entry) != 3:
         return None
+    first, second, value = entry
+    if type(first) is not int or type(second) is not int:
+        return None
+    number = _number(value)
+    return None if number is None else (first, second, number)
 
 
 def _measurement(value: float) -> float | None:
@@ -745,6 +822,38 @@ def _index_list(value: object) -> list[int] | None:
             return None
         out.append(item)
     return out
+
+
+#: Each table a payload carries, by key, with what to call it where it cannot be
+#: read: in the words of the check its absence leaves unmeasured, or ``None`` for
+#: one no check reads.
+_TABLES = {
+    "part_bboxes": "the parts' bounding boxes",
+    "overlaps": f"{_SHARED_UNCHECKED_PREFIX} the parts",
+    "gaps": f"{_GAP_UNCHECKED_PREFIX} the parts",
+    "unchecked": "which measurements could not be taken",
+    "releases": None,
+}
+
+
+def _listed(value: object) -> list | None:
+    """``value`` where it is a list, ``[]`` where there is none, and ``None`` otherwise."""
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else None
+
+
+#: How a value a payload sent is quoted in a sentence: enough of it to recognise,
+#: and no more. The sentence goes on to the model and the panel, and the value is
+#: whatever the code that printed the payload chose -- quoted whole, a table sent
+#: as megabytes of text went into the repair prompt as megabytes of text.
+_QUOTE = reprlib.Repr(
+    maxlevel=3, maxtuple=6, maxlist=6, maxdict=6, maxset=6, maxstring=60, maxlong=40, maxother=60
+)
+
+
+def _quoted(value: object) -> str:
+    return _QUOTE.repr(value)
 
 
 def given_name(index: int, names: Sequence[str | None] | None) -> str | None:
@@ -906,8 +1015,20 @@ def measure_assembly(
     scene = _Scene(parts)
     done = 0
 
+    # Nothing is measured against a part whose box has no finite middle or size:
+    # the kernel, handed one, can stay inside a single call past any budget, and
+    # a budget cannot interrupt a call already running. The order search stops
+    # at the same part, its look-ahead reading the size.
+    unplaced = {index for index, part in enumerate(parts) if not _placed(part)}
+    unchecked.extend(
+        f"{_PAIRS_UNCHECKED_PREFIX} {_at(labels, index)}'s box has no finite middle or "
+        "size, so nothing was measured against it"
+        for index in sorted(unplaced)
+    )
     for first in range(len(parts)):
         for second in range(first + 1, len(parts)):
+            if first in unplaced or second in unplaced:
+                continue
             try:
                 budget.spend()  # the shared-volume probe
                 budget.spend()  # the distance probe
@@ -963,6 +1084,20 @@ def measure_assembly(
 def _extent(part) -> list[float]:
     size = part.bounding_box().size
     return [float(size.X), float(size.Y), float(size.Z)]
+
+
+def _placed(part) -> bool:
+    """Whether the part's box has a finite middle and size.
+
+    Not where the part sits at a coordinate that is NaN or infinite, nor so far
+    out that the middle of its box overflows though its corners do not.
+    """
+    box = part.bounding_box()
+    centre, size = box.center(), box.size
+    return all(
+        math.isfinite(float(value))
+        for value in (centre.X, centre.Y, centre.Z, size.X, size.Y, size.Z)
+    )
 
 
 def _shared_volume(first, second) -> float | None:
@@ -1925,7 +2060,13 @@ def _look_ahead(parts) -> float | None:
     thinnest = None
     for part in parts:
         size = part.bounding_box().size
-        smallest = min(float(size.X), float(size.Y), float(size.Z))
+        # Read as a box rather than compared: the smallest of a NaN and two
+        # numbers depends on their order, and a NaN look-ahead let the search
+        # run on parts whose sweeps the kernel never came back from.
+        sides = _dimensions((float(size.X), float(size.Y), float(size.Z)))
+        if sides is None:
+            return None
+        smallest = min(sides)
         if thinnest is None or smallest < thinnest:
             thinnest = smallest
     if thinnest is None or thinnest <= 0.0:
