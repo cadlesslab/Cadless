@@ -20,6 +20,7 @@ expected to ask for it.
 from __future__ import annotations
 
 import math
+import numbers
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -44,22 +45,40 @@ def _mm(value: float) -> str:
     return fmt(round(value, 1))
 
 
-def _dimensions(bbox: Sequence[Any] | None) -> tuple[float, float, float] | None:
-    """The bounding box as three usable numbers, or ``None``.
+def _number(value: object) -> float | None:
+    """``value`` as a float where it is a number, or ``None``.
 
-    ``None`` covers everything that is not three finite numbers: a missing box, a
-    short one, a string where a number should be, a NaN, an integer too large to
-    be a float. Every caller here answers that the same way -- say nothing, and
-    let the slicer be the one to speak -- which is why the unpacking is one piece
-    of code rather than copies drifting apart.
+    Checked rather than converted: ``float`` takes text that spells a number and
+    a flag as well, and each became a reading nobody measured. An integer too
+    large to be a float is no number here either. NaN and the infinities are
+    numbers, and are left to the caller to refuse.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    try:
+        return float(value)
+    except OverflowError:
+        return None
+
+
+def _dimensions(bbox: Sequence[Any] | None) -> tuple[float, float, float] | None:
+    """The bounding box as three usable lengths, or ``None``.
+
+    ``None`` covers everything that is not three finite numbers none of them
+    below zero: a missing box, a short one, text where the box or a number
+    should be, a flag, a NaN, an integer too large to be a float, and a negative
+    side, which no measured box has. Every caller here answers that the same way
+    -- say nothing, and let the slicer be the one to speak -- which is why the
+    unpacking is one piece of code rather than copies drifting apart.
     """
     try:
-        width, depth, height = (float(value) for value in bbox)  # type: ignore[misc]
-    except (TypeError, ValueError, OverflowError):
+        width, depth, height = bbox  # type: ignore[misc]
+    except (TypeError, ValueError):
         return None
-    if not all(math.isfinite(value) for value in (width, depth, height)):
+    sides = (_number(width), _number(depth), _number(height))
+    if not all(side is not None and math.isfinite(side) and side >= 0.0 for side in sides):
         return None
-    return width, depth, height
+    return sides  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)

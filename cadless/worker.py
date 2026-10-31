@@ -8,6 +8,7 @@ boundary at the process level; the container adds network/FS isolation.
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -16,7 +17,9 @@ from dataclasses import dataclass
 
 from cadless._worker_child import SENTINEL
 from cadless.assembly_check import AssemblyMeasurements
+from cadless.assembly_tree import parts_record
 from cadless.config import Settings, settings
+from cadless.print_fit import _dimensions, _number
 
 
 @dataclass
@@ -60,8 +63,9 @@ class ExecResult:
     assembly: AssemblyMeasurements | None = None
     # One entry per part, in part order: ``{"index", "name", "path", "color"}``,
     # as the build's tree names them. ``None`` where the build could not be read
-    # as a tree, or the worker that ran it does not report parts -- which is not
-    # the same as one part.
+    # as a tree, the worker that ran it does not report parts, or the list it
+    # reported is not one the store would keep -- which is not the same as one
+    # part.
     parts: list[dict] | None = None
     # The whole build as one file of each; ``None`` where the child wrote none.
     assembly_glb_path: str | None = None
@@ -69,16 +73,87 @@ class ExecResult:
     repair_context: RepairContext | None = None
 
 
-def _repair_context_from_payload(payload: dict) -> RepairContext | None:
-    """Build a RepairContext from a child/worker failure payload, if structured."""
-    if "error_type" not in payload:
+def _repair_context_from_payload(
+    payload: dict, traceback_key: str = "traceback"
+) -> RepairContext | None:
+    """Build a RepairContext from a child/worker failure payload, if structured.
+
+    Key by key, as the rest of a result is read: unpacked, a key this build does
+    not know raised out of the call, and a field of the wrong type was handed
+    on to a repair prompt that reads every one as text.
+    """
+    error_type = payload.get("error_type")
+    if not isinstance(error_type, str):
         return None
     return RepairContext(
-        error_type=payload["error_type"],
-        message=payload.get("message", ""),
-        offending_line=payload.get("offending_line"),
-        last_traceback=payload.get("traceback"),
+        error_type=error_type,
+        message=_text(payload.get("message")) or "",
+        offending_line=_text(payload.get("offending_line")),
+        last_traceback=_text(payload.get(traceback_key)),
     )
+
+
+def _read_result(payload: dict, repair_context: RepairContext | None) -> ExecResult:
+    """The result a child printed or the worker service sent, every field checked.
+
+    The generated script runs in the child and owns its stdout, so the line read
+    back is whatever the script chose to print; and a worker on another engine
+    build sends shapes this one never wrote. Handed on as it came, a field of the
+    wrong shape raised here, or passed downstream as a reading -- a box read a
+    letter to a side, a count or a flag in text -- so a value that is not what
+    its field holds is read as ``None``, not measured, instead.
+
+    Except the volume and the box, which every success the child reports
+    carries: one without them is no success. Read as not measured, a lone part
+    on a turn held to the bed was handed over without being held to it.
+    """
+    if payload.get("ok") is not True:
+        return ExecResult(
+            ok=False,
+            error=_text(payload.get("error")) or "unknown error",
+            timed_out=payload.get("timed_out") is True,
+            repair_context=repair_context,
+        )
+    volume, bbox = _amount(payload.get("volume")), _dimensions(payload.get("bbox"))
+    if volume is None or bbox is None:
+        return ExecResult(
+            ok=False, error="the build reported no volume and bounding box that can be read"
+        )
+    return ExecResult(
+        ok=True,
+        volume=volume,
+        bbox=bbox,
+        part_count=_count(payload.get("part_count")),
+        manifold=_flag(payload.get("manifold")),
+        min_wall_thickness=_amount(payload.get("min_wall_thickness")),
+        step_path=_text(payload.get("step_path")),
+        glb_path=_text(payload.get("glb_path")),
+        stl_path=_text(payload.get("stl_path")),
+        obj_path=_text(payload.get("obj_path")),
+        assembly=AssemblyMeasurements.from_payload(payload.get("assembly")),
+        parts=parts_record(payload.get("parts")),
+        assembly_glb_path=_text(payload.get("assembly_glb_path")),
+        assembly_step_path=_text(payload.get("assembly_step_path")),
+    )
+
+
+def _amount(value: object) -> float | None:
+    """``value`` where it is a finite number no smaller than zero, else ``None``."""
+    number = _number(value)
+    return number if number is not None and math.isfinite(number) and number >= 0.0 else None
+
+
+def _count(value: object) -> int | None:
+    """``value`` where it is a whole number no smaller than zero, else ``None``."""
+    return value if type(value) is int and value >= 0 else None
+
+
+def _flag(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _limit_resources(cpu_secs: int):
@@ -158,31 +233,7 @@ def run_code(
             killed = proc.returncode and proc.returncode < 0
             msg = "killed (resource limit)" if killed else (stderr or "no result emitted")
             return ExecResult(ok=False, error=msg, timed_out=killed)
-
-        if not payload.get("ok"):
-            return ExecResult(
-                ok=False,
-                error=payload.get("error", "unknown error"),
-                repair_context=_repair_context_from_payload(payload),
-            )
-
-        bbox = payload.get("bbox")
-        return ExecResult(
-            ok=True,
-            volume=payload.get("volume"),
-            bbox=tuple(bbox) if bbox else None,
-            part_count=payload.get("part_count"),
-            manifold=payload.get("manifold"),
-            min_wall_thickness=payload.get("min_wall_thickness"),
-            step_path=payload.get("step_path"),
-            glb_path=payload.get("glb_path"),
-            stl_path=payload.get("stl_path"),
-            obj_path=payload.get("obj_path"),
-            assembly=AssemblyMeasurements.from_payload(payload.get("assembly")),
-            parts=payload.get("parts"),
-            assembly_glb_path=payload.get("assembly_glb_path"),
-            assembly_step_path=payload.get("assembly_step_path"),
-        )
+        return _read_result(payload, _repair_context_from_payload(payload))
 
 
 def _run_remote(
@@ -219,34 +270,27 @@ def _run_remote(
             data = json.loads(resp.read().decode())
     except Exception as exc:  # noqa: BLE001 - network/worker failure
         return ExecResult(ok=False, error=f"worker unreachable: {exc}")
-    bbox = data.get("bbox")
+    if not isinstance(data, dict):
+        return ExecResult(ok=False, error="the worker's reply is not a result")
     rc = data.get("repair_context")
-    return ExecResult(
-        ok=data.get("ok", False),
-        error=data.get("error"),
-        timed_out=data.get("timed_out", False),
-        volume=data.get("volume"),
-        bbox=tuple(bbox) if bbox else None,
-        part_count=data.get("part_count"),
-        manifold=data.get("manifold"),
-        min_wall_thickness=data.get("min_wall_thickness"),
-        step_path=data.get("step_path"),
-        glb_path=data.get("glb_path"),
-        stl_path=data.get("stl_path"),
-        obj_path=data.get("obj_path"),
-        assembly=AssemblyMeasurements.from_payload(data.get("assembly")),
-        parts=data.get("parts"),
-        assembly_glb_path=data.get("assembly_glb_path"),
-        assembly_step_path=data.get("assembly_step_path"),
-        repair_context=RepairContext(**rc) if isinstance(rc, dict) else None,
+    return _read_result(
+        data,
+        _repair_context_from_payload(rc, "last_traceback") if isinstance(rc, dict) else None,
     )
 
 
 def _parse_payload(stdout: str) -> dict | None:
+    """The child's result line as an object, or ``None`` where there is none.
+
+    Anything the parser raises on is none either: the line is the generated
+    script's to write, and one nested past the parser's depth, or holding an
+    integer past its length, raised out of the call rather than failing it.
+    """
     for line in reversed(stdout.splitlines()):
         if line.startswith(SENTINEL):
             try:
-                return json.loads(line[len(SENTINEL) :].strip())
-            except json.JSONDecodeError:
+                payload = json.loads(line[len(SENTINEL) :].strip())
+            except (ValueError, RecursionError):
                 return None
+            return payload if isinstance(payload, dict) else None
     return None

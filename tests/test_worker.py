@@ -1,10 +1,13 @@
 """Execution-worker tests. Marked build123d: spawns subprocesses that
 import the OCCT kernel."""
 
+import json
+import math
 from pathlib import Path
 
 import pytest
 
+from cadless._worker_child import SENTINEL
 from cadless.config import Settings
 from cadless.worker import run_code
 
@@ -550,3 +553,190 @@ def test_the_child_hands_the_tree_s_names_to_the_measurement(tmp_path, monkeypat
     capsys.readouterr()
 
     assert seen["names"] == ["base", "lid"]
+
+
+# --- what the parent reads back from the child -------------------------------
+#
+# The generated script runs in the child and owns its stdout, so the result line
+# the parent reads is whatever the script chose to print: nothing in it can be
+# trusted to have the shape the child would have given it.
+
+
+def _forged(payload) -> str:
+    """A script that prints ``payload`` as the child's result and exits first."""
+    line = f"{SENTINEL} {payload if isinstance(payload, str) else json.dumps(payload)}"
+    return f"import os, sys\nsys.stdout.write({line!r} + '\\n')\nsys.stdout.flush()\nos._exit(0)\n"
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["[1, 2]", "[" * 100_000 + "]" * 100_000, '{"ok": true, "volume": ' + "1" * 5_000 + "}"],
+    ids=["a list", "nesting past the parser", "an integer past the parser"],
+)
+def test_a_result_that_is_not_an_object_is_a_failed_build(line):
+    # The last two raised out of the parser, and so out of run_code.
+    res = run_code(_forged(line))
+    assert res.ok is False
+    assert res.error
+
+
+@pytest.mark.parametrize(
+    ("field", "sent"),
+    [
+        ("part_count", "3"),
+        ("part_count", True),
+        ("part_count", -1),
+        ("manifold", "no"),
+        ("min_wall_thickness", math.inf),
+        ("min_wall_thickness", -1.0),
+        ("step_path", 5),
+    ],
+    ids=[
+        "text for a count",
+        "a flag for a count",
+        "a count below zero",
+        "text for a flag",
+        "a thickness that is no number",
+        "a thickness below zero",
+        "a number for a path",
+    ],
+)
+def test_a_value_that_is_no_reading_comes_back_as_none(field, sent):
+    # Each was handed on as it came, and every reader downstream took it for a
+    # count, a flag, a measurement or a path.
+    res = run_code(_forged({"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0], field: sent}))
+    assert res.ok is True
+    assert getattr(res, field) is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"volume": 1.0, "bbox": 5},
+        {"volume": 1.0, "bbox": "abc"},
+        {"volume": 1.0, "bbox": [math.nan, 1.0, 1.0]},
+        {"volume": 1.0},
+        {"volume": math.nan, "bbox": [1.0, 1.0, 1.0]},
+        {"volume": -1.0, "bbox": [1.0, 1.0, 1.0]},
+        {"bbox": [1.0, 1.0, 1.0]},
+    ],
+    ids=[
+        "a number for the box",
+        "text for the box",
+        "a box that is no size",
+        "no box",
+        "a volume that is no number",
+        "a volume below zero",
+        "no volume",
+    ],
+)
+def test_a_success_with_no_volume_or_box_it_can_read_is_a_failed_build(result):
+    # Every success the child reports carries both. Handed on, the first raised
+    # out of the reader, the second read a letter to a side, and the rest passed
+    # as successes with a reading nobody took, or with none at all.
+    res = run_code(_forged({"ok": True, **result}))
+    assert res.ok is False
+
+
+def test_a_lone_part_whose_box_cannot_be_read_is_refused_on_a_turn_held_to_the_bed():
+    # Read as a box not measured, a lone part would be handed over without being
+    # held to the bed, so a success whose box cannot be read is no success.
+    from cadless.pipeline import rebuild
+    from cadless.printer_profile import AssemblySpec, BuildVolume
+
+    spec = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=0.2)
+    code = _forged({"ok": True, "volume": 1.0, "bbox": [math.nan, 1.0, 1.0], "part_count": 1})
+    assert rebuild(code, assembly=spec).ok is False
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        7,
+        [7],
+        [{"name": "lid"}],
+        [{"index": 0}],
+        [{"index": 0, "name": "lid", "path": "car"}],
+        [{"index": 0, "name": "lid", "path": [1]}],
+        [{"index": 0, "name": "lid", "path": [], "color": "red"}],
+        [{"index": 0, "name": "lid", "path": [], "color": ["r", 0.0, 0.0, 1.0]}],
+    ],
+    ids=[
+        "a number for the list",
+        "a number for a part",
+        "a part with no index",
+        "a part with no name",
+        "text for a path",
+        "a number in a path",
+        "text for a colour",
+        "text in a colour",
+    ],
+)
+def test_parts_the_store_would_not_keep_come_back_as_none(parts):
+    # Read by the rule the store files them by, so what a run hands the turn is
+    # the list its version will be filed with.
+    res = run_code(_forged({"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0], "parts": parts}))
+    assert res.parts is None
+
+
+def test_a_traceback_that_is_not_text_is_left_out_of_the_repair_context():
+    # The repair prompt strips it as text, and anything else raised there.
+    res = run_code(
+        _forged({"ok": False, "error": "boom", "error_type": "ValueError", "traceback": [1]})
+    )
+    assert res.repair_context.error_type == "ValueError"
+    assert res.repair_context.last_traceback is None
+
+
+def test_an_error_type_that_is_not_text_is_no_repair_context():
+    res = run_code(_forged({"ok": False, "error": "boom", "error_type": 5}))
+    assert res.repair_context is None
+
+
+# --- what the child refuses to report as a build -----------------------------
+
+
+def _child(tmp_path, capsys, code: str, *args: str) -> dict:
+    """The payload the child prints for ``code``, run in this process."""
+    from cadless import _worker_child
+
+    code_file = tmp_path / "m.py"
+    code_file.write_text(code)
+    _worker_child.main(["prog", str(code_file), *args])
+    line = [x for x in capsys.readouterr().out.splitlines() if x.startswith(SENTINEL)][-1]
+    return json.loads(line[len(SENTINEL) :])
+
+
+@pytest.mark.parametrize("scale", ["nan", "inf", "0", "-1"])
+def test_the_child_refuses_a_scale_that_is_no_length(tmp_path, capsys, scale):
+    # A negative scale exported a mirrored model as a success, NaN held the
+    # kernel inside the export or passed where nothing was exported, and zero
+    # and infinity failed in the kernel, as if the model were at fault.
+    payload = _child(
+        tmp_path, capsys, "from build123d import *\nresult = Box(10, 10, 10)\n", "", scale
+    )
+    assert payload["ok"] is False
+    assert "export scale" in payload["error"]
+
+
+@pytest.mark.parametrize("volume", [math.nan, math.inf], ids=["nan", "inf"])
+def test_the_child_refuses_a_volume_that_is_no_number(tmp_path, capsys, monkeypatch, volume):
+    from OCP.GProp import GProp_GProps
+
+    monkeypatch.setattr(GProp_GProps, "Mass", lambda self: volume)
+    payload = _child(tmp_path, capsys, "from build123d import *\nresult = Box(10, 10, 10)\n")
+    assert payload["ok"] is False
+    assert payload["error"].startswith("degenerate solid")
+
+
+def test_the_child_refuses_a_part_placed_where_no_coordinate_is_a_number(tmp_path, capsys):
+    # The part has no volume and the whole keeps its neighbour's, so the volume
+    # check passed the build -- with a box no reader downstream could use, and
+    # parts the measurement could not finish with inside its budget.
+    code = (
+        "from build123d import *\n"
+        "result = Compound([Pos(float('nan'), 0, 0) * Box(10, 10, 10), Box(10, 10, 10)])\n"
+    )
+    payload = _child(tmp_path, capsys, code)
+    assert payload["ok"] is False
+    assert payload["error"].startswith("degenerate solid")
