@@ -1655,8 +1655,8 @@ def test_a_fresh_build_in_an_assembly_project_is_not_told_to_split(client, store
 
     "Forget that, make me a simple cube" starts a new model, and a new model is an
     assembly only if this turn says so. Inheriting here would make the opt-in
-    permanent — the composer's toggle is opt-in only, so there would be no way to
-    take it back — and the cube would then be recorded as an assembly itself, so
+    permanent — switching the composer's toggle off for the turn would take
+    nothing back — and the cube would then be recorded as an assembly itself, so
     every later turn in the project would carry a brief that opens by saying the
     part is too large to print in one piece.
     """

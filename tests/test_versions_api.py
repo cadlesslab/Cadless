@@ -61,6 +61,28 @@ def test_plan_step_in_version_payload(client, store):
     assert lst[plain_id]["plan_step"] is None
 
 
+def test_built_as_assembly_in_version_payload(client, store):
+    """The chat starts its Assembly option from this, so the client can tell a
+    model recorded as an assembly from one that is not."""
+
+    async def go():
+        p = await store.create_project("P")
+        split = await store.add_version(
+            p.id, "a shelf", "result = Box(1,1,1)", ok=True, built_as_assembly=True
+        )
+        whole = await store.add_version(p.id, "a cube", "result = Box(1,1,1)", ok=True)
+        return p.id, split.id, whole.id
+
+    pid, split_id, whole_id = asyncio.run(go())
+    assert client.get(f"/versions/{split_id}").json()["built_as_assembly"] is True
+    assert client.get(f"/versions/{whole_id}").json()["built_as_assembly"] is False
+    listed = {v["id"]: v for v in client.get(f"/projects/{pid}/versions").json()}
+    assert (listed[split_id]["built_as_assembly"], listed[whole_id]["built_as_assembly"]) == (
+        True,
+        False,
+    )
+
+
 def test_list_versions_unknown_project_404(client):
     assert client.get("/projects/999/versions").status_code == 404
 

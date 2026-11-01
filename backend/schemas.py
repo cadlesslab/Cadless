@@ -159,6 +159,9 @@ class VersionOut(BaseModel):
     # under (1-based), or null when no plan was active. Lets the UI narrate
     # "rolled back to step N". Purely additive — null for legacy/no-plan rows.
     plan_step: int | None = None
+    # Whether this version was built as an assembly: what the chat starts its
+    # Assembly option from, so a turn on a model kept in pieces asks for pieces.
+    built_as_assembly: bool = False
     artifacts: list[ArtifactOut] = []
     parts: list[PartOut] = []
 
@@ -177,6 +180,7 @@ class VersionOut(BaseModel):
             parameters=v.parameters,
             parent_version_id=v.parent_version_id,
             plan_step=v.plan_step,
+            built_as_assembly=v.built_as_assembly,
             artifacts=[ArtifactOut.of(a) for a in (artifacts or [])],
             parts=_parts_of(v, artifacts or []),
         )

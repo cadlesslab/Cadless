@@ -117,6 +117,8 @@ export function ChatPanel({
   // interlocking pieces that each fit the saved printer's bed (server gates it
   // behind the global assembly kill-switch too). Independent of forge —
   // one turn may want splitting without racing candidates, or the other way round.
+  // It starts from the model the turn edits, below, and the user switches it
+  // either way from there.
   const [assembly, setAssembly] = useState(false);
   // Which of those opt-ins the server will act on. Each is offered only while
   // its switch is on: with the switch off the server ignores it, so the toggle
@@ -144,6 +146,20 @@ export function ChatPanel({
       alive = false;
     };
   }, []);
+  // The model the next turn edits is the project's current version, not the one
+  // on screen. One recorded as an assembly starts the option on: the record lives
+  // on the version, and with the option back to off after a reload, a fresh build
+  // on that model was neither held to the bed nor recorded as an assembly. Set
+  // again only when that model changes, so the user's own switch stands until then.
+  const editedVersion = useStoreSelector((s) => {
+    const current = s.projects.find((p) => p.id === s.activeProjectId)?.current_version_id;
+    return s.versions.find((v) => v.id === current) ?? null;
+  });
+  const editedId = editedVersion?.id ?? null;
+  const editedIsAssembly = editedVersion?.built_as_assembly === true;
+  useEffect(() => {
+    setAssembly(offered.assembly && editedIsAssembly);
+  }, [editedId, editedIsAssembly, offered.assembly]);
   // Reference pictures for the next turn. Per-turn like forge, and held here
   // rather than in the composer so that clearing them is part of the same step
   // that clears the field once a turn has gone out.
@@ -281,6 +297,7 @@ export function ChatPanel({
                     app={app}
                     onRetry={() => replay.current()}
                     onEdit={editLast}
+                    onAnswer={(text) => runChat(text)}
                   />
                 ))}
               </div>
@@ -291,6 +308,7 @@ export function ChatPanel({
                 app={app}
                 onRetry={() => replay.current()}
                 onEdit={editLast}
+                onAnswer={(text) => runChat(text)}
               />
             ),
           )

@@ -61,6 +61,9 @@ export interface Version {
   /** UI narration: the active plan step (1-based) this checkpoint was
    * written under, or null when no plan was active. Lets the UI narrate "step N". */
   plan_step: number | null;
+  /** Whether the version was built as an assembly. Optional because a server
+   * older than the field sends none, which reads as not one. */
+  built_as_assembly?: boolean;
   artifacts: ArtifactRef[];
   /** The version's parts by name. Optional because a server older than part
    * names sends none. */
