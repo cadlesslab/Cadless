@@ -259,9 +259,9 @@ def test_run_code_remote_carries_the_whole_assembly_paths(monkeypatch):
 
 
 def test_run_code_remote_survives_a_payload_from_a_different_engine_build(monkeypatch):
-    # The neighbouring RepairContext(**rc) raises TypeError on a key it does not
-    # know, which turns an api/worker version skew into a broken call. This field
-    # must degrade instead: read what it recognises, ignore the rest.
+    # Unpacked, a key the reader does not know raises TypeError, which turns an
+    # api/worker version skew into a broken call. This field must degrade
+    # instead: read what it recognises, ignore the rest.
     import urllib.request
 
     class FakeResp:
@@ -352,3 +352,65 @@ def test_worker_service_can_serialise_a_result_carrying_measurements(monkeypatch
         r = c.post("/run", json={"code": "result = 1", "check_assembly": True})
     assert r.status_code == 200
     assert r.json()["assembly"]["order"] == [0, 1]
+
+
+# --- a reply that is no reading ------------------------------------------------
+
+
+def _reply(monkeypatch, body: str):
+    """What the remote path makes of the worker service answering ``body``."""
+    import urllib.request
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return body.encode()
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
+    return run_code("result = 1", config=Settings(worker_url="http://worker:9000"))
+
+
+def test_a_reply_that_is_not_an_object_is_a_failed_build(monkeypatch):
+    res = _reply(monkeypatch, "[1]")
+    assert res.ok is False
+    assert res.error
+
+
+def test_a_reply_is_read_as_the_child_s_own_result_is(monkeypatch):
+    # One reader for both paths: a value one path refuses, the other refuses too.
+    reply = {"ok": True, "volume": 1.0, "bbox": [1, 1, 1], "part_count": "3"}
+    assert _reply(monkeypatch, json.dumps(reply)).part_count is None
+
+
+def test_a_reply_that_timed_out_says_so(monkeypatch):
+    reply = {"ok": False, "timed_out": True, "error": "execution exceeded 30s wall-clock limit"}
+    assert _reply(monkeypatch, json.dumps(reply)).timed_out is True
+
+
+def test_a_reply_saying_ok_in_anything_but_true_is_no_success(monkeypatch):
+    # Readable otherwise, so that the flag alone decides.
+    reply = {"ok": "false", "error": "refused", "volume": 1.0, "bbox": [1, 1, 1]}
+    res = _reply(monkeypatch, json.dumps(reply))
+    assert (res.ok, res.error) == (False, "refused")
+
+
+def test_a_repair_context_from_another_build_keeps_what_it_recognises(monkeypatch):
+    context = {
+        "error_type": "ValueError",
+        "message": "bad",
+        "offending_line": "x = 1",
+        "last_traceback": "tb",
+        "added_later": 1,
+    }
+    res = _reply(monkeypatch, json.dumps({"ok": False, "error": "bad", "repair_context": context}))
+    assert res.repair_context is not None
+    assert (
+        res.repair_context.error_type,
+        res.repair_context.offending_line,
+        res.repair_context.last_traceback,
+    ) == ("ValueError", "x = 1", "tb")

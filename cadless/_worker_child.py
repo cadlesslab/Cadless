@@ -15,6 +15,7 @@ Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 import traceback
@@ -78,6 +79,28 @@ def _offending_line(exc: BaseException, code: str) -> str | None:
     if lineno is None or not (1 <= lineno <= len(lines)):
         return None
     return lines[lineno - 1].strip()
+
+
+def _degenerate(summary: dict) -> str | None:
+    """Why the summarised result is no solid to hand on, or ``None`` where it is one.
+
+    A volume that is no finite number measured nothing. A part placed where a
+    coordinate is NaN or infinite has no volume of its own, so the whole keeps
+    its neighbours' and passes on volume alone, with a box no reader can use --
+    the assembly measurement among them, which the kernel can hold inside one
+    call past its budget.
+    """
+    volume = summary["volume"]
+    if not math.isfinite(volume):
+        return "volume is not a finite number"
+    if volume <= 0:
+        return "volume <= 0"
+    if not all(math.isfinite(side) for side in summary["bbox"]):
+        return (
+            "its bounding box is not finite numbers: a part sits where a coordinate is "
+            "NaN or infinite"
+        )
+    return None
 
 
 def _summarise(result) -> dict:
@@ -187,6 +210,14 @@ def main(argv: list[str]) -> int:
     # returns no summary at all, so the measurement has to stop before it, and
     # a constant only does that at one particular timeout.
     wall_secs = float(argv[5]) if len(argv) > 5 and argv[5] else 0.0
+    if not math.isfinite(export_scale) or export_scale <= 0:
+        # Before the script runs: a negative scale exported a mirrored model as a
+        # success, NaN held the kernel inside the export or passed where nothing
+        # was exported, and zero or infinity failed in the kernel as if the model
+        # were at fault.
+        error = f"export scale {argv[3]!r} is not a positive finite number"
+        print(f"{SENTINEL} " + json.dumps({"ok": False, "error": error}))
+        return 1
     code = open(code_file).read()  # noqa: S108,SIM115 - trusted path from parent
 
     ns: dict = {}
@@ -203,10 +234,10 @@ def main(argv: list[str]) -> int:
     result = ns["result"]
     try:
         summary = _summarise(result)
-        if summary["volume"] <= 0:
+        problem = _degenerate(summary)
+        if problem is not None:
             print(
-                f"{SENTINEL} "
-                + json.dumps({"ok": False, "error": "degenerate solid (volume <= 0)"})
+                f"{SENTINEL} " + json.dumps({"ok": False, "error": f"degenerate solid ({problem})"})
             )
             return 1
         # Scaled once, above both readers. The export writes millimetres and the

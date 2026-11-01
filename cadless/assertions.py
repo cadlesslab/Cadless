@@ -24,7 +24,8 @@ compute. When a metric is genuinely unavailable the signature carries ``None`` a
 the corresponding check is *skipped* (never failed) — an assertion must never block
 on a value we could not measure. A bounding box or wall thickness that came back
 as anything but finite numbers was not measured either, and is skipped the same
-way rather than compared.
+way rather than compared. So is an assertion whose own value is no length or
+count: compared as it came, it passed every build, failed every build, or raised.
 These are skips, not silent always-passes: a metric we *did* measure and that
 violates its assertion does fail.
 """
@@ -34,7 +35,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from cadless.print_fit import _dimensions
+from cadless.print_fit import _dimensions, _number
 
 
 @dataclass(frozen=True)
@@ -70,14 +71,14 @@ class GeometryAssertions:
 class GeometrySignature:
     """Cheap, deterministic metrics measured after a successful build.
 
-    ``bbox``, ``min_wall_thickness`` and ``manifold`` may be ``None`` when the
-    executor could not compute them; assertions against an unknown metric are
-    skipped, not failed.
+    ``bbox``, ``part_count``, ``min_wall_thickness`` and ``manifold`` may be
+    ``None`` when the executor could not compute them; assertions against an
+    unknown metric are skipped, not failed.
     """
 
     volume: float
     bbox: tuple[float, float, float] | None
-    part_count: int
+    part_count: int | None
     manifold: bool | None = None
     min_wall_thickness: float | None = None
 
@@ -132,8 +133,11 @@ def evaluate_assertions(
 
 
 def _check_bbox(sig: GeometrySignature, a: GeometryAssertions, report: AssertionReport) -> None:
-    tol = a.bbox_tolerance
-    expected = a.bbox
+    expected = _dimensions(a.bbox)
+    tol = _finite(a.bbox_tolerance)
+    if expected is None or tol is None or tol < 0:
+        report.skipped.append("bounding box extents (the expected size or tolerance is no length)")
+        return
     actual = _dimensions(sig.bbox)
     if actual is None:
         report.skipped.append("bounding box extents (not measured)")
@@ -153,6 +157,12 @@ def _check_bbox(sig: GeometrySignature, a: GeometryAssertions, report: Assertion
 def _check_part_count(
     sig: GeometrySignature, a: GeometryAssertions, report: AssertionReport
 ) -> None:
+    if type(a.expected_part_count) is not int or a.expected_part_count < 0:
+        report.skipped.append("part count (the expected count is no count)")
+        return
+    if type(sig.part_count) is not int:
+        report.skipped.append("part count (not computed)")
+        return
     if sig.part_count != a.expected_part_count:
         report.failures.append(
             f"part count mismatch: expected {a.expected_part_count}, got {sig.part_count}"
@@ -174,6 +184,10 @@ def _check_manifold(sig: GeometrySignature, a: GeometryAssertions, report: Asser
 def _check_thickness(
     sig: GeometrySignature, a: GeometryAssertions, report: AssertionReport
 ) -> None:
+    minimum = _finite(a.min_wall_thickness)
+    if minimum is None or minimum < 0:
+        report.skipped.append("min wall thickness (the required minimum is no length)")
+        return
     if sig.min_wall_thickness is None:
         report.skipped.append("min wall thickness (not computed)")
         return
@@ -181,9 +195,9 @@ def _check_thickness(
     if thickness is None:
         report.skipped.append("min wall thickness (not measured)")
         return
-    if thickness < a.min_wall_thickness:
+    if thickness < minimum:
         report.failures.append(
-            f"min wall thickness {thickness:g}mm is below the required {a.min_wall_thickness:g}mm"
+            f"min wall thickness {thickness:g}mm is below the required {minimum:g}mm"
         )
 
 
@@ -194,8 +208,5 @@ def _finite(value) -> float | None:
     every one, and one that is not a number at all raises out of a function that
     must not.
     """
-    try:
-        number = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return number if math.isfinite(number) else None
+    number = _number(value)
+    return number if number is not None and math.isfinite(number) else None

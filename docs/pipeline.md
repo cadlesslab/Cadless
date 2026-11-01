@@ -126,6 +126,16 @@ subprocess.run([sys.executable, "-m", "cadless._worker_child", ...],
   ([ADR-0003](./adr/0003-three-layer-sandbox.md)).
 - The child executes the (already validated) code, exports artifacts, and
   reports back over a one-line protocol on stdout: `__VTRESULT__ {json}`.
+- That stdout is the generated code's as well, so the line read back is
+  whatever the code chose to print. The parent reads every field of it as
+  untrusted, as it reads the remote worker's reply: a value that is not what
+  its field holds reads as not measured, never as a reading, and a line that
+  is no result object fails the build, as does a success with no volume and
+  box that can be read. The child refuses an export scale that is no positive
+  finite number before the code runs, and a result whose volume is no positive
+  finite number or whose box is not finite before anything reads it: a part
+  placed where a coordinate is NaN or infinite leaves the whole a finite
+  volume.
 
 **Remote worker** (`worker_url=http://worker:9000` — the compose stack). The
 API delegates with `POST /run` to `worker/service.py`, which calls the same

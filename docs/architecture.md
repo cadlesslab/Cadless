@@ -340,6 +340,12 @@ catalog content read-only.
   code directly. Review those call sites before
   changing who can invoke them or what inputs they accept; their current shape
   is not evidence of a universal validation gate.
+- The worker child reports on stdout, which the generated code it runs shares,
+  so the result line is whatever that code chose to print. `run_code` reads
+  every field of it as untrusted, as it reads a remote worker's reply: a value
+  that is not what its field holds reads as not measured, and a line that is no
+  result object fails the build, as does a success with no volume and box that
+  can be read.
 - Environment settings take precedence over settings persisted by the UI. A
   saved value may therefore be present without being the effective value.
 - The launch gate over the settings behind it is read from the launch

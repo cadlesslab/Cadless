@@ -4,7 +4,11 @@ The policy that reads these numbers is tested in ``tests/test_assembly_check.py`
 against synthetic values; here the numbers themselves come from real solids.
 """
 
+import json
 import math
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -359,6 +363,39 @@ def test_a_part_with_no_measurable_size_stops_the_order_search():
     m = measure_assembly([_Awkward(size=(0.0, 10.0, 10.0)), _Awkward(centre=(30.0, 0.0, 0.0))])
     assert m.order is None
     assert any("no measurable size" in reason for reason in m.unchecked)
+
+
+_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.mark.parametrize("position", ["nan", "inf", "1.7e308"])
+def test_a_part_placed_at_no_number_is_measured_against_nothing(position):
+    # Handed such a part, the kernel can stay inside one call past any budget, or
+    # never come back, and a budget cannot interrupt a call already running. So
+    # the measurement runs in an interpreter of its own here, where a hang fails
+    # the test instead of holding the suite. The last position is a number, but
+    # the middle of a box there is not.
+    probe = (
+        "import json, time\n"
+        "from build123d import Box, Pos\n"
+        "from cadless.assembly_check import measure_assembly\n"
+        f"first = Pos(float({position!r}), 0, 0) * Box(20, 20, 10)\n"
+        "start = time.monotonic()\n"
+        "m = measure_assembly([first, Pos(30, 0, 0) * Box(20, 20, 10)], time_budget=5.0)\n"
+        "print(json.dumps([time.monotonic() - start, m.unchecked]))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    seconds, unchecked = json.loads(done.stdout)
+    assert seconds < 5.0
+    assert any(r.startswith("overlap and gap between every pair: part 1") for r in unchecked)
+    assert "assembly order: a part has no measurable size" in unchecked
 
 
 def test_parts_that_cannot_meet_along_a_direction_are_not_stepped_through():

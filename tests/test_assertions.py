@@ -94,13 +94,44 @@ def test_a_bbox_that_is_not_three_numbers_is_skipped_not_passed(bbox):
 
 @pytest.mark.parametrize(
     "thickness",
-    [math.nan, math.inf, "thin", 10**400, [1.0]],
-    ids=["nan", "inf", "text", "too-large", "list"],
+    [math.nan, math.inf, "thin", 10**400, [1.0], "2.0", True],
+    ids=["nan", "inf", "text", "too-large", "list", "text-of-a-number", "flag"],
 )
 def test_a_wall_thickness_that_is_not_a_number_is_skipped_not_passed(thickness):
     a = GeometryAssertions(min_wall_thickness=3.0)
     report = evaluate_assertions(_sig(min_wall_thickness=thickness), a)
     assert (report.failures, report.skipped) == ([], ["min wall thickness (not measured)"])
+
+
+# The request's side of each comparison is held to the same rule as the build's:
+# a value that is no length is no assertion, and it is skipped rather than
+# allowed to pass every build, fail every build, or raise.
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [(math.nan, 10.0, 10.0), (10.0, 10.0), (-10.0, 10.0, 10.0)],
+    ids=["nan", "short", "negative"],
+)
+def test_an_expected_size_that_is_not_three_lengths_is_skipped_not_judged(expected):
+    report = evaluate_assertions(_sig(), GeometryAssertions(bbox=expected))
+    assert report.failures == []
+    assert report.skipped
+
+
+@pytest.mark.parametrize("tolerance", [math.nan, math.inf, -1.0], ids=["nan", "inf", "negative"])
+def test_a_tolerance_that_is_no_length_is_skipped_not_judged(tolerance):
+    a = GeometryAssertions(bbox=(10.0, 10.0, 10.0), bbox_tolerance=tolerance)
+    report = evaluate_assertions(_sig(bbox=(12.0, 10.0, 10.0)), a)
+    assert report.failures == []
+    assert report.skipped
+
+
+@pytest.mark.parametrize("minimum", [math.nan, math.inf, -1.0], ids=["nan", "inf", "negative"])
+def test_a_minimum_wall_that_is_no_length_is_skipped_not_judged(minimum):
+    report = evaluate_assertions(_sig(), GeometryAssertions(min_wall_thickness=minimum))
+    assert report.failures == []
+    assert report.skipped
 
 
 # --- manifold / watertight -------------------------------------------------
@@ -136,6 +167,24 @@ def test_part_count_mismatch_fails():
     report = evaluate_assertions(_sig(part_count=3), a)
     assert not report.ok
     assert any("part" in f.lower() for f in report.failures)
+
+
+def test_a_part_count_that_was_not_computed_is_skipped_not_failed():
+    # The worker reports none where it could not count the solids.
+    report = evaluate_assertions(_sig(part_count=None), GeometryAssertions(expected_part_count=1))
+    assert report.failures == []
+    assert report.skipped
+
+
+@pytest.mark.parametrize("expected", ["2", -1], ids=["text", "negative"])
+def test_an_expected_part_count_that_is_not_a_count_is_skipped_not_judged(expected):
+    # Compared as it came, it failed every build, the one with exactly that many
+    # parts among them.
+    report = evaluate_assertions(
+        _sig(part_count=2), GeometryAssertions(expected_part_count=expected)
+    )
+    assert report.failures == []
+    assert report.skipped
 
 
 # --- multiple failures aggregate ------------------------------------------
