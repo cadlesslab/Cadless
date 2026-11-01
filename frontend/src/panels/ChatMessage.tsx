@@ -227,15 +227,15 @@ function CodegenStatus({ code, streaming }: { code: string; streaming: boolean }
 }
 
 /** A clarification turn: the assistant's questions, each optionally
- * with quick-reply chips. Clicking a chip hands its label to `onAnswer`, which
- * sends it as the composer sends a typed answer — with the composer's options,
- * and as the turn Retry and Edit then act on — and resumes the conversation. */
+ * with quick-reply chips. Clicking a chip hands its label to `onAnswer` rather
+ * than sending it from here, so the answer goes out as a typed one would and
+ * resumes the conversation. With no `onAnswer` the chips are shown disabled. */
 function Clarification({
   questions,
   onAnswer,
 }: {
   questions: ClarificationQuestion[];
-  onAnswer: (text: string) => void;
+  onAnswer: ((text: string) => void) | null;
 }) {
   return (
     <div className="clarification">
@@ -249,7 +249,8 @@ function Clarification({
                   key={opt}
                   type="button"
                   className="clarify-chip"
-                  onClick={() => onAnswer(opt)}
+                  disabled={onAnswer == null}
+                  onClick={() => onAnswer?.(opt)}
                 >
                   {opt}
                 </button>
@@ -403,7 +404,7 @@ function LiveChat({
   app: App;
   onRetry: () => void;
   onEdit: () => void;
-  onAnswer: (text: string) => void;
+  onAnswer: ((text: string) => void) | null;
 }) {
   // Surface a turn-level error (abort / provider failure) through the reused
   // StagedProgress error UI, so it settles to a stopped state with Retry/Edit.
@@ -476,7 +477,7 @@ export function ChatMessage({
   app: App;
   onRetry: () => void;
   onEdit: () => void;
-  onAnswer: (text: string) => void;
+  onAnswer: ((text: string) => void) | null;
 }) {
   // A picture takes its side of the thread from its role, ahead of the
   // fallthrough below — which takes any unbranched kind to be an assistant result

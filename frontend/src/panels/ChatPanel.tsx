@@ -147,19 +147,48 @@ export function ChatPanel({
     };
   }, []);
   // The model the next turn edits is the project's current version, not the one
-  // on screen. One recorded as an assembly starts the option on: the record lives
-  // on the version, and with the option back to off after a reload, a fresh build
-  // on that model was neither held to the bed nor recorded as an assembly. Set
-  // again only when that model changes, so the user's own switch stands until then.
-  const editedVersion = useStoreSelector((s) => {
-    const current = s.projects.find((p) => p.id === s.activeProjectId)?.current_version_id;
-    return s.versions.find((v) => v.id === current) ?? null;
-  });
-  const editedId = editedVersion?.id ?? null;
-  const editedIsAssembly = editedVersion?.built_as_assembly === true;
+  // on screen. One recorded as an assembly starts the option on while it is
+  // offered: with the option off, a turn the orchestrator opens with a fresh
+  // build is neither held to the bed nor recorded as an assembly. The option
+  // starts again only when the project, that model, its record or the offer
+  // changes, so the user's own switch stands until then, opening the same
+  // project again included. While the project names a model whose record has
+  // not arrived -- the moment after a turn built it -- the option stays as it
+  // was, so a turn sent then does not go out without it; in another project it
+  // starts off until the record arrives.
+  const editedId = useStoreSelector(
+    (s) => s.projects.find((p) => p.id === s.activeProjectId)?.current_version_id ?? null,
+  );
+  const edited = useStoreSelector((s) => s.versions.find((v) => v.id === editedId) ?? null);
+  const editedIsAssembly = edited?.built_as_assembly === true;
+  const awaitingRecord = editedId != null && edited == null;
+  // What the option last started from: the project, the model, what its record
+  // said (not an assembly while the record has yet to arrive), and whether the
+  // option was offered.
+  const startedFrom = useRef<{
+    project: number | null;
+    model: number | null;
+    assembly: boolean;
+    offered: boolean;
+  } | null>(null);
   useEffect(() => {
+    const from = startedFrom.current;
+    const sameProject = from?.project === activeProjectId;
+    if (awaitingRecord && sameProject) return;
+    const unchanged =
+      sameProject &&
+      from?.model === editedId &&
+      from?.assembly === editedIsAssembly &&
+      from?.offered === offered.assembly;
+    if (unchanged) return;
+    startedFrom.current = {
+      project: activeProjectId,
+      model: editedId,
+      assembly: editedIsAssembly,
+      offered: offered.assembly,
+    };
     setAssembly(offered.assembly && editedIsAssembly);
-  }, [editedId, editedIsAssembly, offered.assembly]);
+  }, [activeProjectId, editedId, editedIsAssembly, awaitingRecord, offered.assembly]);
   // Reference pictures for the next turn. Per-turn like forge, and held here
   // rather than in the composer so that clearing them is part of the same step
   // that clears the field once a turn has gone out.
@@ -220,6 +249,9 @@ export function ChatPanel({
     };
     app.chat(message, opted, images, optedAssembly);
   }
+  // A clarification chip answers through the same path as the composer, and is
+  // disabled where the composer is: with no open project, or on a read-only one.
+  const answer = activeProjectId == null || readOnly ? null : (text: string) => runChat(text);
   function submit() {
     const text = value.trim();
     // A picture on its own is a request the server accepts, so an empty field
@@ -297,7 +329,7 @@ export function ChatPanel({
                     app={app}
                     onRetry={() => replay.current()}
                     onEdit={editLast}
-                    onAnswer={(text) => runChat(text)}
+                    onAnswer={answer}
                   />
                 ))}
               </div>
@@ -308,7 +340,7 @@ export function ChatPanel({
                 app={app}
                 onRetry={() => replay.current()}
                 onEdit={editLast}
-                onAnswer={(text) => runChat(text)}
+                onAnswer={answer}
               />
             ),
           )

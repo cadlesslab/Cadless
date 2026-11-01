@@ -90,8 +90,9 @@ class ChatRequest(BaseModel):
     # kill-switch is on (the same both-true gate ``forge`` uses).
     #
     # It is one of two ways in, not the only one. The other is the version's own
-    # record: a model built as an assembly stays one, so an edit made after a reload
-    # put this flag back to False is still framed and checked as an assembly. This
+    # record: a model built as an assembly stays one, so an edit sent with this flag
+    # False -- switched off for the turn, or from a client that does not start it
+    # from the record -- is still framed and checked as an assembly. This
     # field therefore means "this turn is asking", never "this turn is the only
     # thing that decides" -- unlike ``forge``, which really is per-turn, because
     # forgetting a race costs a cheaper generation while forgetting an assembly
@@ -254,8 +255,8 @@ async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | Non
     """Resolve the current code, params and assembly-ness for the agent's edit context.
 
     The third value comes from the version rather than from this turn's request on
-    purpose: the turn that edits an assembly may have been made after a reload put
-    the per-turn option back to off, and the model is in pieces either way. It is
+    purpose: the turn that edits an assembly may arrive with the per-turn option
+    off, and the model is in pieces either way. It is
     read here rather than fetched separately because this is already the one place
     that loads the current version.
     """

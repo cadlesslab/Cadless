@@ -169,11 +169,11 @@ candidate judging, the identity seam and the image decisions are recorded under
    refinement, each repair round, and each best-of-N candidate. On a turn that
    asked for an assembly the printer's build volume and joint clearance reach
    every one of those calls as well, framed in the same place and the same order.
-   A turn asks either by opting in — which the chat starts on for a model recorded
-   as an assembly — or by editing such a model: the record lives on the version,
-   so a turn sent with the opt-in off does not drop the next edit back to the
-   brief of a turn that never asked. A
-   fresh build starts a new model and inherits nothing, with one exception: a
+   A turn asks either by opting in — which the chat, where it offers the option,
+   starts on for a model recorded as an assembly — or by editing such a model:
+   the record lives on the version, so an edit sent with the opt-in off is still
+   briefed as an assembly. A fresh build starts a new model and inherits
+   nothing, with one exception: a
    build the orchestrator generates after an edit or a parameter change in the
    same turn regenerates the model being edited, so it keeps that model's spec and
    is recorded as what that model was, until the user sends another message into

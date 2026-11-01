@@ -337,8 +337,8 @@ class ToolContext:
     # already built as, rather than what this turn asked for. Separate from
     # ``assembly`` because the two are not entitled to the same paths. A fresh
     # generation starts a new model, so only an explicit request may make it an
-    # assembly -- inheriting there would make the opt-in permanent, since the
-    # composer's toggle only ever turns it on. An edit acts on the model that
+    # assembly -- inheriting there would make the opt-in permanent: switching the
+    # composer's toggle off would take nothing back. An edit acts on the model that
     # already exists, so it takes either, and so does a generation that
     # regenerates the model this turn was editing (``edited_this_turn``).
     inherited_assembly: AssemblySpec | None = None

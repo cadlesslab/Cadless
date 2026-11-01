@@ -378,11 +378,11 @@ def test_version_persists_parent_lineage(tmp_path):
 
 
 def test_version_persists_whether_it_was_built_as_an_assembly(tmp_path):
-    """Whether the turn asked for an assembly outlives the turn.
+    """Whether a version was built as an assembly outlives the turn that built it.
 
     It has to live on the version rather than on the request, because the thing
-    that needs the answer is a *later* turn — an edit, whose own request may have
-    been made after a reload put the option back to off.
+    that needs the answer is a *later* turn — an edit, whose own request may
+    arrive with the option off.
     """
 
     async def go():

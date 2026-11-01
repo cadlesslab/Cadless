@@ -62,8 +62,7 @@ def test_plan_step_in_version_payload(client, store):
 
 
 def test_built_as_assembly_in_version_payload(client, store):
-    """The chat starts its Assembly option from this, so the client can tell a
-    model recorded as an assembly from one that is not."""
+    """The payload tells a version built as an assembly from one that was not."""
 
     async def go():
         p = await store.create_project("P")
