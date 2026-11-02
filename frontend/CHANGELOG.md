@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/cadlesslab/Cadless/compare/frontend-v1.3.1...frontend-v1.3.2) (2026-11-02)
+
+
+### Fixes
+
+* start the Assembly option from the model a turn edits, and send chip answers through the composer ([#81](https://github.com/cadlesslab/Cadless/issues/81)) ([c245dbe](https://github.com/cadlesslab/Cadless/commit/c245dbe3ab612ece349f0beac010a2c907209bdd))
+
 ## [1.3.1](https://github.com/cadlesslab/Cadless/compare/frontend-v1.3.0...frontend-v1.3.1) (2026-10-26)
 
 
