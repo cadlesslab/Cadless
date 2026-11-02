@@ -555,7 +555,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
 
     async def run() -> None:
         produced_blocks: list = []
-        any_failure = False
+        # Whether the turn's latest tool result failed: the turn's outcome.
+        last_failed = False
         settled = False
         # The last successful tool result of the turn — its code + metrics seed the
         # auto-distill flywheel once the turn settles ok.
@@ -579,7 +580,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             inherits_assembly = current_is_assembly
 
             def drive() -> None:
-                nonlocal produced_blocks, any_failure, last_good
+                nonlocal produced_blocks, last_failed, last_good
                 nonlocal plan_total, plan_cursor, chain_parent, inherits_assembly
                 for ev in agent.stream_turn(
                     user_text=body.message,
@@ -594,7 +595,10 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                         # Persist a version for a successful tool, link it + a served
                         # thumbnail URL into the UI event (scheduled on the loop).
                         ok = bool(ev.data.get("ok"))
-                        any_failure = any_failure or not ok
+                        # The latest result, not any of them: an attempt the turn
+                        # then repaired is not what it delivered, and it keeps its
+                        # own tool result and findings in the message.
+                        last_failed = not ok
                         # A generation the agent marked as regenerating the model
                         # the turn was editing counts as that model, as an edit does.
                         regenerates = bool(ev.data.get("regenerates"))
@@ -735,20 +739,20 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                 context.grounding = ""
 
             await run_in_threadpool(drive)
-            status = "error" if any_failure else "ok"
-            version_id = await _latest_version_id(any_failure, store, project_id)
+            status = "error" if last_failed else "ok"
+            version_id = await _latest_version_id(last_failed, store, project_id)
             await store.update_message(
                 assistant.id,
                 status=status,
                 blocks=[*produced_blocks, *critique_blocks],
                 version_id=version_id,
-                error="a tool call failed" if any_failure else None,
+                error="a tool call failed" if last_failed else None,
             )
             settled = True
             # Flywheel: a turn that settled ok+asserted auto-distills its
             # known-good result into a KB entry. Best-effort and AFTER the turn has
             # settled, so a distill failure can never affect the user's turn.
-            if not any_failure and last_good is not None:
+            if not last_failed and last_good is not None:
                 await auto_distill(
                     store,
                     provider,
@@ -868,13 +872,13 @@ async def _revert_to_last_ok(store: ScopedStore, project_id: int) -> int | None:
     return target
 
 
-async def _latest_version_id(any_failure: bool, store: ScopedStore, project_id: int) -> int | None:
+async def _latest_version_id(last_failed: bool, store: ScopedStore, project_id: int) -> int | None:
     """Resolve the version the assistant turn settles on.
 
-    On success the turn keeps its new version (the project's current). On failure
-    the auto-revert policy guarantees current points at the last OK version, and
-    the assistant turn is linked to that fallback."""
-    if any_failure:
+    On success the turn keeps its new version (the project's current). On a turn
+    that ended on a failure the auto-revert policy guarantees current points at the
+    last OK version, and the assistant turn is linked to that fallback."""
+    if last_failed:
         return await _revert_to_last_ok(store, project_id)
     project = await store.get_project(project_id)
     return project.current_version_id if project else None
