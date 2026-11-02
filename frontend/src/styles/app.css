@@ -345,7 +345,8 @@ body.resizing { cursor: col-resize; user-select: none; }
   border: 1px solid var(--border); border-radius: 999px;
   padding: var(--space-1) var(--space-3); cursor: pointer;
 }
-.clarify-chip:hover { border-color: var(--accent); color: var(--accent); }
+.clarify-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.clarify-chip:disabled { opacity: 0.5; cursor: default; }
 
 /* ordered plan list: the steps shown ahead of the action card */
 .plan-list {

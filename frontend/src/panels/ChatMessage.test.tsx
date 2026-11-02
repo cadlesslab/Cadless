@@ -21,7 +21,7 @@ function okVersion(): Version {
 const app = {} as Parameters<typeof ChatMessage>[0]["app"];
 
 function msgElement(msg: Msg) {
-  return <ChatMessage msg={msg} app={app} onRetry={() => {}} onEdit={() => {}} />;
+  return <ChatMessage msg={msg} app={app} onRetry={() => {}} onEdit={() => {}} onAnswer={() => {}} />;
 }
 
 function renderMsg(msg: Msg, state: Partial<AppState> = {}) {
@@ -122,9 +122,8 @@ describe("ChatMessage", () => {
     expect(getByText("in")).not.toBeNull();
   });
 
-  it("sends the answer as a user message when a chip is clicked", () => {
-    const chat = vi.fn();
-    const appWithChat = { chat } as unknown as Parameters<typeof ChatMessage>[0]["app"];
+  it("hands the answer to the composer when a chip is clicked", () => {
+    const onAnswer = vi.fn();
     const { getByText } = renderWithProviders(
       <ChatMessage
         msg={{
@@ -132,13 +131,14 @@ describe("ChatMessage", () => {
           id: "m6",
           questions: [{ text: "Metric or imperial?", options: ["mm", "in"] }],
         }}
-        app={appWithChat}
+        app={app}
         onRetry={() => {}}
         onEdit={() => {}}
+        onAnswer={onAnswer}
       />,
     );
     fireEvent.click(getByText("mm"));
-    expect(chat).toHaveBeenCalledWith("mm");
+    expect(onAnswer).toHaveBeenCalledWith("mm");
   });
 
   it("renders a persisted thinking block as a collapsed 'Thought' pane", () => {

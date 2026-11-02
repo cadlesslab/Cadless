@@ -227,10 +227,16 @@ function CodegenStatus({ code, streaming }: { code: string; streaming: boolean }
 }
 
 /** A clarification turn: the assistant's questions, each optionally
- * with quick-reply chips. Clicking a chip sends its label as a normal user
- * message (`app.chat`), which answers the question and resumes the conversation —
- * the same as typing the answer. */
-function Clarification({ questions, app }: { questions: ClarificationQuestion[]; app: App }) {
+ * with quick-reply chips. Clicking a chip hands its label to `onAnswer` rather
+ * than sending it from here, so the answer goes out as a typed one would and
+ * resumes the conversation. With no `onAnswer` the chips are shown disabled. */
+function Clarification({
+  questions,
+  onAnswer,
+}: {
+  questions: ClarificationQuestion[];
+  onAnswer: ((text: string) => void) | null;
+}) {
   return (
     <div className="clarification">
       {questions.map((q, i) => (
@@ -243,7 +249,8 @@ function Clarification({ questions, app }: { questions: ClarificationQuestion[];
                   key={opt}
                   type="button"
                   className="clarify-chip"
-                  onClick={() => app.chat(opt)}
+                  disabled={onAnswer == null}
+                  onClick={() => onAnswer?.(opt)}
                 >
                   {opt}
                 </button>
@@ -391,11 +398,13 @@ function LiveChat({
   app,
   onRetry,
   onEdit,
+  onAnswer,
 }: {
   turn: LiveTurn;
   app: App;
   onRetry: () => void;
   onEdit: () => void;
+  onAnswer: ((text: string) => void) | null;
 }) {
   // Surface a turn-level error (abort / provider failure) through the reused
   // StagedProgress error UI, so it settles to a stopped state with Retry/Edit.
@@ -451,7 +460,7 @@ function LiveChat({
         <AssemblyCheck key={i} {...found} />
       ))}
       {turn.clarification && turn.clarification.length > 0 && (
-        <Clarification questions={turn.clarification} app={app} />
+        <Clarification questions={turn.clarification} onAnswer={onAnswer} />
       )}
     </>
   );
@@ -462,11 +471,13 @@ export function ChatMessage({
   app,
   onRetry,
   onEdit,
+  onAnswer,
 }: {
   msg: Msg;
   app: App;
   onRetry: () => void;
   onEdit: () => void;
+  onAnswer: ((text: string) => void) | null;
 }) {
   // A picture takes its side of the thread from its role, ahead of the
   // fallthrough below — which takes any unbranched kind to be an assistant result
@@ -525,13 +536,13 @@ export function ChatMessage({
         {msg.kind === "live" ? (
           <StagedProgress events={msg.events} onRetry={onRetry} onEdit={onEdit} />
         ) : msg.kind === "live-chat" ? (
-          <LiveChat turn={msg.turn} app={app} onRetry={onRetry} onEdit={onEdit} />
+          <LiveChat turn={msg.turn} app={app} onRetry={onRetry} onEdit={onEdit} onAnswer={onAnswer} />
         ) : msg.kind === "thinking" ? (
           <ThinkingPane text={msg.text} />
         ) : msg.kind === "text" ? (
           <Markdown text={msg.text} />
         ) : msg.kind === "clarification" ? (
-          <Clarification questions={msg.questions} app={app} />
+          <Clarification questions={msg.questions} onAnswer={onAnswer} />
         ) : msg.kind === "plan" ? (
           <PlanList steps={msg.steps} />
         ) : msg.kind === "guide" ? (

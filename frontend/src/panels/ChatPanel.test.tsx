@@ -210,7 +210,7 @@ describe("ChatPanel", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a 10mm cube" } });
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
-    // Both per-turn toggles are off by default => the turn opts into neither.
+    // Neither per-turn toggle is offered here => the turn opts into neither.
     expect(api.streamChat).toHaveBeenCalledWith(1, "a 10mm cube", expect.any(Function), expect.any(Object), false, [], false);
   });
 
@@ -273,6 +273,194 @@ describe("ChatPanel", () => {
     expect(api.getSettings).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Assembly/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /Forge/i })).toBeNull();
+  });
+
+  // ---- the Assembly option starts from the model the next turn edits ----
+
+  function built(id: number, asAssembly?: boolean): Version {
+    return { ...okVersion(), id, ...(asAssembly === undefined ? {} : { built_as_assembly: asAssembly }) };
+  }
+
+  // The project's current version is the model the server edits; the one on
+  // screen can be any other the user opened.
+  function onModel(current: number, versions: Version[], viewing = current) {
+    return {
+      activeProjectId: 1,
+      projects: [{ ...project, current_version_id: current }],
+      versions,
+      activeVersionId: viewing,
+    };
+  }
+
+  function send(text: string) {
+    fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: text } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  }
+
+  async function assemblyOffered(): Promise<HTMLElement> {
+    const toggle = await screen.findByRole("button", { name: /Assembly/i });
+    await readsSettled();
+    return toggle;
+  }
+
+  it("starts the Assembly option on for a model built as an assembly", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
+    expect(await assemblyOffered()).toHaveAttribute("aria-pressed", "true");
+    send("make it 450 mm wide");
+    expect(api.streamChat).toHaveBeenCalledWith(1, "make it 450 mm wide", expect.any(Function), expect.any(Object), false, [], true);
+  });
+
+  it.each([
+    ["was not", false],
+    ["does not say whether it was", undefined],
+  ])("starts it off for a model that %s built as one", async (_, asAssembly) => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    renderWithProviders(<ChatPanel />, onModel(7, [built(7, asAssembly)]));
+    expect(await assemblyOffered()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it.each([
+    ["the model edited is an assembly and the one on screen is not", 7, 8, "true"],
+    ["the one on screen is an assembly and the model edited is not", 8, 7, "false"],
+  ])("follows the model the turn edits when %s", async (_, current, viewing, pressed) => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    renderWithProviders(<ChatPanel />, onModel(current, [built(7, true), built(8, false)], viewing));
+    expect(await assemblyOffered()).toHaveAttribute("aria-pressed", pressed);
+  });
+
+  it("asks for no assembly while the server's switch is off, even on one", async () => {
+    renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
+    await readsSettled();
+    send("make it 450 mm wide");
+    expect(api.streamChat).toHaveBeenCalledWith(1, "make it 450 mm wide", expect.any(Function), expect.any(Object), false, [], false);
+  });
+
+  it("keeps the user's own switch until the model the turn edits changes", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
+    const toggle = await assemblyOffered();
+    fireEvent.click(toggle);
+    // The same model, its versions read again: the user's choice stands.
+    act(() => store.set({ versions: [built(7, true)] }));
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    // A new model to edit, recorded as an assembly, starts the option again.
+    act(() => store.set({ projects: [{ ...project, current_version_id: 9 }], versions: [built(7, true), built(9, true)] }));
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("starts again when the same model's record changes", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    // A server older than the field sends none, so the model reads as not one.
+    const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7)]));
+    const toggle = await assemblyOffered();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    act(() => store.set({ versions: [built(7, true)] }));
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps the user's own switch when the open project is opened again", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
+    const toggle = await assemblyOffered();
+    fireEvent.click(toggle);
+    // Opening a project empties its versions, then reads the same record back.
+    act(() => store.set({ versions: [], activeVersionId: null }));
+    act(() => store.set({ versions: [built(7, true)], activeVersionId: 7 }));
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("keeps the option while the model a turn built is on its way", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
+    const toggle = await assemblyOffered();
+    // A settling turn reads the project, naming the model it built, before the
+    // versions that hold that model's record.
+    act(() => store.set({ projects: [{ ...project, current_version_id: 9 }] }));
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    act(() => store.set({ versions: [built(7, true), built(9, false)] }));
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("starts from the other project's model when the project changes", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    const other = { ...project, id: 2, name: "Q", current_version_id: 8 };
+    const { store } = renderWithProviders(<ChatPanel />, {
+      ...onModel(7, [built(7, false)]),
+      projects: [{ ...project, current_version_id: 7 }, other],
+    });
+    const toggle = await assemblyOffered();
+    fireEvent.click(toggle);
+    // Opening a project empties the versions before its own arrive: the option
+    // asked for in the other project does not carry over meanwhile.
+    act(() => store.set({ activeProjectId: 2, versions: [], activeVersionId: null }));
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    act(() => store.set({ versions: [built(8, true)], activeVersionId: 8 }));
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("starts again in another project, though neither has a model yet", async () => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    const { store } = renderWithProviders(<ChatPanel />, {
+      activeProjectId: 1,
+      projects: [project, { ...project, id: 2, name: "Q" }],
+    });
+    const toggle = await assemblyOffered();
+    fireEvent.click(toggle);
+    act(() => store.set({ activeProjectId: 2 }));
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  // ---- a clarification chip answers through the composer ----
+
+  function clarifying(): MessageOut[] {
+    return [
+      { id: 1, seq: 1, role: "user", content: null, status: "ok", error: null, version_id: null, created_at: "", blocks: [{ kind: "text", text: "make it 450 mm wide" }] },
+      {
+        id: 2, seq: 2, role: "assistant", content: null, status: "ok", error: null, version_id: null, created_at: "",
+        blocks: [{ kind: "clarification", input: { questions: [{ text: "Regenerate it?", options: ["Yes, regenerate it"] }] } }],
+      },
+    ];
+  }
+
+  it.each([
+    ["a settled turn", { messages: clarifying() }],
+    // A turn's events stay on screen until the transcript reloads after it.
+    [
+      "a turn still on screen",
+      { chatEvents: [{ event: "clarification", questions: [{ text: "Regenerate it?", options: ["Yes, regenerate it"] }] }] as ChatEvent[] },
+    ],
+  ])("sends a chip's answer from %s with the composer's options", async (_, transcript) => {
+    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ forge_enabled: true, assembly_enabled: true }));
+    renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project], ...transcript });
+    fireEvent.click(await screen.findByRole("button", { name: /Forge/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Assembly/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, regenerate it" }));
+    expect(api.streamChat).toHaveBeenCalledWith(1, "Yes, regenerate it", expect.any(Function), expect.any(Object), true, [], true);
+  });
+
+  it.each([
+    ["a read-only project", { activeProjectId: 1, projects: [{ ...project, is_catalog: true }] }],
+    ["no open project", { activeProjectId: null, projects: [] }],
+  ])("offers no chip's answer on %s", (_, state) => {
+    renderWithProviders(<ChatPanel />, { ...state, messages: clarifying() });
+    expect(screen.getByRole("button", { name: "Yes, regenerate it" })).toBeDisabled();
+  });
+
+  it("retries a chip's answer, not the turn before it", async () => {
+    // The transcript reloaded after the first turn still asks the question.
+    vi.mocked(api.getMessages).mockResolvedValueOnce(clarifying());
+    renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project], messages: clarifying() });
+    send("a cube");
+    await waitFor(() => expect(api.getMessages).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, regenerate it" }));
+    // The default mock fails the turn, so Retry is on offer.
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(vi.mocked(api.streamChat).mock.calls.map((call) => call[1])).toEqual([
+      "a cube",
+      "Yes, regenerate it",
+      "Yes, regenerate it",
+    ]);
   });
 
   it("renders the block-based transcript with markdown and a result card", () => {

@@ -119,8 +119,8 @@ export function ChatComposer({
   forge?: boolean;
   onToggleForge?: () => void;
   // Per-turn assembly opt-in: the turn asks for the part split into interlocking
-  // pieces that each fit the printer's bed. Off by default; the server gates it
-  // behind a global kill-switch, and it is independent of `forge`.
+  // pieces that each fit the printer's bed. The server gates it behind a global
+  // kill-switch, and it is independent of `forge`.
   assembly?: boolean;
   onToggleAssembly?: () => void;
   // Reference pictures for the next turn. Owned by the panel, like `value`, so
@@ -215,7 +215,7 @@ export function ChatComposer({
             </Tooltip>
           )}
           {onToggleAssembly && (
-            <Tooltip label="Assembly: split a part too large for the printer in Settings into interlocking pieces that each fit its bed. Off by default.">
+            <Tooltip label="Assembly: split a part too large for the printer in Settings into interlocking pieces that each fit its bed. Starts on when the model you are editing was built as an assembly.">
               <Button
                 className="composer-assembly"
                 variant="ghost"

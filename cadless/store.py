@@ -226,10 +226,11 @@ class ScriptVersion:
     parent_version_id: int | None = None
     candidate_of_version_id: int | None = None
     plan_step: int | None = None
-    # Whether the turn that built this version asked for an assembly. Not the spec
-    # itself: which bed and which clearance apply belong to the printer the user
-    # owns now, so storing them here would let a version built for a larger bed
-    # keep being edited against it after they changed machines.
+    # Whether this version was built as an assembly: its turn asked for one, or it
+    # was made from a version that was one. Not the spec itself: which bed and
+    # which clearance apply belong to the printer the user owns now, so storing
+    # them here would let a version built for a larger bed keep being edited
+    # against it after they changed machines.
     built_as_assembly: bool = False
     # The build's parts as its tree named them, one ``{"index", "name", "path",
     # "color"}`` per part in part order; ``None`` where none was recorded.
@@ -547,13 +548,14 @@ class Store:
             # lightweight annotation over the existing chain, no new snapshot store.
             await db.execute("ALTER TABLE script_versions ADD COLUMN plan_step INTEGER")
         if "built_as_assembly" not in cols:
-            # Whether the turn that produced this version asked for an assembly.
-            # Recorded because the round that needs the answer is a LATER one: an
-            # edit, whose own request may have been made after a reload put the
-            # per-turn option back to off. NULL on every legacy row and read as
-            # False -- "was not asked for" and "was written before we recorded it"
-            # take the same branch deliberately, because guessing True would start
-            # holding edits to models that never asked to be assemblies to the bed.
+            # Whether this version was built as an assembly: its turn asked for
+            # one, or it was made from a version that was one. Recorded because
+            # the round that needs the answer is a LATER one: an edit, whose own
+            # request may arrive with the per-turn option off. NULL on every
+            # legacy row and read as False -- "was not asked for" and "was
+            # written before we recorded it" take the same branch deliberately,
+            # because guessing True would start holding edits to models that
+            # never asked to be assemblies to the bed.
             await db.execute("ALTER TABLE script_versions ADD COLUMN built_as_assembly INTEGER")
         if "parts_json" not in cols:
             # Left NULL rather than backfilled: the names are the build's to give.
