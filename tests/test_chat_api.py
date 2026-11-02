@@ -410,8 +410,39 @@ def test_failed_tool_turn_settles_assistant_to_error_no_dangling_pending(
 
     msgs = _messages(store, pid)
     assert [m.role for m in msgs] == ["user", "assistant"]
-    assert msgs[1].status == "error"
-    assert msgs[1].status != "pending"
+    assert (msgs[1].status, msgs[1].error) == ("error", "a tool call failed")
+
+
+def _builds(monkeypatch, outcomes):
+    """A turn of one build per outcome, in order, then a closing reply."""
+    turns = [
+        # Each with its own input, or a call is refused as a repeat of an earlier one.
+        _tool_turn(
+            tool_use_id=f"tu-{n}", name="generate_model", tool_input={"spec": f"a shelf, try {n}"}
+        )
+        for n, _ in enumerate(outcomes, 1)
+    ]
+    _install(
+        monkeypatch,
+        ScriptedProvider([*turns, _text_turn("Here it is.")]),
+        pipeline=SequencedPipeline([(ok, None if ok else "execution: boom") for ok in outcomes]),
+    )
+
+
+def test_a_turn_that_recovers_from_a_failed_build_is_saved_as_ok(client, store, monkeypatch):
+    """The turn is what it ended on.
+
+    The failed attempt keeps its own tool result in the message, so marking the
+    whole turn failed for it says the kept build failed.
+    """
+    _builds(monkeypatch, [False, True])
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _stream_chat(client, pid)
+    assert [e["ok"] for e in events if e["event"] == "tool_result"] == [False, True]
+
+    turn = _messages(store, pid)[1]
+    assert (turn.status, turn.error) == ("ok", None)
 
 
 def test_provider_exception_emits_error_and_settles_pending(client, store, monkeypatch):
@@ -929,6 +960,31 @@ def test_failed_turn_distills_nothing(client, store, monkeypatch):
     pid = client.post("/projects", json={"name": "P"}).json()["id"]
 
     _stream_chat(client, pid)
+    assert _kb_entries(store) == []
+
+
+def test_a_recovered_turn_distills_the_build_it_ended_on(client, store, monkeypatch):
+    """A repaired turn ends on a good build like any other ok turn, so it teaches,
+    and what it teaches is that build, not an earlier one it moved past."""
+    _builds(monkeypatch, [True, False, True])
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _stream_chat(client, pid, "make a shelf")
+    builds = [e for e in events if e["event"] == "tool_result"]
+    assert [e["ok"] for e in builds] == [True, False, True]
+
+    entries = _kb_entries(store)
+    assert [e.provenance["version_id"] for e in entries] == [builds[-1]["version_id"]]
+
+
+def test_a_turn_ending_on_a_failure_after_a_kept_build_distills_nothing(client, store, monkeypatch):
+    """Its earlier build is still the last good one, but the turn did not end on it."""
+    _builds(monkeypatch, [True, False])
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    events = _stream_chat(client, pid)
+    assert [e["ok"] for e in events if e["event"] == "tool_result"] == [True, False]
+
     assert _kb_entries(store) == []
 
 
