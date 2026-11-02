@@ -7,4 +7,4 @@ isolated worker, and exporting STEP (engineering) + glTF (display).
  for the locked architecture decisions.
 """
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
