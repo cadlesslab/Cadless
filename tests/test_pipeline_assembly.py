@@ -526,6 +526,87 @@ def test_a_repair_forced_by_the_assembly_check_may_resplit_even_under_an_edit(mo
     assert all(gen.repair_may_resplits)
 
 
+class _SplitGen(FakeGen):
+    """Repairs once with ``first_repair``, then with good code."""
+
+    def __init__(self, first_repair):
+        super().__init__()
+        self._first_repair = first_repair
+
+    def repair(self, intent, code, error, context=None, images=(), assembly=None, may_resplit=True):
+        super().repair(intent, code, error, context, images, assembly, may_resplit)
+        return self._first_repair if self.repairs == 1 else GOOD
+
+
+def _builds(monkeypatch, *results):
+    """``run_code`` answering each build with the next of ``results``, the last kept."""
+    queue = list(results)
+
+    def fake(code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None):
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    monkeypatch.setattr("cadless.pipeline.run_code", fake)
+
+
+def test_a_cut_off_split_is_repaired_with_the_right_to_resplit(monkeypatch):
+    # The check let a repair redesign the split, and its script was cut off at the
+    # output limit. Repairing that script finishes the split it was writing: framed
+    # by the edit's "do not add, remove or move a seam" it can only patch half a
+    # split, which is what the live turns did.
+    from cadless.prompts import CutOffScript
+
+    _builds(monkeypatch, _exec(_overlapping()))
+    gen = _SplitGen(CutOffScript("from build123d import *\nresult = Box(", limit=6000))
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=3)).run(
+        "make it 400 mm long", prior_code="result = Box(5,5,5)", assembly=SPEC
+    )
+
+    assert gen.repair_may_resplits == [True, True]
+
+
+def test_a_redesigned_split_that_fails_to_build_is_repaired_with_the_right_to_resplit(
+    monkeypatch,
+):
+    _builds(
+        monkeypatch,
+        _exec(_overlapping()),
+        ExecResult(ok=False, error="NameError: name 'FIT_SNAP' is not defined"),
+        _exec(_overlapping()),
+    )
+    gen = _SplitGen(GOOD)
+
+    Pipeline(generator=gen, config=Settings(repair_max_attempts=3)).run(
+        "make it 400 mm long", prior_code="result = Box(5,5,5)", assembly=SPEC
+    )
+
+    assert gen.repair_may_resplits == [True, True]
+
+
+class _SecondBuildLooksWrong:
+    """A reviewer that disagrees with the second build it is shown, and only that one."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def critique(self, intent, mesh_path):
+        self.calls += 1
+        return Critique(self.calls != 2, "the wheels are missing")
+
+
+def test_a_redesigned_split_the_reviewer_rejects_is_repaired_with_the_right_to_resplit(
+    monkeypatch,
+):
+    _builds(monkeypatch, _exec(_overlapping()))
+    gen = _SplitGen(GOOD)
+
+    Pipeline(
+        generator=gen, config=Settings(repair_max_attempts=3), critic=_SecondBuildLooksWrong()
+    ).run("make it 400 mm long", prior_code="result = Box(5,5,5)", assembly=SPEC)
+
+    assert gen.repair_may_resplits == [True, True]
+
+
 # --- the last attempt: refused, not presented -----------------------------
 
 

@@ -400,8 +400,12 @@ class Pipeline:
         # edit acts on a model already cut, so its repairs are not -- they are
         # fixing what the edit produced, not answering how the thing comes apart.
         # Computed once here rather than at each repair site so they cannot drift
-        # apart, and overridden at exactly one: the assembly check, where the
-        # split is what failed and a redesign is the answer.
+        # apart, and changed at exactly one: the assembly check, where the split
+        # is what failed and a redesign is the answer. From there on it stays
+        # granted, because every later repair in the run is repairing that
+        # redesign -- a reply cut off at the output limit, a script that does not
+        # run, a render the reviewer rejects -- and framed by "do not add, remove
+        # or move a seam" it could only patch half a split.
         #
         # Truthiness rather than `is None`, to read `prior_code` the same way the
         # lines around it do. An empty string takes the fresh-generation branch
@@ -588,6 +592,12 @@ class Pipeline:
                         )
                         if n >= max_tries:
                             break
+                        # The one site that changes the turn's answer: the split
+                        # is what failed here, so this round is the one a
+                        # redesign answers -- on an edit as much as on a fresh
+                        # run. Withholding the brief would leave it failing the
+                        # same check until the budget ran out.
+                        may_resplit = True
                         code = self._repair(
                             on_progress,
                             intent,
@@ -595,12 +605,7 @@ class Pipeline:
                             last_error,
                             n,
                             max_tries,
-                            # The one site that overrides the turn's answer: the
-                            # split is what failed here, so this round is the one
-                            # a redesign answers -- on an edit as much as on a
-                            # fresh run. Withholding the brief would leave it
-                            # failing the same check until the budget ran out.
-                            may_resplit=True,
+                            may_resplit=may_resplit,
                             forced=True,
                             images=images,
                             assembly=assembly,

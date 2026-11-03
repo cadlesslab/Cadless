@@ -320,10 +320,22 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     the same reason: "fits" alone was answered with a cut along one axis, the
     other two left whole, and a smaller model once that was refused.
 
+    The joint lines answer what splits of a mated, multi-part model kept getting
+    wrong: a joint buried in a pocket closed at both ends, or swept across the
+    axis a snap fit holding the same part lifts along, so the parts could not be
+    put together in any order; a tab over a hole the part already had; a feature
+    left straddling the seam as a loose sliver; a rod shortened instead of cut;
+    and an extrude read as centred. The old rule to sweep every joint in the
+    build plane is kept only where it leaves a choice, because obeying it first
+    is what produced the joints that could not be assembled. The request for a
+    short script is there because a split rewrite is the longest reply a round
+    writes, and one cut off at the output limit fails whole.
+
     This is the whole brief -- the constraints AND the design decisions -- so it
     belongs to a round entitled to decide the split: a fresh generation and every
-    repair beneath one, plus any repair the assembly check forced. An edit is not
-    entitled to, nor is a repair beneath an edit, and both take
+    repair beneath one, plus any repair the assembly check forced and every repair
+    after it, which is repairing that redesign. An edit is not entitled to, nor is
+    a repair beneath an edit before the check has forced one, and both take
     :func:`_assembly_edit_rules` instead.
     """
     fits = _fits(spec)
@@ -334,7 +346,8 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         "too large to print in one piece. Build it as an ASSEMBLY of separate "
         "solids:\n"
         f"  * Split it into the FEWEST parts such that each one fits within {fits} "
-        "on its own.\n"
+        "on its own. Every part counts, the thin ones too: a rod or a rail longer "
+        "than the bed is cut like a panel, never shortened.\n"
         "  * A part fits only when its width, depth and height each fit the bed at "
         "once; turning it a quarter on the bed swaps width and depth but never "
         "helps its height. Along every axis the model is longer than the bed, cut "
@@ -350,7 +363,9 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         )
         + ". Never shrink the model to fit the bed; the split is what makes it fit.\n"
         "  * Put each seam where a cut does least harm: at a natural boundary, not "
-        "through a feature and not across a face meant to be seen.\n"
+        "through a feature and not across a face meant to be seen. Clip everything "
+        "that crosses a seam -- a cabin, a rib, a bead -- to the half it belongs to, "
+        "so each half comes out as one solid.\n"
         "  * Join the parts with an interlocking dovetail or jigsaw profile cut "
         "into the mating faces, so the assembly holds without glue. A plain flat "
         "butt face is NOT acceptable.\n"
@@ -364,10 +379,22 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         "inside the receiving part and is open where the tab slides in, and "
         "subtracted from the receiving part. A socket on the outer face or outside "
         "the part removes nothing where the tab sits and leaves the tab in solid "
-        "material.\n"
-        "  * Orient every seam so the interlocking faces print without support: "
-        "sweep each joint profile along an axis lying in the build plane, never "
-        "overhanging it.\n"
+        "material. Put every tab where both cut faces are solid, never across a "
+        "hole, window, pocket or hollow already in the part.\n"
+        "  * Make every seam come apart the way its part goes in: sweep each joint "
+        "profile right through both parts, out of a face at each end, along the one "
+        "direction that part is put in place -- the same direction as every other "
+        "joint and fit that holds it, a snap fit included. A tab in a pocket closed "
+        "at both ends of its sweep never goes in. Where that leaves a choice, orient "
+        "the seam so its interlocking faces print without support.\n"
+        "  * In build123d, extrude(face, amount) runs one way only, along the face's "
+        "normal (a face on Plane.XZ extrudes toward -Y), and both=True runs the "
+        "amount each way, so a centred sweep of length L is "
+        "extrude(face, L / 2, both=True). Box and Cylinder are centred on where "
+        "they are placed unless align says otherwise.\n"
+        "  * Keep the script short enough to finish: no decorative comment lines, "
+        "no docstrings, a short comment only where a joint needs one. A reply that "
+        "runs past the output limit is cut off and fails.\n"
         f"  * Assign the whole assembly to `{RESULT_VARIABLE}` as a Compound of the "
         "separate solids. Do NOT fuse the parts into one connected solid."
     )
@@ -382,7 +409,8 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
     place, not redesign" and invites the rewrite that message exists to prevent.
     A repair beneath an edit takes these rules for the same reason -- it is that
     edit one round on, fixing what the edit produced. A repair forced by the
-    assembly check does not, because there the split is what failed. What any such
+    assembly check does not, because there the split is what failed, and nor does
+    any repair after it, which is fixing that redesign. What any such
     round must still respect is the arithmetic it cannot infer: the bed each solid
     has to fit, along every axis at once, and the gap a joint needs to go together
     in plastic -- and that the bed is met by cutting, never by shrinking, which a
@@ -421,8 +449,9 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
         + "Do not add, remove or move a seam "
         "unless the change request asks for it; where it does, cut that seam as an "
         "interlocking dovetail or jigsaw profile rather than a flat butt face, its "
-        "socket subtracted from the receiving part where the tab sits assembled, and "
-        "orient it to print without support."
+        "socket subtracted from the receiving part where the tab sits assembled, "
+        "swept through both parts along the direction its part goes in, and oriented "
+        "to print without support where that leaves a choice."
     )
 
 
