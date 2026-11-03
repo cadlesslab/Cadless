@@ -4,6 +4,8 @@ import asyncio
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from cadless.store import LEGACY_PUBLISH_PLUGIN, Store
 
 
@@ -1115,6 +1117,26 @@ def test_migration_seeds_one_session_per_existing_project(tmp_path):
         s1 = await s.get_or_create_session(1)
         s2 = await s.get_or_create_session(2)
         assert s1.project_id == 1 and s2.project_id == 2 and s1.id != s2.id
+
+    run(go())
+
+
+def test_a_branch_whose_seed_never_lands_still_records_its_origin(tmp_path, monkeypatch):
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        origin = await s.create_project("Origin")
+        v1 = await s.add_version(origin.id, "a cube", "result = Box(1,1,1)", ok=True)
+
+        async def lost(*args, **kwargs):
+            raise RuntimeError("the process stopped here")
+
+        monkeypatch.setattr(s, "add_version", lost)
+        with pytest.raises(RuntimeError):
+            await s.branch_project(v1.id, name="Fork")
+
+        fork = next(p for p in await s.list_projects() if p.name == "Fork")
+        assert fork.branched_from_version_id == v1.id
 
     run(go())
 

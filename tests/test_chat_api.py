@@ -2084,6 +2084,48 @@ def test_chat_tool_version_chains_onto_current_version(client, store, monkeypatc
     assert new[-1]["parent_version_id"] == base_id  # chained, not an orphan root
 
 
+def test_a_turn_shows_the_orchestrator_the_measured_size_of_the_model_it_edits(
+    client, store, monkeypatch
+):
+    provider = ScriptedProvider([_text_turn("Sure.")])
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    async def seed():
+        v = await store.add_version(
+            pid, "base", "result = 1\n", ok=True, volume=1.0, bbox=(84.0, 66.0, 36.05)
+        )
+        await store.set_current_version(pid, v.id)
+
+    asyncio.run(seed())
+    _stream_chat(client, pid, "make it 400 mm long, keeping its proportions")
+
+    block = provider.calls[0]["messages"][-1].content[0].text
+    assert "84 x 66 x 36.05 mm" in block
+
+
+def test_a_damaged_catalog_ledger_leaves_a_project_nothing_was_copied_from_its_size(
+    client, store, monkeypatch, tmp_path
+):
+    # Only a copy of a catalog item has a unit to look up there.
+    provider = ScriptedProvider([_text_turn("Sure.")])
+    _install(monkeypatch, provider)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    async def seed():
+        v = await store.add_version(
+            pid, "base", "result = 1\n", ok=True, volume=1.0, bbox=(84.0, 66.0, 36.05)
+        )
+        await store.set_current_version(pid, v.id)
+
+    asyncio.run(seed())
+    (tmp_path / "catalog-ledger.json").write_text("{not json")
+    _stream_chat(client, pid, "make it 400 mm long, keeping its proportions")
+
+    block = provider.calls[0]["messages"][-1].content[0].text
+    assert "84 x 66 x 36.05 mm" in block
+
+
 def test_replay_history_drops_invalid_assistant_blocks(store):
     """A flattened tool turn replays as plain text — no thinking/tool_use/tool_result
     blocks, which Bedrock rejects inside an assistant message (replay fix)."""

@@ -953,6 +953,15 @@ class Store:
         origin = await self.get_project(source.project_id, owner=owner)
         branch_name = name or (f"{origin.name} (branch)" if origin else "Branch")
         project = await self.create_project(branch_name, owner=mine)
+        # The origin goes in before the seed. Writes that stop between the two then
+        # leave a branch that knows where it came from and has no model yet, rather
+        # than a model that reads as one nothing was branched from.
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE projects SET branched_from_version_id=?, updated_at=? WHERE id=?",
+                (version_id, _now(), project.id),
+            )
+            await db.commit()
         seed = await self.add_version(
             project.id,
             source.prompt,
@@ -967,12 +976,6 @@ class Store:
             owner=mine,
         )
         await self.set_current_version(project.id, seed.id, owner=mine)
-        async with self._connect() as db:
-            await db.execute(
-                "UPDATE projects SET branched_from_version_id=?, updated_at=? WHERE id=?",
-                (version_id, _now(), project.id),
-            )
-            await db.commit()
         return await self.get_project(project.id, owner=mine)
 
     async def clone_project(

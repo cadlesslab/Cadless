@@ -40,7 +40,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend import artifact_io
 from backend.assembly import assembly_findings, assembly_spec_for
-from backend.catalog_state import reject_if_catalog
+from backend.catalog_state import authoring_units, reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
 from cadless import user_settings
@@ -251,25 +251,35 @@ def _blind_role(provider) -> str | None:
     return None
 
 
-async def _current_model(store: ScopedStore, project_id: int) -> tuple[str | None, dict, bool]:
-    """Resolve the current code, params and assembly-ness for the agent's edit context.
+async def _current_model(
+    store: ScopedStore, project_id: int
+) -> tuple[str | None, dict, bool, tuple[float, float, float] | None]:
+    """Resolve the current code, params, assembly-ness and size for the agent's edit context.
 
     The third value comes from the version rather than from this turn's request on
     purpose: the turn that edits an assembly may arrive with the per-turn option
     off, and the model is in pieces either way. It is
     read here rather than fetched separately because this is already the one place
     that loads the current version.
+
+    The fourth is the version's measured size, and only where its scripts are
+    written in millimetres: a turn's builds measure a script in its own unit, so a
+    size in any other would contradict the code and every check the turn runs.
     """
     project = await store.get_project(project_id)
     if not project or project.current_version_id is None:
-        return None, {}, False
+        return None, {}, False, None
     version = await store.get_version(project.current_version_id)
     if not version or not version.code:
-        return None, {}, False
+        return None, {}, False, None
+    size = None
+    if version.bbox and await authoring_units(store, project) == "mm":
+        size = version.bbox
     return (
         version.code,
         version.parameters or extract_params(version.code),
         version.built_as_assembly,
+        size,
     )
 
 
@@ -445,7 +455,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
 
     session = await store.get_or_create_session(project_id)
     history = await _replay_history(store, session.id)
-    code, params, current_is_assembly = await _current_model(store, project_id)
+    code, params, current_is_assembly, current_size = await _current_model(store, project_id)
 
     # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
     # ``content``, so once there is a picture the words have to be carried beside it
@@ -541,6 +551,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         pipeline=pipeline,
         current_code=code,
         current_params=params,
+        start_size_mm=current_size,
         export_dir=str(staging),
         images=image_blocks,
         on_reading=_keep_first_reading if image_blocks else None,
