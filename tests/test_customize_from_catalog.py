@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -339,6 +340,15 @@ def _first_turn_context(client, monkeypatch, project_id: int) -> str:
     return block
 
 
+def _states_a_size(block: str) -> bool:
+    """Whether ``block`` states three lengths in millimetres, however it labels them."""
+    return re.search(r"\d+(?:\.\d+)? x \d+(?:\.\d+)? x \d+(?:\.\d+)? mm", block) is not None
+
+
+def _ledger_path(store: Store) -> Path:
+    return Path(store.db_path).parent / "catalog-ledger.json"
+
+
 def test_a_copy_of_a_millimetre_item_shows_the_orchestrator_its_measured_size(
     client, store, tmp_path, monkeypatch
 ):
@@ -348,13 +358,23 @@ def test_a_copy_of_a_millimetre_item_shows_the_orchestrator_its_measured_size(
     assert "40 x 40 x 10 mm" in _first_turn_context(client, monkeypatch, clone_id)
 
 
+def test_a_branch_of_a_millimetre_item_shows_the_orchestrator_its_measured_size(
+    client, store, tmp_path, monkeypatch
+):
+    pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
+    vid = client.get(f"/projects/{pid}").json()["current_version_id"]
+    branch_id = client.post(f"/projects/{pid}/branch", json={"version_id": vid}).json()["id"]
+
+    assert "40 x 40 x 10 mm" in _first_turn_context(client, monkeypatch, branch_id)
+
+
 def test_a_copy_of_a_metre_item_is_shown_no_size(client, store, tmp_path, monkeypatch):
     # Filed in millimetres while its script is in metres, which is what a chat
     # build of it measures: the two sizes are a thousand times apart.
     pid = _load_sized_item(store, tmp_path, item_id="hut", domain="house", bbox=[12.4, 8.4, 6.9])
     clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
 
-    assert "measured" not in _first_turn_context(client, monkeypatch, clone_id).lower()
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
 
 
 def test_a_branch_of_a_metre_item_is_shown_no_size(client, store, tmp_path, monkeypatch):
@@ -362,7 +382,15 @@ def test_a_branch_of_a_metre_item_is_shown_no_size(client, store, tmp_path, monk
     vid = client.get(f"/projects/{pid}").json()["current_version_id"]
     branch_id = client.post(f"/projects/{pid}/branch", json={"version_id": vid}).json()["id"]
 
-    assert "measured" not in _first_turn_context(client, monkeypatch, branch_id).lower()
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, branch_id))
+
+
+def test_a_copy_of_a_copy_of_a_metre_item_is_shown_no_size(client, store, tmp_path, monkeypatch):
+    pid = _load_sized_item(store, tmp_path, item_id="hut", domain="house", bbox=[12.4, 8.4, 6.9])
+    copy_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    second_id = client.post(f"/projects/{copy_id}/clone", json={}).json()["id"]
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, second_id))
 
 
 def test_a_copy_whose_item_the_ledger_no_longer_holds_is_shown_no_size(
@@ -370,9 +398,9 @@ def test_a_copy_whose_item_the_ledger_no_longer_holds_is_shown_no_size(
 ):
     pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
     clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
-    Ledger(Path(store.db_path).parent / "catalog-ledger.json").remove("blank")
+    Ledger(_ledger_path(store)).remove("blank")
 
-    assert "measured" not in _first_turn_context(client, monkeypatch, clone_id).lower()
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
 
 
 @pytest.mark.parametrize(
@@ -381,6 +409,7 @@ def test_a_copy_whose_item_the_ledger_no_longer_holds_is_shown_no_size(
         b"{not json",
         b'{"blank": {"name": "caf\xe9"}}',  # not text: fails before the JSON parse
         b'{"blank": {"domain": ["mechanical"]}}',  # parses, but names no domain
+        b'{"blank": "mechanical"}',  # parses, but the entry is no record
     ],
 )
 def test_a_damaged_ledger_leaves_a_copy_without_a_size_and_the_turn_running(
@@ -388,9 +417,32 @@ def test_a_damaged_ledger_leaves_a_copy_without_a_size_and_the_turn_running(
 ):
     pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
     clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
-    (Path(store.db_path).parent / "catalog-ledger.json").write_bytes(damage)
+    _ledger_path(store).write_bytes(damage)
 
-    assert "measured" not in _first_turn_context(client, monkeypatch, clone_id).lower()
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
+
+
+def test_a_ledger_that_cannot_be_opened_leaves_a_copy_without_a_size_and_the_turn_running(
+    client, store, tmp_path, monkeypatch
+):
+    pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    _ledger_path(store).unlink()
+    _ledger_path(store).mkdir()
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
+
+
+def test_a_size_filed_as_no_number_leaves_a_copy_without_a_size_and_the_turn_running(
+    client, store, tmp_path, monkeypatch
+):
+    # A manifest's JSON may carry NaN, and the loader files it as it finds it.
+    pid = _load_sized_item(
+        store, tmp_path, item_id="blank", domain="mechanical", bbox=[float("nan"), 40, 10]
+    )
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
 
 
 @pytest.mark.parametrize("descend", ["clone", "branch"])
@@ -405,4 +457,4 @@ def test_a_project_whose_catalog_origin_is_gone_is_shown_no_size(
         copy_id = client.post(f"/projects/{pid}/branch", json={"version_id": vid}).json()["id"]
     assert asyncio.run(store.delete_project(pid))
 
-    assert "measured" not in _first_turn_context(client, monkeypatch, copy_id).lower()
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, copy_id))

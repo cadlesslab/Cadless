@@ -999,7 +999,7 @@ class Store:
           (user_prompt / assistant_message) as ordinary chat messages, and this
           method copies them verbatim. ``POST /chat`` then assembles the clone's
           first-turn model context from that replayed history plus a leading
-          current-model block (code + params) — see
+          current-model block — see
           ``backend.routers.chat._replay_history`` / ``_current_model`` and
           ``cadless.agent._model_context_block``. So the first message on a
           clone can immediately be a modification ("make the bore 10 mm") with

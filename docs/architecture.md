@@ -194,8 +194,10 @@ candidate judging, the identity seam and the image decisions are recorded under
    reports its own, because a constant in the script measures one feature rather
    than the whole model. That size is stated only where the project's scripts
    are written in millimetres: a copy or branch of a catalog item authored in
-   another unit keeps a size filed in millimetres against a script in its own.
-   What they say differs by round, and deliberately: a fresh run is entitled to
+   another unit keeps a recorded size that a build of its script does not
+   measure in the same unit.
+   What the assembly framing says differs by round, and deliberately: a fresh
+   run is entitled to
    decide the split, so it carries the whole brief — how few parts, along which
    axes, where the seams fall, how they interlock; an edit is not, because the
    split already exists and asking for it again argues with that same message's
@@ -212,7 +214,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    split until the repair budget ran out. Every later repair in the same run
    keeps the whole brief: a reply cut off at the output limit, a script that does
    not run and a render the reviewer rejects are all faults in that redesign, and
-   framed by the edit's constraints a repair could only patch half a split. A call handed neither is closed by the
+   framed by the edit's constraints a repair could only patch half a split.
+   A call handed neither is closed by the
    same `result` rule the system prompt states — one solid, or a Compound of
    separate parts, each placed where it sits assembled and labelled — and
    whatever parts it returns are held only to the check for a build nobody asked

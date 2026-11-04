@@ -671,8 +671,10 @@ class CodeGenerator:
         question it asks is entitlement rather than which round this is: a repair
         beneath an edit is not entitled to redesign the split, *except* where the
         assembly check is itself what failed, which is the one failure a redesign
-        answers among the stages wired to carry a spec today. Only the caller
-        knows which stage produced the error, so only the caller can answer it.
+        answers among the stages wired to carry a spec today, and every repair
+        after that one in the same run, which is repairing the redesign. Only the
+        caller knows which stage produced the error, so only the caller can
+        answer it.
         The default is the framing every caller had before this parameter
         existed, so a caller that does not know keeps the prompt it has always
         sent -- a caller that does know is expected to say so rather than lean

@@ -13,12 +13,14 @@ therefore took the project list, chat, generate, rerun and revert down with it �
 none of which are about catalog items — and answering "no catalog items" instead
 would have made every one of them editable. Asking the db costs a
 query the response is usually making anyway, and cannot half-fail. What is left
-in the ledger is what the catalog pages *display*; see ``cadless.catalog.ledger``.
+in the ledger is what the catalog pages *display*, and the domain that says which
+unit an item's scripts are written in; see ``cadless.catalog.ledger``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -27,6 +29,8 @@ from cadless.catalog.domains import find_domain
 from cadless.catalog.ledger import Ledger, LedgerUnreadable
 from cadless.scoped_store import ScopedStore
 from cadless.store import Project
+
+logger = logging.getLogger(__name__)
 
 
 def ledger_for(store: ScopedStore) -> Ledger:
@@ -37,10 +41,11 @@ def ledger_for(store: ScopedStore) -> Ledger:
 async def catalog_metadata(store: ScopedStore) -> dict[str, dict]:
     """The catalog's display metadata, read off the event loop.
 
-    Only the catalog pages need this. Routes deciding whether a project is
+    The catalog pages need this, and so does :func:`authoring_units` for a
+    project descending from a catalog item. Routes deciding whether a project is
     read-only must not call it — that is what put a JSON parse on the path of
-    every write. Raises ``LedgerUnreadable`` if the file is damaged; the catalog
-    routes degrade to what the db knows rather than failing the request.
+    every write. Raises ``LedgerUnreadable`` if the file is damaged; its callers
+    degrade to what the db knows rather than failing the request.
     """
     return await asyncio.to_thread(ledger_for(store).entries)
 
@@ -56,6 +61,10 @@ async def authoring_units(store: ScopedStore, project: Project) -> str | None:
     catalog item reads the ledger, and a ledger that cannot answer -- damaged, or no
     longer holding the item -- answers ``None`` rather than failing the request
     that asked: an unreadable ledger once took every write route down with it.
+
+    The one case read as millimetres without being shown to be is a copy made
+    before the database recorded where copies come from: it has no pointer to
+    follow, so it looks like a project nothing was copied from.
     """
     seen: set[int] = set()
     while project.catalog_item_id is None:
@@ -79,6 +88,11 @@ async def authoring_units(store: ScopedStore, project: Project) -> str | None:
     except (LedgerUnreadable, OSError, ValueError):
         # ValueError: bytes that are not text fail before the JSON parse that
         # turns a bad file into LedgerUnreadable.
+        logger.warning(
+            "catalog ledger unreadable; no unit for %s, so its copies show no size",
+            project.catalog_item_id,
+            exc_info=True,
+        )
         return None
     key = entry.get("domain") if isinstance(entry, dict) else None
     domain = find_domain(key) if isinstance(key, str) else None

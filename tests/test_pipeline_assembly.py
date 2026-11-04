@@ -551,8 +551,8 @@ def _builds(monkeypatch, *results):
 def test_a_cut_off_split_is_repaired_with_the_right_to_resplit(monkeypatch):
     # The check let a repair redesign the split, and its script was cut off at the
     # output limit. Repairing that script finishes the split it was writing: framed
-    # by the edit's "do not add, remove or move a seam" it can only patch half a
-    # split, which is what the live turns did.
+    # by the edit's rules, which keep every seam where it is, it can only patch half
+    # a split.
     from cadless.prompts import CutOffScript
 
     _builds(monkeypatch, _exec(_overlapping()))

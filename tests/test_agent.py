@@ -10,6 +10,7 @@ debounce, block assembly) is what's under test, not build123d geometry.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -1547,13 +1548,30 @@ def test_the_context_block_states_the_measured_size_of_the_model():
     assert "84 x 66 x 36.05 mm" in block
 
 
+_A_SIZE = re.compile(r"\d+(?:\.\d+)? x \d+(?:\.\d+)? x \d+(?:\.\d+)? mm")
+
+
 def test_the_context_block_states_no_size_when_none_was_measured():
     provider = ScriptedProvider([_text_turn("ok")])
     Agent(provider=provider, model="fake-model").run_turn(user_text="hi", context=_context())
 
     block = provider.calls[0]["messages"][-1].content[0].text
     assert block.startswith("Current model in this project")
-    assert "measured" not in block.lower()
+    assert _A_SIZE.search(block) is None
+
+
+@pytest.mark.parametrize(
+    "size", [(float("nan"), 40.0, 10.0), (float("inf"), 40.0, 10.0), (0.0, 40.0, 10.0)]
+)
+def test_the_context_block_leaves_out_a_size_that_is_not_three_lengths(size):
+    provider = ScriptedProvider([_text_turn("ok")])
+    ctx = _context()
+    ctx.start_size_mm = size
+    Agent(provider=provider, model="fake-model").run_turn(user_text="hi", context=ctx)
+
+    block = provider.calls[0]["messages"][-1].content[0].text
+    assert block.startswith("Current model in this project")
+    assert _A_SIZE.search(block) is None
 
 
 @pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])

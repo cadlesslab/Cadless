@@ -11,7 +11,9 @@ can mutate a project asked this file first, so one unreadable copy of it turned
 ordinary projects' writes — and the project list, and chat — into 500s, and
 treating it as empty instead would have re-imported the whole catalog on the next
 start. The db answers both of those now. This file is read by the catalog pages,
-and when it cannot be read only they are affected.
+and by a chat turn on a copy of a catalog item for the unit its domain is
+written in; when it cannot be read, the pages lose their details and the copy
+its stated size, and nothing else is affected.
 """
 
 from __future__ import annotations

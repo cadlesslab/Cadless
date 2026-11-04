@@ -773,11 +773,14 @@ def build_agent_system_prompt() -> str:
 
 
 def _model_context_block(context: ToolContext) -> ContentBlock | None:
-    """Summarize the current model (code + params) as a user-role text block.
+    """Summarize the current model (code, params, and its size where known) as a
+    user-role text block.
 
     Returned as a leading context message so the model always knows the script it
     is editing and the dimensions it can re-parametrize. ``None`` when there is no
-    current model yet (a fresh conversation).
+    current model yet (a fresh conversation). A size that is not three finite,
+    positive lengths is left out rather than stated: it was filed from somewhere
+    that could not be checked, and printing it would fail the turn or mislead it.
     """
     if not context.current_code:
         return None
@@ -787,8 +790,9 @@ def _model_context_block(context: ToolContext) -> ContentBlock | None:
         f"```python\n{context.current_code.strip()}\n```\n\n"
         f"Declared parameters: {json.dumps(params)}"
     )
-    if context.start_size_mm:
-        sides = " x ".join(fmt(round(side, 2)) for side in context.start_size_mm)
+    size = _requested_size(context.start_size_mm)
+    if size is not None:
+        sides = " x ".join(fmt(round(side, 2)) for side in size)
         summary += (
             f"\n\nMeasured size of the whole model at the start of this turn, "
             f"along X, Y and Z: {sides} mm"

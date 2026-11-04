@@ -404,8 +404,8 @@ class Pipeline:
         # is what failed and a redesign is the answer. From there on it stays
         # granted, because every later repair in the run is repairing that
         # redesign -- a reply cut off at the output limit, a script that does not
-        # run, a render the reviewer rejects -- and framed by "do not add, remove
-        # or move a seam" it could only patch half a split.
+        # run, a render the reviewer rejects -- and framed by the edit's rules,
+        # which keep every seam where it is, it could only patch half a split.
         #
         # Truthiness rather than `is None`, to read `prior_code` the same way the
         # lines around it do. An empty string takes the fresh-generation branch
