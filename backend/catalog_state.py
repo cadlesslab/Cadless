@@ -62,9 +62,11 @@ async def authoring_units(store: ScopedStore, project: Project) -> str | None:
     longer holding the item -- answers ``None`` rather than failing the request
     that asked: an unreadable ledger once took every write route down with it.
 
-    The one case read as millimetres without being shown to be is a copy made
-    before the database recorded where copies come from: it has no pointer to
-    follow, so it looks like a project nothing was copied from.
+    What is read as millimetres without being shown to be is a project whose
+    origin was never written: a copy made before the database recorded where
+    copies come from, or a branch whose writes stopped between its seed and its
+    origin while the origin was still written last. With no pointer to follow,
+    each looks like a project nothing was copied from.
     """
     seen: set[int] = set()
     while project.catalog_item_id is None:

@@ -1571,7 +1571,8 @@ def test_the_context_block_leaves_out_a_size_that_is_not_three_lengths(size):
 
     block = provider.calls[0]["messages"][-1].content[0].text
     assert block.startswith("Current model in this project")
-    assert _A_SIZE.search(block) is None
+    # Any three tokens, so a size printed as "nan" or "inf" is caught as well.
+    assert re.search(r"\S+ x \S+ x \S+ mm", block) is None
 
 
 @pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
