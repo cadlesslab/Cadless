@@ -225,6 +225,47 @@ def test_the_clearance_is_named_before_the_socket_is_built_from_it():
     )
 
 
+def test_the_brief_says_a_seam_comes_apart_the_way_its_part_goes_in():
+    # A joint buried in a pocket closed at both ends, or swept across the axis a
+    # snap fit on the same part lifts along, leaves no order to assemble in.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "sweep each joint profile right through both parts, out of a face at each end" in brief
+    assert "the same direction as every other joint and fit that holds it" in brief
+
+
+def test_the_edit_rules_say_a_new_seam_comes_apart_the_way_its_part_goes_in():
+    rules = " ".join(_assembly_edit_rules(_SPEC).split())
+    assert "swept through both parts along the direction its part goes in" in rules
+
+
+def test_the_brief_puts_tabs_on_solid_faces():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "where both cut faces are solid" in brief
+
+
+def test_the_brief_clips_what_crosses_a_seam_to_its_half():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "to the half it belongs to, so each half comes out as one solid" in brief
+
+
+def test_the_brief_cuts_every_part_longer_than_the_bed():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "a rod or a rail longer than the bed is cut like a panel, never shortened" in brief
+
+
+def test_the_brief_says_how_build123d_extrudes_and_centres():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "extrude(face, amount) runs one way only, along the face's normal" in brief
+    assert "extrude(face, L / 2, both=True)" in brief
+
+
+def test_the_brief_asks_for_a_script_short_enough_to_finish():
+    # A split rewrites the whole script, the longest reply a round writes, and
+    # one cut off at the output limit fails whole.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "no decorative comment lines, no docstrings" in brief
+
+
 def test_an_edit_that_cuts_a_seam_is_told_where_the_socket_goes():
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -300,3 +301,160 @@ def test_customising_a_multi_part_item_keeps_every_part(client, store, tmp_path)
 
     assert client.get(f"/versions/{clone_vid}/artifacts/glb/0").content == b"first part"
     assert client.get(f"/versions/{clone_vid}/artifacts/glb/1").content == b"second part"
+
+
+# --- the measured size the first turn is shown ----------------------------------
+
+
+def _load_sized_item(store: Store, tmp_path: Path, *, item_id: str, domain: str, bbox) -> int:
+    """Load a one-step item whose step records ``bbox`` in its domain's units."""
+    house = tmp_path / "catalog" / item_id
+    (house / "steps").mkdir(parents=True)
+    (house / "steps" / "01.py").write_text(STEP1_CODE)
+    step = {"index": 1, "instruction": "blank", "code": "steps/01.py", "geometry": {"bbox": bbox}}
+    (house / "manifest.json").write_text(
+        json.dumps({"id": item_id, "name": item_id, "domain": domain, "steps": [step]})
+    )
+    ledger = Ledger(Path(store.db_path).parent / "catalog-ledger.json")
+
+    async def load():
+        await store.init()
+        return await load_house(store, ledger, house)
+
+    return asyncio.run(load())
+
+
+def _first_turn_context(client, monkeypatch, project_id: int) -> str:
+    """The context block the orchestrator is sent on a turn in ``project_id``."""
+    provider = RecordingProvider()
+    monkeypatch.setattr(chat, "build_provider", lambda *a, **k: provider)
+    monkeypatch.setattr(chat.settings, "llm_provider", "fake")
+    with client.stream(
+        "POST", f"/projects/{project_id}/chat", json={"message": "twice as long"}
+    ) as r:
+        assert r.status_code == 200
+        "".join(r.iter_text())
+    block = provider.calls[0]["messages"][-1].content[0].text
+    # Without this, a turn that lost the whole block would pass every "no size" check.
+    assert block.startswith("Current model in this project")
+    return block
+
+
+def _states_a_size(block: str) -> bool:
+    """Whether ``block`` states three lengths in millimetres, however it labels them."""
+    return re.search(r"\d+(?:\.\d+)? x \d+(?:\.\d+)? x \d+(?:\.\d+)? mm", block) is not None
+
+
+def _ledger_path(store: Store) -> Path:
+    return Path(store.db_path).parent / "catalog-ledger.json"
+
+
+def test_a_copy_of_a_millimetre_item_shows_the_orchestrator_its_measured_size(
+    client, store, tmp_path, monkeypatch
+):
+    pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+
+    assert "40 x 40 x 10 mm" in _first_turn_context(client, monkeypatch, clone_id)
+
+
+def test_a_branch_of_a_millimetre_item_shows_the_orchestrator_its_measured_size(
+    client, store, tmp_path, monkeypatch
+):
+    pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
+    vid = client.get(f"/projects/{pid}").json()["current_version_id"]
+    branch_id = client.post(f"/projects/{pid}/branch", json={"version_id": vid}).json()["id"]
+
+    assert "40 x 40 x 10 mm" in _first_turn_context(client, monkeypatch, branch_id)
+
+
+def test_a_copy_of_a_metre_item_is_shown_no_size(client, store, tmp_path, monkeypatch):
+    # Filed in millimetres while its script is in metres, which is what a chat
+    # build of it measures: the two sizes are a thousand times apart.
+    pid = _load_sized_item(store, tmp_path, item_id="hut", domain="house", bbox=[12.4, 8.4, 6.9])
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
+
+
+def test_a_branch_of_a_metre_item_is_shown_no_size(client, store, tmp_path, monkeypatch):
+    pid = _load_sized_item(store, tmp_path, item_id="hut", domain="house", bbox=[12.4, 8.4, 6.9])
+    vid = client.get(f"/projects/{pid}").json()["current_version_id"]
+    branch_id = client.post(f"/projects/{pid}/branch", json={"version_id": vid}).json()["id"]
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, branch_id))
+
+
+def test_a_copy_of_a_copy_of_a_metre_item_is_shown_no_size(client, store, tmp_path, monkeypatch):
+    pid = _load_sized_item(store, tmp_path, item_id="hut", domain="house", bbox=[12.4, 8.4, 6.9])
+    copy_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    second_id = client.post(f"/projects/{copy_id}/clone", json={}).json()["id"]
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, second_id))
+
+
+def test_a_copy_whose_item_the_ledger_no_longer_holds_is_shown_no_size(
+    client, store, tmp_path, monkeypatch
+):
+    pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    Ledger(_ledger_path(store)).remove("blank")
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        b"{not json",
+        b'{"blank": {"name": "caf\xe9"}}',  # not text: fails before the JSON parse
+        b'{"blank": {"domain": ["mechanical"]}}',  # parses, but names no domain
+        b'{"blank": "mechanical"}',  # parses, but the entry is no record
+    ],
+)
+def test_a_damaged_ledger_leaves_a_copy_without_a_size_and_the_turn_running(
+    client, store, tmp_path, monkeypatch, damage
+):
+    pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    _ledger_path(store).write_bytes(damage)
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
+
+
+def test_a_ledger_that_cannot_be_opened_leaves_a_copy_without_a_size_and_the_turn_running(
+    client, store, tmp_path, monkeypatch
+):
+    pid = _load_sized_item(store, tmp_path, item_id="blank", domain="mechanical", bbox=[40, 40, 10])
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    _ledger_path(store).unlink()
+    _ledger_path(store).mkdir()
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
+
+
+def test_a_size_filed_as_no_number_leaves_a_copy_without_a_size_and_the_turn_running(
+    client, store, tmp_path, monkeypatch
+):
+    # A manifest's JSON may carry NaN, and the loader files it as it finds it.
+    pid = _load_sized_item(
+        store, tmp_path, item_id="blank", domain="mechanical", bbox=[float("nan"), 40, 10]
+    )
+    clone_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, clone_id))
+
+
+@pytest.mark.parametrize("descend", ["clone", "branch"])
+def test_a_project_whose_catalog_origin_is_gone_is_shown_no_size(
+    client, store, tmp_path, monkeypatch, descend
+):
+    pid = _load_sized_item(store, tmp_path, item_id="hut", domain="house", bbox=[12.4, 8.4, 6.9])
+    if descend == "clone":
+        copy_id = client.post(f"/projects/{pid}/clone", json={}).json()["id"]
+    else:
+        vid = client.get(f"/projects/{pid}").json()["current_version_id"]
+        copy_id = client.post(f"/projects/{pid}/branch", json={"version_id": vid}).json()["id"]
+    assert asyncio.run(store.delete_project(pid))
+
+    assert not _states_a_size(_first_turn_context(client, monkeypatch, copy_id))

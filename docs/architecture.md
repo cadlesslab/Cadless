@@ -187,8 +187,17 @@ candidate judging, the identity seam and the image decisions are recorded under
    message into the running turn — so a call that restates the request smaller
    after a refusal, or a parameter change made to the same end, is still judged
    against the request. A later turn starts with nothing pinned, so a resize the
-   user asks for then is free.
-   What they say differs by round, and deliberately: a fresh run is entitled to
+   user asks for then is free. A resize that keeps the current model's
+   proportions is stated the same way, its three sides the model's measured size
+   times one factor: the context the orchestrator edits from states the size the
+   model was measured at when the turn began, and a build later in the turn
+   reports its own, because a constant in the script measures one feature rather
+   than the whole model. That size is stated only where the project's scripts
+   are written in millimetres: a copy or branch of a catalog item authored in
+   another unit keeps a recorded size that a build of its script does not
+   measure in the same unit.
+   What the assembly framing says differs by round, and deliberately: a fresh
+   run is entitled to
    decide the split, so it carries the whole brief — how few parts, along which
    axes, where the seams fall, how they interlock; an edit is not, because the
    split already exists and asking for it again argues with that same message's
@@ -202,7 +211,11 @@ candidate judging, the identity seam and the image decisions are recorded under
    check carries the whole brief whatever the turn, because there the split is
    what failed and cutting the model differently is the answer. Without that
    exception an edit that broke its assembly could only keep re-offering the same
-   split until the repair budget ran out. A call handed neither is closed by the
+   split until the repair budget ran out. Every later repair in the same run
+   keeps the whole brief: a reply cut off at the output limit, a script that does
+   not run and a render the reviewer rejects are all faults in that redesign, and
+   framed by the edit's constraints a repair could only patch half a split.
+   A call handed neither is closed by the
    same `result` rule the system prompt states — one solid, or a Compound of
    separate parts, each placed where it sits assembled and labelled — and
    whatever parts it returns are held only to the check for a build nobody asked

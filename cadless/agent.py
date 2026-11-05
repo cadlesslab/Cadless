@@ -63,7 +63,7 @@ from cadless.llm.types import (
 )
 from cadless.params import apply_param_overrides, extract_params
 from cadless.pipeline import GenerationResult, Pipeline
-from cadless.printer_profile import AssemblySpec
+from cadless.printer_profile import AssemblySpec, fmt
 from cadless.system_prompt import SYSTEM_PROMPT
 
 # --- tool registry ----------------------------------------------------------
@@ -93,8 +93,10 @@ _REQUESTED_MM = {
     "description": (
         "The overall width, depth and height the user asked for, as three numbers "
         "in millimetres: converted if the user used another unit, otherwise "
-        "exactly as given. Omit unless the user gave all three. Never adjust them "
-        "to fit a printer."
+        "exactly as given. Omit unless the user gave all three, or asked for a "
+        "proportional resize of the current model: then all three are the model's "
+        "measured size times one factor, worked out as the operating instructions "
+        "say. Never adjust them to fit a printer."
     ),
 }
 
@@ -315,6 +317,14 @@ class ToolContext:
     reparametrize: ReparametrizeFn | None = None
     current_code: str | None = None
     current_params: dict = field(default_factory=dict)
+    # The measured overall size of the model the turn starts on, along X, Y and Z
+    # in millimetres, or ``None`` where it is not known in them. Shown in the
+    # context block because the code alone gives a resize nothing but one feature's
+    # constant to scale from, and a factor taken from that is the wrong factor for
+    # the whole model. It is never updated: the block is written once, before the
+    # first tool, and a build later in the turn reports its own size in its result,
+    # which is where the operating instructions send a resize that follows it.
+    start_size_mm: tuple[float, float, float] | None = None
     export_dir: str | None = None
     grounding: str | None = None
     # The turn's attached reference images. Unlike ``grounding`` these reach every
@@ -737,9 +747,20 @@ You have five tools. Choose the most precise one:
 When the user gives the overall width, depth and height of what they want, pass
 the three as `requested_mm` on every `{GENERATE_MODEL}` and `{EDIT_MODEL}` call of
 the turn, in millimetres: converted if the user used another unit, otherwise
-exactly as given. Leave it out when they did not give all three. Never change
-them to fit a printer: on an assembly turn a model larger than the bed is split
-into parts that each fit, never resized, and every build is held to that size.
+exactly as given. A proportional resize of the current model, one overall side
+given or a factor with its proportions kept, gives all three: multiply the
+model's measured size by one factor, the length asked for over the measured
+length of what the user named or the factor given, pass the products, and state
+the factor in the change. The measured size is the one in the context block, or,
+once a build this turn has changed the model, the `bbox` under `metrics` in the
+latest build's result. A constant in the code measures one feature, not the
+whole model, so never take the factor from one unless the user named that
+feature (its chassis, a wheel); the sides are still the whole model's measured
+size times that factor. With no measured size in the context block, leave
+`requested_mm` out of such a resize. Otherwise leave it out when they did not
+give all three. Never change them to fit a printer: on an assembly turn a model
+larger than the bed is split into parts that each fit, never resized, and every
+build is held to that size.
 
 After a tool returns, read its result and either call another tool or give the
 user a short final answer. Do not call a tool with identical arguments twice.
@@ -752,11 +773,14 @@ def build_agent_system_prompt() -> str:
 
 
 def _model_context_block(context: ToolContext) -> ContentBlock | None:
-    """Summarize the current model (code + params) as a user-role text block.
+    """Summarize the current model (code, params, and its size where known) as a
+    user-role text block.
 
     Returned as a leading context message so the model always knows the script it
     is editing and the dimensions it can re-parametrize. ``None`` when there is no
-    current model yet (a fresh conversation).
+    current model yet (a fresh conversation). A size that is not three finite,
+    positive lengths is left out rather than stated: it was filed from somewhere
+    that could not be checked, and printing it would fail the turn or mislead it.
     """
     if not context.current_code:
         return None
@@ -766,6 +790,13 @@ def _model_context_block(context: ToolContext) -> ContentBlock | None:
         f"```python\n{context.current_code.strip()}\n```\n\n"
         f"Declared parameters: {json.dumps(params)}"
     )
+    size = _requested_size(context.start_size_mm)
+    if size is not None:
+        sides = " x ".join(fmt(round(side, 2)) for side in size)
+        summary += (
+            f"\n\nMeasured size of the whole model at the start of this turn, "
+            f"along X, Y and Z: {sides} mm"
+        )
     return ContentBlock.of_text(summary)
 
 

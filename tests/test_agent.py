@@ -10,6 +10,7 @@ debounce, block assembly) is what's under test, not build123d geometry.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -1504,6 +1505,74 @@ def test_the_operating_instructions_say_to_pass_the_stated_size_unchanged():
     assert "never change them to fit a printer" in prompt
     assert "converted if the user used another unit" in prompt
     assert "on an assembly turn a model larger than the bed is split" in prompt
+
+
+def test_the_build_tools_take_a_proportional_resize_from_the_measured_size():
+    tool = next(t for t in build_tools() if t.name == "edit_model")
+    description = " ".join(tool.input_schema["properties"]["requested_mm"]["description"].split())
+    assert "a proportional resize of the current model" in description
+    assert "the model's measured size times one factor" in description
+
+
+def test_the_operating_instructions_take_a_proportional_resize_from_the_measured_size():
+    from cadless.agent import build_agent_system_prompt
+
+    prompt = " ".join(build_agent_system_prompt().lower().split())
+    assert "a proportional resize of the current model" in prompt
+    assert "multiply the model's measured size by one factor" in prompt
+    assert "never take the factor from one unless the user named that feature" in prompt
+    assert "with no measured size in the context block, leave `requested_mm` out" in prompt
+
+
+def test_the_operating_instructions_take_the_size_from_a_build_that_changed_the_model():
+    # The context block is written once per turn, so after a build has changed the
+    # model its size is the old model's.
+    from cadless.agent import build_agent_system_prompt
+
+    prompt = " ".join(build_agent_system_prompt().lower().split())
+    assert (
+        "once a build this turn has changed the model, the `bbox` under `metrics` "
+        "in the latest build's result"
+    ) in prompt
+
+
+def test_the_context_block_states_the_measured_size_of_the_model():
+    # With the script and its parameters alone, the orchestrator read a resize's
+    # factor off one feature's constant rather than the whole model's size.
+    provider = ScriptedProvider([_text_turn("ok")])
+    ctx = _context()
+    ctx.start_size_mm = (84.0, 66.0, 36.05)
+    Agent(provider=provider, model="fake-model").run_turn(user_text="400 mm long", context=ctx)
+
+    block = provider.calls[0]["messages"][-1].content[0].text
+    assert "84 x 66 x 36.05 mm" in block
+
+
+_A_SIZE = re.compile(r"\d+(?:\.\d+)? x \d+(?:\.\d+)? x \d+(?:\.\d+)? mm")
+
+
+def test_the_context_block_states_no_size_when_none_was_measured():
+    provider = ScriptedProvider([_text_turn("ok")])
+    Agent(provider=provider, model="fake-model").run_turn(user_text="hi", context=_context())
+
+    block = provider.calls[0]["messages"][-1].content[0].text
+    assert block.startswith("Current model in this project")
+    assert _A_SIZE.search(block) is None
+
+
+@pytest.mark.parametrize(
+    "size", [(float("nan"), 40.0, 10.0), (float("inf"), 40.0, 10.0), (0.0, 40.0, 10.0)]
+)
+def test_the_context_block_leaves_out_a_size_that_is_not_three_lengths(size):
+    provider = ScriptedProvider([_text_turn("ok")])
+    ctx = _context()
+    ctx.start_size_mm = size
+    Agent(provider=provider, model="fake-model").run_turn(user_text="hi", context=ctx)
+
+    block = provider.calls[0]["messages"][-1].content[0].text
+    assert block.startswith("Current model in this project")
+    # Any three tokens, so a size printed as "nan" or "inf" is caught as well.
+    assert re.search(r"\S+ x \S+ x \S+ mm", block) is None
 
 
 @pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
