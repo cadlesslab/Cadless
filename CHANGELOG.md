@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.2...backend-v1.3.3) (2026-11-05)
+
+
+### Fixes
+
+* size a proportional resize from the measured model, and keep a split redesign's repairs on the split ([#84](https://github.com/cadlesslab/Cadless/issues/84)) ([3fd2b83](https://github.com/cadlesslab/Cadless/commit/3fd2b83ac4d271d145912ca5a4330a5576b8da25))
+
 ## [1.3.2](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.1...backend-v1.3.2) (2026-11-02)
 
 
