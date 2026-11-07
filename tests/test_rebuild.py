@@ -35,9 +35,22 @@ def _overlapping() -> AssemblyMeasurements:
 
 
 def _stub_run_code(monkeypatch, result: ExecResult, captured: dict | None = None):
-    def fake(code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None):
+    def fake(
+        code,
+        *,
+        export_dir=None,
+        export_scale=1.0,
+        check_assembly=False,
+        assembly_turn=False,
+        config=None,
+    ):
         if captured is not None:
-            captured.update(code=code, export_dir=export_dir, check_assembly=check_assembly)
+            captured.update(
+                code=code,
+                export_dir=export_dir,
+                check_assembly=check_assembly,
+                assembly_turn=assembly_turn,
+            )
         return result
 
     monkeypatch.setattr("cadless.pipeline.run_code", fake)
@@ -60,7 +73,21 @@ def test_a_rebuild_asks_the_worker_to_measure_and_to_export_where_it_is_told(mon
 
     rebuild("code", export_dir=str(tmp_path))
 
-    assert captured == {"code": "code", "export_dir": str(tmp_path), "check_assembly": True}
+    assert captured == {
+        "code": "code",
+        "export_dir": str(tmp_path),
+        "check_assembly": True,
+        "assembly_turn": False,
+    }
+
+
+def test_a_rebuild_of_an_assembly_runs_on_the_assembly_clock(monkeypatch):
+    captured: dict = {}
+    _stub_run_code(monkeypatch, _built(_sound()), captured)
+
+    rebuild("code", assembly=SPEC)
+
+    assert captured["assembly_turn"] is True
 
 
 def test_an_unasked_rebuild_whose_parts_share_volume_is_kept_with_its_verdict(monkeypatch):

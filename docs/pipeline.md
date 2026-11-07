@@ -119,7 +119,14 @@ subprocess.run([sys.executable, "-m", "cadless._worker_child", ...],
 ```
 
 - `_limit_resources` sets POSIX `RLIMIT_CPU`; the wall-clock timeout is
-  `settings.exec_timeout_secs` (default 30 s) and also drives the CPU limit.
+  `settings.exec_timeout_secs` (default 30 s) and also drives the CPU limit. A
+  build on a turn that asked for an assembly (`run_code(assembly_turn=True)`,
+  which the pipeline sets whenever it builds against an assembly spec) runs on
+  `settings.assembly_exec_timeout_secs` instead: its order search gets a share of
+  what the build leaves of the clock, and a split into many parts needs more than
+  the plain clock leaves it. The measurement flag does not choose the clock —
+  the pipeline measures every build. On the remote path the api sends the clock
+  it chose, and the worker runs on it.
 - `RLIMIT_AS` is **deliberately not set**: OCCT reserves a very large virtual
   address range up front, so an address-space cap causes thrashing rather
   than safety. Real memory limits come from the container cgroup
@@ -208,7 +215,9 @@ a duplicate-tool-call debounce and a same-stage escalation counter
 (`agent_same_stage_escalation=2`) that nudges the model toward
 `ask_clarification` when it keeps failing at the same stage. A turn a cap stops
 ends with a line naming the cap, in the transcript and in the stream, as a reply
-the provider cut at its output limit does.
+the provider cut at its output limit does. The time caps are read between steps,
+not during one, so a turn that starts a build just inside its budget overruns it
+by up to that build's clock — on an assembly turn, the assembly clock.
 
 **Direct generation** — `POST /projects/{id}/generate` +
 `GET /projects/{id}/generate/stream` (`backend/routers/generation.py`) runs

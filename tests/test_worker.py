@@ -74,6 +74,24 @@ def test_wall_clock_timeout():
     assert res.timed_out
 
 
+def test_a_build_on_an_assembly_turn_runs_on_the_assembly_clock():
+    cfg = Settings(exec_timeout_secs=1.0, assembly_exec_timeout_secs=2.0)
+    res = run_code(
+        "while True:\n    pass\nresult = 1", check_assembly=True, assembly_turn=True, config=cfg
+    )
+    assert res.timed_out
+    assert "exceeded 2s" in res.error
+
+
+def test_a_measured_build_on_any_other_turn_keeps_the_plain_clock():
+    # Every pipeline build is measured, so the measurement cannot be what earns
+    # the longer clock: only a turn that asked for an assembly does.
+    cfg = Settings(exec_timeout_secs=1.0, assembly_exec_timeout_secs=2.0)
+    res = run_code("while True:\n    pass\nresult = 1", check_assembly=True, config=cfg)
+    assert res.timed_out
+    assert "exceeded 1s" in res.error
+
+
 def test_export_writes_artifacts(tmp_path):
     res = run_code(
         "from build123d import *\nresult = Box(8, 8, 8)",

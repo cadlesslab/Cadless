@@ -348,6 +348,13 @@ catalog content read-only.
   that the API serves. The catalog mount is separate and read-only at runtime.
 - `CADLESS_WORKER_URL` changes the process boundary, not the pipeline contract.
   An empty value intentionally selects the subprocess path used by tests.
+- A build on a turn that asked for an assembly runs on its own clock,
+  `assembly_exec_timeout_secs`, and the CPU limit follows it; every other build
+  keeps `exec_timeout_secs`. The pipeline measures every build, so it is the
+  turn's ask that earns the longer clock, never the measurement: the order
+  search takes a share of what the build leaves of the clock, and a split into
+  many parts with running fits needs more than the plain clock leaves it. Like
+  the plain clock it is operator-only: the settings endpoint refuses it.
 - SSE must remain unbuffered through the proxy or progress appears only after a
   generation has finished.
 - Catalog items contain executable source. Third-party catalog content crosses

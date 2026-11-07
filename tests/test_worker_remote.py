@@ -169,6 +169,48 @@ def test_run_code_remote_sends_the_assembly_flag(monkeypatch):
     assert captured["body"]["check_assembly"] is True
 
 
+@pytest.mark.parametrize("assembly_turn, clock", [(True, 90.0), (False, 30.0)])
+def test_run_code_remote_sends_the_clock_the_build_runs_on(monkeypatch, assembly_turn, clock):
+    import urllib.request
+
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"ok": True, "volume": 1.0, "bbox": [1, 1, 1]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        captured["wait"] = timeout
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    cfg = Settings(
+        worker_url="http://worker:9000", exec_timeout_secs=30.0, assembly_exec_timeout_secs=90.0
+    )
+    run_code("result = 1", check_assembly=True, assembly_turn=assembly_turn, config=cfg)
+    assert captured["body"]["timeout"] == clock
+    assert captured["wait"] > clock  # the api waits out the clock it sent
+
+
+def test_worker_service_runs_a_measured_build_on_the_clock_it_is_sent():
+    from fastapi.testclient import TestClient
+
+    from worker.service import app
+
+    loop = {"code": "while True:\n    pass\nresult = 1", "check_assembly": True, "timeout": 1.0}
+    with TestClient(app) as c:
+        reply = c.post("/run", json=loop).json()
+    assert reply["timed_out"]
+    assert "exceeded 1s" in reply["error"]
+
+
 def test_run_code_remote_rebuilds_the_assembly_measurements(monkeypatch):
     import urllib.request
 

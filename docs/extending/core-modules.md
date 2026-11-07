@@ -68,8 +68,14 @@ to be carried into the server's vendored copy as well.
 ## Changing the worker
 
 ```python
-run_code(code, *, export_dir=None, export_scale=1.0, config=None) -> ExecResult
+run_code(code, *, export_dir=None, export_scale=1.0, check_assembly=False,
+         assembly_turn=False, config=None) -> ExecResult
 ```
+
+`check_assembly` asks the child to measure how a multi-part result's parts
+relate; `assembly_turn` puts the build on the assembly clock. They are separate
+on purpose: the pipeline measures every build, and only a turn that asked for an
+assembly earns the longer clock.
 
 `ExecResult` carries `ok` / `error` / `timed_out`, the geometry summary
 (`volume`, `bbox`, `part_count`, `manifold`, `min_wall_thickness`), the four

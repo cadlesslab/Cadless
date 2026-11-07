@@ -180,6 +180,12 @@ class Settings(BaseSettings):
 
     # Execution worker limits
     exec_timeout_secs: float = 30.0  # wall-clock; also drives the child CPU rlimit
+    # The same clock for a build on a turn that asked for an assembly. Its order
+    # search gets a share of what the build leaves of the clock, and a split of
+    # many parts with running fits needs more than the plain clock leaves it;
+    # refused for running out of time, a sound split reads as one that could not
+    # be checked. Every other build keeps the plain clock, measured or not.
+    assembly_exec_timeout_secs: float = 90.0
     # Offline catalog bake/authoring timeout (#34). Re-authored house steps run
     # 20-200s+ of pure OCCT booleans (cumulative boolean ladders); the 30s limit
     # above is tuned for *live user codegen* and must not gate offline runs
