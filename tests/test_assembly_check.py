@@ -374,9 +374,9 @@ def test_a_split_into_two_independent_groups_is_caught():
 
 
 def test_a_joint_sitting_at_exactly_the_clearance_is_mated():
-    # The prompt tells the model to leave the clearance on every mating face, so a
-    # correct joint's closest approach *is* the clearance. A threshold at or below
-    # it would refuse every correct split.
+    # The prompt tells the model to leave the clearance on every fit but a seam the
+    # split helper makes, so a correct joint's closest approach can be the
+    # clearance itself. A threshold at or below it would refuse every such split.
     report = evaluate_assembly(_m(gaps=[[0, 1, SPEC.clearance_mm]]), SPEC)
     assert report.ok
 

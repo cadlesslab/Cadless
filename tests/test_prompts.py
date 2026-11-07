@@ -185,7 +185,8 @@ def test_the_brief_makes_every_seam_with_split_and_join():
     # them; the helper builds them from the cut.
     brief = " ".join(_assembly_rules(_SPEC).split())
     assert "Make every seam with split_and_join(part, plane, insert_along, clearance=0.2)" in brief
-    assert "Never write a dovetail, tab or socket yourself" in brief
+    # A seam's own: a snap fit or a socket for another part is still written by hand.
+    assert "Never write a seam's dovetail, tab or socket yourself" in brief
 
 
 def test_the_brief_says_the_helper_needs_no_import():
@@ -198,22 +199,26 @@ def test_the_brief_says_which_axis_a_seam_comes_apart_along():
     # A joint swept across the axis a snap fit on the same part lifts along
     # leaves no order to assemble in.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "insert_along is the axis the part is put in place along" in brief
+    assert "insert_along is the axis the whole part goes into the assembly along" in brief
     assert "the same axis as every other fit that holds that part" in brief
 
 
-def test_the_brief_says_insert_along_is_not_the_way_the_halves_meet():
-    # Read as the way the two halves are pushed together, it was given the cut
-    # plane's normal for a shell that snaps down onto a chassis: pegs across a
+def test_the_brief_says_the_halves_come_together_along_the_way_the_part_goes_in():
+    # Read as the way the two halves alone are pushed together, it was given the
+    # cut plane's normal for a shell that snaps down onto a chassis: pegs across a
     # seam whose part goes in along another axis, and no order to assemble in.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "never the direction the two halves are pushed together" in brief
+    assert "the two halves come together along it as well" in brief
     assert "Axis.Z for a part that sits or snaps down onto another" in brief
 
 
-def test_the_brief_keeps_pegs_for_rods_cut_across_their_length():
+def test_the_brief_takes_the_normal_only_where_the_part_goes_in_along_it():
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "Only a rod, an axle or a bar cut across its length takes the plane's normal" in brief
+    assert (
+        "It is the plane's normal only when that is how the part goes in: a rod, an axle "
+        "or a bar cut across its length, or a part cut through its height that sits "
+        "down onto the piece below, joined by pegs"
+    ) in brief
 
 
 def test_the_brief_refuses_a_seam_made_any_other_way():
@@ -239,7 +244,7 @@ def test_the_brief_keeps_the_clearance_on_every_other_fit():
 
 def test_the_brief_cuts_every_part_longer_than_the_bed():
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "a rod or a rail longer than the bed is cut like a panel, never shortened" in brief
+    assert "a rod or a rail longer than the bed is cut as well, never shortened" in brief
 
 
 def test_the_brief_asks_for_a_script_short_enough_to_finish():
@@ -252,8 +257,18 @@ def test_the_brief_asks_for_a_script_short_enough_to_finish():
 def test_the_edit_rules_make_a_new_seam_with_split_and_join():
     rules = " ".join(_assembly_edit_rules(_SPEC).split())
     assert "make that seam with split_and_join(part, plane, insert_along, clearance=0.2)" in rules
-    assert "insert_along being the axis the part is put in place along" in rules
-    assert "never the direction the two halves are pushed together" in rules
+    assert "insert_along being the axis the whole part goes into the assembly along" in rules
+    assert "(the plane's normal only when that is how the part goes in" in rules
+    assert "never write the seam's dovetail, tab or socket yourself" in rules
+
+
+def test_the_edit_rules_keep_the_clearance_on_every_fit_but_a_seam():
+    # The helper's seam faces meet with no gap; every other fit keeps one.
+    rules = " ".join(_assembly_edit_rules(_SPEC).split())
+    assert (
+        "any fit between separate parts other than a seam split_and_join made must keep "
+        "0.2 mm of clearance"
+    ) in rules
 
 
 def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
