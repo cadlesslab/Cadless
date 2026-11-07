@@ -198,8 +198,28 @@ def test_the_brief_says_which_axis_a_seam_comes_apart_along():
     # A joint swept across the axis a snap fit on the same part lifts along
     # leaves no order to assemble in.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "insert_along is the axis the half ahead goes on along" in brief
-    assert "the same as every other fit that holds that part, a snap fit included" in brief
+    assert "insert_along is the axis the part is put in place along" in brief
+    assert "the same axis as every other fit that holds that part" in brief
+
+
+def test_the_brief_says_insert_along_is_not_the_way_the_halves_meet():
+    # Read as the way the two halves are pushed together, it was given the cut
+    # plane's normal for a shell that snaps down onto a chassis: pegs across a
+    # seam whose part goes in along another axis, and no order to assemble in.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "never the direction the two halves are pushed together" in brief
+    assert "Axis.Z for a part that sits or snaps down onto another" in brief
+
+
+def test_the_brief_keeps_pegs_for_rods_cut_across_their_length():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "Only a rod, an axle or a bar cut across its length takes the plane's normal" in brief
+
+
+def test_the_brief_refuses_a_seam_made_any_other_way():
+    # A plain cut passes every check there is, since nothing measures the joint.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "A seam made any other way -- a plain cut, a flat butt face" in brief
 
 
 def test_the_brief_says_what_to_change_when_the_helper_refuses():
@@ -232,7 +252,8 @@ def test_the_brief_asks_for_a_script_short_enough_to_finish():
 def test_the_edit_rules_make_a_new_seam_with_split_and_join():
     rules = " ".join(_assembly_edit_rules(_SPEC).split())
     assert "make that seam with split_and_join(part, plane, insert_along, clearance=0.2)" in rules
-    assert "insert_along being the axis the half ahead goes on along" in rules
+    assert "insert_along being the axis the part is put in place along" in rules
+    assert "never the direction the two halves are pushed together" in rules
 
 
 def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
