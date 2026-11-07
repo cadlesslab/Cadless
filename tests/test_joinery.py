@@ -105,6 +105,50 @@ def test_the_tip_of_a_dovetail_clears_the_end_of_its_socket_by_the_clearance():
     assert socket_end - tip == pytest.approx(CLEARANCE, abs=1e-3)
 
 
+def test_a_socket_never_cuts_the_part_beyond_the_face_it_stands_on():
+    # A wall inside the shell, 5 mm past the seam. A socket in the shell's top
+    # runs out along Z, past the face its tab stands on, down through the wall.
+    wall = Pos(6.5, 0, -3) * Box(3, 108, 74)
+    part = _shell(6) + wall
+
+    _first, second = split_and_join(part, SEAM, Axis.Z, CLEARANCE)
+
+    assert _shared(second, wall) == pytest.approx(_shared(part, wall), rel=1e-6)
+
+
+def test_a_seam_whose_every_joint_would_cut_through_the_part_is_refused():
+    # A block on the half ahead, flush with the seam: a dovetail along Z, of any
+    # size, would have to run out through it.
+    part = _plate() + Pos(50, 0, 30) * Box(100, 100, 50)
+
+    with pytest.raises(JoineryError, match="beyond the cut face"):
+        split_and_join(part, SEAM, Axis.Z, CLEARANCE)
+
+
+def test_a_face_flush_with_the_cut_on_one_half_only_takes_no_joint():
+    # A block on the half behind, its face flush with the cut: material on one
+    # side of the plane only, so a tab standing there would stand in the air.
+    part = _plate() + Pos(-50, 0, 30) * Box(100, 100, 50)
+
+    first, _second = split_and_join(part, SEAM, Axis.Z, CLEARANCE)
+
+    tabs = [tab.bounding_box() for tab in (first & BEYOND).solids()]
+    assert tabs and all(box.min.Z >= -5 - 1e-6 and box.max.Z <= 5 + 1e-6 for box in tabs)
+
+
+def test_a_seam_whose_ends_are_taken_by_windows_is_joined_between_them():
+    # Windows 1.5 mm past the seam near both ends; the middle of the face is solid.
+    windows = [Pos(16, y, 0) * Box(29, 24, 12) for y in (34, -34)]
+    plate = _plate() - windows[0] - windows[1]
+
+    first, second = split_and_join(plate, SEAM, Axis.Z, CLEARANCE)
+
+    features = [*(first & BEYOND).solids(), *((plate & BEYOND) - second).solids()]
+    clear = [Pos(16, y, 0) * Box(31, 26, 14) for y in (34, -34)]  # each window and its margin
+    assert features
+    assert all(_shared(feature, window) < 1e-6 for feature in features for window in clear)
+
+
 def test_the_halves_of_a_cut_plate_come_apart_along_the_axis_given():
     measured = measure_assembly(list(split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)))
 

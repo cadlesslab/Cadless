@@ -18,6 +18,7 @@ dunder.
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 from build123d import (
     Align,
@@ -51,6 +52,13 @@ _JOINTS_MOST = 2
 _CLEARANCE_MOST = 2.0
 #: Positions sampled across a cut face when looking for room for a joint.
 _SAMPLES = 240
+#: Places tried along one band of the cut face, at most: enough to step past a
+#: feature near either end without trying every sample.
+_POSITIONS_MOST = 9
+#: What a dovetail's root is multiplied by each time the half cannot hold it.
+_SHRINK = 0.75
+#: The share of a volume a boolean may miss or add without it counting.
+_VOLUME_SHARE = 1e-6
 _EPS = 1e-6
 
 
@@ -105,12 +113,19 @@ def split_and_join(
             "(for dovetails) or faces it (for pegs)"
         )
     behind, ahead = _halves(_one_solid(part), plane, where)
-    section = _section(behind, plane)
+    section = _section(behind, ahead, plane)
     margin = max(1.0, 2 * clearance)
+    blocked = False
     if across <= _EPS:
-        joints = _dovetails(section, plane, axis, ahead, clearance, margin)
+        joints, blocked = _dovetails(section, plane, axis, ahead, clearance, margin)
     else:
         joints = _pegs(section, plane, ahead, clearance, margin)
+    if not joints and blocked:
+        raise JoineryError(
+            f"{where}: wherever a joint fits, its socket along {_name(axis)} would cut "
+            "through the part beyond the cut face; insert along another axis, or move "
+            "the seam clear of what stands in the way"
+        )
     if not joints:
         least = _ROOT_LEAST if across <= _EPS else _PEG_LEAST
         raise JoineryError(
@@ -207,15 +222,34 @@ def _volume(shape) -> float:
     return 0.0 if shape is None else shape.volume
 
 
-def _section(behind: Solid, plane: Plane) -> list:
-    """The faces the cut left on ``behind``: where a joint can stand."""
+def _section(behind: Solid, ahead: Solid, plane: Plane) -> list:
+    """The cut face: where the halves meet in ``plane``, the only place a joint can stand.
+
+    Taken from both halves rather than one, because a face of the part that only
+    lies flush with the plane has material on one side of it alone, and a joint
+    standing there would stand in the air.
+    """
+    common = []
+    for face in _in_plane(behind, plane):
+        for other in _in_plane(ahead, plane):
+            shared = face & other  # None, an edge or a face, as the two meet
+            common.extend(
+                found
+                for found in (shared.faces() if shared is not None else [])
+                if found.area > _EPS
+            )
+    return common
+
+
+def _in_plane(solid: Solid, plane: Plane) -> list:
+    """The solid's flat faces lying in ``plane``."""
     normal = Vector(plane.z_dir).normalized()
     return [
         face
-        for face in behind.faces()
+        for face in solid.faces()
         if face.geom_type == GeomType.PLANE
         and abs(abs(face.normal_at().dot(normal)) - 1) < _EPS
-        and abs(plane.to_local_coords(face.center()).Z) < 1e-6
+        and abs(plane.to_local_coords(face.center()).Z) < _EPS
     ]
 
 
@@ -232,12 +266,27 @@ def _single(shape, where: str) -> Solid:
 # --- dovetails: the axis lies in the plane --------------------------------------
 
 
+class _Site(NamedTuple):
+    """A place a dovetail may stand: its centre across the seam, how far its socket
+    and margin reach to either side of it at full size, that size, and the run
+    along the axis it is swept over."""
+
+    centre: float
+    half: float
+    root: float
+    low: float
+    high: float
+
+
 def _dovetails(section, plane, axis, ahead, clearance, margin):
-    """Tabs and sockets for up to two dovetails swept along ``axis``.
+    """Tabs and sockets for up to two dovetails swept along ``axis``, and whether a
+    place was given up because its socket would cut the part beyond the cut face.
 
     Positions across the cut face are sampled; where the line along ``axis``
     crosses the face in one run, unbroken by a hole, and the same run at
-    neighbouring positions, the face is a band a dovetail can stand in.
+    neighbouring positions, the face is a band a dovetail can stand in. Places
+    are spread along each band rather than kept to its ends, so a band whose
+    ends the half cannot hold still takes a joint in between.
     """
     frame = Plane(origin=plane.origin, x_dir=axis, z_dir=Vector(plane.z_dir).normalized())
     sites = []
@@ -246,15 +295,17 @@ def _dovetails(section, plane, axis, ahead, clearance, margin):
         if root < _ROOT_LEAST:
             continue
         half = _reach(root, clearance + margin)
-        for centre in sorted({start + half, max(start + half, end - half)}):
-            sites.append((centre, half, root, low, high))
+        for centre in _positions(start + half, end - half, half):
+            sites.append(_Site(centre, half, root, low, high))
     extent = _extent(ahead, frame)
-    joints = []
-    for centre, _half, root, low, high in _spread(sites):
-        made = _dovetail(frame, ahead, centre, root, low, high, extent, clearance, margin)
-        if made is not None:
-            joints.append(made)
-    return joints
+    blocked = []
+
+    def make(site):
+        joint, in_the_way = _dovetail(frame, ahead, site, extent, clearance, margin)
+        blocked.append(in_the_way)
+        return joint
+
+    return _choose(sites, make), any(blocked)
 
 
 def _widest_root(width: float, clearance: float, margin: float) -> float:
@@ -328,21 +379,45 @@ def _runs(section, frame, across, start, end) -> list[tuple[float, float]]:
     return merged
 
 
-def _spread(sites):
-    """At most two of ``sites``, as far apart as their sockets and margins allow.
+def _positions(first: float, last: float, step: float) -> list[float]:
+    """Centres from ``first`` to ``last``, both ends included, ``step`` or less apart
+    until there are as many as a band is given."""
+    if last - first <= _EPS:
+        return [first]
+    count = min(_POSITIONS_MOST - 1, math.ceil((last - first) / step))
+    return [first + (last - first) * k / count for k in range(count + 1)]
 
-    Each site is ``(centre, half, ...)``, ``half`` being how far its socket and
-    margin reach to either side of the centre.
+
+def _choose(sites, make) -> list:
+    """Up to two joints: the first as far out on the face as one can be made, the
+    second as far from it as one can be made without their sockets and margins
+    meeting.
+
+    ``make`` builds a site's joint, or returns None where the half cannot hold
+    one; it is called only for the sites tried, and at most once for each.
     """
-    if len(sites) <= 1:
-        return sites
-    best, gap = [max(sites, key=lambda site: site[2])], 0.0
-    for i, first in enumerate(sites):
-        for second in sites[i + 1 :]:
-            apart = abs(first[0] - second[0])
-            if apart > gap and apart >= first[1] + second[1]:
-                best, gap = [first, second], apart
-    return best[:_JOINTS_MOST]
+    if not sites:
+        return []
+    middle = (min(site.centre for site in sites) + max(site.centre for site in sites)) / 2
+    made: dict = {}
+
+    def joint(site):
+        if site not in made:
+            made[site] = make(site)
+        return made[site]
+
+    outermost = sorted(sites, key=lambda site: -abs(site.centre - middle))
+    first = next((site for site in outermost if joint(site) is not None), None)
+    if first is None:
+        return []
+    chosen = [joint(first)]
+    apart = [s for s in sites if abs(s.centre - first.centre) >= first.half + s.half]
+    for second in sorted(apart, key=lambda s: -abs(s.centre - first.centre)):
+        if len(chosen) == _JOINTS_MOST:
+            break
+        if joint(second) is not None:
+            chosen.append(joint(second))
+    return chosen
 
 
 def _extent(ahead, frame) -> tuple[float, float]:
@@ -350,17 +425,42 @@ def _extent(ahead, frame) -> tuple[float, float]:
     return box.min.X - 1, box.max.X + 1
 
 
-def _dovetail(frame, ahead, centre, root, low, high, extent, clearance, margin):
-    """A tab and its socket at ``centre``, or None when the half cannot hold them."""
+def _dovetail(frame, ahead, site, extent, clearance, margin):
+    """A tab and its socket at ``site``, shrunk until the half holds them, or None;
+    and whether a size the half held was given up for the socket's path.
+
+    The socket runs right through the half along the axis, open at both ends so
+    the tab can slide in from either; past the run the tab stands on, nothing of
+    the half may lie in its way, or the socket would cut a groove through it.
+    """
+    root, blocked = site.root, False
     while root >= _ROOT_LEAST:
         depth = root * _DEPTH_PER_ROOT
-        tab = _prism(frame, _trapezoid(centre, root, depth, 0.0, 0.0), low, high)
-        socket = _prism(frame, _trapezoid(centre, root, depth, clearance, 1.0), *extent)
-        room = _prism(frame, _trapezoid(centre, root, depth, clearance + margin, 0.0), low, high)
-        if _volume(ahead & room) >= room.volume * (1 - 1e-6):
-            return tab, socket
-        root *= 0.75
-    return None
+        outline = _trapezoid(site.centre, root, depth, clearance, 1.0)
+        grown = _trapezoid(site.centre, root, depth, clearance + margin, 0.0)
+        if _fills(ahead, _prism(frame, grown, site.low, site.high)):
+            path = (
+                _prism(frame, outline, extent[0], site.low),
+                _prism(frame, outline, site.high, extent[1]),
+            )
+            if not any(_meets(ahead, piece) for piece in path):
+                tab = _prism(
+                    frame, _trapezoid(site.centre, root, depth, 0.0, 0.0), site.low, site.high
+                )
+                return (tab, _prism(frame, outline, *extent)), blocked
+            blocked = True
+        root *= _SHRINK
+    return None, blocked
+
+
+def _fills(half, room) -> bool:
+    """Whether ``room`` lies wholly inside ``half``'s material."""
+    return _volume(half & room) >= room.volume * (1 - _VOLUME_SHARE)
+
+
+def _meets(half, room) -> bool:
+    """Whether any of ``half``'s material lies inside ``room``."""
+    return _volume(half & room) > room.volume * _VOLUME_SHARE
 
 
 def _trapezoid(centre: float, root: float, depth: float, grow: float, below: float):
@@ -447,7 +547,7 @@ def _peg(frame, ahead, spot, radius, clearance, margin):
         peg = _cylinder(frame, spot, radius, 0.0, length)
         socket = _cylinder(frame, spot, radius + clearance, -1.0, length + clearance)
         room = _cylinder(frame, spot, radius + clearance + margin, 0.0, length + clearance + margin)
-        if _volume(ahead & room) >= room.volume * (1 - 1e-6):
+        if _fills(ahead, room):
             return peg, socket
         length /= 2
     return None
