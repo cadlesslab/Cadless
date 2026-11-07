@@ -175,88 +175,51 @@ def test_an_assembly_turn_tells_the_model_which_printer_it_is_building_for():
     user = fake.last[1]
     assert "210 x 200 x 195 mm" in user
     assert "0.35 mm of clearance" in user
-    assert "dovetail" in user
-    assert "without support" in user
+    assert "split_and_join(part, plane, insert_along, clearance=0.35)" in user
     # The request itself survives the prefix.
     assert "Request: a bookshelf" in user
 
 
-def test_the_brief_says_how_a_socket_is_cut():
-    """Measured: the generator added a tab to one part and cut the socket on the
-    other part's outer face, or not at all, so the tab landed in solid material.
-    A brief that only asked for the socket to be cut larger than the tab said
-    nothing about where the socket is, which part it is cut from, or that it is
-    a cavity inside that part."""
-    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
-    gen = CodeGenerator(provider=fake)
-    spec = AssemblySpec(
-        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
-    )
-
-    gen.generate("a bookshelf", assembly=spec)
-
-    user = fake.last[1]
-    assert "every tab meets a socket, never a tab facing a tab" in user
-    assert "enlarged by the clearance on every side" in user
-    assert (
-        "placed where the tab sits when the parts are assembled so it lies inside the "
-        "receiving part" in user
-    )
-    assert "open where the tab slides in" in user
-    assert "subtracted from the receiving part" in user
-    assert "removes nothing where the tab sits" in user
-
-
-def test_the_clearance_is_named_before_the_socket_is_built_from_it():
-    """The socket bullet says "the clearance" as a size already given; a brief
-    that gave it one bullet later asked the model to build with a number it had
-    not read yet."""
-    fake = _FakeProvider("```python\nresult = Box(1,1,1)\n```")
-    gen = CodeGenerator(provider=fake)
-    spec = AssemblySpec(
-        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
-    )
-
-    gen.generate("a bookshelf", assembly=spec)
-
-    user = fake.last[1]
-    assert user.index("mm of clearance on every mating face") < user.index(
-        "every tab meets a socket"
-    )
-
-
-def test_the_brief_says_a_seam_comes_apart_the_way_its_part_goes_in():
-    # A joint buried in a pocket closed at both ends, or swept across the axis a
-    # snap fit on the same part lifts along, leaves no order to assemble in.
+def test_the_brief_makes_every_seam_with_split_and_join():
+    # Written by hand, joints failed the same few ways however the brief described
+    # them; the helper builds them from the cut.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "sweep each joint profile right through both parts, out of a face at each end" in brief
-    assert "the same direction as every other joint and fit that holds it" in brief
+    assert "Make every seam with split_and_join(part, plane, insert_along, clearance=0.2)" in brief
+    assert "Never write a dovetail, tab or socket yourself" in brief
 
 
-def test_the_edit_rules_say_a_new_seam_comes_apart_the_way_its_part_goes_in():
-    rules = " ".join(_assembly_edit_rules(_SPEC).split())
-    assert "swept through both parts along the direction its part goes in" in rules
-
-
-def test_the_brief_puts_tabs_on_solid_faces():
+def test_the_brief_says_the_helper_needs_no_import():
+    # An import of it is refused by the validator; the script is handed it instead.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "where both cut faces are solid" in brief
+    assert "call it without importing anything" in brief
 
 
-def test_the_brief_clips_what_crosses_a_seam_to_its_half():
+def test_the_brief_says_which_axis_a_seam_comes_apart_along():
+    # A joint swept across the axis a snap fit on the same part lifts along
+    # leaves no order to assemble in.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "to the half it belongs to, so each half comes out as one solid" in brief
+    assert "insert_along is the axis the half ahead goes on along" in brief
+    assert "the same as every other fit that holds that part, a snap fit included" in brief
+
+
+def test_the_brief_says_what_to_change_when_the_helper_refuses():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "If split_and_join raises, its message says what to change" in brief
+
+
+def test_the_brief_puts_each_seam_where_each_side_stays_one_piece():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "on a plane where each side stays one piece" in brief
+
+
+def test_the_brief_keeps_the_clearance_on_every_other_fit():
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "Any other fit between separate parts keeps 0.2 mm of clearance" in brief
 
 
 def test_the_brief_cuts_every_part_longer_than_the_bed():
     brief = " ".join(_assembly_rules(_SPEC).split())
     assert "a rod or a rail longer than the bed is cut like a panel, never shortened" in brief
-
-
-def test_the_brief_says_how_build123d_extrudes_and_centres():
-    brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "extrude(face, amount) runs one way only, along the face's normal" in brief
-    assert "extrude(face, L / 2, both=True)" in brief
 
 
 def test_the_brief_asks_for_a_script_short_enough_to_finish():
@@ -266,14 +229,10 @@ def test_the_brief_asks_for_a_script_short_enough_to_finish():
     assert "no decorative comment lines, no docstrings" in brief
 
 
-def test_an_edit_that_cuts_a_seam_is_told_where_the_socket_goes():
-    spec = AssemblySpec(
-        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35
-    )
-    assert (
-        "socket subtracted from the receiving part where the tab sits assembled"
-        in _assembly_edit_rules(spec)
-    )
+def test_the_edit_rules_make_a_new_seam_with_split_and_join():
+    rules = " ".join(_assembly_edit_rules(_SPEC).split())
+    assert "make that seam with split_and_join(part, plane, insert_along, clearance=0.2)" in rules
+    assert "insert_along being the axis the half ahead goes on along" in rules
 
 
 def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():

@@ -202,7 +202,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    What the assembly framing says differs by round, and deliberately: a fresh
    run is entitled to
    decide the split, so it carries the whole brief — how few parts, along which
-   axes, where the seams fall, how they interlock; an edit is not, because the
+   axes, where the seams fall, each made with `split_and_join` so the joint is
+   built from the cut rather than written by the model; an edit is not, because the
    split already exists and asking for it again argues with that same message's
    instruction to edit in place rather than redesign, so an edit carries the
    constraints alone: the bed each part fits along every axis at once, the

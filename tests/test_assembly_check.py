@@ -319,6 +319,13 @@ def test_a_tab_s_worth_of_shared_volume_is_blamed_on_the_socket():
     assert "widen" not in why
 
 
+def test_a_tab_in_solid_material_sends_a_seam_back_to_split_and_join():
+    # A seam the helper makes cannot hold a tab in solid material, so the fix for
+    # a seam is to make it with the helper rather than to cut its socket by hand.
+    why = evaluate_assembly(_m(overlaps=[[0, 1, 1000.0]]), SPEC).failures[0]
+    assert "re-make a seam with split_and_join along the axis its part goes in on" in why
+
+
 def test_a_sliver_of_shared_volume_is_blamed_on_a_socket_that_does_not_clear_its_tab():
     # A socket cut to the tab's exact size only touches it, and touching measures
     # zero: a sliver is a socket narrower than the tab or off its place, and the

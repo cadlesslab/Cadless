@@ -320,16 +320,17 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     the same reason: "fits" alone was answered with a cut along one axis, the
     other two left whole, and a smaller model once that was refused.
 
-    The joint lines answer what splits of a mated, multi-part model kept getting
-    wrong: a joint buried in a pocket closed at both ends, or swept across the
-    axis a snap fit holding the same part lifts along, so the parts could not be
-    put together in any order; a tab over a hole the part already had; a feature
-    left straddling the seam as a loose sliver; a rod shortened instead of cut;
-    and an extrude read as centred. The old rule to sweep every joint in the
-    build plane is kept only where it leaves a choice, because obeying it first
-    is what produced the joints that could not be assembled. The request for a
-    short script is there because a split rewrite is the longest reply a round
-    writes, and one cut off at the output limit fails whole.
+    The seam lines hand the joint to ``split_and_join``, which every script is
+    given, because writing it by hand kept failing the same ways however the
+    brief described it: a joint buried in a pocket closed at both ends, or swept
+    across the axis a snap fit holding the same part lifts along, so the parts
+    could not be put together in any order; a tab over a hole the part already
+    had; a feature left straddling the seam as a loose sliver; an extrude read as
+    centred. What the model still decides is what only it can: where each seam
+    falls and the axis each part goes in along. The rod line stays because a rod
+    shortened instead of cut was the other way a split missed the bed. The request
+    for a short script is there because a split rewrite is the longest reply a
+    round writes, and one cut off at the output limit fails whole.
 
     This is the whole brief -- the constraints AND the design decisions -- so it
     belongs to a round entitled to decide the split: a fresh generation and every
@@ -363,38 +364,29 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         )
         + ". Never shrink the model to fit the bed; the split is what makes it fit.\n"
         "  * Put each seam where a cut does least harm: at a natural boundary, not "
-        "through a feature and not across a face meant to be seen. Clip everything "
-        "that crosses a seam -- a cabin, a rib, a bead -- to the half it belongs to, "
-        "so each half comes out as one solid.\n"
-        "  * Join the parts with an interlocking dovetail or jigsaw profile cut "
-        "into the mating faces, so the assembly holds without glue. A plain flat "
-        "butt face is NOT acceptable.\n"
-        f"  * Leave {fmt(spec.clearance_mm)} mm of clearance on every mating face "
-        "-- cut the socket that much larger than the tab it receives. A joint that "
-        "is exact in CAD does not go together in plastic.\n"
-        "  * Build each seam as tabs on one part received by sockets in the other: "
-        "every tab meets a socket, never a tab facing a tab. A socket is a cavity "
-        "in the receiving part, the tab's shape enlarged by the clearance on every "
-        "side, placed where the tab sits when the parts are assembled so it lies "
-        "inside the receiving part and is open where the tab slides in, and "
-        "subtracted from the receiving part. A socket on the outer face or outside "
-        "the part removes nothing where the tab sits and leaves the tab in solid "
-        "material. Put every tab where both cut faces are solid, never across a "
-        "hole, window, pocket or hollow already in the part.\n"
-        "  * Make every seam come apart the way its part goes in: sweep each joint "
-        "profile right through both parts, out of a face at each end, along the one "
-        "direction that part is put in place -- the same direction as every other "
-        "joint and fit that holds it, a snap fit included. A tab in a pocket closed "
-        "at both ends of its sweep never goes in. Where that leaves a choice, orient "
-        "the seam so its interlocking faces print without support.\n"
-        "  * In build123d, extrude(face, amount) runs one way only, along the face's "
-        "normal (a face on Plane.XZ extrudes toward -Y), and both=True runs the "
-        "amount each way, so a centred sweep of length L is "
-        "extrude(face, L / 2, both=True). Box and Cylinder are centred on where "
-        "they are placed unless align says otherwise.\n"
+        "through a feature and not across a face meant to be seen, on a plane where "
+        "each side stays one piece.\n"
+        "  * Make every seam with split_and_join(part, plane, insert_along, "
+        f"clearance={fmt(spec.clearance_mm)}), which every script is given: call it "
+        "without importing anything. It cuts the part at the plane -- for example "
+        "Plane(origin=(x, 0, 0), z_dir=(1, 0, 0)) cuts at that x -- and returns "
+        "(behind, ahead), the halves behind and ahead of the plane's normal, joined "
+        "by dovetails swept along insert_along when that axis lies in the plane, or "
+        "by pegs when it runs along the plane's normal, sized to the cut face and "
+        "cut with this printer's clearance. Never write a dovetail, tab or socket "
+        "yourself.\n"
+        "  * insert_along is the axis the half ahead goes on along -- Axis.X, Axis.Y "
+        "or Axis.Z, the same as every other fit that holds that part, a snap fit "
+        "included. Cut a half still larger than the bed again the same way.\n"
+        "  * If split_and_join raises, its message says what to change: move the "
+        "plane to where each side stays one piece and the cut face is thicker, or "
+        "insert along another axis.\n"
+        f"  * Any other fit between separate parts keeps {fmt(spec.clearance_mm)} mm "
+        "of clearance on every mating face -- a joint that is exact in CAD does not "
+        "go together in plastic.\n"
         "  * Keep the script short enough to finish: no decorative comment lines, "
-        "no docstrings, a short comment only where a joint needs one. A reply that "
-        "runs past the output limit is cut off and fails.\n"
+        "no docstrings. A reply that runs past the output limit is cut off and "
+        "fails.\n"
         f"  * Assign the whole assembly to `{RESULT_VARIABLE}` as a Compound of the "
         "separate solids. Do NOT fuse the parts into one connected solid."
     )
@@ -428,8 +420,9 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
     then edit a single-solid model" reaches here and would be told something false
     about its own input. And having
     left the seam question open, it cannot then leave a seam the request *does* ask
-    for unspecified -- nothing downstream measures joint shape or print orientation,
-    so a butt-jointed or unprintable new seam would pass every check there is.
+    for unspecified -- nothing downstream measures joint shape, so a butt-jointed
+    new seam would pass every check there is; it is sent to ``split_and_join``,
+    the same as a seam the full brief asks for.
     """
     fits = _fits(spec)
     size = _requested(spec)
@@ -447,11 +440,12 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
             else ""
         )
         + "Do not add, remove or move a seam "
-        "unless the change request asks for it; where it does, cut that seam as an "
-        "interlocking dovetail or jigsaw profile rather than a flat butt face, its "
-        "socket subtracted from the receiving part where the tab sits assembled, "
-        "swept through both parts along the direction its part goes in, and oriented "
-        "to print without support where that leaves a choice."
+        "unless the change request asks for it; where it does, make that seam with "
+        "split_and_join(part, plane, insert_along, "
+        f"clearance={fmt(spec.clearance_mm)}) -- given to every script, called "
+        "without importing anything -- insert_along being the axis the half ahead "
+        "goes on along, the same as every other fit that holds that part, and never "
+        "write the dovetail, tab or socket yourself."
     )
 
 
