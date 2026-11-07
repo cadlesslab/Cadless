@@ -8,6 +8,9 @@ may and may not stand.
 """
 
 import math
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from build123d import Axis, Box, Compound, Cylinder, Edge, Location, Plane, Pos, Rot
@@ -241,6 +244,20 @@ def test_two_joints_never_stand_so_close_that_their_sockets_meet():
 
     widths = [tab.bounding_box().size.Y for tab in (first & BEYOND).solids()]
     assert len(widths) == 1 and widths[0] < 27  # one dovetail: 20 at its root, 26.4 at its tip
+
+
+def test_importing_the_api_loads_neither_the_helpers_nor_build123d():
+    # The helpers import build123d at the top, so only the execution child may
+    # import them -- inside a function -- and the api process keeps the kernel out.
+    probe = (
+        "import sys, backend.main; "
+        "print(sorted({'build123d', 'cadless.joinery'} & set(sys.modules)))"
+    )
+    root = Path(__file__).resolve().parents[1]
+    done = subprocess.run(
+        [sys.executable, "-c", probe], cwd=root, capture_output=True, text=True, check=True
+    )
+    assert done.stdout.strip().splitlines()[-1] == "[]"
 
 
 def test_each_script_gets_a_namespace_of_its_own():

@@ -33,7 +33,9 @@ port, bound to loopback.
    tests enforce that path's import, name, and dunder-access policy. Engine code a
    script may call is handed to it in the namespace it runs in
    (`cadless/joinery.py`'s `script_namespace`), never imported, so the import
-   allow-list stays build123d, `math` and `copy`.
+   allow-list stays build123d, `math` and `copy`. Whatever that module holds,
+   generated code can reach, so handing a script another name is a security
+   decision like widening the allow-list.
 2. The public stack MUST remain loopback-only unless an authenticated settings
    boundary and stronger hostile-code isolation are added. The current settings
    endpoint stores provider credentials without authentication, and containers

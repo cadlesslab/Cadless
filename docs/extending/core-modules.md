@@ -16,7 +16,11 @@ drives them is in [pipeline.md](../pipeline.md).
 One layering rule spans all three and is worth stating plainly: **build123d is
 imported only inside the execution child and the exporters**, and even there
 only inside functions. Nothing else in the package may import it at module
-level. See the layering rules in [architecture.md](../architecture.md).
+level, with one exception that lives on the child's side: `cadless/joinery.py`,
+the helpers a script is handed, imports it at the top, and is itself imported
+only inside functions, by the execution child and evalkit's in-process runner —
+importing the api loads neither it nor build123d. See the layering rules in
+[architecture.md](../architecture.md).
 
 ## Changing the validator
 
@@ -48,11 +52,14 @@ it. Change both in the same commit.
 **Not every capability is an import.** A script starts with the names
 `cadless.joinery.script_namespace()` returns — today `split_and_join`, which cuts
 a part at a plane and joins the halves — and calls them without importing
-anything, so the allow-list stays as it is. A function handed over this way is
-reachable only as a call: the module behind it sits behind `__globals__`, a dunder
-the gate refuses. The worker child, evalkit's in-process runner and the few-shot
-tests all start a script from that function, so a name added there reaches each
-of them; the prompt still has to mention it, as with an import.
+anything, so the allow-list stays as it is. That keeps the allow-list from
+widening; it puts no wall around what is handed over. Whatever the module behind
+a handed-over name holds, generated code can reach, so adding a name there is a
+security decision like widening the allow-list, and that module keeps its own
+imports to what a script may have. The worker child, evalkit's in-process runner
+and the few-shot tests all start a script from that function, so a name added
+there reaches each of them; the prompt still has to mention it, as with an
+import.
 
 `validate_code` is called from two production sites, and they guard different
 things. The repair loop in `Pipeline.run` checks code this tool is about to run
