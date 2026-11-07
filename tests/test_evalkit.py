@@ -74,6 +74,15 @@ def test_default_run_executes_a_real_few_shot_snippet():
     assert not EvalReport(records=[]).records  # empty-report guard
 
 
+def test_default_run_hands_a_script_split_and_join():
+    code = (
+        "from build123d import *\n"
+        "result = Compound(children=list(split_and_join(Box(300, 100, 10), Plane.YZ, Axis.Z, 0.2)))\n"
+    )
+
+    assert default_run(code).ok
+
+
 def test_pipeline_eval_is_reachable_from_the_package_root():
     # evalkit's __init__ re-exports run_pipeline_eval as the package's public
     # entry point, and docs/extending/catalog.md imports it from there, so the

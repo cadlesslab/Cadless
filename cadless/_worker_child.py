@@ -220,7 +220,9 @@ def main(argv: list[str]) -> int:
         return 1
     code = open(code_file).read()  # noqa: S108,SIM115 - trusted path from parent
 
-    ns: dict = {}
+    from cadless.joinery import script_namespace  # noqa: PLC0415 - lazy, as the exporters are
+
+    ns = script_namespace()
     try:
         exec(compile(code, _GENERATED_FILE, "exec"), ns)  # noqa: S102
     except Exception as exc:  # noqa: BLE001

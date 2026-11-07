@@ -707,6 +707,18 @@ def _child(tmp_path, capsys, code: str, *args: str) -> dict:
     return json.loads(line[len(SENTINEL) :])
 
 
+def test_a_script_calls_split_and_join_without_importing_it(tmp_path, capsys):
+    code = (
+        "from build123d import *\n"
+        "a, b = split_and_join(Box(300, 100, 10), Plane.YZ, Axis.Z, 0.2)\n"
+        "result = Compound(children=[a, b])\n"
+    )
+
+    payload = _child(tmp_path, capsys, code)
+
+    assert (payload["ok"], payload["part_count"]) == (True, 2)
+
+
 @pytest.mark.parametrize("scale", ["nan", "inf", "0", "-1"])
 def test_the_child_refuses_a_scale_that_is_no_length(tmp_path, capsys, scale):
     # A negative scale exported a mirrored model as a success, NaN held the

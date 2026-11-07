@@ -21,6 +21,14 @@ def test_rejected_example_fails_for_import_and_more():
     assert any("disallowed import: os" in r for r in res.reasons)
 
 
+def test_the_helper_a_script_is_handed_is_not_importable():
+    # Scripts get split_and_join in their namespace; importing it would need the
+    # whole cadless package on the allow-list.
+    res = validate_code("from cadless.joinery import split_and_join\nresult = 1\n")
+    assert not res.ok
+    assert any(r.startswith("disallowed import") and "cadless.joinery" in r for r in res.reasons)
+
+
 def test_banned_open_call():
     res = validate_code("from build123d import *\nopen('/etc/passwd')\nresult = Box(1,1,1)")
     assert not res.ok

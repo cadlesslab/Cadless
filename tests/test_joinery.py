@@ -9,7 +9,7 @@ import pytest
 from build123d import Axis, Box, Cylinder, Location, Plane, Pos, Rot
 
 from cadless.assembly_check import evaluate_assembly, measure_assembly
-from cadless.joinery import JoineryError, split_and_join
+from cadless.joinery import JoineryError, script_namespace, split_and_join
 from cadless.printer_profile import AssemblySpec, BuildVolume
 
 CLEARANCE = 0.2
@@ -115,6 +115,13 @@ def test_a_socket_keeps_its_margin_off_a_window_just_past_the_seam():
     beyond = Pos(150, 0, 0) * Box(300, 200, 20)
     for feature in [*(first & beyond).solids(), *((plate & beyond) - second).solids()]:
         assert _shared(feature, Pos(17, 35, 0) * Box(28, 32, 14)) < 1e-6  # window and margin
+
+
+def test_each_script_gets_a_namespace_of_its_own():
+    first, second = script_namespace(), script_namespace()
+
+    first["split_and_join"] = None  # what one script does to its namespace
+    assert second["split_and_join"] is split_and_join
 
 
 def test_the_halves_take_the_names_given():

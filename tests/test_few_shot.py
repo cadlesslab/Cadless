@@ -8,6 +8,7 @@ import pytest
 
 from cadless import api_subset
 from cadless.few_shot import FEW_SHOT
+from cadless.joinery import script_namespace
 from cadless.system_prompt import SYSTEM_PROMPT
 
 pytestmark = pytest.mark.build123d
@@ -25,7 +26,7 @@ def test_system_prompt_mentions_result_and_allowed_surface():
 
 @pytest.mark.parametrize("example", FEW_SHOT, ids=lambda e: e.prompt[:40])
 def test_example_compiles_and_builds_a_solid(example):
-    ns: dict = {}
+    ns = script_namespace()
     exec(compile(example.code, "<few_shot>", "exec"), ns)  # noqa: S102 - trusted curated code
     assert api_subset.RESULT_VARIABLE in ns, "example must assign `result`"
     result = ns[api_subset.RESULT_VARIABLE]

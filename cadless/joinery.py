@@ -9,8 +9,10 @@ builds the joint from the cut itself instead, so it runs along the axis the piec
 goes in, sits only where both cut faces are solid, and fits with the clearance
 the printer holds.
 
-The imports stay to build123d and math because scripts are handed
-:func:`split_and_join`: whatever this module holds, a script can reach.
+Scripts are handed :func:`split_and_join` in the globals :func:`script_namespace`
+gives them rather than importing this module, so the import allow-list stays as
+it is: a script can call the function, and the module behind it lies behind a
+dunder.
 """
 
 from __future__ import annotations
@@ -54,6 +56,15 @@ _EPS = 1e-6
 
 class JoineryError(ValueError):
     """A part could not be split and joined as asked; the message says what to change."""
+
+
+def script_namespace() -> dict[str, object]:
+    """The globals a generated script starts with: the helpers it is handed.
+
+    A new dict on every call, so what one script does to its namespace never
+    reaches the next script run in the same process.
+    """
+    return {"split_and_join": split_and_join}
 
 
 def split_and_join(
