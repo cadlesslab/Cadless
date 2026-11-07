@@ -11,8 +11,9 @@ the printer holds.
 
 Scripts are handed :func:`split_and_join` in the globals :func:`script_namespace`
 gives them rather than importing this module, so the import allow-list stays as
-it is: a script can call the function, and the module behind it lies behind a
-dunder.
+it is. That is no wall around the module: whatever it holds, a script can reach,
+so it imports nothing beyond build123d, the standard library and the printer
+profile's limits.
 """
 
 from __future__ import annotations
@@ -34,8 +35,11 @@ from build123d import (
     extrude,
 )
 
+from cadless.printer_profile import PRINTER_PROFILE_LIMITS
+
 #: Off square, each flank of a dovetail: enough to lock the halves across the
-#: seam, shallow enough to print without support.
+#: seam. Swept along an upright axis, a dovetail prints without support; along a
+#: level one, how its flanks print depends on how the part lies on the bed.
 _FLANK_DEGREES = 15.0
 #: A dovetail's root, across the seam, at most and at least (mm). Below the least
 #: it is too weak to hold the halves together.
@@ -50,9 +54,11 @@ _RUN_LEAST = 3.0
 #: shares the load and holds the seam closed at both ends.
 _JOINTS_MOST = 2
 #: The clearance a printer can hold, in mm: the range a printer profile accepts.
-_CLEARANCE_MOST = 2.0
+_CLEARANCE_LEAST, _CLEARANCE_MOST = PRINTER_PROFILE_LIMITS["printer_joint_clearance"]
 #: Positions sampled across a cut face when looking for room for a joint.
 _SAMPLES = 240
+#: How far apart, in mm, two sampled runs' ends may be and still be the same run.
+_SAME_RUN = 1e-3
 #: Steps along each side of a cut face when looking for room for a peg.
 _GRID = 24
 #: Places tried along one band of the cut face, at most: enough to step past a
@@ -100,11 +106,26 @@ def split_and_join(
     the tabs or pegs, and the half the normal points into, which carries the
     sockets. They are labelled from ``names``, or from the part's own label.
 
-    Raises :class:`JoineryError`, saying what to change, when the clearance is
-    outside what a printer holds, the axis is not one the plane allows, a side of
-    the cut comes out in several pieces, or no joint fits on the cut face.
+    Raises :class:`JoineryError`, saying what to change, when
+
+    - ``part`` is not one solid, or ``plane`` is not a Plane or misses the part;
+    - ``clearance`` is outside what a printer holds;
+    - ``insert_along`` is not one of the six axis directions, or neither lies in
+      the plane nor runs along its normal;
+    - a side of the cut comes out in several pieces;
+    - no place on the cut face holds a joint, or every socket that would fit
+      would cut through the part beyond the cut face;
+    - a joint would leave a half in several pieces.
+
+    A failure inside the geometry kernel is not caught: it reaches the script as
+    the kernel raised it.
     """
     _check_clearance(clearance)
+    if not isinstance(plane, Plane):
+        raise JoineryError(
+            "plane must be a Plane, such as Plane(origin=(x, 0, 0), z_dir=(1, 0, 0)) for a "
+            f"cut at that x: got {plane!r}"
+        )
     axis = _axis(insert_along)
     normal = Vector(plane.z_dir).normalized()
     where = _describe(plane)
@@ -145,10 +166,12 @@ def split_and_join(
 
 
 def _check_clearance(clearance) -> None:
-    if not isinstance(clearance, int | float) or not 0.0 <= clearance <= _CLEARANCE_MOST:
+    # A bool is an int to isinstance, and True would pass as a millimetre.
+    number = isinstance(clearance, int | float) and not isinstance(clearance, bool)
+    if not number or not _CLEARANCE_LEAST <= clearance <= _CLEARANCE_MOST:
         raise JoineryError(
-            f"clearance must be a number of millimetres from 0 to {_CLEARANCE_MOST:g}, "
-            f"the range a printer holds: got {clearance!r}"
+            f"clearance must be a number of millimetres from {_CLEARANCE_LEAST:g} to "
+            f"{_CLEARANCE_MOST:g}, the range a printer holds: got {clearance!r}"
         )
 
 
@@ -186,6 +209,10 @@ def _describe(plane: Plane) -> str:
 
 
 def _one_solid(part) -> Solid:
+    if not hasattr(part, "solids"):
+        raise JoineryError(
+            f"part must be a build123d shape, such as a Box or a Part: got {type(part).__name__}"
+        )
     solids = part.solids()
     if len(solids) != 1:
         raise JoineryError(f"split_and_join cuts one solid at a time: got {len(solids)}")
@@ -329,7 +356,10 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     """Runs of the cut face along the frame's x, as ``(low, high, start, end)``.
 
     ``low``-``high`` is the run along the axis, the same at every sampled
-    position from ``start`` to ``end`` across it.
+    position from ``start`` to ``end`` across it. Only the sampled positions are
+    looked at, so a hole narrower than the step between them can lie inside a
+    band: the room check still finds one that reaches into the half ahead, and a
+    tab over one that does not bridges it.
     """
     if not section:
         return []
@@ -345,8 +375,8 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
         same = (
             current is not None
             and run is not None
-            and abs(run[0] - current[0]) < 1e-3
-            and abs(run[1] - current[1]) < 1e-3
+            and abs(run[0] - current[0]) < _SAME_RUN
+            and abs(run[1] - current[1]) < _SAME_RUN
         )
         if same:
             current[3] = across
@@ -375,7 +405,7 @@ def _runs(section, frame, across, start, end) -> list[tuple[float, float]]:
     runs.sort()
     merged: list[tuple[float, float]] = []
     for low, high in runs:
-        if merged and low <= merged[-1][1] + 1e-6:
+        if merged and low <= merged[-1][1] + _EPS:
             merged[-1] = (merged[-1][0], max(high, merged[-1][1]))
         else:
             merged.append((low, high))

@@ -1,18 +1,22 @@
 """``split_and_join``: halves the assembly check accepts by construction.
 
-Every passing case is judged by the engine's own check -- the measurement a
-build's parts get -- rather than by facts about the joint's shape, so a joint
-that looks right but jams, overlaps or comes apart the wrong way fails here.
+A whole part split and joined is judged by the engine's own check -- the
+measurement a build's parts get -- so a joint that looks right but jams,
+overlaps or comes apart the wrong way fails here. The rest measure what the
+helper promises of the joint itself: its clearance, its margin, and where it
+may and may not stand.
 """
 
 import math
 
 import pytest
-from build123d import Axis, Box, Cylinder, Edge, Location, Plane, Pos, Rot
+from build123d import Axis, Box, Compound, Cylinder, Edge, Location, Plane, Pos, Rot
 
 from cadless.assembly_check import evaluate_assembly, measure_assembly
 from cadless.joinery import JoineryError, script_namespace, split_and_join
 from cadless.printer_profile import AssemblySpec, BuildVolume
+
+pytestmark = pytest.mark.build123d
 
 CLEARANCE = 0.2
 SPEC = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=CLEARANCE)
@@ -58,10 +62,14 @@ def test_a_plate_cut_with_a_dovetail_passes_the_assembly_check():
     assert evaluate_assembly(measure_assembly(list(halves)), SPEC).failures == []
 
 
-def test_each_half_of_a_cut_plate_is_one_solid():
-    first, second = split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)
+def test_a_joint_that_would_leave_a_half_in_two_pieces_is_refused(monkeypatch):
+    # The check guards what every joint does to the halves; no joint the helper
+    # places today breaks a half, so one is handed in whose socket would.
+    slab = Pos(50, 0, 0) * Box(2, 400, 400)
+    monkeypatch.setattr("cadless.joinery._dovetails", lambda *args: ([(Box(1, 1, 1), slab)], False))
 
-    assert (len(first.solids()), len(second.solids())) == (1, 1)
+    with pytest.raises(JoineryError, match="the joint would leave a half"):
+        split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)
 
 
 def test_the_halves_of_a_cut_plate_span_the_plate():
@@ -181,24 +189,39 @@ def test_no_joint_reaches_into_the_hollow_of_a_shell():
     assert _shared(first, hollow) + _shared(second, hollow) < 1e-6
 
 
-def test_a_rod_cut_along_its_length_is_pegged_and_passes_the_assembly_check():
+def test_a_rod_cut_across_its_length_is_pegged_and_passes_the_assembly_check():
     first, second = split_and_join(_rod(), SEAM, Axis.X, CLEARANCE)
 
     assert first.bounding_box().max.X > 1.0  # the peg stands past the seam
     assert evaluate_assembly(measure_assembly([first, second]), SPEC).failures == []
 
 
-def test_a_joint_keeps_its_margin_off_a_hole_on_the_seam():
-    plate = _plate() - Cylinder(10, 12)
+def test_a_peg_clears_its_socket_by_the_clearance_and_no_more():
+    first, second = split_and_join(_rod(), SEAM, Axis.X, CLEARANCE)
+
+    # Across the seam, along Y, square to two of the peg's sides.
+    assert _shared(first, second.moved(Location((0, 0.9 * CLEARANCE, 0)))) < 1e-6
+    assert _shared(first, second.moved(Location((0, 1.3 * CLEARANCE, 0)))) > 1e-4
+
+
+def test_a_peg_keeps_its_margin_off_a_hole_just_past_the_seam():
+    # A cross hole 5 mm past the seam, where a full-length peg's socket would end.
+    rod = _rod() - Pos(6, 0, 0) * Rot(90, 0, 0) * Cylinder(1, 20)
+    _first, second = split_and_join(rod, SEAM, Axis.X, CLEARANCE)
+
+    sockets = ((rod & BEYOND) - second).solids()
+    clear = Pos(6, 0, 0) * Rot(90, 0, 0) * Cylinder(2, 20)  # the hole and its margin
+    assert sockets and all(_shared(socket, clear) < 1e-6 for socket in sockets)
+
+
+def test_a_joint_keeps_its_margin_off_a_slot_through_the_seam():
+    # Where a joint stands on a plain plate; the slot reaches 15 mm either side.
+    plate = _plate() - Pos(0, 35, 0) * Box(30, 20, 12)
     first, second = split_and_join(plate, SEAM, Axis.Z, CLEARANCE)
 
-    beyond = Pos(150, 0, 0) * Box(300, 200, 20)  # x >= 0, where tabs and sockets are
-    tabs = (first & beyond).solids()
-    sockets = ((plate & beyond) - second).solids()
-    assert tabs and sockets
-    for feature in [*tabs, *sockets]:
-        box = feature.bounding_box()
-        assert box.min.Y >= 11.0 or box.max.Y <= -11.0  # hole radius 10, margin 1
+    features = [*(first & BEYOND).solids(), *((plate & BEYOND) - second).solids()]
+    clear = Pos(0, 35, 0) * Box(32, 22, 14)  # the slot and its margin
+    assert features and all(_shared(feature, clear) < 1e-6 for feature in features)
 
 
 def test_a_socket_keeps_its_margin_off_a_window_just_past_the_seam():
@@ -208,9 +231,16 @@ def test_a_socket_keeps_its_margin_off_a_window_just_past_the_seam():
     plate = _plate() - window
     first, second = split_and_join(plate, SEAM, Axis.Z, CLEARANCE)
 
-    beyond = Pos(150, 0, 0) * Box(300, 200, 20)
-    for feature in [*(first & beyond).solids(), *((plate & beyond) - second).solids()]:
+    for feature in [*(first & BEYOND).solids(), *((plate & BEYOND) - second).solids()]:
         assert _shared(feature, Pos(17, 35, 0) * Box(28, 32, 14)) < 1e-6  # window and margin
+
+
+def test_two_joints_never_stand_so_close_that_their_sockets_meet():
+    # 40 mm across leaves room for one full-size dovetail and its margins, not two.
+    first, _second = split_and_join(Box(300, 40, 10), SEAM, Axis.Z, CLEARANCE)
+
+    widths = [tab.bounding_box().size.Y for tab in (first & BEYOND).solids()]
+    assert len(widths) == 1 and widths[0] < 27  # one dovetail: 20 at its root, 26.4 at its tip
 
 
 def test_each_script_gets_a_namespace_of_its_own():
@@ -228,12 +258,29 @@ def test_the_halves_take_the_names_given():
 
 @pytest.mark.parametrize("direction", [(1, 1, 0), (0, 0.6, 0.8)])
 def test_a_direction_that_is_not_an_axis_is_refused(direction):
-    with pytest.raises(JoineryError, match="axis"):
+    with pytest.raises(JoineryError, match="six axis directions"):
         split_and_join(_plate(), SEAM, direction, CLEARANCE)
 
 
+@pytest.mark.parametrize(
+    "part, says",
+    [
+        ("a box", "build123d shape"),
+        (Compound([Box(300, 100, 10), Pos(0, 200, 0) * Box(300, 100, 10)]), "one solid at a time"),
+    ],
+)
+def test_what_is_cut_must_be_one_solid(part, says):
+    with pytest.raises(JoineryError, match=says):
+        split_and_join(part, SEAM, Axis.Z, CLEARANCE)
+
+
+def test_a_plane_given_as_anything_but_a_plane_is_refused():
+    with pytest.raises(JoineryError, match="plane must be a Plane"):
+        split_and_join(_plate(), (0, 0, 0), Axis.Z, CLEARANCE)
+
+
 def test_an_axis_neither_in_the_plane_nor_along_its_normal_is_refused():
-    tilted = SEAM.rotated((0, 30, 0))  # the normal swings from +X toward Y
+    tilted = SEAM.rotated((0, 30, 0))  # the normal swings from +X toward -Z
 
     with pytest.raises(JoineryError, match="normal"):
         split_and_join(_plate(), tilted, Axis.X, CLEARANCE)
@@ -252,7 +299,7 @@ def test_a_wall_too_thin_for_a_joint_is_refused():
         split_and_join(_shell(1), SEAM, Axis.Z, CLEARANCE)
 
 
-@pytest.mark.parametrize("clearance", [-0.1, 2.5, float("nan")])
+@pytest.mark.parametrize("clearance", [-0.1, 2.5, float("nan"), True])
 def test_a_clearance_outside_what_a_printer_holds_is_refused(clearance):
     with pytest.raises(JoineryError, match="clearance"):
         split_and_join(_plate(), SEAM, Axis.Z, clearance)
