@@ -22,7 +22,7 @@ from typing import NamedTuple
 
 from build123d import (
     Align,
-    Cylinder,
+    Box,
     Edge,
     GeomType,
     Keep,
@@ -42,16 +42,19 @@ _FLANK_DEGREES = 15.0
 _ROOT_MOST, _ROOT_LEAST = 20.0, 3.0
 #: How deep a dovetail reaches into the other half, per unit of its root.
 _DEPTH_PER_ROOT = 0.6
-#: A peg's diameter, at most and at least (mm).
+#: A peg's width, at most and at least (mm).
 _PEG_MOST, _PEG_LEAST = 8.0, 3.0
 #: The shortest a joint may run along the axis the half goes in (mm).
 _RUN_LEAST = 3.0
-#: Joints per seam, at most: two far apart keep the halves from turning.
+#: Joints per seam, at most: a second, as far from the first as the face allows,
+#: shares the load and holds the seam closed at both ends.
 _JOINTS_MOST = 2
 #: The clearance a printer can hold, in mm: the range a printer profile accepts.
 _CLEARANCE_MOST = 2.0
 #: Positions sampled across a cut face when looking for room for a joint.
 _SAMPLES = 240
+#: Steps along each side of a cut face when looking for room for a peg.
+_GRID = 24
 #: Places tried along one band of the cut face, at most: enough to step past a
 #: feature near either end without trying every sample.
 _POSITIONS_MOST = 9
@@ -88,7 +91,7 @@ def split_and_join(
     ``insert_along`` is the axis the second half is put on along -- one of the six
     axis directions, the same one every other fit holding it uses. Lying in the
     plane, it gives dovetails swept along it right through the cut face, so their
-    sockets are open at both ends; along the plane's normal, it gives round pegs.
+    sockets are open at both ends; along the plane's normal, it gives square pegs.
     Each joint sits where the cut face is solid along its whole run, its socket
     keeping a margin of ``max(1, 2 * clearance)`` mm from every edge and hole, and
     the socket is the tab grown by ``clearance`` on every side that meets it.
@@ -494,66 +497,73 @@ def _prism(frame, outline, low, high) -> Solid:
 
 
 def _pegs(section, plane, ahead, clearance, margin):
-    """Pegs and their sockets, at most two, where the cut face has room."""
+    """Square pegs and their sockets, at most two, where the cut face has room.
+
+    Square rather than round so that one peg alone, all a small face may have
+    room for, keeps the halves from turning about it.
+    """
     normal = Vector(plane.z_dir).normalized()
     frame = Plane(origin=plane.origin, x_dir=plane.x_dir, z_dir=normal)
-    spots = _roomy_spots(section, frame, clearance + margin)
     joints, taken = [], []
-    for spot, room in spots:
-        radius = min(_PEG_MOST / 2, room)
-        if radius < _PEG_LEAST / 2:
+    for spot, edge in _roomy_spots(section, frame):
+        # A square's corners reach out to its half-width times root two, and the
+        # socket around it, grown by the clearance and the margin, further still.
+        half = min(_PEG_MOST / 2, edge / math.sqrt(2) - clearance - margin)
+        if half < _PEG_LEAST / 2:
             break
         if any(
-            (spot - other).length < radius + other_radius + 2 * clearance + margin
-            for other, other_radius in taken
+            (spot - other).length < (half + other_half) * math.sqrt(2) + 2 * clearance + margin
+            for other, other_half in taken
         ):
             continue
-        made = _peg(frame, ahead, spot, radius, clearance, margin)
+        made = _peg(frame, ahead, spot, half, clearance, margin)
         if made is not None:
             joints.append(made)
-            taken.append((spot, radius))
+            taken.append((spot, half))
         if len(joints) == _JOINTS_MOST:
             break
     return joints
 
 
-def _roomy_spots(section, frame, spare):
-    """Points on the cut face with the radius a peg could take there, roomiest first."""
+def _roomy_spots(section, frame):
+    """Points on the cut face with how far each lies from the face's edge, farthest first."""
     if not section:
         return []
     corners = [frame.to_local_coords(face).bounding_box() for face in section]
     x0, x1 = min(c.min.X for c in corners), max(c.max.X for c in corners)
     y0, y1 = min(c.min.Y for c in corners), max(c.max.Y for c in corners)
-    count = 24
     spots = []
-    for i in range(count + 1):
-        for j in range(count + 1):
-            local = Vector(x0 + (x1 - x0) * i / count, y0 + (y1 - y0) * j / count, 0)
+    for i in range(_GRID + 1):
+        for j in range(_GRID + 1):
+            local = Vector(x0 + (x1 - x0) * i / _GRID, y0 + (y1 - y0) * j / _GRID, 0)
             at = frame.from_local_coords(local)
             point = Vertex(at.X, at.Y, at.Z)
             for face in section:
-                if point.distance_to(face) < 1e-9:
-                    edge_room = min(point.distance_to(edge) for edge in face.edges())
-                    spots.append((local, edge_room - spare))
+                if point.distance_to(face) < _EPS:
+                    spots.append((local, min(point.distance_to(edge) for edge in face.edges())))
                     break
     spots.sort(key=lambda found: -found[1])
     return spots
 
 
-def _peg(frame, ahead, spot, radius, clearance, margin):
-    """A peg at ``spot`` and its socket, or None when the half cannot hold them."""
-    length = 2 * radius
-    while length >= radius:
-        peg = _cylinder(frame, spot, radius, 0.0, length)
-        socket = _cylinder(frame, spot, radius + clearance, -1.0, length + clearance)
-        room = _cylinder(frame, spot, radius + clearance + margin, 0.0, length + clearance + margin)
+def _peg(frame, ahead, spot, half, clearance, margin):
+    """A peg ``2 * half`` across at ``spot`` and its socket, shortened until the
+    half holds them, or None."""
+    length = 2 * half
+    while length >= half:
+        peg = _block(frame, spot, half, 0.0, length)
+        socket = _block(frame, spot, half + clearance, -1.0, length + clearance)
+        room = _block(frame, spot, half + clearance + margin, 0.0, length + clearance + margin)
         if _fills(ahead, room):
             return peg, socket
         length /= 2
     return None
 
 
-def _cylinder(frame, spot, radius, start, end) -> Solid:
-    base = Plane(origin=frame.from_local_coords(Vector(spot.X, spot.Y, start)), z_dir=frame.z_dir)
-    upright = Cylinder(radius, end - start, align=(Align.CENTER, Align.CENTER, Align.MIN))
+def _block(frame, spot, half, start, end) -> Solid:
+    """A block ``2 * half`` square, its sides along the frame's x and y, standing at
+    ``spot`` from ``start`` to ``end`` along the frame's z."""
+    origin = frame.from_local_coords(Vector(spot.X, spot.Y, start))
+    base = Plane(origin=origin, x_dir=frame.x_dir, z_dir=frame.z_dir)
+    upright = Box(2 * half, 2 * half, end - start, align=(Align.CENTER, Align.CENTER, Align.MIN))
     return (base * upright).solids()[0]

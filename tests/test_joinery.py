@@ -149,6 +149,18 @@ def test_a_seam_whose_ends_are_taken_by_windows_is_joined_between_them():
     assert all(_shared(feature, window) < 1e-6 for feature in features for window in clear)
 
 
+def test_a_lone_peg_keeps_the_halves_from_turning_about_it():
+    # A rod with a flat has room for one peg; a round one would let the half
+    # ahead turn about it and carry the flat out of line.
+    part = _rod() - Pos(0, 9, 0) * Box(400, 10, 20)
+    first, second = split_and_join(part, SEAM, Axis.X, CLEARANCE)
+
+    pegs = (first & BEYOND).solids()
+    centre = pegs[0].center()
+    turned = second.moved(Pos(centre) * Rot(8, 0, 0) * Pos(-centre))
+    assert _shared(first, turned) > 1e-3
+
+
 def test_the_halves_of_a_cut_plate_come_apart_along_the_axis_given():
     measured = measure_assembly(list(split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)))
 
