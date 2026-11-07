@@ -5,8 +5,10 @@ build's parts get -- rather than by facts about the joint's shape, so a joint
 that looks right but jams, overlaps or comes apart the wrong way fails here.
 """
 
+import math
+
 import pytest
-from build123d import Axis, Box, Cylinder, Location, Plane, Pos, Rot
+from build123d import Axis, Box, Cylinder, Edge, Location, Plane, Pos, Rot
 
 from cadless.assembly_check import evaluate_assembly, measure_assembly
 from cadless.joinery import JoineryError, script_namespace, split_and_join
@@ -16,6 +18,8 @@ CLEARANCE = 0.2
 SPEC = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=CLEARANCE)
 #: x = 0, facing +X: the half on +X is the one the tabs reach into.
 SEAM = Plane.YZ
+#: x >= 0, where the tabs and the sockets are.
+BEYOND = Pos(150, 0, 0) * Box(300, 400, 400)
 
 
 def _plate():
@@ -35,6 +39,17 @@ def _rod():
 def _shared(first, second) -> float:
     common = first & second  # None where the two do not meet at all
     return 0.0 if common is None else common.volume
+
+
+def _runs(shape, start, end, axis: int) -> list[tuple[float, float]]:
+    """Where the line from ``start`` to ``end`` lies inside ``shape``, as
+    ``(low, high)`` along coordinate ``axis`` (0, 1, 2 for x, y, z)."""
+    hit = shape & Edge.make_line(start, end)
+    spans = []
+    for edge in hit.edges() if hit is not None else []:
+        ends = [(v.X, v.Y, v.Z)[axis] for v in edge.vertices()]
+        spans.append((min(ends), max(ends)))
+    return sorted(spans)
 
 
 def test_a_plate_cut_with_a_dovetail_passes_the_assembly_check():
@@ -63,6 +78,31 @@ def test_the_socket_clears_the_tab_by_the_clearance_and_no_more():
     # little short of the clearance stays clear, one a little past it collides.
     assert _shared(first, second.moved(Location((0, 0.9 * CLEARANCE, 0)))) < 1e-6
     assert _shared(first, second.moved(Location((0, 1.3 * CLEARANCE, 0)))) > 1e-3
+
+
+@pytest.mark.parametrize("depth", [0.05, 11.9])  # just past the seam; just short of the tip
+def test_each_socket_flank_clears_its_tab_by_the_clearance_at_every_depth(depth):
+    first, second = split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)
+
+    across = ((depth, -60, 0), (depth, 60, 0))
+    tabs = _runs(first, *across, axis=1)
+    body = _runs(second, *across, axis=1)
+    sockets = [(body[i][1], body[i + 1][0]) for i in range(len(body) - 1)]
+    flank = CLEARANCE / math.cos(math.radians(15))  # the clearance, square to a 15-degree flank
+    assert len(tabs) == len(sockets) == 2
+    for (tab_low, tab_high), (socket_low, socket_high) in zip(tabs, sockets, strict=True):
+        gaps = (tab_low - socket_low, socket_high - tab_high)
+        assert gaps == pytest.approx((flank, flank), abs=0.01)
+
+
+def test_the_tip_of_a_dovetail_clears_the_end_of_its_socket_by_the_clearance():
+    first, second = split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)
+
+    low, high = _runs(first, (0.05, -60, 0), (0.05, 60, 0), axis=1)[0]
+    along = ((-1, (low + high) / 2, 0), (150, (low + high) / 2, 0))  # out through the tab
+    tip = _runs(first, *along, axis=0)[-1][1]
+    socket_end = _runs(second, *along, axis=0)[0][0]
+    assert socket_end - tip == pytest.approx(CLEARANCE, abs=1e-3)
 
 
 def test_the_halves_of_a_cut_plate_come_apart_along_the_axis_given():

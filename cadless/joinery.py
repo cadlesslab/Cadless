@@ -367,14 +367,16 @@ def _trapezoid(centre: float, root: float, depth: float, grow: float, below: flo
     """A dovetail's outline across the seam: ``(across, into the half ahead)`` corners.
 
     Grown by ``grow`` on the flanks and the tip, and reaching ``below`` behind the
-    seam so a socket cuts cleanly through the face it starts on.
+    seam so a socket cuts cleanly through the face it starts on. Each flank is one
+    straight line, ``below`` the seam as much as past it, so a socket's flanks run
+    parallel to its tab's and the gap between them is the same at every depth.
     """
     slope = math.tan(math.radians(_FLANK_DEGREES))
     side = grow / math.cos(math.radians(_FLANK_DEGREES))
     bottom, top = -below, depth + grow
     return [
-        (centre - root / 2 - side + bottom * slope, bottom),
-        (centre + root / 2 + side - bottom * slope, bottom),
+        (centre - root / 2 - side - bottom * slope, bottom),
+        (centre + root / 2 + side + bottom * slope, bottom),
         (centre + root / 2 + side + top * slope, top),
         (centre - root / 2 - side - top * slope, top),
     ]
