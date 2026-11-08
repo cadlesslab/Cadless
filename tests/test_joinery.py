@@ -93,7 +93,9 @@ def test_a_joint_that_would_leave_a_half_in_two_pieces_is_refused(monkeypatch):
     # The check guards what every joint does to the halves; no joint the helper
     # places today breaks a half, so one is handed in whose socket would.
     slab = Pos(50, 0, 0) * Box(2, 400, 400)
-    monkeypatch.setattr("cadless.joinery._dovetails", lambda *args: ([(Box(1, 1, 1), slab)], False))
+    monkeypatch.setattr(
+        "cadless.joinery._dovetails", lambda *args: ([(Box(1, 1, 1), slab)], False, True)
+    )
 
     with pytest.raises(JoineryError, match="the joint would leave a half"):
         split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)
@@ -357,7 +359,10 @@ def test_a_direction_that_is_not_an_axis_is_refused(direction):
     "part, says",
     [
         ("a box", "build123d shape"),
-        (Compound([Box(300, 100, 10), Pos(0, 200, 0) * Box(300, 100, 10)]), "one solid at a time"),
+        (
+            Compound([Box(300, 100, 10), Pos(0, 200, 0) * Box(300, 100, 10)]),
+            "one solid at a time: got 2; pass each solid to it on its own",
+        ),
     ],
 )
 def test_what_is_cut_must_be_one_solid(part, says):
@@ -388,6 +393,34 @@ def test_a_cut_that_leaves_a_half_in_two_pieces_is_refused():
 def test_a_wall_too_thin_for_a_joint_is_refused():
     with pytest.raises(JoineryError, match="thicker"):
         split_and_join(_shell(1), SEAM, Axis.Z, CLEARANCE)
+
+
+def test_a_rod_cut_across_but_given_an_axis_in_its_cut_is_told_to_take_the_normal():
+    # The commonest refusal live: an axle cut across its length, given an axis in
+    # the cut. Pegs fit its face, so the refusal names the axis that takes them.
+    with pytest.raises(JoineryError, match=r"pegs fit this cut face.*insert along \+X"):
+        split_and_join(_rod(), SEAM, Axis.Z, CLEARANCE)
+
+
+def test_a_face_no_peg_fits_is_not_offered_pegs():
+    with pytest.raises(JoineryError) as refused:
+        split_and_join(_shell(1), SEAM, Axis.Z, CLEARANCE)
+
+    assert "pegs" not in str(refused.value)
+
+
+def test_a_shell_whose_dovetails_found_no_room_is_not_offered_pegs():
+    # Windows just past the seam take the room every dovetail in the top needs, yet
+    # a peg fits there. A shell given the normal leaves its parts no order to go
+    # together in, so pegs are offered only where no dovetail had a place at all.
+    shell = _shell(7)
+    for y in range(-45, 50, 15):
+        shell -= Pos(16, y, 40) * Box(29, 12, 30)
+
+    with pytest.raises(JoineryError) as refused:
+        split_and_join(shell, SEAM, Axis.Z, CLEARANCE)
+
+    assert "pegs" not in str(refused.value)
 
 
 @pytest.mark.parametrize("clearance", [-0.1, 2.5, float("nan"), True])

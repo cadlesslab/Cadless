@@ -153,9 +153,9 @@ def split_and_join(
     behind, ahead = _halves(_one_solid(part), plane, where)
     section = _section(behind, ahead, plane)
     margin = max(1.0, 2 * clearance)
-    blocked = False
+    blocked = placed = False
     if across <= _EPS:
-        joints, blocked = _dovetails(section, plane, axis, ahead, clearance, margin)
+        joints, blocked, placed = _dovetails(section, plane, axis, ahead, clearance, margin)
     else:
         joints = _pegs(section, plane, ahead, clearance, margin)
     if not joints and blocked:
@@ -170,6 +170,7 @@ def split_and_join(
             f"{where}: no place on the cut face is solid enough for a joint {least:g} mm "
             f"across with {margin:g} mm to spare along {_name(axis)}; make the wall thicker "
             "there, move the seam, or insert along another axis"
+            + ("" if placed else _pegs_instead(across, section, plane, ahead, clearance, margin))
         )
     for tab, socket in joints:
         behind = _single(behind.fuse(tab), where)
@@ -177,6 +178,31 @@ def split_and_join(
     first, second = names or (f"{part.label or 'part'} 1", f"{part.label or 'part'} 2")
     behind.label, ahead.label = first, second
     return behind, ahead
+
+
+def _pegs_instead(across, section, plane, ahead, clearance, margin) -> str:
+    """What to add to a refusal of dovetails when pegs would join the same cut face.
+
+    Live, the commonest refusal was a rod or an axle cut across its length but
+    given an axis lying in the cut, and "insert along another axis" sent the model
+    to the other axis in it. Its face offers no place for a dovetail at all, while
+    a shell whose places found no room does, and a shell given the normal leaves
+    its parts no order to assemble in -- so the caller asks only where no place
+    was found. The axis that takes pegs is named only where pegs fit and the plane
+    faces along an axis, and only for a part that goes in that way.
+    """
+    if across > _EPS:
+        return ""
+    try:
+        normal = _axis(plane.z_dir)
+    except JoineryError:
+        return ""
+    if not _pegs(section, plane, ahead, clearance, margin):
+        return ""
+    return (
+        "; pegs fit this cut face, so if the part goes in along the plane's normal, as a "
+        f"rod, an axle or a bar cut across its length does, insert along {_name(normal)}"
+    )
 
 
 def _check_clearance(clearance) -> None:
@@ -229,7 +255,10 @@ def _one_solid(part) -> Solid:
         )
     solids = part.solids()
     if len(solids) != 1:
-        raise JoineryError(f"split_and_join cuts one solid at a time: got {len(solids)}")
+        raise JoineryError(
+            f"split_and_join cuts one solid at a time: got {len(solids)}; pass each solid "
+            "to it on its own"
+        )
     return solids[0]
 
 
@@ -323,8 +352,9 @@ class _Site(NamedTuple):
 
 
 def _dovetails(section, plane, axis, ahead, clearance, margin):
-    """Tabs and sockets for up to two dovetails swept along ``axis``, and whether a
-    place was given up because its socket would cut the part beyond the cut face.
+    """Tabs and sockets for up to two dovetails swept along ``axis``; whether a
+    place was given up because its socket would cut the part beyond the cut face;
+    and whether the face offered any place at all.
 
     Positions across the cut face are sampled; where the line along ``axis``
     crosses the face in one run, unbroken by a hole, and the same run at
@@ -349,7 +379,7 @@ def _dovetails(section, plane, axis, ahead, clearance, margin):
         blocked.append(in_the_way)
         return joint
 
-    return _choose(sites, make), any(blocked)
+    return _choose(sites, make), any(blocked), bool(sites)
 
 
 def _widest_root(width: float, clearance: float, margin: float) -> float:
