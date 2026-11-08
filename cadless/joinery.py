@@ -75,6 +75,10 @@ _SHRINK = 0.75
 #: How far, in mm, a cut or a sampling line is carried past what it crosses --
 #: behind the seam, past the half's ends -- so it never stops on a face.
 _OVERCUT = 1.0
+#: How far past the run it stands on, in mm, a socket may cut through the part as
+#: its own opening: enough to come out through a surface a few degrees off square,
+#: too little to groove a feature standing in its way, whatever the clearance.
+_EXIT = 1.0
 #: The share of a volume a boolean may miss or add without it counting.
 _VOLUME_SHARE = 1e-6
 _EPS = 1e-6
@@ -157,7 +161,7 @@ def split_and_join(
     if not joints and blocked:
         raise JoineryError(
             f"{where}: wherever a joint fits, its socket along {_name(axis)} would cut a "
-            f"groove through the part beyond the cut face, more than {margin:g} mm past "
+            f"groove through the part beyond the cut face, more than {_EXIT:g} mm past "
             "it; insert along another axis, or move the seam"
         )
     if not joints:
@@ -475,9 +479,9 @@ def _dovetail(frame, ahead, site, extent, clearance, margin, shrunk):
     for the socket's path.
 
     The socket runs right through the half along the axis, open at both ends so
-    the tab can slide in from either. Within a margin past the run the tab stands
-    on, it comes out through the part's surface and cuts its own opening there;
-    past that, nothing of the half may lie in its way, or it would cut a groove.
+    the tab can slide in from either. Just past the run the tab stands on, it
+    comes out through the part's surface and cuts its own opening there; further
+    on, nothing of the half may lie in its way, or it would cut a groove.
     """
     roots = [site.root]
     if shrunk:
@@ -493,7 +497,7 @@ def _dovetail(frame, ahead, site, extent, clearance, margin, shrunk):
         grown = _trapezoid(site.centre, root, depth, clearance + margin, 0.0)
         if not _fills(ahead, _prism(frame, grown, site.low, site.high)):
             continue
-        beyond = ((extent[0], site.low - margin), (site.high + margin, extent[1]))
+        beyond = ((extent[0], site.low - _EXIT), (site.high + _EXIT, extent[1]))
         if any(_meets(ahead, _prism(frame, outline, *ends)) for ends in beyond if _apart(*ends)):
             blocked = True
             continue
@@ -622,5 +626,6 @@ def _flatted(frame, spot, radius, grow, start, end) -> Solid:
     base = Plane(origin=origin, x_dir=frame.x_dir, z_dir=frame.z_dir)
     height, outer, flat = end - start, radius + grow, radius * _FLAT + grow
     round_ = Cylinder(outer, height, align=(Align.CENTER, Align.CENTER, Align.MIN))
-    past_flat = Pos(0, flat + outer, height / 2) * Box(2 * outer + 2, 2 * outer, height + 2)
+    cutter = Box(2 * (outer + _OVERCUT), 2 * outer, height + 2 * _OVERCUT)
+    past_flat = Pos(0, flat + outer, height / 2) * cutter
     return (base * (round_ - past_flat)).solids()[0]

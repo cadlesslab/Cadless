@@ -65,9 +65,9 @@ from cadless.printer_profile import AssemblySpec, BuildVolume
 #: A correct joint's closest approach can be the clearance itself: every fit but a
 #: seam the split helper makes cuts its socket that much larger than the tab it
 #: receives, so those faces never touch. A threshold at or below the clearance
-#: would therefore refuse every such split. The multiple leaves room for a chamfer or fillet on the mating
-#: faces, where the nearest points of two joined parts sit further apart than the
-#: nominal gap.
+#: would therefore refuse every such split. The multiple leaves room for a chamfer
+#: or fillet on the mating faces, where the nearest points of two joined parts sit
+#: further apart than the nominal gap.
 MATING_TOLERANCE_FACTOR = 4.0
 
 #: The floor under that tolerance, in millimetres, so a printer configured with no

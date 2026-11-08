@@ -151,6 +151,15 @@ def test_a_socket_never_cuts_the_part_beyond_the_face_it_stands_on():
     assert _shared(second, wall) == pytest.approx(_shared(part, wall), rel=1e-6)
 
 
+def test_a_wider_clearance_lets_no_socket_groove_further_past_the_cut_face():
+    # A rim 3 mm tall standing flush with the seam on the half ahead: past the
+    # socket's own opening at any clearance, so cutting through it is refused.
+    part = _plate() + Pos(10, 0, 6.5) * Box(20, 100, 3)
+
+    with pytest.raises(JoineryError, match="beyond the cut face"):
+        split_and_join(part, SEAM, Axis.Z, 2.0)
+
+
 def test_a_seam_whose_every_joint_would_cut_through_the_part_is_refused():
     # A block on the half ahead, flush with the seam: a dovetail along Z, of any
     # size, would have to run out through it.
@@ -258,9 +267,18 @@ def test_a_thin_rod_or_bar_cut_across_its_length_is_still_pegged(part):
 def test_a_peg_clears_its_socket_by_the_clearance_and_no_more():
     first, second = split_and_join(_rod(), SEAM, Axis.X, CLEARANCE)
 
-    # Across the seam, along Y, square to two of the peg's sides.
+    # Across the seam, along Y, against the round of the peg.
     assert _shared(first, second.moved(Location((0, 0.9 * CLEARANCE, 0)))) < 1e-6
     assert _shared(first, second.moved(Location((0, 1.3 * CLEARANCE, 0)))) > 1e-4
+
+
+def test_a_peg_clears_its_socket_on_the_flat_side_too():
+    first, second = split_and_join(_rod(), SEAM, Axis.X, CLEARANCE)
+
+    # The flat faces +Z on this seam: moving the socket down brings its flat onto
+    # the peg's, and nothing else is as close.
+    assert _shared(first, second.moved(Location((0, 0, -0.9 * CLEARANCE)))) < 1e-6
+    assert _shared(first, second.moved(Location((0, 0, -1.3 * CLEARANCE)))) > 1e-4
 
 
 def test_a_peg_keeps_its_margin_off_a_hole_just_past_the_seam():
