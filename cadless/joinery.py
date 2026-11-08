@@ -24,11 +24,13 @@ from typing import NamedTuple
 from build123d import (
     Align,
     Box,
+    Cylinder,
     Edge,
     GeomType,
     Keep,
     Plane,
     Polygon,
+    Pos,
     Solid,
     Vector,
     Vertex,
@@ -46,8 +48,11 @@ _FLANK_DEGREES = 15.0
 _ROOT_MOST, _ROOT_LEAST = 20.0, 3.0
 #: How deep a dovetail reaches into the other half, per unit of its root.
 _DEPTH_PER_ROOT = 0.6
-#: A peg's width, at most and at least (mm).
+#: A peg's diameter, at most and at least (mm).
 _PEG_MOST, _PEG_LEAST = 8.0, 3.0
+#: Where a peg's flat side stands from its axis, as a share of its radius: enough
+#: to stop the halves turning about the peg, little enough to keep most of it.
+_FLAT = 0.5
 #: The shortest a joint may run along the axis the half goes in (mm).
 _RUN_LEAST = 3.0
 #: Joints per seam, at most: a second, as far from the first as the face allows,
@@ -61,11 +66,15 @@ _SAMPLES = 240
 _SAME_RUN = 1e-3
 #: Steps along each side of a cut face when looking for room for a peg.
 _GRID = 24
-#: Places tried along one band of the cut face, at most: enough to step past a
-#: feature near either end without trying every sample.
+#: Places tried along one band of the cut face, at most, half a joint's reach
+#: apart: enough to find room between features near either end without trying
+#: every sample.
 _POSITIONS_MOST = 9
 #: What a dovetail's root is multiplied by each time the half cannot hold it.
 _SHRINK = 0.75
+#: How far, in mm, a cut or a sampling line is carried past what it crosses --
+#: behind the seam, past the half's ends -- so it never stops on a face.
+_OVERCUT = 1.0
 #: The share of a volume a boolean may miss or add without it counting.
 _VOLUME_SHARE = 1e-6
 _EPS = 1e-6
@@ -97,7 +106,8 @@ def split_and_join(
     ``insert_along`` is the axis the second half is put on along -- one of the six
     axis directions, the same one every other fit holding it uses. Lying in the
     plane, it gives dovetails swept along it right through the cut face, so their
-    sockets are open at both ends; along the plane's normal, it gives square pegs.
+    sockets are open at both ends; along the plane's normal, it gives pegs, each
+    round with one flat side.
     Each joint sits where the cut face is solid along its whole run, its socket
     keeping a margin of ``max(1, 2 * clearance)`` mm from every edge and hole, and
     the socket is the tab grown by ``clearance`` on every side that meets it.
@@ -146,9 +156,9 @@ def split_and_join(
         joints = _pegs(section, plane, ahead, clearance, margin)
     if not joints and blocked:
         raise JoineryError(
-            f"{where}: wherever a joint fits, its socket along {_name(axis)} would cut "
-            "through the part beyond the cut face; insert along another axis, or move "
-            "the seam clear of what stands in the way"
+            f"{where}: wherever a joint fits, its socket along {_name(axis)} would cut a "
+            f"groove through the part beyond the cut face, more than {margin:g} mm past "
+            "it; insert along another axis, or move the seam"
         )
     if not joints:
         least = _ROOT_LEAST if across <= _EPS else _PEG_LEAST
@@ -325,13 +335,13 @@ def _dovetails(section, plane, axis, ahead, clearance, margin):
         if root < _ROOT_LEAST:
             continue
         half = _reach(root, clearance + margin)
-        for centre in _positions(start + half, end - half, half):
+        for centre in _positions(start + half, end - half, half / 2):
             sites.append(_Site(centre, half, root, low, high))
     extent = _extent(ahead, frame)
     blocked = []
 
-    def make(site):
-        joint, in_the_way = _dovetail(frame, ahead, site, extent, clearance, margin)
+    def make(site, shrunk):
+        joint, in_the_way = _dovetail(frame, ahead, site, extent, clearance, margin, shrunk)
         blocked.append(in_the_way)
         return joint
 
@@ -370,7 +380,7 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     bands, current = [], None
     for k in range(_SAMPLES + 1):
         across = y0 + k * step
-        runs = _runs(section, frame, across, x0 - 1, x1 + 1)
+        runs = _runs(section, frame, across, x0 - _OVERCUT, x1 + _OVERCUT)
         run = runs[0] if len(runs) == 1 and runs[0][1] - runs[0][0] >= _RUN_LEAST else None
         same = (
             current is not None
@@ -424,66 +434,77 @@ def _positions(first: float, last: float, step: float) -> list[float]:
 def _choose(sites, make) -> list:
     """Up to two joints: the first as far out on the face as one can be made, the
     second as far from it as one can be made without their sockets and margins
-    meeting.
+    meeting -- each full size wherever some place takes one, and smaller only
+    where none does.
 
-    ``make`` builds a site's joint, or returns None where the half cannot hold
-    one; it is called only for the sites tried, and at most once for each.
+    ``make(site, shrunk)`` builds a site's joint at full size, or ``shrunk`` below
+    it, or returns None where the half cannot hold one; it is called only for the
+    sites tried, and at most once for each site and size.
     """
     if not sites:
         return []
-    middle = (min(site.centre for site in sites) + max(site.centre for site in sites)) / 2
     made: dict = {}
 
-    def joint(site):
-        if site not in made:
-            made[site] = make(site)
-        return made[site]
+    def first_made(candidates):
+        for shrunk in (False, True):
+            for site in candidates:
+                if (site, shrunk) not in made:
+                    made[site, shrunk] = make(site, shrunk)
+                if made[site, shrunk] is not None:
+                    return site, made[site, shrunk]
+        return None
 
-    outermost = sorted(sites, key=lambda site: -abs(site.centre - middle))
-    first = next((site for site in outermost if joint(site) is not None), None)
-    if first is None:
+    middle = (min(site.centre for site in sites) + max(site.centre for site in sites)) / 2
+    found = first_made(sorted(sites, key=lambda site: -abs(site.centre - middle)))
+    if found is None:
         return []
-    chosen = [joint(first)]
+    first, joint = found
     apart = [s for s in sites if abs(s.centre - first.centre) >= first.half + s.half]
-    for second in sorted(apart, key=lambda s: -abs(s.centre - first.centre)):
-        if len(chosen) == _JOINTS_MOST:
-            break
-        if joint(second) is not None:
-            chosen.append(joint(second))
-    return chosen
+    second = first_made(sorted(apart, key=lambda s: -abs(s.centre - first.centre)))
+    return [joint] if second is None else [joint, second[1]]
 
 
 def _extent(ahead, frame) -> tuple[float, float]:
     box = frame.to_local_coords(ahead).bounding_box()
-    return box.min.X - 1, box.max.X + 1
+    return box.min.X - _OVERCUT, box.max.X + _OVERCUT
 
 
-def _dovetail(frame, ahead, site, extent, clearance, margin):
-    """A tab and its socket at ``site``, shrunk until the half holds them, or None;
-    and whether a size the half held was given up for the socket's path.
+def _dovetail(frame, ahead, site, extent, clearance, margin, shrunk):
+    """A tab and its socket at ``site`` -- full size, or ``shrunk`` smaller and
+    smaller below it -- or None; and whether a size the half held was given up
+    for the socket's path.
 
     The socket runs right through the half along the axis, open at both ends so
-    the tab can slide in from either; past the run the tab stands on, nothing of
-    the half may lie in its way, or the socket would cut a groove through it.
+    the tab can slide in from either. Within a margin past the run the tab stands
+    on, it comes out through the part's surface and cuts its own opening there;
+    past that, nothing of the half may lie in its way, or it would cut a groove.
     """
-    root, blocked = site.root, False
-    while root >= _ROOT_LEAST:
+    roots = [site.root]
+    if shrunk:
+        roots = []
+        root = site.root * _SHRINK
+        while root >= _ROOT_LEAST:
+            roots.append(root)
+            root *= _SHRINK
+    blocked = False
+    for root in roots:
         depth = root * _DEPTH_PER_ROOT
-        outline = _trapezoid(site.centre, root, depth, clearance, 1.0)
+        outline = _trapezoid(site.centre, root, depth, clearance, _OVERCUT)
         grown = _trapezoid(site.centre, root, depth, clearance + margin, 0.0)
-        if _fills(ahead, _prism(frame, grown, site.low, site.high)):
-            path = (
-                _prism(frame, outline, extent[0], site.low),
-                _prism(frame, outline, site.high, extent[1]),
-            )
-            if not any(_meets(ahead, piece) for piece in path):
-                tab = _prism(
-                    frame, _trapezoid(site.centre, root, depth, 0.0, 0.0), site.low, site.high
-                )
-                return (tab, _prism(frame, outline, *extent)), blocked
+        if not _fills(ahead, _prism(frame, grown, site.low, site.high)):
+            continue
+        beyond = ((extent[0], site.low - margin), (site.high + margin, extent[1]))
+        if any(_meets(ahead, _prism(frame, outline, *ends)) for ends in beyond if _apart(*ends)):
             blocked = True
-        root *= _SHRINK
+            continue
+        tab = _prism(frame, _trapezoid(site.centre, root, depth, 0.0, 0.0), site.low, site.high)
+        return (tab, _prism(frame, outline, *extent)), blocked
     return None, blocked
+
+
+def _apart(low: float, high: float) -> bool:
+    """Whether a stretch from ``low`` to ``high`` has any length to build on."""
+    return high - low > _EPS
 
 
 def _fills(half, room) -> bool:
@@ -527,29 +548,28 @@ def _prism(frame, outline, low, high) -> Solid:
 
 
 def _pegs(section, plane, ahead, clearance, margin):
-    """Square pegs and their sockets, at most two, where the cut face has room.
+    """Pegs and their sockets, at most two, where the cut face has room.
 
-    Square rather than round so that one peg alone, all a small face may have
-    room for, keeps the halves from turning about it.
+    Each peg is round with one flat side, so that one peg alone, all a small face
+    may have room for, keeps the halves from turning about it, on no more room
+    than a round peg of its size needs.
     """
     normal = Vector(plane.z_dir).normalized()
     frame = Plane(origin=plane.origin, x_dir=plane.x_dir, z_dir=normal)
     joints, taken = [], []
     for spot, edge in _roomy_spots(section, frame):
-        # A square's corners reach out to its half-width times root two, and the
-        # socket around it, grown by the clearance and the margin, further still.
-        half = min(_PEG_MOST / 2, edge / math.sqrt(2) - clearance - margin)
-        if half < _PEG_LEAST / 2:
+        radius = min(_PEG_MOST / 2, edge - clearance - margin)
+        if radius < _PEG_LEAST / 2:
             break
         if any(
-            (spot - other).length < (half + other_half) * math.sqrt(2) + 2 * clearance + margin
-            for other, other_half in taken
+            (spot - other).length < radius + other_radius + 2 * clearance + margin
+            for other, other_radius in taken
         ):
             continue
-        made = _peg(frame, ahead, spot, half, clearance, margin)
+        made = _peg(frame, ahead, spot, radius, clearance, margin)
         if made is not None:
             joints.append(made)
-            taken.append((spot, half))
+            taken.append((spot, radius))
         if len(joints) == _JOINTS_MOST:
             break
     return joints
@@ -576,24 +596,31 @@ def _roomy_spots(section, frame):
     return spots
 
 
-def _peg(frame, ahead, spot, half, clearance, margin):
-    """A peg ``2 * half`` across at ``spot`` and its socket, shortened until the
-    half holds them, or None."""
-    length = 2 * half
-    while length >= half:
-        peg = _block(frame, spot, half, 0.0, length)
-        socket = _block(frame, spot, half + clearance, -1.0, length + clearance)
-        room = _block(frame, spot, half + clearance + margin, 0.0, length + clearance + margin)
+def _peg(frame, ahead, spot, radius, clearance, margin):
+    """A peg ``radius`` round at ``spot`` and its socket, shortened until the half
+    holds them, or None."""
+    length = 2 * radius
+    while length >= radius:
+        peg = _flatted(frame, spot, radius, 0.0, 0.0, length)
+        socket = _flatted(frame, spot, radius, clearance, -_OVERCUT, length + clearance)
+        room = _flatted(frame, spot, radius, clearance + margin, 0.0, length + clearance + margin)
         if _fills(ahead, room):
             return peg, socket
         length /= 2
     return None
 
 
-def _block(frame, spot, half, start, end) -> Solid:
-    """A block ``2 * half`` square, its sides along the frame's x and y, standing at
-    ``spot`` from ``start`` to ``end`` along the frame's z."""
+def _flatted(frame, spot, radius, grow, start, end) -> Solid:
+    """A round peg ``radius`` round with its flat side toward the frame's +y, grown
+    by ``grow`` all round, standing at ``spot`` from ``start`` to ``end`` along the
+    frame's z.
+
+    Grown, it is the round grown and the flat moved out by the same amount: a
+    little more than the peg grown evenly, at the two corners of the flat only.
+    """
     origin = frame.from_local_coords(Vector(spot.X, spot.Y, start))
     base = Plane(origin=origin, x_dir=frame.x_dir, z_dir=frame.z_dir)
-    upright = Box(2 * half, 2 * half, end - start, align=(Align.CENTER, Align.CENTER, Align.MIN))
-    return (base * upright).solids()[0]
+    height, outer, flat = end - start, radius + grow, radius * _FLAT + grow
+    round_ = Cylinder(outer, height, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    past_flat = Pos(0, flat + outer, height / 2) * Box(2 * outer + 2, 2 * outer, height + 2)
+    return (base * (round_ - past_flat)).solids()[0]

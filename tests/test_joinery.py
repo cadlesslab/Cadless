@@ -13,7 +13,19 @@ import sys
 from pathlib import Path
 
 import pytest
-from build123d import Axis, Box, Compound, Cylinder, Edge, Location, Plane, Pos, Rot
+from build123d import (
+    Axis,
+    Box,
+    Compound,
+    Cylinder,
+    Edge,
+    Location,
+    Plane,
+    Polygon,
+    Pos,
+    Rot,
+    extrude,
+)
 
 from cadless.assembly_check import evaluate_assembly, measure_assembly
 from cadless.joinery import JoineryError, script_namespace, split_and_join
@@ -39,8 +51,20 @@ def _shell(wall: float):
     return Box(300, 120, 80) - Pos(0, 0, -(wall + 2) / 2) * inside
 
 
-def _rod():
-    return Rot(0, 90, 0) * Cylinder(6, 300)
+def _rod(radius: float = 6):
+    return Rot(0, 90, 0) * Cylinder(radius, 300)
+
+
+def _drafted_plate(degrees: float):
+    """The plate, its top rising ``degrees`` from the seam along +X."""
+    rise = 150 * math.tan(math.radians(degrees))
+    wedge = Plane.XZ * Polygon((0, 5), (150, 5), (150, 5 + rise), align=None)
+    return _plate() + extrude(wedge, amount=50, both=True)
+
+
+def _tabs_across(first, depth: float = 0.05) -> list[tuple[float, float]]:
+    """Each tab's span across the seam, along Y, just past it."""
+    return _runs(first, (depth, -60, 0), (depth, 60, 0), axis=1)
 
 
 def _shared(first, second) -> float:
@@ -160,6 +184,31 @@ def test_a_seam_whose_ends_are_taken_by_windows_is_joined_between_them():
     assert all(_shared(feature, window) < 1e-6 for feature in features for window in clear)
 
 
+def test_two_joints_hold_the_seam_at_opposite_ends():
+    first, _second = split_and_join(_plate(), SEAM, Axis.Z, CLEARANCE)
+
+    centres = sorted((low + high) / 2 for low, high in _tabs_across(first))
+    assert len(centres) == 2 and centres[0] < -25 and centres[1] > 25
+
+
+def test_a_full_size_joint_further_in_is_taken_before_a_small_one_at_the_end():
+    # A window 4 mm past the seam leaves the end of the face room for a small
+    # dovetail only; a full-size one fits further in.
+    plate = _plate() - Pos(17, 35, 0) * Box(26, 30, 12)
+    first, _second = split_and_join(plate, SEAM, Axis.Z, CLEARANCE)
+
+    widths = [high - low for low, high in _tabs_across(first)]
+    assert widths and all(width == pytest.approx(20, abs=0.1) for width in widths)
+
+
+def test_a_seam_whose_far_side_rises_a_little_is_still_joined():
+    # Past the seam the plate's top rises half a degree, so each socket comes out
+    # through a sliver of it: its opening, not something standing in its way.
+    halves = split_and_join(_drafted_plate(0.5), SEAM, Axis.Z, CLEARANCE)
+
+    assert evaluate_assembly(measure_assembly(list(halves)), SPEC).failures == []
+
+
 def test_a_lone_peg_keeps_the_halves_from_turning_about_it():
     # A rod with a flat has room for one peg; a round one would let the half
     # ahead turn about it and carry the flat out of line.
@@ -197,6 +246,13 @@ def test_a_rod_cut_across_its_length_is_pegged_and_passes_the_assembly_check():
 
     assert first.bounding_box().max.X > 1.0  # the peg stands past the seam
     assert evaluate_assembly(measure_assembly([first, second]), SPEC).failures == []
+
+
+@pytest.mark.parametrize("part", [_rod(3), Box(300, 12, 6)], ids=["6 mm rod", "12 x 6 bar"])
+def test_a_thin_rod_or_bar_cut_across_its_length_is_still_pegged(part):
+    first, _second = split_and_join(part, SEAM, Axis.X, CLEARANCE)
+
+    assert (first & BEYOND).solids()  # a peg stands past the seam
 
 
 def test_a_peg_clears_its_socket_by_the_clearance_and_no_more():
