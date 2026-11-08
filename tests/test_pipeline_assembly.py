@@ -124,7 +124,15 @@ def _exec(measurements=None, *, bbox=(10.0, 10.0, 10.0), part_count=None) -> Exe
 
 
 def _stub_run_code(monkeypatch, measurements, captured=None, *, bbox=None, part_count=None):
-    def fake(code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None):
+    def fake(
+        code,
+        *,
+        export_dir=None,
+        export_scale=1.0,
+        check_assembly=False,
+        assembly_turn=False,
+        config=None,
+    ):
         if captured is not None:
             captured["check_assembly"] = check_assembly
         extra = {} if bbox is None else {"bbox": bbox}
@@ -186,6 +194,20 @@ def test_a_turn_that_asked_for_an_assembly_asks_the_worker_to_measure(monkeypatc
     captured = {}
     _run(FakeGen(), _sound(), monkeypatch, captured=captured)
     assert captured["check_assembly"] is True
+
+
+LOOPS = "while True:\n    pass\nresult = 1\n"
+
+
+@pytest.mark.parametrize("assembly, clock", [(SPEC, "2s"), (None, "1s")])
+def test_a_turn_builds_on_the_clock_its_ask_earns(assembly, clock):
+    # The real worker rather than a stand-in: the pipeline chooses the clock and
+    # the worker keeps it, so a build that never ends says which one it ran out of.
+    cfg = Settings(exec_timeout_secs=1.0, assembly_exec_timeout_secs=2.0, repair_max_attempts=1)
+
+    result = Pipeline(generator=FakeGen(LOOPS), config=cfg).run("a bracket", assembly=assembly)
+
+    assert f"exceeded {clock}" in result.error
 
 
 def test_an_edit_to_an_assembly_reaches_the_generator_with_the_spec(monkeypatch):
@@ -542,7 +564,15 @@ def _builds(monkeypatch, *results):
     """``run_code`` answering each build with the next of ``results``, the last kept."""
     queue = list(results)
 
-    def fake(code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None):
+    def fake(
+        code,
+        *,
+        export_dir=None,
+        export_scale=1.0,
+        check_assembly=False,
+        assembly_turn=False,
+        config=None,
+    ):
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
     monkeypatch.setattr("cadless.pipeline.run_code", fake)
@@ -1080,7 +1110,15 @@ def test_a_verdict_never_outlives_the_attempt_it_was_taken_for(monkeypatch):
     # attach a pass to a build that is not the one being returned.
     calls = {"n": 0}
 
-    def fake(code, *, export_dir=None, export_scale=1.0, check_assembly=False, config=None):
+    def fake(
+        code,
+        *,
+        export_dir=None,
+        export_scale=1.0,
+        check_assembly=False,
+        assembly_turn=False,
+        config=None,
+    ):
         calls["n"] += 1
         # Attempt 1 builds and is measured (and fails the check, so the loop goes
         # round); attempt 2 never executes, so nothing measures it.

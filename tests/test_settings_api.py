@@ -199,6 +199,7 @@ def test_post_wrong_typed_knob_is_refused(client):
     [
         "worker_url",  # where generated code is executed
         "exec_timeout_secs",  # the sandbox's resource limit
+        "assembly_exec_timeout_secs",  # the same limit, on a turn that asked for an assembly
         "embed_dimensions",  # changing it silently invalidates every KB vector
     ],
 )

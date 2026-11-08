@@ -16,7 +16,11 @@ drives them is in [pipeline.md](../pipeline.md).
 One layering rule spans all three and is worth stating plainly: **build123d is
 imported only inside the execution child and the exporters**, and even there
 only inside functions. Nothing else in the package may import it at module
-level. See the layering rules in [architecture.md](../architecture.md).
+level, with one exception that lives on the child's side: `cadless/joinery.py`,
+the helpers a script is handed, imports it at the top, and is itself imported
+only inside functions, by the execution child and evalkit's in-process runner —
+importing the api loads neither it nor build123d. See the layering rules in
+[architecture.md](../architecture.md).
 
 ## Changing the validator
 
@@ -45,6 +49,18 @@ validator accepts while the prompt still tells the model that only build123d,
 `math` and `copy` are available — so the capability exists and nothing ever uses
 it. Change both in the same commit.
 
+**Not every capability is an import.** A script starts with the names
+`cadless.joinery.script_namespace()` returns — today `split_and_join`, which cuts
+a part at a plane and joins the halves — and calls them without importing
+anything, so the allow-list stays as it is. That keeps the allow-list from
+widening; it puts no wall around what is handed over. Whatever the module behind
+a handed-over name holds, generated code can reach, so adding a name there is a
+security decision like widening the allow-list, and what that module imports, a
+script can reach as well. The worker child, evalkit's in-process runner
+and the few-shot tests all start a script from that function, so a name added
+there reaches each of them; the prompt still has to mention it, as with an
+import.
+
 `validate_code` is called from two production sites, and they guard different
 things. The repair loop in `Pipeline.run` checks code this tool is about to run
 from a model that just wrote it. `catalog.pack.verify_steps` checks code that
@@ -59,8 +75,14 @@ to be carried into the server's vendored copy as well.
 ## Changing the worker
 
 ```python
-run_code(code, *, export_dir=None, export_scale=1.0, config=None) -> ExecResult
+run_code(code, *, export_dir=None, export_scale=1.0, check_assembly=False,
+         assembly_turn=False, config=None) -> ExecResult
 ```
+
+`check_assembly` asks the child to measure how a multi-part result's parts
+relate; `assembly_turn` puts the build on the assembly clock. They are separate
+on purpose: the pipeline measures every build, and only a turn that asked for an
+assembly earns the longer clock.
 
 `ExecResult` carries `ok` / `error` / `timed_out`, the geometry summary
 (`volume`, `bbox`, `part_count`, `manifold`, `min_wall_thickness`), the four

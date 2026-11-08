@@ -180,6 +180,7 @@ def run_code(
     export_dir: str | None = None,
     export_scale: float = 1.0,
     check_assembly: bool = False,
+    assembly_turn: bool = False,
     config: Settings | None = None,
 ) -> ExecResult:
     """Execute `code` in an isolated subprocess and return an ExecResult.
@@ -191,11 +192,16 @@ def run_code(
     ``check_assembly`` asks the child to measure how the parts of a multi-part
     result relate to each other. Off by default, so a caller that only wants the
     files does not spend the build's wall clock on a measurement nobody reads.
+
+    ``assembly_turn`` runs the build on the assembly clock rather than the plain
+    one. It is the turn's ask, not the measurement, that earns it: the pipeline
+    measures every build, so keying the clock on ``check_assembly`` would hand
+    the longer clock to every build there is.
     """
     cfg = config or settings
+    wall = cfg.assembly_exec_timeout_secs if assembly_turn else cfg.exec_timeout_secs
     if cfg.worker_url:
-        return _run_remote(code, export_dir, export_scale, check_assembly, cfg)
-    wall = cfg.exec_timeout_secs
+        return _run_remote(code, export_dir, export_scale, check_assembly, cfg, wall)
     cpu = max(1, int(wall) + 1)  # CPU limit slightly above wall-clock
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -242,11 +248,13 @@ def _run_remote(
     export_scale: float,
     check_assembly: bool,
     cfg: Settings,
+    wall: float,
 ) -> ExecResult:
     """Delegate execution to the isolated worker service over HTTP.
 
     Both api and worker share the artifacts volume at the same path, so the worker
-    writes STEP/GLB into `export_dir` and the api reads them back.
+    writes STEP/GLB into `export_dir` and the api reads them back. ``wall`` is the
+    clock the build runs on there, sent so the worker keeps the api's choice.
     """
     import urllib.request
 
@@ -256,7 +264,7 @@ def _run_remote(
             "export_dir": export_dir,
             "export_scale": export_scale,
             "check_assembly": check_assembly,
-            "timeout": cfg.exec_timeout_secs,
+            "timeout": wall,
         }
     ).encode()
     req = urllib.request.Request(
@@ -266,7 +274,7 @@ def _run_remote(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=cfg.exec_timeout_secs + 15) as resp:
+        with urllib.request.urlopen(req, timeout=wall + 15) as resp:
             data = json.loads(resp.read().decode())
     except Exception as exc:  # noqa: BLE001 - network/worker failure
         return ExecResult(ok=False, error=f"worker unreachable: {exc}")

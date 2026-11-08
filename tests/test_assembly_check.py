@@ -319,6 +319,13 @@ def test_a_tab_s_worth_of_shared_volume_is_blamed_on_the_socket():
     assert "widen" not in why
 
 
+def test_a_tab_in_solid_material_sends_a_seam_back_to_split_and_join():
+    # A seam the helper makes cannot hold a tab in solid material, so the fix for
+    # a seam is to make it with the helper rather than to cut its socket by hand.
+    why = evaluate_assembly(_m(overlaps=[[0, 1, 1000.0]]), SPEC).failures[0]
+    assert "re-make a seam with split_and_join along the axis its part goes in on" in why
+
+
 def test_a_sliver_of_shared_volume_is_blamed_on_a_socket_that_does_not_clear_its_tab():
     # A socket cut to the tab's exact size only touches it, and touching measures
     # zero: a sliver is a socket narrower than the tab or off its place, and the
@@ -367,9 +374,9 @@ def test_a_split_into_two_independent_groups_is_caught():
 
 
 def test_a_joint_sitting_at_exactly_the_clearance_is_mated():
-    # The prompt tells the model to leave the clearance on every mating face, so a
-    # correct joint's closest approach *is* the clearance. A threshold at or below
-    # it would refuse every correct split.
+    # The prompt tells the model to leave the clearance on every fit but a seam the
+    # split helper makes, so a correct joint's closest approach can be the
+    # clearance itself. A threshold at or below it would refuse every such split.
     report = evaluate_assembly(_m(gaps=[[0, 1, SPEC.clearance_mm]]), SPEC)
     assert report.ok
 

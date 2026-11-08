@@ -62,12 +62,12 @@ from cadless.printer_profile import AssemblySpec, BuildVolume
 #: How far apart two parts may sit and still count as mating, as a multiple of the
 #: joint clearance.
 #:
-#: A correct joint's closest approach *is* the clearance: the model is told to cut
-#: the socket that much larger than the tab it receives, so the two faces never
-#: touch. A threshold at or below the clearance would therefore refuse every
-#: correct split. The multiple leaves room for a chamfer or fillet on the mating
-#: faces, where the nearest points of two joined parts sit further apart than the
-#: nominal gap.
+#: A correct joint's closest approach can be the clearance itself: every fit but a
+#: seam the split helper makes cuts its socket that much larger than the tab it
+#: receives, so those faces never touch. A threshold at or below the clearance
+#: would therefore refuse every such split. The multiple leaves room for a chamfer
+#: or fillet on the mating faces, where the nearest points of two joined parts sit
+#: further apart than the nominal gap.
 MATING_TOLERANCE_FACTOR = 4.0
 
 #: The floor under that tolerance, in millimetres, so a printer configured with no
@@ -90,10 +90,14 @@ OVERLAP_EPSILON_MM3 = 1e-9
 #: volume above the epsilon refuses.
 TAB_IN_SOLID_MM3 = 50.0
 
-#: What either sentence ends with: the one construction that clears a tab.
+#: What either sentence ends with: how a tab is cleared -- by the split helper for
+#: a seam, since a seam it makes cannot hold a tab in solid material, and by hand
+#: for any other fit.
 _SOCKET_FIX = (
-    "subtract the socket, the tab's shape enlarged by the clearance on every side, "
-    "from the receiving part at the place the tab occupies when assembled"
+    "re-make a seam with split_and_join along the axis its part goes in on, which "
+    "cuts the socket itself; for any other fit, subtract the socket, the tab's shape "
+    "enlarged by the clearance on every side, from the receiving part at the place "
+    "the tab occupies when assembled"
 )
 
 #: How far a side of the whole build may stand from the size the request gave,
@@ -917,11 +921,11 @@ def _size1(value: float) -> str:
 
 #: The six axis directions every part is tried along first.
 #:
-#: The model is asked to sweep each joint profile along an axis lying in the build
-#: plane, so a correct interlock comes apart along one of these. They are not
-#: relied on alone -- :func:`_candidate_directions` adds directions derived from
-#: the geometry, because a candidate that turns out to be blocked costs kernel
-#: work while a missing one costs a false refusal.
+#: Seam joints are made along an axis -- the split helper takes nothing else -- so
+#: a correct interlock comes apart along one of these. They are not relied on
+#: alone -- :func:`_candidate_directions` adds directions derived from the
+#: geometry, because a candidate that turns out to be blocked costs kernel work
+#: while a missing one costs a false refusal.
 _AXES = (
     (1.0, 0.0, 0.0),
     (-1.0, 0.0, 0.0),

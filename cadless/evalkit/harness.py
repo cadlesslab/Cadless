@@ -157,7 +157,9 @@ def default_run(code: str) -> RunResult:
         compiled = compile(code, "<eval>", "exec")
     except SyntaxError as exc:  # pragma: no cover - exercised via tests
         return RunResult(ok=False, error=f"compile: {exc}")
-    ns: dict = {}
+    from cadless.joinery import script_namespace  # noqa: PLC0415 - build123d only where code runs
+
+    ns = script_namespace()
     try:
         exec(compiled, ns)  # noqa: S102 - trusted in tests; sandboxed in prod
     except Exception as exc:

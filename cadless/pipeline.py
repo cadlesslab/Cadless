@@ -489,12 +489,13 @@ class Pipeline:
             # Always asked: the worker measures only a build of several parts,
             # so a one-part build pays nothing, and whether the turn asked for an
             # assembly decides how the measurement is judged, not whether it is
-            # taken.
+            # taken -- and which clock the build runs on.
             res = run_code(
                 code,
                 export_dir=export_dir,
                 export_scale=export_scale,
                 check_assembly=True,
+                assembly_turn=assembly is not None,
                 config=self._cfg,
             )
             if res.ok:
@@ -1153,7 +1154,9 @@ def rebuild(
     ``describe=False`` writes the motion alone, for a caller with nowhere to show
     a guide: its drawings are rendered on the CPU and would be made for nobody.
     """
-    res = run_code(code, export_dir=export_dir, check_assembly=True)
+    res = run_code(
+        code, export_dir=export_dir, check_assembly=True, assembly_turn=assembly is not None
+    )
     if not res.ok:
         return Rebuild(res, False, res.error, None, None)
     verdict, report = _judge_parts(res, assembly, 1)

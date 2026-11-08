@@ -74,6 +74,24 @@ def test_wall_clock_timeout():
     assert res.timed_out
 
 
+def test_a_build_on_an_assembly_turn_runs_on_the_assembly_clock():
+    cfg = Settings(exec_timeout_secs=1.0, assembly_exec_timeout_secs=2.0)
+    res = run_code(
+        "while True:\n    pass\nresult = 1", check_assembly=True, assembly_turn=True, config=cfg
+    )
+    assert res.timed_out
+    assert "exceeded 2s" in res.error
+
+
+def test_a_measured_build_on_any_other_turn_keeps_the_plain_clock():
+    # Every pipeline build is measured, so the measurement cannot be what earns
+    # the longer clock: only a turn that asked for an assembly does.
+    cfg = Settings(exec_timeout_secs=1.0, assembly_exec_timeout_secs=2.0)
+    res = run_code("while True:\n    pass\nresult = 1", check_assembly=True, config=cfg)
+    assert res.timed_out
+    assert "exceeded 1s" in res.error
+
+
 def test_export_writes_artifacts(tmp_path):
     res = run_code(
         "from build123d import *\nresult = Box(8, 8, 8)",
@@ -705,6 +723,18 @@ def _child(tmp_path, capsys, code: str, *args: str) -> dict:
     _worker_child.main(["prog", str(code_file), *args])
     line = [x for x in capsys.readouterr().out.splitlines() if x.startswith(SENTINEL)][-1]
     return json.loads(line[len(SENTINEL) :])
+
+
+def test_a_script_calls_split_and_join_without_importing_it(tmp_path, capsys):
+    code = (
+        "from build123d import *\n"
+        "a, b = split_and_join(Box(300, 100, 10), Plane.YZ, Axis.Z, 0.2)\n"
+        "result = Compound(children=[a, b])\n"
+    )
+
+    payload = _child(tmp_path, capsys, code)
+
+    assert (payload["ok"], payload["part_count"]) == (True, 2)
 
 
 @pytest.mark.parametrize("scale", ["nan", "inf", "0", "-1"])

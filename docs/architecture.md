@@ -30,7 +30,12 @@ port, bound to loopback.
 
 1. The interactive `Pipeline` MUST pass freshly generated or refined model code
    through `cadless.validation.validate_code` before `run_code`. The validation
-   tests enforce that path's import, name, and dunder-access policy.
+   tests enforce that path's import, name, and dunder-access policy. Engine code a
+   script may call is handed to it in the namespace it runs in
+   (`cadless/joinery.py`'s `script_namespace`), never imported, so the import
+   allow-list stays build123d, `math` and `copy`. Whatever that module holds,
+   generated code can reach, so handing a script another name is a security
+   decision like widening the allow-list.
 2. The public stack MUST remain loopback-only unless an authenticated settings
    boundary and stronger hostile-code isolation are added. The current settings
    endpoint stores provider credentials without authentication, and containers
@@ -199,7 +204,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    What the assembly framing says differs by round, and deliberately: a fresh
    run is entitled to
    decide the split, so it carries the whole brief — how few parts, along which
-   axes, where the seams fall, how they interlock; an edit is not, because the
+   axes, where the seams fall, each made with `split_and_join` so the joint is
+   built from the cut rather than written by the model; an edit is not, because the
    split already exists and asking for it again argues with that same message's
    instruction to edit in place rather than redesign, so an edit carries the
    constraints alone: the bed each part fits along every axis at once, the
@@ -344,6 +350,13 @@ catalog content read-only.
   that the API serves. The catalog mount is separate and read-only at runtime.
 - `CADLESS_WORKER_URL` changes the process boundary, not the pipeline contract.
   An empty value intentionally selects the subprocess path used by tests.
+- A build on a turn that asked for an assembly runs on its own clock,
+  `assembly_exec_timeout_secs`, and the CPU limit follows it; every other build
+  keeps `exec_timeout_secs`. The pipeline measures every build, so it is the
+  turn's ask that earns the longer clock, never the measurement: the order
+  search takes a share of what the build leaves of the clock, and a split into
+  many parts with running fits needs more than the plain clock leaves it. Like
+  the plain clock it is operator-only: the settings endpoint refuses it.
 - SSE must remain unbuffered through the proxy or progress appears only after a
   generation has finished.
 - Catalog items contain executable source. Third-party catalog content crosses

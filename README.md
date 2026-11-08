@@ -163,6 +163,7 @@ Every variable is optional. See `.env.example` for the full list.
 | `CADLESS_CATALOG_ROOT` | `./catalog` | Where catalog items live |
 | `CADLESS_DATA_DIR` | `/data` | Database and saved settings |
 | `CADLESS_EXEC_TIMEOUT_SECS` | `30` | Per-execution wall-clock limit |
+| `CADLESS_ASSEMBLY_EXEC_TIMEOUT_SECS` | `90` | The same limit for a build on a turn that asked for an assembly, whose order search needs the time |
 | `CADLESS_ASSEMBLY_ENABLED` | `false` | Lets a turn ask for a part split into interlocking pieces that fit the printer's bed (the chat's **Assembly** toggle) |
 | `CADLESS_PROXY_PORT` | `8800` | Published port |
 

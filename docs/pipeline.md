@@ -35,7 +35,7 @@ Pipeline.run(intent, export_dir=None, on_progress=None, prior_code=None,
 | Stage | Owner | What happens |
 |---|---|---|
 | interpret | `pipeline.py` | Pre-loop intent processing; emitted as attempt 0. |
-| generate / refine | `prompts.py` `CodeGenerator.generate` / `.refine` | Prompt assembly (system prompt + few-shot from `few_shot.py` + optional retrieval `grounding`) and the provider call; `extract_code` pulls the fenced code out of the reply. |
+| generate / refine | `prompts.py` `CodeGenerator.generate` / `.refine` | Prompt assembly (system prompt + few-shot from `few_shot.py` + optional retrieval `grounding`) and the provider call; `extract_code` pulls the fenced code out of the reply. On a turn that asked for an assembly, every seam is to be made with `split_and_join` (`joinery.py`), which each script is handed in its namespace: the model picks where a seam falls and the axis its part goes in along, and the helper builds the joint from the cut — dovetails or pegs, with the printer's clearance — or raises saying what to change. |
 | validate | `validation.py` `validate_code` | The AST static gate — sandbox layer 1 ([ADR-0003](./adr/0003-three-layer-sandbox.md)). No execution happens for code that fails here. |
 | build + mesh | `worker.py` `run_code` | Sandboxed execution and artifact export. Meshing happens inside the worker alongside the build; `mesh` is reported ok once artifacts exist. |
 | critique *(optional)* | `vlm_critique.py` | Renders the build — every part it exported, drawn together in the positions they hold in the assembled model, so a split is reviewed as the thing it is rather than as its first piece — from several named views at one shared scale, and asks a vision model, through the `ChatProvider` seam, whether the shape matches the intent; a mismatch forces a repair. Every attempt is reviewed, the last one included — with no budget left the finding is reported and the part is delivered with it attached, so "ran out of budget" is distinguishable from "was never checked". On by default, but only where a critic was injected: a pipeline built without one never critiques, whatever the setting says. The best-of-N fan-out opts out — it has no progress sink, so a candidate's captures would be thrown away as they were produced while the cost multiplied by the candidate count — so the fan-out's own attempts are not reviewed here. A forge turn gets that signal from the judge's vision rung instead — handed this pipeline's reviewer and gated on the same setting — whenever more than one candidate survives the hard filter, a race settled before then having no tie to break. So an installation with the review switched off pays nothing on the path that runs N candidates, and one with it on pays for a review of the field rather than of each attempt. A critique that cannot be taken is reported and skipped, never fatal to a build that already succeeded. |
@@ -119,7 +119,14 @@ subprocess.run([sys.executable, "-m", "cadless._worker_child", ...],
 ```
 
 - `_limit_resources` sets POSIX `RLIMIT_CPU`; the wall-clock timeout is
-  `settings.exec_timeout_secs` (default 30 s) and also drives the CPU limit.
+  `settings.exec_timeout_secs` (default 30 s) and also drives the CPU limit. A
+  build on a turn that asked for an assembly (`run_code(assembly_turn=True)`,
+  which the pipeline sets whenever it builds against an assembly spec) runs on
+  `settings.assembly_exec_timeout_secs` instead: its order search gets a share of
+  what the build leaves of the clock, and a split into many parts needs more than
+  the plain clock leaves it. The measurement flag does not choose the clock —
+  the pipeline measures every build. On the remote path the api sends the clock
+  it chose, and the worker runs on it.
 - `RLIMIT_AS` is **deliberately not set**: OCCT reserves a very large virtual
   address range up front, so an address-space cap causes thrashing rather
   than safety. Real memory limits come from the container cgroup
@@ -208,7 +215,11 @@ a duplicate-tool-call debounce and a same-stage escalation counter
 (`agent_same_stage_escalation=2`) that nudges the model toward
 `ask_clarification` when it keeps failing at the same stage. A turn a cap stops
 ends with a line naming the cap, in the transcript and in the stream, as a reply
-the provider cut at its output limit does.
+the provider cut at its output limit does. The time caps are read between steps,
+not during one, and one step can be a whole generation — every repair attempt,
+each on the build clock (the assembly clock on an assembly turn), and the model
+calls between them — so a turn that starts one just inside its budget can
+overrun it by that whole run.
 
 **Direct generation** — `POST /projects/{id}/generate` +
 `GET /projects/{id}/generate/stream` (`backend/routers/generation.py`) runs
