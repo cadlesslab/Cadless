@@ -229,7 +229,8 @@ def test_the_brief_refuses_a_seam_made_any_other_way():
 
 def test_the_brief_says_what_to_change_when_the_helper_refuses():
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "If split_and_join raises, its message says what to change" in brief
+    # Only its own refusal: a failure inside the kernel says nothing of the kind.
+    assert "If split_and_join refuses with a JoineryError, its message says what to change" in brief
 
 
 def test_the_brief_puts_each_seam_where_each_side_stays_one_piece():

@@ -216,8 +216,10 @@ a duplicate-tool-call debounce and a same-stage escalation counter
 `ask_clarification` when it keeps failing at the same stage. A turn a cap stops
 ends with a line naming the cap, in the transcript and in the stream, as a reply
 the provider cut at its output limit does. The time caps are read between steps,
-not during one, so a turn that starts a build just inside its budget overruns it
-by up to that build's clock — on an assembly turn, the assembly clock.
+not during one, and one step can be a whole generation — every repair attempt,
+each on the build clock (the assembly clock on an assembly turn), and the model
+calls between them — so a turn that starts one just inside its budget can
+overrun it by that whole run.
 
 **Direct generation** — `POST /projects/{id}/generate` +
 `GET /projects/{id}/generate/stream` (`backend/routers/generation.py`) runs
