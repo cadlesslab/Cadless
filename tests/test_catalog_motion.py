@@ -252,6 +252,22 @@ def test_a_part_a_tessellation_away_from_the_baked_one_is_still_that_part(store)
     assert len(_motions(store, version)) == 1
 
 
+def test_an_item_that_cannot_be_read_costs_only_itself(store, monkeypatch):
+    _, [first] = _seed(store, "first")
+    _, [second] = _seed(store, "second")
+    real = catalog_motion.authoring_units
+
+    async def units(build, project):
+        if project.catalog_item_id == "first":
+            raise OSError("the ledger went away")
+        return await real(build, project)
+
+    monkeypatch.setattr(catalog_motion, "authoring_units", units)
+
+    assert _fill(store, run=_scripted()) == 1
+    assert (len(_motions(store, first)), len(_motions(store, second))) == (0, 1)
+
+
 def test_one_version_that_cannot_be_built_costs_only_itself(store):
     other = TWO_PARTS + "# the next step\n"
     _, [first, second] = _seed(store, versions=((TWO_PARTS, BOXES, False), (other, BOXES, False)))
@@ -423,6 +439,46 @@ def test_startup_answers_while_the_fill_is_still_building(store, monkeypatch):
         release.set()
 
     assert len(_motions(store, version)) == 1
+
+
+def test_the_app_files_under_its_import_gate(store, monkeypatch):
+    # Held by a reload or a delete of the item while it writes; a fill that took
+    # some other lock would write beside them.
+    _, [version] = _seed(store)
+    built = threading.Event()
+    scripted = _scripted()
+
+    def run(code, **kwargs):
+        done = scripted(code, **kwargs)
+        built.set()
+        return done
+
+    monkeypatch.setattr(catalog_motion, "rebuild", run)
+    app = create_app(store=store)
+
+    with TestClient(app) as client:
+        client.portal.call(app.state.import_gate.acquire)
+        try:
+            assert built.wait(timeout=30)
+            client.portal.call(asyncio.sleep, 0.3)
+            assert _motions(store, version) == []
+        finally:
+            client.portal.call(app.state.import_gate.release)
+        client.portal.call(app.state.catalog_motions.idle)
+
+    assert len(_motions(store, version)) == 1
+
+
+def test_a_pass_that_fails_leaves_the_app_serving(store, monkeypatch):
+    async def broken(*args, **kwargs):
+        raise RuntimeError("the catalog went away")
+
+    monkeypatch.setattr(catalog_motion, "fill_motions", broken)
+    app = create_app(store=store)
+
+    with TestClient(app) as client:
+        client.portal.call(app.state.catalog_motions.idle)
+        assert client.get("/health").status_code == 200
 
 
 def test_a_switch_value_it_does_not_know_stops_the_process_starting():
