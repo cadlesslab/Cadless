@@ -40,7 +40,7 @@ from pathlib import Path
 from backend import artifact_io
 from backend.catalog_state import ledger_for
 from cadless.catalog.domains import find_domain
-from cadless.catalog.importer import imported_item_dir
+from cadless.catalog.importer import imported_catalog_root, scan_root
 from cadless.catalog.ledger import Ledger, LedgerUnreadable
 from cadless.pipeline import Rebuild, rebuild
 from cadless.scoped_store import AnyStore, BuildStore, system_view
@@ -221,9 +221,18 @@ async def fill_motions(
             exc_info=True,
         )
         return 0
+    received = await asyncio.to_thread(scan_root, imported_catalog_root())
+    if not received.complete:
+        # Received items are told from shipped ones by this walk, and a walk that
+        # stepped over something cannot say an item is not among them.
+        logger.warning(
+            "catalog motion: the received catalog could not be read in full, so a "
+            "shipped item cannot be told from a received one; nothing built"
+        )
+        return 0
     filed = 0
     for project_id, item_id in sorted(catalog.items()):
-        if await asyncio.to_thread(imported_item_dir, item_id) is not None:
+        if received.claims(item_id):
             continue
         entry = entries.get(item_id)
         key = entry.get("domain") if isinstance(entry, dict) else None

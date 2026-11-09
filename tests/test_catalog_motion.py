@@ -22,6 +22,7 @@ from backend.app import create_app
 from backend.catalog_motion import CatalogMotions, fill_motions
 from backend.catalog_state import ledger_for
 from cadless.assembly_guide import MOTION_FILE
+from cadless.catalog.importer import RootScan
 from cadless.config import Settings, settings
 from cadless.pipeline import Rebuild
 from cadless.scoped_store import system_view
@@ -231,6 +232,21 @@ def test_an_item_whose_units_are_unknown_is_not_built(store, caplog):
     assert calls == []
     [said] = [r.getMessage() for r in caplog.records if "names no units" in r.getMessage()]
     assert "\n" not in said
+
+
+def test_a_received_catalog_that_cannot_be_read_in_full_builds_nothing(store, monkeypatch):
+    # Received and shipped are told apart by walking the received items; a walk
+    # that stepped over something cannot say an item is not among them.
+    _seed(store)
+    monkeypatch.setattr(
+        catalog_motion,
+        "scan_root",
+        lambda root: RootScan(ids=frozenset(), complete=False, present=True),
+    )
+    calls: list = []
+
+    assert _fill(store, run=_scripted(calls=calls)) == 0
+    assert calls == []
 
 
 def test_a_ledger_that_cannot_be_read_builds_nothing(store):
