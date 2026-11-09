@@ -66,14 +66,15 @@ Everything under `artifacts/` is generated — never hand-edit it. So is
 `manifest.json`'s `geometry`, `artifacts` and `parts` data, which the authoring
 pipeline measures and fills in.
 
-No item carries the motion the viewer plays an assembly from. For a step of
-several parts — two or more `glb` files — in an item under the catalog root, the
-app builds the step's script once in the background after startup, and files the
-motion that build measures on the version; it files none where the build orders
-another number of parts or measures another `bbox` than the step records, so a
-step's `geometry` has to be what its script builds. A received item is not
-built: its steps are code nobody here asked to run. `CADLESS_CATALOG_MOTIONS=off`
-turns this off.
+The motion the viewer plays an assembly from is not baked; the app measures it.
+For a step of several parts — two or more `glb` files, and an `stl` file for each
+of them — in an item under the catalog root, the app builds the step's script in
+the background at every start until the version has a motion, and files the
+motion that build measures. It files none where the build orders another number
+of parts, or where a part it exports lies elsewhere than the step's `stl` file of
+that number, so the step's files have to be what its script builds, numbered as
+it builds them. A received item is not built: its steps are code nobody here
+asked to run. `CADLESS_CATALOG_MOTIONS=off` turns this off.
 
 A build that publishes produces this same shape from a project without running
 any of that: it reads the ladder out of the store, copies the exports each step

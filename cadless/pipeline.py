@@ -1141,7 +1141,6 @@ def rebuild(
     assembly: AssemblySpec | None = None,
     describe: bool = True,
     export_scale: float = 1.0,
-    assembly_clock: bool = False,
 ) -> Rebuild:
     """Run ``code`` once and judge its parts as :meth:`Pipeline.run` judges a build.
 
@@ -1158,17 +1157,14 @@ def rebuild(
 
     ``export_scale`` is the authoring-units-to-millimetre factor, as
     :meth:`Pipeline.run` takes it, for code written in another unit than the
-    millimetre. ``assembly_clock`` runs the build on the assembly clock with no
-    printer to hold the parts to: for a caller that builds only to have the parts
-    ordered, which the plain clock can cut short, and whose parts were never sized
-    for anybody's bed.
+    millimetre.
     """
     res = run_code(
         code,
         export_dir=export_dir,
         export_scale=export_scale,
         check_assembly=True,
-        assembly_turn=assembly is not None or assembly_clock,
+        assembly_turn=assembly is not None,
     )
     if not res.ok:
         return Rebuild(res, False, res.error, None, None)

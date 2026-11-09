@@ -92,18 +92,6 @@ def test_a_rebuild_of_an_assembly_runs_on_the_assembly_clock(monkeypatch):
     assert captured["assembly_turn"] is True
 
 
-def test_a_rebuild_asked_for_the_assembly_clock_runs_on_it_held_to_no_printer(monkeypatch):
-    # What a catalog version's motion needs: the order search is the point of the
-    # build, and its parts were never sized for anybody's bed.
-    captured: dict = {}
-    _stub_run_code(monkeypatch, _built(_sound()), captured)
-
-    rb = rebuild("code", assembly_clock=True)
-
-    assert captured["assembly_turn"] is True
-    assert rb.assembly["checks"] == ["overlap"]
-
-
 def test_a_rebuild_exports_at_the_scale_it_is_given(monkeypatch):
     captured: dict = {}
     _stub_run_code(monkeypatch, _built(), captured)

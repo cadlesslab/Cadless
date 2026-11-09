@@ -25,14 +25,12 @@ Pipeline.run(intent, export_dir=None, on_progress=None, prior_code=None,
   `Pipeline`; `Pipeline.run_candidates(intent, n, ...)` runs N fresh
   generations in parallel for best-of-N
   ([ADR-0005](./adr/0005-best-of-n-judge.md)).
-- `rebuild(code, export_dir=None, assembly=None, describe=True, export_scale=1.0,
-  assembly_clock=False) -> Rebuild` runs code that is not the model's to repair —
-  a parameter edit — once, and judges its parts as the loop judges its last
-  attempt, with no model call: the guide it writes names unnamed parts by
-  number. `export_scale` is the authoring-units-to-millimetre factor, as `run`
-  takes it; `assembly_clock` runs the build on the assembly clock with no printer
-  to hold the parts to, for a caller that builds only to have the parts ordered —
-  the background pass that gives a catalog version of several parts its motion.
+- `rebuild(code, *, export_dir=None, assembly=None, describe=True,
+  export_scale=1.0) -> Rebuild` runs code that is not the model's to repair — a
+  parameter edit, or a catalog version built for its motion — once, and judges
+  its parts as the loop judges its last attempt, with no model call: the guide it
+  writes names unnamed parts by number. `export_scale` is the
+  authoring-units-to-millimetre factor, as `run` takes it.
 
 ## Stages and owners
 

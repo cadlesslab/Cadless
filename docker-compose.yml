@@ -64,6 +64,8 @@ services:
       # A default rather than a pass-through: an empty value would fail the
       # api's number parsing and stop it starting.
       CADLESS_EXEC_TIMEOUT_SECS: ${CADLESS_EXEC_TIMEOUT_SECS:-30}
+      # Empty is read as unset, so the default holds unless `.env` says `off`.
+      CADLESS_CATALOG_MOTIONS: ${CADLESS_CATALOG_MOTIONS:-}
       # Passed through only when set: with no value here, a key left unset
       # stays unset in the container rather than arriving as an empty string.
       ANTHROPIC_API_KEY:

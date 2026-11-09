@@ -33,6 +33,20 @@ SWEEP_MODES = ("report", "off")
 CATALOG_MOTION_MODES = ("fill", "off")
 
 
+def _one_of(value: str, modes: tuple[str, ...], variable: str, advice: str = "") -> str:
+    """``value`` as one of ``modes``: trimmed and folded, empty as the first, else refused.
+
+    Empty is unset, which a compose file spells `${VAR:-}`; nobody writes an empty
+    string to mean anything else.
+    """
+    cleaned = (value or "").strip().lower()
+    if not cleaned:
+        return modes[0]
+    if cleaned not in modes:
+        raise ValueError(f"{variable}={value!r} is not one of {', '.join(modes)}.{advice}")
+    return cleaned
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CADLESS_", env_file=".env", extra="ignore")
 
@@ -55,32 +69,17 @@ class Settings(BaseSettings):
         operator would believe something that is not so about a pass that walks
         their whole artifact tree.
         """
-        cleaned = (value or "").strip().lower()
-        if not cleaned:
-            return SWEEP_MODES[0]  # unset, which a compose file spells `${VAR:-}`
-        if cleaned not in SWEEP_MODES:
-            raise ValueError(
-                f"CADLESS_SWEEP_ON_START={value!r} is not one of {', '.join(SWEEP_MODES)}."
-            )
-        return cleaned
+        return _one_of(value, SWEEP_MODES, "CADLESS_SWEEP_ON_START")
 
-    # Whether catalog versions of several parts are given their motion. Operator-
-    # only, like the sweep above: in none of the settings endpoint's field maps.
+    # Whether catalog versions of several parts are given their motion.
+    # Operator-only, like the sweep above.
     catalog_motions: str = "fill"
 
     @field_validator("catalog_motions")
     @classmethod
     def _known_catalog_motion_mode(cls, value: str) -> str:
         """Refuse a value this does not understand, at startup, as the sweep's does."""
-        cleaned = (value or "").strip().lower()
-        if not cleaned:
-            return CATALOG_MOTION_MODES[0]
-        if cleaned not in CATALOG_MOTION_MODES:
-            raise ValueError(
-                f"CADLESS_CATALOG_MOTIONS={value!r} is not one of "
-                f"{', '.join(CATALOG_MOTION_MODES)}."
-            )
-        return cleaned
+        return _one_of(value, CATALOG_MOTION_MODES, "CADLESS_CATALOG_MOTIONS")
 
     @property
     def db_path(self) -> Path:
@@ -249,18 +248,13 @@ class Settings(BaseSettings):
         is at import -- a bad value stops the process starting rather than
         surfacing on a request, and `backend/app.py` already refuses to start
         on a security gate it cannot honour.
+
+        Empty is genuinely unset, and different from `false`: nobody writes an
+        empty string to mean off.
         """
-        cleaned = (value or "").strip().lower()
-        if not cleaned:
-            # Genuinely unset, which a compose file spells `${CADLESS_PRINTING:-}`.
-            # Different from `false`: nobody writes an empty string to mean off.
-            return PRINTING_MODES[0]
-        if cleaned not in PRINTING_MODES:
-            raise ValueError(
-                f"CADLESS_PRINTING={value!r} is not one of {', '.join(PRINTING_MODES)}. "
-                "To switch printing off, write `off`."
-            )
-        return cleaned
+        return _one_of(
+            value, PRINTING_MODES, "CADLESS_PRINTING", " To switch printing off, write `off`."
+        )
 
     # Repair loop
     repair_max_attempts: int = 3

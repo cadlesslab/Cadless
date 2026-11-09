@@ -68,6 +68,12 @@ def _copy_over(src: Path, target: Path) -> None:
     os.replace(staged, target)
 
 
+def _motion_of(src: Path) -> Path | None:
+    """The motion a build left in ``src``, or ``None`` when it left none."""
+    motion = src / MOTION_FILE
+    return motion if motion.is_file() else None
+
+
 def _copy_in(src: Path, dest: Path) -> list[tuple[str, Path]]:
     """Copy every file of the build into ``dest``; return ``(kind, target)`` in order.
 
@@ -94,8 +100,8 @@ def _copy_in(src: Path, dest: Path) -> list[tuple[str, Path]]:
     # The motion through the same funnel too, as the one file of its kind: part
     # 0. A build that left none registers none, rather than a row for a file
     # that is not there.
-    motion = src / MOTION_FILE
-    if motion.is_file():
+    motion = _motion_of(src)
+    if motion is not None:
         take(ASSEMBLY_KIND, motion)
     # The whole build as one file of each, on the same terms as the motion.
     for kind, name in ASSEMBLY_FILES.items():
@@ -115,9 +121,9 @@ async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Pat
     The copying runs on a thread, off the event loop; the rows are written after
     it, one at a time and in its order, because that order is the numbering.
 
-    ``store`` is annotated rather than left bare because this is the one place
-    every artifact write now passes through, and with nothing said a later caller
-    would have nothing to read. It is ``AnyStore`` rather than the scoped view
+    ``store`` is annotated rather than left bare because this module is the one
+    place every artifact write now passes through, and with nothing said a later
+    caller would have nothing to read. It is ``AnyStore`` rather than the scoped view
     alone because that is what the function accepts and what its own test hands
     it; what keeps a *route* on the scoped view is the import check in
     ``tests/test_store_surface.py``, which covers this module by name.
@@ -130,8 +136,8 @@ async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Pat
 
 
 def _copy_motion(src: Path, dest: Path) -> Path | None:
-    motion = src / MOTION_FILE
-    if not motion.is_file():
+    motion = _motion_of(src)
+    if motion is None:
         return None
     target = dest / motion.name
     _copy_over(motion, target)
