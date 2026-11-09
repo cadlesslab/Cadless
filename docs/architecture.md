@@ -331,12 +331,13 @@ candidate judging, the identity seam and the image decisions are recorded under
    build nobody asked to split — and files the motion that build writes, as the
    installation, the way the loader writes catalog rows. It files none where the
    build orders another number of parts than the version draws, or where a part
-   it exported lies elsewhere than the baked part of that number: the motion
-   moves the version's own files by number. Only items the deployment ships are
-   built; a received package's code is never run without somebody asking, since
-   it arrives through a route that asks for no sign-in. One build runs at a time,
-   startup does not wait for it, the motion is filed under the import gate, and
-   `CADLESS_CATALOG_MOTIONS=off` turns it off.
+   it exported lies elsewhere than the baked part of that number, compared in the
+   API process through the thumbnail's first-party mesh reader: the motion moves
+   the version's own files by number. Only items the deployment ships are built;
+   a received package's code is never run without somebody asking, since it
+   arrives through a route open to any caller the deployment admits. One build
+   runs at a time, startup does not wait for it, the motion is filed under the
+   import gate, and `CADLESS_CATALOG_MOTIONS=off` turns it off.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount

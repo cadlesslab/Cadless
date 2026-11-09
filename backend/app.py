@@ -205,8 +205,8 @@ def create_app(store: Store | None = None) -> FastAPI:
     # per-process CPU rlimit does not stop N of them arriving at once.
     app.state.slice_gate = asyncio.Lock()
     # Shipped catalog versions of several parts are given the motion their viewer
-    # plays, a build at a time, after startup, each motion filed under the gate
-    # above.
+    # plays, a build at a time, after startup, each motion filed under the import
+    # gate.
     app.state.catalog_motions = CatalogMotions(store, gate=app.state.import_gate)
 
     app.add_middleware(

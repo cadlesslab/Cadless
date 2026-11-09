@@ -28,8 +28,9 @@ PRINTING_MODES = ("auto", "download", "off")
 SWEEP_MODES = ("report", "off")
 
 #: Whether the app gives a catalog version of several parts the motion its viewer
-#: plays, by building the version's step code once in the background. `off` is
-#: for a deployment that would rather not spend the worker on it.
+#: plays, by building the version's step code in the background at every start
+#: until it has one. `off` is for a deployment that would rather not spend the
+#: worker on it.
 CATALOG_MOTION_MODES = ("fill", "off")
 
 

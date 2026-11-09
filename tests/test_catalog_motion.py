@@ -111,10 +111,14 @@ def _seed(
     return seeded
 
 
-def _scripted(order=(1, 0), *, ok=True, ordered=True, trapped=False, boxes=BOXES, calls=None):
+def _scripted(
+    order=(1, 0), *, ok=True, ordered=True, trapped=False, note=None, boxes=BOXES, calls=None
+):
     """Stands in for ``rebuild``: exports the parts' meshes, and writes a motion where
     an accepted build of ``order`` would and none where a refused one would not -- a
-    refused verdict still carries the order its measurement found, as a real one does."""
+    refused verdict still carries the order its measurement found, as a real one does.
+    ``trapped`` and ``note`` are a search that found no order, saying why in the
+    measurement alone, as the parts checks leave it."""
 
     def run(code, *, export_dir=None, describe=True, export_scale=1.0):
         if calls is not None:
@@ -124,10 +128,13 @@ def _scripted(order=(1, 0), *, ok=True, ordered=True, trapped=False, boxes=BOXES
             return Rebuild(failed, False, failed.error, None, None)
         for i, (low, high) in enumerate(boxes):
             _stl(Path(export_dir) / f"model_p{i}.stl", low, high)
+        unordered = trapped or note is not None
         measured = AssemblyMeasurements(
-            order=None if trapped else list(order), trapped=[0, 1] if trapped else []
+            order=None if unordered else list(order),
+            trapped=[0, 1] if trapped else [],
+            unchecked=[note] if note is not None else [],
         )
-        if trapped:
+        if unordered:
             verdict = {"ok": True, "order": None, "failures": [], "unchecked": []}
         else:
             verdict = {
@@ -225,11 +232,20 @@ def test_a_version_with_no_part_meshes_is_not_built(store, caplog):
         (_scripted(ok=False), "its build failed: 'NameError: x'"),
         (_scripted(ordered=False), "could not be ordered: 'parts 0 and 1 share"),
         (_scripted(trapped=True), "could not be ordered: 'parts [0, 1] could not be freed"),
+        (_scripted(note="the order search ran out of time"), "'the order search ran out of time"),
         (_scripted(order=(2, 1, 0)), "ordered 3 parts where the version draws 2"),
         (_scripted(boxes=_moved(BOXES, 2.0)), "its part 1 spans"),
         (_scripted(boxes=BOXES[::-1]), "its part 0 spans"),
     ],
-    ids=["failed", "not ordered", "trapped", "another part count", "a part moved", "parts swapped"],
+    ids=[
+        "failed",
+        "not ordered",
+        "trapped",
+        "out of time",
+        "another part count",
+        "a part moved",
+        "parts swapped",
+    ],
 )
 def test_a_build_that_might_describe_another_model_files_nothing(store, caplog, build, said):
     # A motion is filed for good, and a version with none is drawn as it always
@@ -536,7 +552,7 @@ def _kit_package(tmp_path: Path) -> bytes:
 def test_a_received_kit_is_not_built_at_its_import_or_at_the_next_start(
     store, monkeypatch, tmp_path
 ):
-    # A package arrives through a route that asks for no sign-in; building its
+    # A package arrives through a route open to any caller the deployment admits; building its
     # steps by itself would run code nobody asked to run, as often as anyone
     # cared to send one.
     calls: list = []

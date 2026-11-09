@@ -10,9 +10,9 @@ judged; and the motion that build wrote is filed on the version.
 
 In the background and a build at a time: the app answers while it runs. Only
 items the deployment ships are built. A received item -- a package somebody
-sent, imported through a route that asks for no sign-in -- is left as it was:
-building it here would run code nobody asked to run, as often as anyone cared to
-send it.
+sent, imported through a route open to any caller the deployment admits, by
+default anyone -- is left as it was: building it here would run code nobody
+asked to run, as often as anyone cared to send it.
 
 A version is left as it was wherever the result might describe something other
 than what was baked -- the gate refuses its code, the build fails or its parts
@@ -159,8 +159,10 @@ async def _built(run: Callable[..., Rebuild], code: str, staging: Path, scale: f
     try:
         return await asyncio.shield(building)
     except asyncio.CancelledError:
-        with contextlib.suppress(Exception):
+        try:
             await building
+        except Exception as exc:  # noqa: BLE001 - its outcome is nobody's once cancelled
+            logger.debug("catalog motion: the build in hand ended with %r", exc)
         raise
 
 
