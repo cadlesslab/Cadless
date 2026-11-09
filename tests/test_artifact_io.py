@@ -16,7 +16,13 @@ from fastapi.testclient import TestClient
 
 import cadless.exporters
 from backend.app import create_app
-from backend.artifact_io import GUIDE_KIND, copy_and_register, exported_parts, guide_frames
+from backend.artifact_io import (
+    GUIDE_KIND,
+    copy_and_register,
+    exported_parts,
+    file_motion,
+    guide_frames,
+)
 from cadless.exporters import EXPORTERS
 from cadless.store import Store
 
@@ -207,3 +213,48 @@ def test_a_build_with_no_assembly_motion_registers_none(store, tmp_path):
     _, rows = _copy_in(store, src)
 
     assert [a for a in rows if a.kind == "assembly"] == []
+
+
+def _file_motion_beside_a_baked_part(store, src: Path) -> tuple[bool, list, Path]:
+    async def _run() -> tuple[bool, list, Path]:
+        project = await store.create_project("Kit")
+        version = await store.add_version(project.id, "a kit", "result=1", ok=True)
+        baked = Path(store.version_artifact_dir(version.id)) / "model_p0.glb"
+        baked.write_bytes(b"baked")
+        await store.add_artifact(version.id, "glb", str(baked))
+        filed = await file_motion(store, version.id, src)
+        rows = await store.list_artifacts(version.id)
+        return filed, rows, Path(store.version_artifact_dir(version.id))
+
+    return asyncio.run(_run())
+
+
+def test_a_motion_is_filed_alone_beside_what_the_version_already_holds(store, tmp_path):
+    """A catalog version arrives with its parts filed and no motion. The build
+    that measures it writes its own parts beside the motion, and filing those too
+    would give the version a second row for every part it already has."""
+    src = tmp_path / "staging"
+    src.mkdir()
+    _touch(src, "model_p0.glb", "model_p1.glb", "assembly.json")
+
+    filed, rows, directory = _file_motion_beside_a_baked_part(store, src)
+
+    assert filed is True
+    assert sorted((a.kind, a.part, Path(a.path).name) for a in rows) == [
+        ("assembly", 0, "assembly.json"),
+        ("glb", 0, "model_p0.glb"),
+    ]
+    assert (directory / "assembly.json").is_file()
+    assert (directory / "model_p0.glb").read_bytes() == b"baked"
+
+
+def test_a_build_that_left_no_motion_files_nothing(store, tmp_path):
+    src = tmp_path / "staging"
+    src.mkdir()
+    _touch(src, "model_p0.glb", "model_p1.glb")
+
+    filed, rows, directory = _file_motion_beside_a_baked_part(store, src)
+
+    assert filed is False
+    assert [a.kind for a in rows] == ["glb"]
+    assert not (directory / "assembly.json").exists()

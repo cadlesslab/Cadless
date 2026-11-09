@@ -113,3 +113,30 @@ async def copy_and_register(store: AnyStore, version_id: int, src_dir: str | Pat
     for kind, target in copied:
         await store.add_artifact(version_id, kind, str(target))
     return len(copied)
+
+
+def _copy_motion(src: Path, dest: Path) -> Path | None:
+    motion = src / MOTION_FILE
+    if not motion.is_file():
+        return None
+    target = dest / motion.name
+    shutil.copy(motion, target)
+    return target
+
+
+async def file_motion(store: AnyStore, version_id: int, src_dir: str | Path) -> bool:
+    """File the motion a build wrote, and nothing else it wrote; whether there was one.
+
+    For a version whose files are already filed: a catalog version arrives with
+    its parts baked and no motion, and the build that measures it writes its own
+    parts beside the motion. Filing those as well would give the version a second
+    row for every part it holds, numbered after the first. Here rather than at the
+    caller for the reason everything else is: this module is where the rows are
+    written.
+    """
+    dest = Path(store.version_artifact_dir(version_id))
+    target = await asyncio.to_thread(_copy_motion, Path(src_dir), dest)
+    if target is None:
+        return False
+    await store.add_artifact(version_id, ASSEMBLY_KIND, str(target))
+    return True

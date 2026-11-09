@@ -27,6 +27,11 @@ PRINTING_MODES = ("auto", "download", "off")
 #: decision, taken on what these reports turn out to say.
 SWEEP_MODES = ("report", "off")
 
+#: Whether the app gives a catalog version of several parts the motion its viewer
+#: plays, by building the version's step code once in the background. `off` is
+#: for a deployment that would rather not spend the worker on it.
+CATALOG_MOTION_MODES = ("fill", "off")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CADLESS_", env_file=".env", extra="ignore")
@@ -56,6 +61,24 @@ class Settings(BaseSettings):
         if cleaned not in SWEEP_MODES:
             raise ValueError(
                 f"CADLESS_SWEEP_ON_START={value!r} is not one of {', '.join(SWEEP_MODES)}."
+            )
+        return cleaned
+
+    # Whether catalog versions of several parts are given their motion. Operator-
+    # only, like the sweep above: in none of the settings endpoint's field maps.
+    catalog_motions: str = "fill"
+
+    @field_validator("catalog_motions")
+    @classmethod
+    def _known_catalog_motion_mode(cls, value: str) -> str:
+        """Refuse a value this does not understand, at startup, as the sweep's does."""
+        cleaned = (value or "").strip().lower()
+        if not cleaned:
+            return CATALOG_MOTION_MODES[0]
+        if cleaned not in CATALOG_MOTION_MODES:
+            raise ValueError(
+                f"CADLESS_CATALOG_MOTIONS={value!r} is not one of "
+                f"{', '.join(CATALOG_MOTION_MODES)}."
             )
         return cleaned
 

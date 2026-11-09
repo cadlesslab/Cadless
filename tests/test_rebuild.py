@@ -48,6 +48,7 @@ def _stub_run_code(monkeypatch, result: ExecResult, captured: dict | None = None
             captured.update(
                 code=code,
                 export_dir=export_dir,
+                export_scale=export_scale,
                 check_assembly=check_assembly,
                 assembly_turn=assembly_turn,
             )
@@ -76,6 +77,7 @@ def test_a_rebuild_asks_the_worker_to_measure_and_to_export_where_it_is_told(mon
     assert captured == {
         "code": "code",
         "export_dir": str(tmp_path),
+        "export_scale": 1.0,
         "check_assembly": True,
         "assembly_turn": False,
     }
@@ -88,6 +90,41 @@ def test_a_rebuild_of_an_assembly_runs_on_the_assembly_clock(monkeypatch):
     rebuild("code", assembly=SPEC)
 
     assert captured["assembly_turn"] is True
+
+
+def test_a_rebuild_asked_for_the_assembly_clock_runs_on_it_held_to_no_printer(monkeypatch):
+    # What a catalog version's motion needs: the order search is the point of the
+    # build, and its parts were never sized for anybody's bed.
+    captured: dict = {}
+    _stub_run_code(monkeypatch, _built(_sound()), captured)
+
+    rb = rebuild("code", assembly_clock=True)
+
+    assert captured["assembly_turn"] is True
+    assert rb.assembly["checks"] == ["overlap"]
+
+
+def test_a_rebuild_exports_at_the_scale_it_is_given(monkeypatch):
+    captured: dict = {}
+    _stub_run_code(monkeypatch, _built(), captured)
+
+    rebuild("code", export_scale=1000.0)
+
+    assert captured["export_scale"] == 1000.0
+
+
+def test_a_rebuild_judges_its_size_in_millimetres(monkeypatch):
+    # Authored in metres: 0.3 m is past a 210 mm bed, which the unscaled box
+    # would read as a third of a millimetre.
+    _stub_run_code(
+        monkeypatch,
+        ExecResult(ok=True, volume=0.001, bbox=(0.3, 0.25, 0.018), part_count=1, assembly=None),
+    )
+
+    rb = rebuild("code", assembly=SPEC, export_scale=1000.0)
+
+    assert rb.ok is False
+    assert "one part" in rb.assembly["failures"][0]
 
 
 def test_an_unasked_rebuild_whose_parts_share_volume_is_kept_with_its_verdict(monkeypatch):

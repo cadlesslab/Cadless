@@ -1140,6 +1140,8 @@ def rebuild(
     export_dir: str | None = None,
     assembly: AssemblySpec | None = None,
     describe: bool = True,
+    export_scale: float = 1.0,
+    assembly_clock: bool = False,
 ) -> Rebuild:
     """Run ``code`` once and judge its parts as :meth:`Pipeline.run` judges a build.
 
@@ -1153,13 +1155,24 @@ def rebuild(
 
     ``describe=False`` writes the motion alone, for a caller with nowhere to show
     a guide: its drawings are rendered on the CPU and would be made for nobody.
+
+    ``export_scale`` is the authoring-units-to-millimetre factor, as
+    :meth:`Pipeline.run` takes it, for code written in another unit than the
+    millimetre. ``assembly_clock`` runs the build on the assembly clock with no
+    printer to hold the parts to: for a caller that builds only to have the parts
+    ordered, which the plain clock can cut short, and whose parts were never sized
+    for anybody's bed.
     """
     res = run_code(
-        code, export_dir=export_dir, check_assembly=True, assembly_turn=assembly is not None
+        code,
+        export_dir=export_dir,
+        export_scale=export_scale,
+        check_assembly=True,
+        assembly_turn=assembly is not None or assembly_clock,
     )
     if not res.ok:
         return Rebuild(res, False, res.error, None, None)
-    verdict, report = _judge_parts(res, assembly, 1)
+    verdict, report = _judge_parts(res, assembly, 1, export_scale)
     signal = report.repair_signal() if report is not None else None
     if signal is not None and assembly is not None:
         # Swept rather than left: the export directory is shared by a turn's builds,

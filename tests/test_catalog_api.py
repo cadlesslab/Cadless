@@ -37,6 +37,10 @@ def _own_catalog_roots(tmp_path, monkeypatch):
     # the first.
     monkeypatch.setattr(settings, "catalog_root", tmp_path / "catalog")
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    # Some of these items have several parts and stand-in step code, which the
+    # app would otherwise build in the background on every start to give them a
+    # motion; what that does is tested on its own.
+    monkeypatch.setattr(settings, "catalog_motions", "off")
 
 
 def _write_house(catalog_dir: Path, house_id: str, domain: str, name: str, **meta) -> Path:
