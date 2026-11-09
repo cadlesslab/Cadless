@@ -248,6 +248,51 @@ def test_a_motion_is_filed_alone_beside_what_the_version_already_holds(store, tm
     assert (directory / "model_p0.glb").read_bytes() == b"baked"
 
 
+def _planted(store, victim: Path, name: str) -> tuple[int, Path]:
+    """A version whose directory holds a link, at ``name``, to a file elsewhere."""
+
+    async def _run() -> tuple[int, Path]:
+        project = await store.create_project("P")
+        version = await store.add_version(project.id, "a kit", "result=1", ok=True)
+        directory = Path(store.version_artifact_dir(version.id))
+        (directory / name).symlink_to(victim)
+        return version.id, directory
+
+    return asyncio.run(_run())
+
+
+@pytest.mark.parametrize("name", ["model_p0.stl", "assembly.json"])
+def test_a_link_where_a_build_s_file_goes_is_replaced_not_written_through(store, tmp_path, name):
+    """A version's directory is named for its id, which anything sharing the volume
+    can predict; a link planted at a file's name there must not carry the copy to
+    wherever it points."""
+    victim = tmp_path / "victim.txt"
+    victim.write_text("kept")
+    src = tmp_path / "staging"
+    src.mkdir()
+    _touch(src, "model_p0.stl", "model_p1.stl", "assembly.json")
+    version, directory = _planted(store, victim, name)
+
+    asyncio.run(copy_and_register(store, version, src))
+
+    assert victim.read_text() == "kept"
+    assert not (directory / name).is_symlink()
+
+
+def test_a_link_where_the_motion_goes_is_replaced_not_written_through(store, tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("kept")
+    src = tmp_path / "staging"
+    src.mkdir()
+    _touch(src, "assembly.json")
+    version, directory = _planted(store, victim, "assembly.json")
+
+    assert asyncio.run(file_motion(store, version, src)) is True
+
+    assert victim.read_text() == "kept"
+    assert not (directory / "assembly.json").is_symlink()
+
+
 def test_a_build_that_left_no_motion_files_nothing(store, tmp_path):
     src = tmp_path / "staging"
     src.mkdir()

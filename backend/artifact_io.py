@@ -14,8 +14,10 @@ module re-exports it for the callers that have always reached it through here.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 from cadless.assembly_guide import MOTION_FILE
@@ -54,6 +56,18 @@ def guide_frames(src_dir: Path) -> list[Path]:
     return [path for _, path in sorted(numbered)]
 
 
+def _copy_over(src: Path, target: Path) -> None:
+    """Copy ``src`` to ``target``, replacing whatever stands there rather than writing through it.
+
+    Copied beside the target and moved over it, so a link standing at the target's
+    name is replaced rather than followed: a version's directory is named for its
+    id, which anything sharing the volume can predict.
+    """
+    staged = target.with_name(f".{target.name}.{uuid.uuid4().hex}")
+    shutil.copy(src, staged)
+    os.replace(staged, target)
+
+
 def _copy_in(src: Path, dest: Path) -> list[tuple[str, Path]]:
     """Copy every file of the build into ``dest``; return ``(kind, target)`` in order.
 
@@ -65,7 +79,7 @@ def _copy_in(src: Path, dest: Path) -> list[tuple[str, Path]]:
 
     def take(kind: str, path: Path) -> None:
         target = dest / path.name
-        shutil.copy(path, target)
+        _copy_over(path, target)
         copied.append((kind, target))
 
     for kind in EXPORTERS:
@@ -120,7 +134,7 @@ def _copy_motion(src: Path, dest: Path) -> Path | None:
     if not motion.is_file():
         return None
     target = dest / motion.name
-    shutil.copy(motion, target)
+    _copy_over(motion, target)
     return target
 
 
