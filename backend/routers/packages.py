@@ -214,16 +214,9 @@ async def place_package(
                 # its way out would close a file the read is still using.
                 payload.close()  # type: ignore[union-attr]
         async with request.app.state.import_gate:
-            written = await _write_in(
+            return await _write_in(
                 store, ledger, package, origin, recorded, overwrite, expected_digest
             )
-        # The item can be opened now, and a kit of several parts has nothing to
-        # play until it is built once. Asked from this task rather than by the
-        # request, which may already be gone, and with the id alone: what the
-        # fill writes is the installation's, through the app's own store.
-        if written["project_id"] is not None:
-            request.app.state.catalog_motions.ask([written["project_id"]])
-        return written
 
     return await to_completion(guarded())
 

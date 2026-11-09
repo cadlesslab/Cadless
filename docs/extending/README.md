@@ -61,9 +61,10 @@ The value resolves to a FastAPI `APIRouter`. Two things worth knowing:
   `CADLESS_SWEEP_ON_START` takes `report` (the default) or `off`, and there is
   no value that removes anything. An add-on wanting its own housekeeping still
   does it here; it should not expect to be the only thing looking at that
-  directory. After the catalog loads, the app also builds each catalog version
-  of several parts that has no motion, in the background and a build at a time,
-  to give it one; `CADLESS_CATALOG_MOTIONS` takes `fill` (the default) or `off`.
+  directory. After the catalog loads, the app also builds each shipped catalog
+  version of several parts that has no motion, in the background and a build at
+  a time, to give it one; `CADLESS_CATALOG_MOTIONS` takes `fill` (the default)
+  or `off`.
 
 **Frontend.** Same idea, different mechanics — and the difference is the whole
 reason it looks the way it does. Python finds an installed distribution at

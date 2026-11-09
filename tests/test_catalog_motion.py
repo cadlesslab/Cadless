@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from backend import catalog_motion
 from backend.app import create_app
-from backend.catalog_motion import fill_motions
+from backend.catalog_motion import CatalogMotions, fill_motions
 from backend.catalog_state import ledger_for
 from cadless.assembly_guide import MOTION_FILE
 from cadless.config import Settings, settings
@@ -177,8 +177,8 @@ def test_code_the_gate_refuses_is_not_built(store):
 @pytest.mark.parametrize(
     ("build", "filed_size", "said"),
     [
-        (_scripted(ok=False), TWO_PARTS_SIZE, "its build failed: NameError: x"),
-        (_scripted(ordered=False), TWO_PARTS_SIZE, "could not be ordered: parts 0 and 1 share"),
+        (_scripted(ok=False), TWO_PARTS_SIZE, "its build failed: 'NameError: x'"),
+        (_scripted(ordered=False), TWO_PARTS_SIZE, "could not be ordered: 'parts 0 and 1 share"),
         (_scripted(order=(2, 1, 0)), TWO_PARTS_SIZE, "ordered 3 parts where the version draws 2"),
         (_scripted(size=(40.0, 20.0, 15.0)), TWO_PARTS_SIZE, "where the version filed"),
         (_scripted(), None, "no size to hold its build to"),
@@ -218,14 +218,19 @@ def test_one_version_that_cannot_be_built_costs_only_itself(store):
     assert (len(_motions(store, first)), len(_motions(store, second))) == (0, 1)
 
 
-def test_an_item_whose_units_are_unknown_is_not_built(store):
+def test_an_item_whose_units_are_unknown_is_not_built(store, caplog):
     # Built at a guessed scale, its parts would be ordered against clearances a
-    # thousand times off.
-    _seed(store, domain="no-such-domain")
+    # thousand times off. The id is quoted in the line saying so: it is the
+    # item's to choose, and a line break in it would forge a line of its own.
+    _seed(store, "kit\nINFO catalog motion: filed", domain="no-such-domain")
     calls: list = []
 
-    assert _fill(store, run=_scripted(calls=calls)) == 0
+    with caplog.at_level("WARNING", logger="backend.catalog_motion"):
+        assert _fill(store, run=_scripted(calls=calls)) == 0
+
     assert calls == []
+    [said] = [r.getMessage() for r in caplog.records if "names no units" in r.getMessage()]
+    assert "\n" not in said
 
 
 def test_a_ledger_that_cannot_be_read_builds_nothing(store):
@@ -235,14 +240,6 @@ def test_a_ledger_that_cannot_be_read_builds_nothing(store):
 
     assert _fill(store, run=_scripted(calls=calls)) == 0
     assert calls == []
-
-
-def test_an_ask_for_one_project_builds_that_project_alone(store):
-    asked, [wanted] = _seed(store, "asked")
-    _, [other] = _seed(store, "other")
-
-    assert _fill(store, project_ids=[asked], run=_scripted()) == 1
-    assert (len(_motions(store, wanted)), len(_motions(store, other))) == (1, 0)
 
 
 def test_a_motion_filed_while_the_version_was_built_is_not_filed_twice(store, tmp_path):
@@ -365,28 +362,66 @@ def _kit_package(tmp_path: Path) -> bytes:
     return packed(item)
 
 
-@pytest.mark.parametrize(("mode", "motions"), [("fill", 1), ("off", 0)])
-def test_a_kit_imported_while_the_app_runs_is_given_its_motion_without_a_restart(
-    store, monkeypatch, tmp_path, mode, motions
+def test_a_received_kit_is_not_built_at_its_import_or_at_the_next_start(
+    store, monkeypatch, tmp_path
 ):
-    # Switched off, the import itself must still succeed: it asks regardless.
-    monkeypatch.setattr(catalog_motion, "rebuild", _scripted())
-    monkeypatch.setattr(settings, "catalog_motions", mode)
+    # A package arrives through a route that asks for no sign-in; building its
+    # steps by itself would run code nobody asked to run, as often as anyone
+    # cared to send one.
+    calls: list = []
+    monkeypatch.setattr(catalog_motion, "rebuild", _scripted(calls=calls))
     payload = _kit_package(tmp_path)
-    app = create_app(store=store)
 
-    with TestClient(app) as client:
+    first = create_app(store=store)
+    with TestClient(first) as client:
         out = client.post(
             "/packages/import",
             content=payload,
             headers={"Content-Type": "application/octet-stream"},
         )
         assert out.status_code == 200, out.text
-        client.portal.call(app.state.catalog_motions.idle)
-        project = out.json()["project_id"]
+        client.portal.call(first.state.catalog_motions.idle)
+    again = create_app(store=store)
+    with TestClient(again) as client:
+        client.portal.call(again.state.catalog_motions.idle)
 
     async def _versions() -> list:
-        return await store.list_versions(project)
+        return await store.list_versions(out.json()["project_id"])
 
     [version] = asyncio.run(_versions())
-    assert len(_motions(store, version.id)) == motions
+    assert (calls, _motions(store, version.id)) == ([], [])
+
+
+def test_closed_mid_build_it_lets_the_build_finish_and_leaves_no_staging_behind(store):
+    # The build carries on in its thread whatever happens to the task; a directory
+    # removed under it would come back as it wrote its files, with nothing to
+    # remove it again.
+    _, [version] = _seed(store)
+    started, release = threading.Event(), threading.Event()
+    seen: dict = {}
+    scripted = _scripted()
+
+    def run(code, *, export_dir=None, **kwargs):
+        seen["staging"] = Path(export_dir)
+        started.set()
+        release.wait(timeout=30)
+        Path(export_dir).mkdir(parents=True, exist_ok=True)  # as the exporters do
+        return scripted(code, export_dir=export_dir, **kwargs)
+
+    async def _run() -> bool:
+        motions = CatalogMotions(store, run=run)
+        motions.start()
+        await asyncio.to_thread(started.wait, 30)
+        closing = asyncio.ensure_future(motions.close())
+        await asyncio.sleep(0.3)
+        waited = not closing.done()
+        release.set()
+        await closing
+        return waited
+
+    try:
+        assert asyncio.run(_run()) is True
+    finally:
+        release.set()
+    assert not seen["staging"].exists()
+    assert _motions(store, version) == []

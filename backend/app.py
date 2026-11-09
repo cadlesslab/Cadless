@@ -178,11 +178,10 @@ def create_app(store: Store | None = None) -> FastAPI:
         await _autoload_catalog(store)
         motions = app.state.catalog_motions
         if settings.catalog_motions == "fill":
-            # After the autoload, so every item it loaded is there to be asked
-            # about, and not awaited: each version it finds is a build through the
-            # worker, and the app has requests to answer meanwhile.
+            # After the autoload, so every item it loaded is there, and not
+            # awaited: each version it finds is a build through the worker, and
+            # the app has requests to answer meanwhile.
             motions.start()
-            motions.ask()
         try:
             yield
         finally:
@@ -205,9 +204,9 @@ def create_app(store: Store | None = None) -> FastAPI:
     # it runs in this container rather than behind the execution sandbox. A
     # per-process CPU rlimit does not stop N of them arriving at once.
     app.state.slice_gate = asyncio.Lock()
-    # Catalog versions of several parts are given the motion their viewer plays,
-    # a build at a time, after startup and after an import. The motion is filed
-    # under the import gate, which a reload or a delete of the item holds.
+    # Shipped catalog versions of several parts are given the motion their viewer
+    # plays, a build at a time, after startup. The motion is filed under the
+    # import gate, which a reload or a delete of the item holds.
     app.state.catalog_motions = CatalogMotions(store, gate=app.state.import_gate)
 
     app.add_middleware(

@@ -67,12 +67,13 @@ Everything under `artifacts/` is generated — never hand-edit it. So is
 pipeline measures and fills in.
 
 No item carries the motion the viewer plays an assembly from. For a step of
-several parts — two or more `glb` files — the app builds the step's script once
-in the background, after startup and after an import, and files the motion that
-build measures on the version; it files none where the build orders another
-number of parts or measures another `bbox` than the step records, so a step's
-`geometry` has to be what its script builds. `CADLESS_CATALOG_MOTIONS=off` turns
-this off.
+several parts — two or more `glb` files — in an item under the catalog root, the
+app builds the step's script once in the background after startup, and files the
+motion that build measures on the version; it files none where the build orders
+another number of parts or measures another `bbox` than the step records, so a
+step's `geometry` has to be what its script builds. A received item is not
+built: its steps are code nobody here asked to run. `CADLESS_CATALOG_MOTIONS=off`
+turns this off.
 
 A build that publishes produces this same shape from a project without running
 any of that: it reads the ladder out of the store, copies the exports each step

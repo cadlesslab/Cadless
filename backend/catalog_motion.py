@@ -8,8 +8,12 @@ code is built once, with no model call; its parts are judged as a build that
 asked for no printer is judged; and the motion that build wrote is filed on the
 version.
 
-In the background and a build at a time, through one queue: the app answers
-while it runs, and startup and an import cannot set two builds going at once.
+Once, in the background after startup, and a build at a time: the app answers
+while it runs. Only items the deployment ships are built. A received item -- a
+package somebody sent, imported through a route that asks for no sign-in -- is
+left as it was: building it here would run code nobody asked to run, as often as
+anyone cared to send it.
+
 A version is left as it was wherever the result might describe something other
 than what was baked -- the gate refuses its code, the build fails or its parts
 cannot be ordered, it orders another number of parts than the version draws, or
@@ -18,8 +22,8 @@ a version without one is drawn exactly as it was before.
 
 The store is widened to the build here, as the catalogue loader widens it: a
 catalog item is the installation's, so its rows are written as the
-installation's. No route hands its own view in -- an import asks with a project
-id, and the rows are reached through the store the app was built with.
+installation's. The store is the one the app was built with; no route reaches
+this module.
 """
 
 from __future__ import annotations
@@ -30,12 +34,13 @@ import logging
 import math
 import shutil
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 
 from backend import artifact_io
 from backend.catalog_state import ledger_for
 from cadless.catalog.domains import find_domain
+from cadless.catalog.importer import imported_item_dir
 from cadless.catalog.ledger import Ledger, LedgerUnreadable
 from cadless.pipeline import Rebuild, rebuild
 from cadless.scoped_store import AnyStore, BuildStore, system_view
@@ -50,6 +55,10 @@ logger = logging.getLogger(__name__)
 #: for a kernel that rounds a box a little differently, not for a model that
 #: changed.
 SIZE_TOLERANCE = 1e-3
+
+#: How much of a build's error a log line carries. The text is the script's to
+#: choose, so it is quoted rather than written out, and cut short.
+_SAID = 300
 
 
 def _parts_drawn(artifacts: list[Artifact]) -> int:
@@ -72,12 +81,12 @@ def _unlike_what_was_baked(
     version filed it: the build measures in the units its code is written in.
     """
     if not rb.ok:
-        return f"its build failed: {rb.error}"
+        return f"its build failed: {rb.error!r:.{_SAID}}"
     verdict = rb.assembly or {}
     order = verdict.get("order") or []
     if not verdict.get("ok") or len(order) < 2:
         failures = "; ".join(verdict.get("failures") or []) or "nothing was measured"
-        return f"its parts could not be ordered: {failures}"
+        return f"its parts could not be ordered: {failures!r:.{_SAID}}"
     if len(order) != parts:
         return f"its build ordered {len(order)} parts where the version draws {parts}"
     built = rb.result.bbox
@@ -101,6 +110,32 @@ async def _file(build: BuildStore, version_id: int, staging: Path) -> bool:
     return await artifact_io.file_motion(build, version_id, staging)
 
 
+async def _built(run: Callable[..., Rebuild], code: str, staging: Path, scale: float) -> Rebuild:
+    """``run`` on a thread, and on a cancellation the build's end waited for.
+
+    The build carries on in its thread whatever happens to the task waiting on
+    it, and writes into the staging directory as it finishes; removing that
+    directory before then would leave what it writes afterwards with nothing to
+    remove it.
+    """
+    building = asyncio.ensure_future(
+        asyncio.to_thread(
+            run,
+            code,
+            export_dir=str(staging),
+            describe=False,
+            export_scale=scale,
+            assembly_clock=True,
+        )
+    )
+    try:
+        return await asyncio.shield(building)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await building
+        raise
+
+
 async def _fill(
     build: BuildStore,
     item_id: str,
@@ -118,27 +153,22 @@ async def _fill(
     parts = _parts_drawn(artifacts)
     if parts < 2 or _has_motion(artifacts):
         return False
-    label = f"{item_id} (version {version.id})"
+    label = f"{item_id!r} (version {version.id})"
     code = version.code or ""
-    gated = validate_code(code)
+    # On a thread: parsing a long script holds the event loop for as long as it takes.
+    gated = await asyncio.to_thread(validate_code, code)
     if not gated.ok:
         logger.warning(
-            "catalog motion: %s not built: the gate refuses its code: %s",
+            "catalog motion: %s not built: the gate refuses its code: %.*r",
             label,
+            _SAID,
             "; ".join(gated.reasons),
         )
         return False
     staging = Path(build.artifacts_dir) / "_staging" / uuid.uuid4().hex
     try:
         await asyncio.to_thread(staging.mkdir, parents=True)
-        rb = await asyncio.to_thread(
-            run,
-            code,
-            export_dir=str(staging),
-            describe=False,
-            export_scale=scale,
-            assembly_clock=True,
-        )
+        rb = await _built(run, code, staging, scale)
         why = _unlike_what_was_baked(rb, parts, version.bbox, scale)
         if why is not None:
             logger.warning("catalog motion: none filed for %s: %s", label, why)
@@ -162,15 +192,13 @@ async def fill_motions(
     store: AnyStore,
     ledger: Ledger,
     *,
-    project_ids: Iterable[int] | None = None,
     gate: asyncio.Lock | None = None,
     run: Callable[..., Rebuild] | None = None,
 ) -> int:
-    """File a motion on each catalog version of several parts that has none; how many.
+    """File a motion on each shipped catalog version of several parts that has none; how many.
 
-    ``project_ids`` narrows the pass to those catalog projects, as an import asks
-    for the item it brought in; ``None`` is every one. ``gate`` is held while a
-    motion is filed. ``run`` stands in for :func:`cadless.pipeline.rebuild`.
+    ``gate`` is held while a motion is filed. ``run`` stands in for
+    :func:`cadless.pipeline.rebuild`.
 
     An item is built at the scale its domain's units call for, read from the
     ledger, which is the one place the domain is kept. An item whose domain cannot
@@ -179,10 +207,7 @@ async def fill_motions(
     """
     build = system_view(store)
     run = run or rebuild
-    asked = None if project_ids is None else set(project_ids)
     catalog = await build.catalog_item_ids()
-    if asked is not None:
-        catalog = {pid: item for pid, item in catalog.items() if pid in asked}
     if not catalog:
         return 0
     try:
@@ -198,12 +223,14 @@ async def fill_motions(
         return 0
     filed = 0
     for project_id, item_id in sorted(catalog.items()):
+        if await asyncio.to_thread(imported_item_dir, item_id) is not None:
+            continue
         entry = entries.get(item_id)
         key = entry.get("domain") if isinstance(entry, dict) else None
         domain = find_domain(key) if isinstance(key, str) else None
         if domain is None:
             logger.warning(
-                "catalog motion: %s names no units this engine knows; not built", item_id
+                "catalog motion: %r names no units this engine knows; not built", item_id
             )
             continue
         for version in await build.list_versions(project_id):
@@ -212,13 +239,7 @@ async def fill_motions(
 
 
 class CatalogMotions:
-    """The one queue catalog motions are filled from, a build at a time.
-
-    Startup asks for every catalog item and an import for the item it brought in;
-    both go through here, so the two cannot build at once. Asked before
-    :meth:`start` or after :meth:`close`, it does nothing -- which is what a
-    deployment that switched it off gets.
-    """
+    """The startup pass that fills catalog motions, as one background task."""
 
     def __init__(
         self,
@@ -230,30 +251,19 @@ class CatalogMotions:
         self._store = store
         self._gate = gate
         self._run = run
-        self._queue: asyncio.Queue[frozenset[int] | None] | None = None
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
-        """Begin taking asks. Called from the running event loop."""
-        # Made here rather than in the constructor: a queue belongs to the loop
-        # that first waits on it, and an app is built before its loop runs.
-        self._queue = asyncio.Queue()
-        self._task = asyncio.get_running_loop().create_task(self._drain())
-
-    def ask(self, project_ids: Iterable[int] | None = None) -> None:
-        """Fill these catalog projects' motions, or every one's; returns at once."""
-        if self._queue is None or self._task is None or self._task.done():
-            return
-        self._queue.put_nowait(None if project_ids is None else frozenset(project_ids))
+        """Begin the pass and return at once. Called from the running event loop."""
+        self._task = asyncio.get_running_loop().create_task(self._pass())
 
     async def idle(self) -> None:
-        """Wait until everything asked so far has been done."""
-        if self._queue is not None:
-            await self._queue.join()
+        """Wait until the pass has finished, if one was started."""
+        if self._task is not None:
+            await asyncio.shield(self._task)
 
     async def close(self) -> None:
-        """Stop taking asks and abandon the one in hand. A build in hand finishes
-        on its thread, and nothing is filed from it."""
+        """Stop the pass. A build in hand is let finish, and nothing is filed from it."""
         task, self._task = self._task, None
         if task is None:
             return
@@ -261,15 +271,8 @@ class CatalogMotions:
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
-    async def _drain(self) -> None:
-        ledger = ledger_for(self._store)
-        while True:
-            asked = await self._queue.get()
-            try:
-                await fill_motions(
-                    self._store, ledger, project_ids=asked, gate=self._gate, run=self._run
-                )
-            except Exception:
-                logger.exception("catalog motion: a pass stopped")
-            finally:
-                self._queue.task_done()
+    async def _pass(self) -> None:
+        try:
+            await fill_motions(self._store, ledger_for(self._store), gate=self._gate, run=self._run)
+        except Exception:
+            logger.exception("catalog motion: the pass stopped")
