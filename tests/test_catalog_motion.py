@@ -15,13 +15,14 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from backend import catalog_motion
 from backend.app import create_app
 from backend.catalog_motion import fill_motions
 from backend.catalog_state import ledger_for
 from cadless.assembly_guide import MOTION_FILE
-from cadless.config import settings
+from cadless.config import Settings, settings
 from cadless.pipeline import Rebuild
 from cadless.scoped_store import system_view
 from cadless.store import Store
@@ -313,6 +314,21 @@ def test_startup_answers_while_the_fill_is_still_building(store, monkeypatch):
         release.set()
 
     assert len(_motions(store, version)) == 1
+
+
+@pytest.mark.parametrize("configured", ["sometimes", "on", "nonsense"])
+def test_a_switch_value_it_does_not_know_stops_the_process_starting(configured):
+    # Read as either mode, an operator would believe something untrue about a
+    # pass that runs catalog code through the worker.
+    with pytest.raises(ValidationError, match="CADLESS_CATALOG_MOTIONS"):
+        Settings(catalog_motions=configured)
+
+
+@pytest.mark.parametrize(
+    ("configured", "read"), [("", "fill"), ("  OFF ", "off"), ("Fill", "fill")]
+)
+def test_the_switch_reads_an_empty_value_as_unset_and_ignores_case(configured, read):
+    assert Settings(catalog_motions=configured).catalog_motions == read
 
 
 def test_switched_off_the_app_builds_nothing(store, monkeypatch):

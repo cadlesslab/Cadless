@@ -324,7 +324,15 @@ candidate judging, the identity seam and the image decisions are recorded under
    before the description and stands without it, because it is a measurement
    rather than anything said about one; a version without
    it — one never checked as an assembly, or rebuilt without the check — is
-   drawn with no player rather than one that guesses.
+   drawn with no player rather than one that guesses. A catalog version of
+   several parts is loaded with its files baked and nothing measured, so the app
+   builds its code once in the background, after startup and after an import —
+   through the gate, at its domain's scale, on the assembly clock, judged as a
+   build nobody asked to split — and files the motion that build writes, unless
+   the build orders another number of parts than the version draws or measures
+   another size than it filed. One build runs at a time, startup does not wait
+   for it, the motion is filed under the import gate, and
+   `CADLESS_CATALOG_MOTIONS=off` turns it off.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount
