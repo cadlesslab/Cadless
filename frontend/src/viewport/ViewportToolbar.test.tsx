@@ -72,19 +72,19 @@ describe("the assembly control", () => {
     expect(viewportStore.get().assemblyPlay).toBe("together");
   });
 
-  it("steps one joint at a time, and says which joint it is on", () => {
+  it("moves a step at a time, and says which step it is on", () => {
     showing(2);
     fireEvent.click(button("Step forward"));
     expect(viewportStore.get().assemblyPosition).toBe(1);
-    expect(within(assembly()!).getByText("Joint 1 of 2")).toBeInTheDocument();
+    expect(within(assembly()!).getByText("Step 1 of 2")).toBeInTheDocument();
     fireEvent.click(button("Step back"));
     expect(viewportStore.get().assemblyPosition).toBe(0);
     expect(within(assembly()!).getByText("Assembled")).toBeInTheDocument();
   });
 
-  it("names the joint a part is on its way through", () => {
+  it("names the step the parts are on their way through", () => {
     showing(2, 1.5);
-    expect(within(assembly()!).getByText("Joint 2 of 2")).toBeInTheDocument();
+    expect(within(assembly()!).getByText("Step 2 of 2")).toBeInTheDocument();
   });
 
   it("scrubs the parts with the slider", () => {

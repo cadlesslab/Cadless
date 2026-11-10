@@ -41,12 +41,12 @@ function part(x: number): THREE.Group {
 // 0.35 of the 2-unit length.
 const TRAVEL = 0.7;
 
-function mount(heading: number[] = [1, 0, 0], measured: Record<string, unknown> = {}) {
+function mount(heading: number[] = [1, 0, 0], fields: Record<string, unknown> = {}) {
   const model = new THREE.Group();
   const [p0, p1] = [part(0), part(1)];
   model.add(p0, p1);
   const motion = parseMotion(
-    { order: [0, 1], releases: [[], heading], stretch: [1, 1], explode_fraction: 0.35, ...measured },
+    { order: [0, 1], releases: [[], heading], stretch: [1, 1], explode_fraction: 0.35, ...fields },
     [0, 1],
   )!;
   const view = render(
@@ -81,6 +81,13 @@ describe("AssemblyPlayer", () => {
     expect(p1.position.y).toBeCloseTo(TRAVEL, 9);
     expect(p1.position.z).toBeCloseTo(0, 9);
     expect(p0.position.toArray()).toEqual([0, 0, 0]);
+  });
+
+  it("offers a step for each joint, however many parts move in it", () => {
+    // The two cubes pulled apart at the same time, one each way: one run, so
+    // one step rather than one a part.
+    mount([1, 0, 0], { releases: [[-1, 0, 0], [1, 0, 0]], steps: [[0, 1]] });
+    expect(viewportStore.get().assemblySteps).toBe(1);
   });
 
   it("moves a part by the travel the engine measured, scaled to the model drawn", () => {

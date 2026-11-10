@@ -16,7 +16,6 @@ import {
   apartBox,
   largestDimension,
   partOffsets,
-  takeApartOrder,
   type Motion,
 } from "./assemblyMotion";
 import { viewportStore } from "./viewportStore";
@@ -56,7 +55,7 @@ export function AssemblyPlayer({
     // Where nothing can say, motion is not reduced: the player still runs.
     reduced.current = globalThis.matchMedia?.(REDUCED_MOTION).matches ?? false;
     size.current = largestDimension(assembled);
-    const steps = takeApartOrder(motion).length;
+    const steps = motion.joints.length;
     apart.current = apartBox(groups, partOffsets(motion, steps, size.current));
     framed.current = false;
     onApartBox(apart.current);

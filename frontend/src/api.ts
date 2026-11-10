@@ -987,13 +987,22 @@ export const guideFrameUrl = (versionId: number, frame: number) =>
  * clears what it was engaged with; a file written before that was measured has
  * none. `explode_fraction` and `stretch` are the spacing such a file plays by:
  * a share of the same dimension, and per part ordinal how many of those the
- * part goes out once all are apart. */
+ * part goes out once all are apart.
+ *
+ * `steps`, optional, cuts `order` into runs of parts that go on at the same
+ * time. `subassemblies`, optional and only beside `steps`, are parts of one run
+ * fitted to one another first and to the model as one piece: per member,
+ * `splits` is the heading in the same frame it comes off the others along, or
+ * `[]` for one that stays with them, and `split_travel` how far it goes, as a
+ * share of the same dimension. A file without them plays a part at a time. */
 export interface AssemblyMotion {
   order: number[];
   releases: number[][];
   travel?: number[];
   stretch: number[];
   explode_fraction: number;
+  steps?: number[][];
+  subassemblies?: { parts: number[]; splits: number[][]; split_travel: number[] }[];
 }
 
 /** The artifact kind the motion is stored and served under. */

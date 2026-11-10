@@ -51,8 +51,8 @@ export interface ViewportState {
   measurePoints: Point3[];
   triangleCount: number | null;
   // assembly play
-  assemblySteps: number; // joints the model on screen comes apart by; 0 hides the control
-  assemblyPosition: number; // 0 assembled … assemblySteps all out; a fraction is a part on its way
+  assemblySteps: number; // steps the model on screen comes apart in; 0 hides the control
+  assemblyPosition: number; // 0 assembled … assemblySteps all out; a fraction is a step under way
   assemblyPlay: AssemblyPlay | null; // which way the parts move on their own; null when still
   // parts, by the ordinal their files are numbered by
   hiddenParts: number[]; // not drawn
