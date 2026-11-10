@@ -12,7 +12,7 @@ hold them together.
 
 from __future__ import annotations
 
-from cadless import assembly_guide
+from cadless import assembly_guide, assembly_motion
 from tests.ts_constants import FRONTEND_SRC, ts_number
 
 _MOTION_TS = FRONTEND_SRC / "viewport" / "assemblyMotion.ts"
@@ -23,7 +23,7 @@ def _ts_number(name: str) -> float:
 
 
 def test_the_viewport_and_the_engine_agree_on_what_is_a_heading():
-    assert _ts_number("HEADING_EPSILON") == assembly_guide._HEADING_EPSILON
+    assert _ts_number("HEADING_EPSILON") == assembly_motion.HEADING_EPSILON
 
 
 def test_the_viewport_accepts_the_fraction_the_engine_writes():

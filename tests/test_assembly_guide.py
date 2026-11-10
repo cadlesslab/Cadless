@@ -430,3 +430,113 @@ def test_each_heading_is_filed_under_its_part_not_its_place_in_the_order():
 
     releases = [[0.0, 0.0, 1.0], [], [1.0, 0.0, 0.0]]
     assert motion_payload([2, 0, 1], releases)["releases"] == releases
+
+
+# --- a grouped motion -----------------------------------------------------
+
+# A block that stays, a sleeve that sits on it, and a pin down through the sleeve
+# and into the block. The sleeve and the pin are put together off the model and
+# lowered onto it as one piece; off it, the pin is drawn up out of the sleeve.
+_SLEEVE_ORDER = [0, 1, 2]
+_SLEEVE_RELEASES = [[], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]
+_SLEEVE_STEPS = [[0], [1, 2]]
+_PINNED = [{"parts": [1, 2], "splits": [[], [0.0, 0.0, 1.0]]}]
+
+
+def _sleeve_meshes() -> list[np.ndarray]:
+    return [
+        _block((-20, -20, 0), (20, 20, 10)),
+        _block((-4, -4, 10), (4, 4, 20)),
+        _block((-1, -1, -30), (1, 1, 20)),
+    ]
+
+
+def test_runs_are_written_as_given_and_need_no_meshes():
+    from cadless.assembly_guide import motion_payload
+
+    payload = motion_payload(_SLEEVE_ORDER, _SLEEVE_RELEASES, steps=_SLEEVE_STEPS)
+    assert payload["steps"] == [[0], [1, 2]]
+
+
+def test_a_sub_assembly_is_written_with_its_members_and_their_splits():
+    from cadless.assembly_guide import motion_payload
+
+    payload = motion_payload(
+        _SLEEVE_ORDER,
+        _SLEEVE_RELEASES,
+        _sleeve_meshes(),
+        steps=_SLEEVE_STEPS,
+        subassemblies=_PINNED,
+    )
+    (written,) = payload["subassemblies"]
+    assert (written["parts"], written["splits"]) == ([1, 2], [[], [0.0, 0.0, 1.0]])
+
+
+def test_a_member_that_stays_with_the_sub_assembly_goes_nowhere_off_it():
+    from cadless.assembly_guide import motion_payload
+
+    meshes = _sleeve_meshes()
+    payload = motion_payload(
+        _SLEEVE_ORDER, _SLEEVE_RELEASES, meshes, steps=_SLEEVE_STEPS, subassemblies=_PINNED
+    )
+    assert payload["subassemblies"][0]["split_travel"][0] == 0
+
+
+def test_a_member_that_splits_off_is_drawn_clear_of_the_member_it_runs_through():
+    # The pin is held far deeper in the sleeve than a spacing, so only a travel
+    # measured from the two of them brings it all the way out.
+    from cadless.assembly_guide import motion_payload
+
+    meshes = _sleeve_meshes()
+    payload = motion_payload(
+        _SLEEVE_ORDER, _SLEEVE_RELEASES, meshes, steps=_SLEEVE_STEPS, subassemblies=_PINNED
+    )
+    pin = payload["subassemblies"][0]["split_travel"][1]
+    points = np.concatenate([m.reshape(-1, 3) for m in meshes])
+    size = float((points.max(axis=0) - points.min(axis=0)).max())
+    assert -30 + pin * size > 20
+
+
+def test_a_sub_assembly_without_the_parts_meshes_is_refused():
+    # How far a member comes off is measured, and there is nothing to measure.
+    from cadless.assembly_guide import motion_payload
+
+    with pytest.raises(ValueError, match="mesh"):
+        motion_payload(_SLEEVE_ORDER, _SLEEVE_RELEASES, steps=_SLEEVE_STEPS, subassemblies=_PINNED)
+
+
+def test_a_sub_assembly_whose_meshes_measure_nothing_is_refused():
+    from cadless.assembly_guide import motion_payload
+
+    empty = np.empty((0, 3, 3))
+    with pytest.raises(ValueError, match="size"):
+        motion_payload(
+            _SLEEVE_ORDER,
+            _SLEEVE_RELEASES,
+            [empty, empty, empty],
+            steps=_SLEEVE_STEPS,
+            subassemblies=_PINNED,
+        )
+
+
+def test_a_grouping_the_viewport_would_not_play_is_raised_rather_than_returned():
+    from cadless.assembly_guide import motion_payload
+
+    with pytest.raises(ValueError, match="steps do not add up to the order"):
+        motion_payload(
+            _SLEEVE_ORDER,
+            _SLEEVE_RELEASES,
+            _sleeve_meshes(),
+            steps=[[0], [2, 1]],
+            subassemblies=_PINNED,
+        )
+
+
+def test_an_order_naming_a_part_twice_is_raised_on_the_grouped_path():
+    # Counted as the parts the order describes, one per entry, the way the
+    # viewport counts the parts it draws -- not as the parts the order names,
+    # which would let a part named twice stand in for one named never.
+    from cadless.assembly_guide import motion_payload
+
+    with pytest.raises(ValueError, match="exactly once"):
+        motion_payload([0, 1, 1], _SLEEVE_RELEASES, steps=[[0], [1, 1]])
