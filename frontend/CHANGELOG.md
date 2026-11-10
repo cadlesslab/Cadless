@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/cadlesslab/Cadless/compare/frontend-v1.3.2...frontend-v1.4.0) (2026-11-10)
+
+
+### Features
+
+* play a catalog kit's assembly from its baked motion, by steps and sub-assemblies ([#88](https://github.com/cadlesslab/Cadless/issues/88)) ([d39e823](https://github.com/cadlesslab/Cadless/commit/d39e8239d4947738ba1fc0542008343b1efcd372))
+
 ## [1.3.2](https://github.com/cadlesslab/Cadless/compare/frontend-v1.3.1...frontend-v1.3.2) (2026-11-02)
 
 
