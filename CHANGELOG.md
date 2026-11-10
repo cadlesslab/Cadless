@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.2...backend-v1.4.0) (2026-11-10)
+
+
+### Features
+
+* make every assembly seam with a split helper that builds the joint from the cut ([#86](https://github.com/cadlesslab/Cadless/issues/86)) ([117a053](https://github.com/cadlesslab/Cadless/commit/117a053dc1741785a0ced091f8ddaf501845d557))
+* play a catalog kit's assembly from its baked motion, by steps and sub-assemblies ([#88](https://github.com/cadlesslab/Cadless/issues/88)) ([d39e823](https://github.com/cadlesslab/Cadless/commit/d39e8239d4947738ba1fc0542008343b1efcd372))
+
+
+### Fixes
+
+* size a proportional resize from the measured model, and keep a split redesign's repairs on the split ([#84](https://github.com/cadlesslab/Cadless/issues/84)) ([3fd2b83](https://github.com/cadlesslab/Cadless/commit/3fd2b83ac4d271d145912ca5a4330a5576b8da25))
+
 ## [1.3.2](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.1...backend-v1.3.2) (2026-11-02)
 
 
