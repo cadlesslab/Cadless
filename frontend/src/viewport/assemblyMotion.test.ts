@@ -13,6 +13,7 @@ import {
   type Motion,
   type Vec3,
 } from "./assemblyMotion";
+import motionCasesSource from "./motionCases.json?raw";
 
 /** Each component within float noise. `toEqual` would also tell -0 from 0,
  * which nothing that reads a position cares about. */
@@ -431,6 +432,32 @@ describe("parseMotion", () => {
     ],
   ])("refuses %s", (_, raw) => {
     expect(parseMotion(raw, PARTS)).toBeNull();
+  });
+});
+
+/** A case both checks of a motion are held to: this parser, and the engine's
+ * check of a file it writes or takes in. */
+interface MotionCase {
+  name: string;
+  parts: number[];
+  payload: unknown;
+  valid: boolean;
+  why: string;
+}
+
+// The engine answers these same cases, and the two have to answer each one
+// alike: a motion the engine passes and this refuses is a player that never
+// appears, and one it refuses that this plays is an item turned away for
+// nothing. Kept as JSON so that each side reads the same text with its own
+// reader, which is where the two languages part first: 2.0 is an integer here
+// and a float there, `true` is no number here and 1 there, and an integer too
+// long for a double is Infinity here and an int there. `?raw` rather than
+// `node:fs`, which this package type-checks without.
+const MOTION_CASES = JSON.parse(motionCasesSource) as MotionCase[];
+
+describe("the motions the engine judges too", () => {
+  it.each<[string, MotionCase]>(MOTION_CASES.map((c) => [c.name, c]))("%s", (_, c) => {
+    expect(parseMotion(c.payload, c.parts) !== null, c.why).toBe(c.valid);
   });
 });
 

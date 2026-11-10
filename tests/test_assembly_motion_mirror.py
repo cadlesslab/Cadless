@@ -1,29 +1,53 @@
-"""The assembly motion's numbers, as the engine writes them and the viewport reads them.
+"""The assembly motion's rules, as the engine states them and the viewport reads them.
 
-The engine writes the motion and the frontend validates it, in two languages that
-share no code. Some of the frontend's limits only mean something next to the
-engine's own values: a heading threshold above the engine's refuses a heading
-the engine measured; a cap on the explode fraction below the fraction the engine
-writes refuses every motion it produces; and a cap on one part's travel below
-the furthest the engine measures refuses the assemblies that need it most. A
-refused motion hides the player with nothing failing. These read both sides and
-hold them together.
+The engine writes the motion and checks one it takes in, and the frontend
+validates it before playing it, in two languages that share no code. Some of the
+frontend's limits only mean something next to the engine's own values: a heading
+threshold above the engine's refuses a heading the engine measured; a cap on the
+explode fraction below the fraction the engine writes refuses every motion it
+produces; and a cap on one part's travel below the furthest the engine measures
+refuses the assemblies that need it most. A refused motion hides the player with
+nothing failing. These read both sides and hold them together: every limit at one
+value, the engine's own output inside them, and one set of cases that both checks
+have to answer alike.
+
+The cases are a JSON file beside the viewport's parser, read whole by each side's
+own JSON reader, because the readers are where the two part first: ``2.0`` is a
+float here and an integer there, ``true`` is ``1`` here and no number there, and
+an integer too long for a double is an ``int`` here and ``Infinity`` there.
 """
 
 from __future__ import annotations
+
+import json
+
+import pytest
 
 from cadless import assembly_guide, assembly_motion
 from tests.ts_constants import FRONTEND_SRC, ts_number
 
 _MOTION_TS = FRONTEND_SRC / "viewport" / "assemblyMotion.ts"
+_MOTION_CASES = json.loads(
+    (FRONTEND_SRC / "viewport" / "motionCases.json").read_text(encoding="utf-8")
+)
 
 
 def _ts_number(name: str) -> float:
     return ts_number(_MOTION_TS, name)
 
 
-def test_the_viewport_and_the_engine_agree_on_what_is_a_heading():
-    assert _ts_number("HEADING_EPSILON") == assembly_motion.HEADING_EPSILON
+@pytest.mark.parametrize(
+    "name",
+    ["HEADING_EPSILON", "MAX_EXPLODE_FRACTION", "MAX_TRAVEL_PER_PART", "SAME_HEADING_TOLERANCE"],
+)
+def test_the_viewport_and_the_engine_hold_each_limit_at_one_value(name):
+    assert _ts_number(name) == getattr(assembly_motion, name)
+
+
+@pytest.mark.parametrize("case", _MOTION_CASES, ids=[case["name"] for case in _MOTION_CASES])
+def test_the_engine_answers_each_case_as_the_viewport_does(case):
+    problems = assembly_motion.motion_problems(case["payload"], case["parts"])
+    assert (not problems) == case["valid"], f"{case['why']} Found: {problems or 'nothing'}"
 
 
 def test_the_viewport_accepts_the_fraction_the_engine_writes():
