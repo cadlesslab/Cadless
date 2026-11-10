@@ -137,10 +137,10 @@ function AssemblyControls({ steps, position }: { steps: number; position: number
           viewportStore.setAssemblyPosition(v);
         }}
       />
-      {/* The joint in motion, or the one just finished: a part on its way
-          through joint 2 is part of joint 2, not of joint 1. */}
+      {/* The step in motion, or the one just finished: parts on their way
+          through step 2 are in step 2, not in step 1. */}
       <span className="vp-label vp-assembly-at">
-        {assembled ? "Assembled" : `Joint ${Math.ceil(position)} of ${steps}`}
+        {assembled ? "Assembled" : `Step ${Math.ceil(position)} of ${steps}`}
       </span>
     </div>
   );

@@ -1055,3 +1055,65 @@ def test_a_package_s_part_names_and_whole_assembly_survive_the_import(tmp_path):
     assert [(a.part, Path(a.path).name, Path(a.path).read_bytes()) for a in whole] == [
         (0, "assembly.glb", b"whole")
     ]
+
+
+# A motion for a kit of two parts: a base that stays and a lid lifted off it.
+_LID_MOTION = json.dumps(
+    {"order": [0, 1], "releases": [[], [0, 0, 1]], "stretch": [1, 1], "explode_fraction": 0.35}
+).encode()
+
+
+def _kit(motion: bytes):
+    """A package of one step of two glb parts that carries ``motion`` as its own."""
+    return carried(
+        a_manifest(
+            steps=[
+                {
+                    "index": 1,
+                    "instruction": "A kit.",
+                    "code": "steps/01.py",
+                    "artifacts": {
+                        "glb": "artifacts/01/a.glb",
+                        "glb:1": "artifacts/01/b.glb",
+                        "assembly": "artifacts/01/motion.json",
+                    },
+                }
+            ]
+        ),
+        {
+            "steps/01.py": ALLOWED_STEP.encode(),
+            "artifacts/01/a.glb": b"first",
+            "artifacts/01/b.glb": b"second",
+            "artifacts/01/motion.json": motion,
+        },
+    )
+
+
+def test_a_package_whose_motion_would_not_play_is_refused_before_anything_is_written(tmp_path):
+    """Found after the write instead, the item would hold its id on disk while
+    `load_manifest` refused it at every load."""
+    for_three = json.dumps({**json.loads(_LID_MOTION), "order": [0, 1, 2]}).encode()
+
+    with pytest.raises(CatalogImportError, match="step 1.*order lists 3 parts, but 2 are drawn"):
+        import_package(_kit(for_three), origin="a file")
+
+    assert nothing_imported()
+    # The id is still free: the same package with its motion put right goes in.
+    assert import_package(_kit(_LID_MOTION), origin="a file").item_dir.exists()
+
+
+def test_a_package_s_motion_reaches_the_version_it_loads_as(tmp_path):
+    result = import_package(_kit(_LID_MOTION), origin="a file")
+
+    store = Store(db_path=tmp_path / "db.sqlite", artifacts_dir=tmp_path / "arts")
+
+    async def go():
+        await store.init()
+        pid = await load_house(store, Ledger(tmp_path / "ledger.json"), result.item_dir)
+        (version,) = await store.list_versions(pid)
+        return [a for a in await store.list_artifacts(version.id) if a.kind == "assembly"]
+
+    motions = asyncio.run(go())
+    assert [(a.part, Path(a.path).name, Path(a.path).read_bytes()) for a in motions] == [
+        (0, "assembly.json", _LID_MOTION)
+    ]

@@ -10,14 +10,23 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from cadless.artifact_kinds import ASSEMBLY_FILES, PART_KINDS
+from cadless.assembly_motion import MAX_MOTION_BYTES, MOTION_KIND, read_motion
 from cadless.assembly_tree import MAX_PARTS, NAME_MAX, readable
 from cadless.catalog.domains import find_domain
 from cadless.catalog.pack import PackError, safe_entry_name
+
+# The part format the viewport draws a version from: the files whose numbers a
+# step's motion names its parts by.
+_DRAWN_KIND = "glb"
+# The fewest of those a version is drawn in parts from; with fewer it is drawn
+# whole. Held equal to the viewport's own threshold by a mirror test.
+MIN_DRAWN_PARTS = 2
 
 # An artifact's kind becomes the extension of the file the loader writes, so the
 # shape this allows is the shape a file extension actually is.
@@ -131,7 +140,7 @@ class CatalogStep(BaseModel):
                     f"artifact keys for {kind!r} name parts {sorted(numbers)}, "
                     "with one missing below the last"
                 )
-            if kind in ASSEMBLY_FILES and len(numbers) > 1:
+            if (kind in ASSEMBLY_FILES or kind == MOTION_KIND) and len(numbers) > 1:
                 raise ValueError(f"{kind!r} is one file for the whole build, keyed once")
         return artifacts
 
@@ -174,6 +183,16 @@ class CatalogStep(BaseModel):
             kind, part = parse_artifact_key(key)
             parts.setdefault(kind, []).append((part, key))
         return {kind: [key for _, key in sorted(numbered)] for kind, numbered in parts.items()}
+
+    def drawn_parts(self) -> range:
+        """The ordinals the viewport draws this step's parts under: one per glb
+        file, where there are two or more, and none for a step of one, which is
+        drawn whole with nothing to move.
+
+        What the step's motion names its parts by, and so what it is read against.
+        """
+        count = len(self.artifact_parts().get(_DRAWN_KIND, []))
+        return range(count if count >= MIN_DRAWN_PARTS else 0)
 
 
 class CatalogManifest(BaseModel):
@@ -261,8 +280,15 @@ def load_manifest(house_dir: Path) -> CatalogManifest:
     ``domain`` must be registered in the domain registry; every referenced
     ``code`` file must exist; every ``code``, artifact and ``thumbnail`` path
     must stay inside ``house_dir``, which itself must not be a symlink; every
-    artifact key must pass ``CatalogStep``'s key check; and a step's ``parts``,
-    if given, must name each of its parts once. Raises ``ValueError`` otherwise.
+    artifact key must pass ``CatalogStep``'s key check; a step's ``parts``, if
+    given, must name each of its parts once; and a step's motion, where its file
+    is there, must be one the viewport plays over that step's parts. Raises
+    ``ValueError`` otherwise.
+
+    A motion is the one artifact read here, not only checked to stay inside: a
+    version filed with one the viewport refuses would show no player and say
+    nothing about why. One listed and not there is left alone, as any missing
+    artifact is.
     """
     house_dir = Path(house_dir)
     if house_dir.is_symlink():
@@ -289,7 +315,61 @@ def load_manifest(house_dir: Path) -> CatalogManifest:
             step_artifact_path(house_dir, step, key)
     if manifest.thumbnail is not None:
         thumbnail_path(house_dir, manifest)
+    check_motions(manifest, lambda relative: _motion_bytes(house_dir, relative))
     return manifest
+
+
+def check_motions(manifest: CatalogManifest, read: Callable[[str], bytes | None]) -> None:
+    """Refuse the first step whose motion the viewport would not play over that
+    step's parts, with a ``ValueError`` naming the step.
+
+    ``read`` gives a motion's bytes by the path the manifest lists it under, or
+    ``None`` for one that is not there, which is left alone as any missing
+    artifact is. Steps may share a motion, and judging it afresh for every step
+    would let a few lines of manifest repeat the reading of a whole file as
+    often as they like; so each file is read and judged once, and what is kept
+    of it is the number of parts it passed for -- one at most, an order being as
+    long as the parts it names -- never the file itself, which would hold every
+    motion an item carries in memory at once. A step drawing another number of
+    parts from a file already passed is judged afresh, and refused.
+    """
+    passed: dict[str, int] = {}
+    absent: set[str] = set()
+    for step in manifest.steps:
+        relative = step.artifacts.get(MOTION_KIND)
+        parts = step.drawn_parts()
+        if relative is None or relative in absent or passed.get(relative) == len(parts):
+            continue
+        try:
+            raw = read(relative)
+            if raw is None:
+                absent.add(relative)
+                continue
+            read_motion(raw, parts)
+        except ValueError as exc:
+            raise ValueError(
+                f"step {step.index}'s {MOTION_KIND} artifact {relative!r} "
+                f"is not a motion the viewport can play for that step: {exc}"
+            ) from exc
+        passed[relative] = len(parts)
+
+
+def _motion_bytes(item: Path, relative: str) -> bytes | None:
+    """A listed motion's bytes, or ``None`` when the item does not have it.
+
+    Its size is taken before any of it is read, so a file far past the largest
+    a motion may be is refused unread; and no more than one byte past that is
+    read even so, so a file that grew in between is still refused for its size
+    rather than read whole.
+    """
+    path = _inside_item(item, relative, "artifact")
+    if not path.is_file():
+        return None
+    size = path.stat().st_size
+    if size > MAX_MOTION_BYTES:
+        raise ValueError(f"it is {size} bytes, more than the {MAX_MOTION_BYTES} a motion may take")
+    with path.open("rb") as motion:
+        return motion.read(MAX_MOTION_BYTES + 1)
 
 
 def read_source_json(item_dir: Path) -> dict | None:

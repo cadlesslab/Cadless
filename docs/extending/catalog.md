@@ -105,7 +105,7 @@ entry in `steps` has:
 | `instruction` | the natural-language instruction for this step |
 | `code` | path to the step's script, relative to the item directory and inside it: no absolute path, no `..`, nothing that leaves the item through a link |
 | `geometry` | `volume` / `bbox`, measured when the item was authored, in the domain's authoring units; the loader files them on the version in millimetres |
-| `artifacts` | key → relative path, likewise inside the item. The key is the kind (`glb`, `stl`, …) for a step's first file of that kind and `<kind>:<part>` for each later one (`glb:1`, `glb:2`), so a step built as several parts carries one file per part. A step of several parts may also carry its whole build as one file of each, under `assembly_glb` and `assembly_step` — keyed once, and filed as `assembly.glb` / `assembly.step` as a build writes them |
+| `artifacts` | key → relative path, likewise inside the item. The key is the kind (`glb`, `stl`, …) for a step's first file of that kind and `<kind>:<part>` for each later one (`glb:1`, `glb:2`), so a step built as several parts carries one file per part. A step of several parts may also carry its whole build as one file of each, under `assembly_glb` and `assembly_step` — keyed once, and filed as `assembly.glb` / `assembly.step` as a build writes them — and the motion the viewport plays its parts apart and back together from, under `assembly`: keyed once, filed as `assembly.json`, and described in [A kit's assembly motion](#a-kits-assembly-motion) |
 | `assertions` | optional post-conditions, e.g. `{"volume_tol": 0.05}` |
 | `expected_bodies` | how many disjoint solids the step deliberately produces; absent means 1 |
 | `parts` | optional names of the step's parts, in part order, as its build labelled them: one per part, each at most 128 characters, showing something other than spaces and invisible format characters, and free of control characters, line separators, bidi embeddings, overrides and isolates, tag characters and lone surrogates. Stored with the version and returned in its API `parts` list wherever they number its part files; absent, the parts are numbered as before |
@@ -118,7 +118,9 @@ directory (spelled as a `.cls` entry would be, and the item directory must not b
 a symlink), every artifact key must be a kind shaped like a file extension
 (letters, digits, `_` and `-`, at most 32 characters) or such a kind followed by
 `:` and a part number from 1 with no leading zero, with no part number of a kind
-skipped, `assembly_glb` and `assembly_step` at most once each, a step's `parts`
+skipped, `assembly_glb`, `assembly_step` and `assembly` at most once each, a
+step's `assembly` motion, where its file is there, must be one the viewport can
+play for that step's parts (below), a step's `parts`
 must name each of its parts once with names of at most 128 characters that show
 something and hold no control character, line separator, bidi embedding,
 override or isolate, tag character or lone surrogate, and `domain` must name a
@@ -131,6 +133,58 @@ into the store, and the artifacts route serves the copies.
 Each step's script is ordinary build123d that assigns its output to `result` —
 the same contract generated code obeys, enforced by the validator and described
 in [core-modules.md](./core-modules.md#changing-the-validator).
+
+## A kit's assembly motion
+
+A build checked as an assembly gets its motion from that check
+([pipeline.md](../pipeline.md)). A catalog item can carry its own: whoever bakes
+it writes the motion from the order and the headings their own tooling verified,
+and lists it, under the key `assembly`, on any step of two or more `glb` parts it
+wants played. The engine checks the file's shape when the item is loaded, and
+when a package carrying it is imported — before anything is written — and
+refuses the item, with the reason, if it is not a motion the viewport can play
+for that step's parts. It does not measure the parts again: the author vouches
+that they clear one another along the headings given.
+
+The file is one JSON object. A part is named by its ordinal, the number of its
+`glb` file in the step (`glb` is 0, `glb:1` is 1, …). Every list indexed by part
+has one entry per part, and every distance is a fraction of the assembled
+model's largest dimension, at most 2.732 times the part count:
+
+| Field | Meaning |
+| --- | --- |
+| `order` | the ordinals in the order the parts go together, each once |
+| `releases` | per part, the heading it comes off along — three numbers in the build's frame, Z up — or `[]` for a part that stays where it is; at least one part has a heading |
+| `stretch` | per part, how many spacings it goes out when no travel is given: an integer from 1 to the part count |
+| `explode_fraction` | that spacing: above 0 and at most 1 |
+| `travel` | optional: per part, how far it goes out; above 0 for every part with a heading |
+| `steps` | optional: `order` cut into runs, in order; a run's parts move at once. Absent, every part is a run of its own |
+| `subassemblies` | optional, and only beside `steps`: groups of two or more parts inside one run, no part in two of them. A group comes off whole, along the heading its members share in `releases` — or not at all, when none of them has one — and then comes apart: `splits` gives each member's heading off the group, `[]` for a member that stays with it, and `split_travel` how far it goes, above 0 along a split and 0 for a member that stays |
+
+```json
+{"order": [0, 1, 2, 3, 4], "releases": [[], [0, 0, 1], [1, 0, 0], [1, 0, 0], [0, -1, 0]],
+ "stretch": [1, 1, 1, 2, 1], "explode_fraction": 0.35, "travel": [0, 0.4, 0.5, 0.5, 0.3],
+ "steps": [[0], [1], [2, 3, 4]],
+ "subassemblies": [{"parts": [2, 3], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.2]}]}
+```
+
+The viewport takes the parts apart a run at a time, the last run first: every
+part of the run that has a heading moves at once, a sub-assembly by the largest
+travel among its members, and then the run's sub-assemblies come apart, as a
+move of their own. The toolbar's "Step N of K" counts those moves, not the
+file's runs: each run is at most two of them — its parts leaving the model, then
+its sub-assemblies coming apart — and a move with nothing in it is not played.
+Putting the parts back plays the same moves in reverse. Keys it does not know are ignored, and the first five fields keep their
+meaning whatever else a file carries, so a viewer that predates `steps` and
+`subassemblies` plays the same file a part at a time.
+
+`cadless.assembly_guide.motion_payload` returns the motion to write, from an
+order, the headings and the parts' meshes, measuring the travels as a checked
+build's are measured, and raises rather than return a grouped motion the
+viewport would not play. `cadless.assembly_motion.read_motion` reads and judges
+one file against a step's part ordinals, and `load_manifest` and an import run
+the same judgement on every step through `cadless.catalog.manifest.check_motions`,
+each file once.
 
 ## The CLI
 
@@ -254,7 +308,8 @@ Metric sets compose: `BASE_METRICS` (volume, bbox) applies everywhere,
 - [ ] Item directory contains `manifest.json`, under the right domain's content dir
 - [ ] `domain` names a registered domain
 - [ ] Step indices start at 1 and are contiguous; every `code` path exists; no `code`, artifact or `thumbnail` path leaves the item directory
-- [ ] Each artifact key is a kind (`glb`) or a kind and a part number from 1 (`glb:1`), with no part number skipped; `assembly_glb` / `assembly_step` at most once each
+- [ ] Each artifact key is a kind (`glb`) or a kind and a part number from 1 (`glb:1`), with no part number skipped; `assembly_glb` / `assembly_step` / `assembly` at most once each
+- [ ] An `assembly` motion, if given, sits on a step of two or more `glb` parts and passes `cadless.assembly_motion.read_motion` against their ordinals, 0 up to one fewer than their count — `load_manifest` checks it so
 - [ ] `parts`, if given, names each part once, in part order
 - [ ] Each step script assigns its output to `result`
 - [ ] `list` shows the item before you try to `load` it

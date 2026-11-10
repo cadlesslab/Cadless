@@ -324,7 +324,15 @@ candidate judging, the identity seam and the image decisions are recorded under
    before the description and stands without it, because it is a measurement
    rather than anything said about one; a version without
    it — one never checked as an assembly, or rebuilt without the check — is
-   drawn with no player rather than one that guesses.
+   drawn with no player rather than one that guesses. A catalog version takes
+   its motion from its item instead: whoever baked the item wrote the same file,
+   optionally grouped into runs whose parts move at once and sub-assemblies that
+   come off whole and then apart, and an import (before writing anything) and
+   `load_manifest` refuse one the viewport could not play, by the one Python
+   statement of what it plays (`cadless/assembly_motion.py`, held to the
+   viewport's parser by a shared case file). The geometry behind such a motion
+   is the author's word: the engine checks the file's shape, never re-measures
+   the parts.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount

@@ -1064,6 +1064,203 @@ def test_a_legacy_item_records_no_part_names(tmp_path):
     assert version.parts is None
 
 
+# --- the motion a step carries ------------------------------------------------
+
+# A motion for a step of two parts: a base that stays and a lid lifted off it.
+_LID_MOTION = json.dumps(
+    {"order": [0, 1], "releases": [[], [0, 0, 1]], "stretch": [1, 1], "explode_fraction": 0.35}
+).encode()
+
+
+def _write_motion_item(
+    catalog_dir: Path,
+    house_id: str,
+    motion: bytes | None,
+    keys: tuple[str, ...] = ("assembly",),
+    glbs: int = 2,
+) -> Path:
+    """One step of ``glbs`` glb parts listing ``motion`` under each of ``keys``.
+
+    The motion sits in the item under a name of the author's choosing; ``None``
+    lists one the item does not have.
+    """
+    house = catalog_dir / house_id
+    (house / "steps").mkdir(parents=True, exist_ok=True)
+    (house / "steps" / "01.py").write_text("result = 1\n")
+    art = house / "artifacts" / "01"
+    art.mkdir(parents=True, exist_ok=True)
+    artifacts = {}
+    for n in range(glbs):
+        (art / f"model_p{n}.glb").write_bytes(b"glTF" + bytes([n]))
+        artifacts["glb" if n == 0 else f"glb:{n}"] = f"artifacts/01/model_p{n}.glb"
+    if motion is not None:
+        (art / "motion.json").write_bytes(motion)
+    for key in keys:
+        artifacts[key] = "artifacts/01/motion.json"
+    step = {"index": 1, "instruction": "build it", "code": "steps/01.py", "artifacts": artifacts}
+    (house / "manifest.json").write_text(
+        json.dumps({"id": house_id, "name": house_id, "steps": [step]})
+    )
+    return house
+
+
+def test_a_step_s_motion_is_filed_under_the_name_a_build_gives_its_own(tmp_path):
+    """The viewer asks a version for its motion by kind, and a version built
+    here keeps it as `assembly.json`; a loaded item's reads back the same."""
+    _, rows = _loaded(tmp_path, _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION))
+    motions = [
+        (a.part, Path(a.path).name, Path(a.path).read_bytes()) for a in rows if a.kind == "assembly"
+    ]
+    assert motions == [(0, "assembly.json", _LID_MOTION)]
+
+
+def test_a_motion_the_viewer_would_not_play_is_refused_with_its_step(tmp_path):
+    from cadless.catalog.manifest import load_manifest
+
+    for_three = json.dumps({**json.loads(_LID_MOTION), "order": [0, 1, 2]}).encode()
+    house = _write_motion_item(tmp_path / "cat", "kit", for_three)
+
+    with pytest.raises(ValueError, match="step 1.*order lists 3 parts, but 2 are drawn"):
+        load_manifest(house)
+
+
+def test_a_listed_motion_that_is_not_there_is_left_alone(tmp_path):
+    """Missing, as any other artifact may be; the version simply has none."""
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", None)
+
+    assert load_manifest(house).steps[0].artifacts["assembly"] == "artifacts/01/motion.json"
+
+
+def test_a_motion_too_large_to_be_one_is_refused_without_being_read(tmp_path, monkeypatch):
+    from cadless.assembly_motion import MAX_MOTION_BYTES
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION.ljust(MAX_MOTION_BYTES + 1))
+    real_open = Path.open
+
+    def open_anything_but_the_motion(self, *args, **kwargs):
+        assert self.name != "motion.json", "the motion was opened"
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_anything_but_the_motion)
+
+    with pytest.raises(ValueError, match="step 1.*more than the"):
+        load_manifest(house)
+
+
+def test_a_motion_on_a_step_of_one_part_is_refused(tmp_path):
+    """A step of one glb file is drawn whole, with no part to move, so no motion
+    plays on it -- not even one naming that one part."""
+    from cadless.catalog.manifest import load_manifest
+
+    one = json.dumps(
+        {"order": [0], "releases": [[0, 0, 1]], "stretch": [1], "explode_fraction": 0.35}
+    ).encode()
+    house = _write_motion_item(tmp_path / "cat", "kit", one, glbs=1)
+
+    with pytest.raises(ValueError, match="step 1.*order lists 1 parts, but 0 are drawn"):
+        load_manifest(house)
+
+
+def test_a_motion_several_steps_share_is_read_once(tmp_path, monkeypatch):
+    """Judged once per number of parts a step draws, so a manifest repeating a
+    path does not repeat the reading of the file behind it."""
+    import cadless.assembly_motion as motion_module
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
+    written = json.loads((house / "manifest.json").read_text())
+    step = written["steps"][0]
+    for index in (2, 3, 4):
+        (house / "steps" / f"0{index}.py").write_text("result = 1\n")
+        written["steps"].append({**step, "index": index, "code": f"steps/0{index}.py"})
+    (house / "manifest.json").write_text(json.dumps(written))
+    reads = []
+    real_parse = motion_module.parse_motion
+
+    def counted(raw):
+        reads.append(len(raw))
+        return real_parse(raw)
+
+    monkeypatch.setattr(motion_module, "parse_motion", counted)
+
+    load_manifest(house)
+
+    assert reads == [len(_LID_MOTION)]
+
+
+def test_a_shared_motion_is_judged_again_for_a_step_drawing_another_count(tmp_path):
+    """Passed for two parts, the same file is still no motion of three."""
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
+    written = json.loads((house / "manifest.json").read_text())
+    step = written["steps"][0]
+    (house / "steps" / "02.py").write_text("result = 1\n")
+    (house / "artifacts" / "01" / "model_p2.glb").write_bytes(b"glTF" + bytes([2]))
+    artifacts = {**step["artifacts"], "glb:2": "artifacts/01/model_p2.glb"}
+    written["steps"].append({**step, "index": 2, "code": "steps/02.py", "artifacts": artifacts})
+    (house / "manifest.json").write_text(json.dumps(written))
+
+    with pytest.raises(ValueError, match="step 2.*order lists 2 parts, but 3 are drawn"):
+        load_manifest(house)
+
+
+def test_a_motion_judged_is_let_go_before_the_next_is_read(tmp_path, monkeypatch):
+    """Only a verdict is kept per file: an item of many motions never holds more
+    than one of them read at once."""
+    import gc
+    import weakref
+
+    import cadless.assembly_motion as motion_module
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
+    written = json.loads((house / "manifest.json").read_text())
+    step = written["steps"][0]
+    for index in (2, 3):
+        (house / "steps" / f"0{index}.py").write_text("result = 1\n")
+        (house / "artifacts" / "01" / f"motion{index}.json").write_bytes(_LID_MOTION)
+        artifacts = {**step["artifacts"], "assembly": f"artifacts/01/motion{index}.json"}
+        written["steps"].append(
+            {**step, "index": index, "code": f"steps/0{index}.py", "artifacts": artifacts}
+        )
+    (house / "manifest.json").write_text(json.dumps(written))
+
+    class Held(dict):
+        pass
+
+    earlier = []
+    real_parse = motion_module.parse_motion
+
+    def parse(raw):
+        gc.collect()
+        assert all(ref() is None for ref in earlier), "a motion judged earlier is still held"
+        payload = Held(real_parse(raw))
+        earlier.append(weakref.ref(payload))
+        return payload
+
+    monkeypatch.setattr(motion_module, "parse_motion", parse)
+
+    load_manifest(house)
+
+    assert len(earlier) == 3
+
+
+def test_a_motion_keyed_twice_on_one_step_is_refused(tmp_path):
+    """One file for the whole build: a second key would file a second copy of it."""
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(
+        tmp_path / "cat", "kit", _LID_MOTION, keys=("assembly", "assembly:1")
+    )
+
+    with pytest.raises(ValueError, match="keyed once"):
+        load_manifest(house)
+
+
 def _write_measured_item(catalog_dir: Path, item_id: str, domain: str, bbox, volume) -> Path:
     """A one-step item whose step records its size and volume as the bake does: in
     the units the item's domain is authored in."""

@@ -26,7 +26,12 @@ from typing import Any
 
 from pydantic_core import PydanticSerializationError
 
-from cadless.catalog.manifest import CatalogManifest, discover_houses, read_source_json
+from cadless.catalog.manifest import (
+    CatalogManifest,
+    check_motions,
+    discover_houses,
+    read_source_json,
+)
 from cadless.catalog.origins import (
     ENGINE_PROVENANCE_KEYS,
     ItemOrigin,
@@ -468,6 +473,14 @@ def _checked_manifest(package: ClsPackage) -> CatalogManifest:
                     f"step {step.index}'s {key} artifact names {relative!r}, "
                     "which this package does not carry"
                 )
+    # Read from what the package carries, the same check `load_manifest` makes
+    # on the files: found after the write instead, it would leave an item on
+    # disk holding its id that no load will take. Every path it reads was just
+    # found among the entries.
+    try:
+        check_motions(manifest, package.entries.get)
+    except ValueError as exc:
+        raise CatalogImportError(str(exc)) from exc
     if manifest.thumbnail is not None and manifest.thumbnail not in carried:
         raise CatalogImportError(
             f"this package's thumbnail names {manifest.thumbnail!r}, which it does not carry"

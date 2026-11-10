@@ -17,10 +17,15 @@ kernel and does not pay for one.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+import numbers
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 
 import numpy as np
 
+from cadless.assembly_motion import HEADING_EPSILON, SAME_HEADING_TOLERANCE, require_motion
+from cadless.assembly_motion import MOTION_FILE as MOTION_FILE  # where callers have always found it
 from cadless.catalog.thumbnail import (
     DEFAULT_SIZE,
     isometric_basis,
@@ -45,27 +50,19 @@ STEP_FRAME_MIN_PARTS = 4
 #: room for it. A part with nothing engaged travels exactly this far.
 EXPLODE_FRACTION = 0.35
 
-#: Below this a heading is not a direction. A zero-length vector cannot be
-#: normalised, and scaling it would move the part nowhere while claiming to move
-#: it somewhere.
-_HEADING_EPSILON = 1e-9
-
-#: How close two unit headings have to be to count as one direction.
-_SAME_HEADING_TOLERANCE = 1e-6
-
 #: Beyond this share of a unit heading along X, the heading is too near X for X
 #: to serve as the second axis its cross product needs; Y is used instead. Any
 #: value well short of one keeps the cross product far from zero length.
 _NEAR_X = 0.9
-
-#: The file a checked assembly's motion is written to, beside its exports.
-MOTION_FILE = "assembly.json"
 
 
 def motion_payload(
     order: Sequence[int],
     releases: Sequence[Sequence[float]],
     part_meshes: Sequence[np.ndarray] | None = None,
+    *,
+    steps: Sequence[Sequence[int]] | None = None,
+    subassemblies: Sequence[Mapping[str, Sequence]] | None = None,
 ) -> dict:
     """The measured order and headings, in the form the viewport plays them from.
 
@@ -91,6 +88,25 @@ def motion_payload(
     measured: per part index, ``stretch`` counts how many of those fractions the
     part goes out once every part is apart, so pieces leaving the same way do not
     stop at the same place.
+
+    ``steps`` and ``subassemblies`` group what the parts do, for a build whose
+    author knows more than one order can say: ``steps`` cuts the order into runs
+    whose parts move at once, and each sub-assembly -- ``{"parts": [...],
+    "splits": [...]}``, a heading or ``[]`` per member -- comes off whole and then
+    apart. Each is written with ``split_travel`` added: how far each member comes
+    off the rest, measured as a part's travel is measured, from the members' own
+    meshes in the order they go together and along their splits, and filed as a
+    fraction of the whole model's largest dimension, as ``travel`` is. A member
+    that stays with the rest gets none. Measured means ``part_meshes`` are needed,
+    and have to be the parts the order names with a finite size to them; without
+    them this raises rather than guess.
+
+    A grouped motion is checked before it is returned, against one part for each
+    entry of the order, and raises ``ValueError`` naming every problem rather
+    than return a file the viewport would not play: the grouping is an author's
+    word rather than something measured here, and a refused file plays as no
+    player at all. A motion without either is returned as it always was, whatever
+    it holds.
     """
     headings = [
         [float(c) for c in releases[index]]
@@ -111,7 +127,144 @@ def motion_payload(
         if np.isfinite(size) and size > 0:
             travels = _travels(part_meshes, order, headings)
             payload["travel"] = [travel / size for travel in travels]
-    return payload
+    if steps is None and subassemblies is None:
+        return payload
+    if steps is not None:
+        payload["steps"] = [_ordinals(run) for run in steps]
+    if subassemblies is not None:
+        payload["subassemblies"] = _subassemblies(order, subassemblies, part_meshes)
+    # One part for each entry of the order, as the viewport counts the parts it
+    # draws: counted from the parts the order names instead, an order naming one
+    # part twice would be checked against itself and pass.
+    return require_motion(payload, range(len(order)))
+
+
+def _subassemblies(
+    order: Sequence[int],
+    subassemblies: Sequence[Mapping[str, Sequence]],
+    part_meshes: Sequence[np.ndarray] | None,
+) -> list[dict]:
+    """Each sub-assembly as the file holds it, with how far each member comes off.
+
+    Members and splits are written as numbers, the way the order and the
+    headings are, but left in the shape they came in -- a split of the wrong
+    length, a member the order does not name, a member that is not a whole
+    number -- for the check that follows to name, rather than tidied here into
+    something nobody was told about. Only one with no list of parts or of splits
+    to write is refused here, there being nothing to leave for the check.
+    """
+    written = []
+    for position, sub in enumerate(subassemblies):
+        parts = _listed(sub.get("parts")) if isinstance(sub, Mapping) else None
+        splits = _listed(sub.get("splits")) if isinstance(sub, Mapping) else None
+        if parts is None or splits is None:
+            raise ValueError(
+                f"this grouping is not a motion the viewport plays: sub-assembly {position} "
+                "is not a mapping with a list of parts and a list of splits"
+            )
+        written.append({"parts": _ordinals(parts), "splits": [_numbers(s) for s in splits]})
+    if not written:
+        return written
+    if part_meshes is None or sorted(order) != list(range(len(part_meshes))):
+        raise ValueError(
+            "a sub-assembly needs the meshes of the parts the order names: "
+            "how far each member comes off it is measured from them"
+        )
+    size = _largest_dimension(part_meshes)
+    if not (np.isfinite(size) and size > 0):
+        raise ValueError(
+            "the parts' meshes have no finite size for a sub-assembly's travel to be a fraction of"
+        )
+    for sub in written:
+        sub["split_travel"] = [travel / size for travel in _split_travels(part_meshes, order, sub)]
+    return written
+
+
+def _split_travels(
+    part_meshes: Sequence[np.ndarray], order: Sequence[int], sub: Mapping[str, list]
+) -> list[float]:
+    """How far each member of ``sub`` comes off the rest, in the meshes' units.
+
+    The members alone, taken in the order they go together and moved along
+    their splits: what a member has to clear as it leaves is the members placed
+    before it, the sub-assembly being off the model by then. A member the order
+    does not name is not measured and goes nowhere.
+    """
+    members = sub["parts"]
+    if not all(isinstance(member, int) and not isinstance(member, bool) for member in members):
+        # Nothing to measure a member by that is not a part's number; the check
+        # that follows names it.
+        return [0.0] * len(members)
+    split_of = {
+        member: _measurable(sub["splits"][position]) if position < len(sub["splits"]) else []
+        for position, member in enumerate(members)
+    }
+    placed = [index for index in order if index in split_of]
+    travels = _travels(
+        [part_meshes[index] for index in placed],
+        list(range(len(placed))),
+        [split_of[index] for index in placed],
+    )
+    measured = dict(zip(placed, travels, strict=True))
+    return [measured.get(member, 0.0) for member in members]
+
+
+def _listed(value: object) -> list | None:
+    """``value``'s entries as a list, if it holds them in an order -- a list, a
+    tuple, an array, a generator, whatever a caller built its grouping from --
+    and ``None`` otherwise: for a string, bytes or a mapping, which hold no
+    entries of this kind, and for a set, whose order is no order, since members
+    are paired with their splits by position."""
+    if isinstance(value, (str, bytes, bytearray, memoryview, Mapping, AbstractSet)):
+        return None
+    try:
+        entries = iter(value)
+    except TypeError:
+        return None
+    return list(entries)
+
+
+def _ordinals(run: object) -> object:
+    """A run or a sub-assembly's members with each whole number written as an
+    ``int``, and anything else -- a fraction, ``True``, a run that is not a
+    sequence -- left as it came, for the check to name rather than this to round
+    into a part nobody named."""
+    listed = _listed(run)
+    if listed is None:
+        return run
+    return [_ordinal(value) for value in listed]
+
+
+def _ordinal(value: object) -> object:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real) and float(value).is_integer():
+        return int(value)
+    return value
+
+
+def _numbers(split: object) -> object:
+    """A split with each number in it written as a ``float``, otherwise as it came."""
+    listed = _listed(split)
+    if listed is None:
+        return split
+    return [
+        float(c) if isinstance(c, numbers.Real) and not isinstance(c, bool) else c for c in listed
+    ]
+
+
+def _measurable(split: object) -> list:
+    """A split a member can be moved along -- three finite numbers -- or ``[]``,
+    which moves it nowhere: the check that follows names a split that is neither."""
+    if (
+        isinstance(split, list)
+        and len(split) == 3
+        and all(isinstance(c, float) and math.isfinite(c) for c in split)
+    ):
+        return split
+    return []
 
 
 def compose(meshes: Sequence[np.ndarray], offsets: Sequence[Sequence[float]]) -> np.ndarray:
@@ -289,7 +442,7 @@ def _stretch(index: int, order: Sequence[int], releases: Sequence[Sequence[float
         for other in placed_before
         if other < len(releases)
         and _is_heading(releases[other])
-        and float(np.dot(_unit(releases[other]), heading)) >= 1 - _SAME_HEADING_TOLERANCE
+        and float(np.dot(_unit(releases[other]), heading)) >= 1 - SAME_HEADING_TOLERANCE
     )
 
 
@@ -313,7 +466,7 @@ def _unit(heading: Sequence[float]) -> np.ndarray:
 
 
 def _is_heading(heading: Sequence[float]) -> bool:
-    return len(heading) == 3 and float(np.linalg.norm(np.asarray(heading))) > _HEADING_EPSILON
+    return len(heading) == 3 and float(np.linalg.norm(np.asarray(heading))) > HEADING_EPSILON
 
 
 def _largest_dimension(meshes: Sequence[np.ndarray]) -> float:

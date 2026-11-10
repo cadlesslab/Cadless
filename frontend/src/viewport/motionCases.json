@@ -1,0 +1,1777 @@
+[
+  {
+    "name": "a motion that is null",
+    "valid": false,
+    "why": "Only a JSON object is a motion.",
+    "parts": [0, 1, 2],
+    "payload": null
+  },
+  {
+    "name": "a motion that is a list",
+    "valid": false,
+    "why": "A list is not an object, whatever it holds.",
+    "parts": [0, 1, 2],
+    "payload": [0, 1, 2]
+  },
+  {
+    "name": "a motion that is a string",
+    "valid": false,
+    "why": "A string has a length in both languages and is still not an object.",
+    "parts": [0, 1, 2],
+    "payload": "order"
+  },
+  {
+    "name": "the five fields alone",
+    "valid": true,
+    "why": "The motion every file before the grouping is: one part a joint, the last placed off first.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "the five fields and a measured travel",
+    "valid": true,
+    "why": "A distance per part, more than none for every part with a heading.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, 1.25, 0.75]
+    }
+  },
+  {
+    "name": "runs and no sub-assemblies",
+    "valid": true,
+    "why": "Two caps pressed onto a tube at once come off at once.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0], [1, 2]]
+    }
+  },
+  {
+    "name": "a sub-assembly lifted off whole and then parted",
+    "valid": true,
+    "why": "A bracket and its pin come off along their shared heading, then the pin leaves the bracket.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "two sub-assemblies in one run",
+    "valid": true,
+    "why": "Each comes off along its own members' shared heading, then each comes apart.",
+    "parts": [0, 1, 2, 3, 4],
+    "payload": {
+      "order": [0, 1, 2, 3, 4],
+      "releases": [[], [0, 0, 1], [0, 0, 1], [1, 0, 0], [1, 0, 0]],
+      "stretch": [1, 1, 1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.4, 0.6, 0.5, 0.5],
+      "steps": [[0], [1, 2, 3, 4]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.3]}, {"parts": [3, 4], "splits": [[0, 0, 1], [0, 0, -1]], "split_travel": [0.2, 0.2]}]
+    }
+  },
+  {
+    "name": "a sub-assembly that stays put and only comes apart",
+    "valid": true,
+    "why": "Its members have no heading in releases, so it only splits; a cover gives the motion a heading.",
+    "parts": [0, 1, 2, 3],
+    "payload": {
+      "order": [0, 1, 2, 3],
+      "releases": [[], [], [], [0, 0, 1]],
+      "stretch": [1, 1, 1, 1],
+      "explode_fraction": 0.35,
+      "steps": [[0], [1, 2], [3]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.3]}]
+    }
+  },
+  {
+    "name": "a sub-assembly that stays put and splits, with nothing else moving",
+    "valid": false,
+    "why": "Only a split would move, and at least one release slot has to be a heading.",
+    "parts": [0, 1, 2, 3],
+    "payload": {
+      "order": [0, 1, 2, 3],
+      "releases": [[], [], [], []],
+      "stretch": [1, 1, 1, 1],
+      "explode_fraction": 0.35,
+      "steps": [[0], [1, 2], [3]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.3]}]
+    }
+  },
+  {
+    "name": "a sub-assembly that comes off whole and never comes apart",
+    "valid": true,
+    "why": "Nothing asks a member to split: every split slot empty and every split travel 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], []], "split_travel": [0, 0]}]
+    }
+  },
+  {
+    "name": "an empty list of sub-assemblies beside steps",
+    "valid": true,
+    "why": "Present and empty is allowed once steps are there.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0], [1, 2]],
+      "subassemblies": []
+    }
+  },
+  {
+    "name": "drawn parts listed out of order",
+    "valid": true,
+    "why": "The drawn ordinals are compared as a set; the order is the payload's to give.",
+    "parts": [2, 0, 1],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "no order",
+    "valid": false,
+    "why": "order is required.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order missing a drawn part",
+    "valid": false,
+    "why": "order is as long as the parts drawn.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order naming a part twice",
+    "valid": false,
+    "why": "order names each drawn part exactly once.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 1],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order naming a part twice, once as 1.0",
+    "valid": false,
+    "why": "1.0 is the part 1 to both readers, so part 1 is named twice and part 2 not at all.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 1.0],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order naming a part not drawn",
+    "valid": false,
+    "why": "Part 3 is not drawn, and has no release slot either.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 3],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order naming a part as true",
+    "valid": false,
+    "why": "Python's True equals 1 and would sort into place; a boolean is not an ordinal.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, true, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order written as a string of digits",
+    "valid": false,
+    "why": "Three characters long, like the parts drawn, but not a list.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": "012",
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order holding a list",
+    "valid": false,
+    "why": "An ordinal is a number, not a list holding one.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, [1], 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order naming a part by an integer too long for a double",
+    "valid": false,
+    "why": "Python reads an int no float can hold and JavaScript reads Infinity; neither is a drawn part.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "an order written as floats and with an exponent",
+    "valid": true,
+    "why": "Python reads 1.0 and 20e-1 as floats and JavaScript as integers; to both they are whole.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0.0, 1.0, 20e-1],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a drawn part with no release slot",
+    "valid": false,
+    "why": "Slots are indexed by ordinal, and two slots have no index 2.",
+    "parts": [1, 2],
+    "payload": {
+      "order": [1, 2],
+      "releases": [[0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1],
+      "explode_fraction": 0.35
+    }
+  },
+  {
+    "name": "nothing drawn and nothing to move",
+    "valid": false,
+    "why": "Every list fits a model of no parts, but no release slot is a heading.",
+    "parts": [],
+    "payload": {
+      "order": [],
+      "releases": [],
+      "stretch": [],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "no releases",
+    "valid": false,
+    "why": "releases is required.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a release slot missing",
+    "valid": false,
+    "why": "releases has a slot for every drawn part.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a release slot too many",
+    "valid": false,
+    "why": "releases has a slot for every drawn part and no more.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0], [0, 1, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a heading of two numbers",
+    "valid": false,
+    "why": "A slot is empty or exactly three numbers.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a heading of four numbers",
+    "valid": false,
+    "why": "A slot is empty or exactly three numbers; a fourth is not ignored.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1, 0], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a release slot holding null",
+    "valid": false,
+    "why": "A part that stays is an empty list, not null.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], null, [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a heading written as a three-character string",
+    "valid": false,
+    "why": "Three characters are not three numbers.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], "001", [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a heading written as an object with a length",
+    "valid": false,
+    "why": "An object with indices and a length is not a list.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], {"0": 0, "1": 0, "2": 1, "length": 3}, [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a heading of booleans",
+    "valid": false,
+    "why": "Python reads False and True as 0 and 1; a boolean is not a number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [false, false, true], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a heading holding a string",
+    "valid": false,
+    "why": "Text is not a number, though JavaScript would turn this one into 1 if asked.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, "1"], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a heading holding 1e400",
+    "valid": false,
+    "why": "Both readers turn 1e400 into infinity, which is not a finite number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1e400], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "no release slot with a heading",
+    "valid": false,
+    "why": "Nothing would move.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [], []],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "the only heading exactly HEADING_EPSILON long",
+    "valid": false,
+    "why": "A length not above the threshold is no heading, so nothing would move.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1e-9], []],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "the only heading just longer than HEADING_EPSILON",
+    "valid": true,
+    "why": "Above the threshold is a heading, however short.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1.000001e-9], []],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "no stretch beside a travel",
+    "valid": false,
+    "why": "stretch is required, even where a travel leaves it unused.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "explode_fraction": 0.5,
+      "travel": [0, 1, 1]
+    }
+  },
+  {
+    "name": "a stretch slot missing",
+    "valid": false,
+    "why": "stretch has an entry for every drawn part.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch of zero",
+    "valid": false,
+    "why": "A stretch is at least 1.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 0, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch as large as the part count",
+    "valid": true,
+    "why": "A stretch may be as large as the part count.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 3, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch past the part count",
+    "valid": false,
+    "why": "A stretch is at most the part count.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 4, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch that is a fraction",
+    "valid": false,
+    "why": "A stretch is a whole number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1.5, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch written as 2.0",
+    "valid": true,
+    "why": "A float to Python and an integer to JavaScript; to both, the whole number 2.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 2.0, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch of true",
+    "valid": false,
+    "why": "Python's True is 1, inside the range; a boolean is not a number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, true, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch of 1e308",
+    "valid": false,
+    "why": "A whole number to both readers, and far past the part count.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1e308, 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "a stretch holding a list",
+    "valid": false,
+    "why": "A list holding a number is not a number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, [2], 1],
+      "explode_fraction": 0.5
+    }
+  },
+  {
+    "name": "no explode_fraction beside a travel",
+    "valid": false,
+    "why": "explode_fraction is required, even where a travel leaves it unused.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "travel": [0, 1, 1]
+    }
+  },
+  {
+    "name": "an explode_fraction of zero",
+    "valid": false,
+    "why": "The fraction is above 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0
+    }
+  },
+  {
+    "name": "an explode_fraction of one",
+    "valid": true,
+    "why": "The fraction may be as large as MAX_EXPLODE_FRACTION.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 1
+    }
+  },
+  {
+    "name": "an explode_fraction just above one",
+    "valid": false,
+    "why": "The next double above MAX_EXPLODE_FRACTION is past it.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 1.0000000000000002
+    }
+  },
+  {
+    "name": "an explode_fraction of true",
+    "valid": false,
+    "why": "Python's True is 1, inside the range; a boolean is not a number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": true
+    }
+  },
+  {
+    "name": "an explode_fraction written as a string",
+    "valid": false,
+    "why": "Text is not a number, though JavaScript's isFinite says this one is.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": "0.5"
+    }
+  },
+  {
+    "name": "an explode_fraction wrapped in a list",
+    "valid": false,
+    "why": "A list is not a number, though JavaScript's isFinite says this one is.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": [0.5]
+    }
+  },
+  {
+    "name": "an explode_fraction of 1e308",
+    "valid": false,
+    "why": "Finite, and far past MAX_EXPLODE_FRACTION.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 1e308
+    }
+  },
+  {
+    "name": "an explode_fraction of 1e400",
+    "valid": false,
+    "why": "Both readers turn 1e400 into infinity, which is not a finite number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 1e400
+    }
+  },
+  {
+    "name": "an explode_fraction that is an integer too long for a double",
+    "valid": false,
+    "why": "Python reads an int no float can hold and JavaScript reads Infinity; neither is finite.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+    }
+  },
+  {
+    "name": "an explode_fraction so small it reads as zero",
+    "valid": false,
+    "why": "Both readers round 1e-400 to 0, which is not above 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 1e-400
+    }
+  },
+  {
+    "name": "the smallest explode_fraction a double holds",
+    "valid": true,
+    "why": "The smallest double is above 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 5e-324
+    }
+  },
+  {
+    "name": "a travel holding null",
+    "valid": false,
+    "why": "Only an absent travel falls back to the spacing; one that is there holds a list.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": null
+    }
+  },
+  {
+    "name": "a travel that is not a list",
+    "valid": false,
+    "why": "travel is a list of distances.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": 1
+    }
+  },
+  {
+    "name": "a travel slot missing",
+    "valid": false,
+    "why": "travel has an entry for every drawn part.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, 1]
+    }
+  },
+  {
+    "name": "a negative travel",
+    "valid": false,
+    "why": "A travel is at least 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, -1, 1]
+    }
+  },
+  {
+    "name": "no travel for a part with a heading",
+    "valid": false,
+    "why": "A part with a heading travels more than none.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, 0, 1]
+    }
+  },
+  {
+    "name": "a travel for a part that stays",
+    "valid": true,
+    "why": "Only a part with a heading needs more than none; one that stays may carry any travel in range.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0.5, 1, 1]
+    }
+  },
+  {
+    "name": "a travel at the cap",
+    "valid": true,
+    "why": "Three parts times MAX_TRAVEL_PER_PART, as both sides compute the product.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, 8.196000000000002, 1]
+    }
+  },
+  {
+    "name": "a travel just past the cap",
+    "valid": false,
+    "why": "The next double above the cap is past it.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, 8.196000000000003, 1]
+    }
+  },
+  {
+    "name": "a travel of false for a part that stays",
+    "valid": false,
+    "why": "Python's False equals the 0 a part that stays may travel; a boolean is not a number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [false, 1, 1]
+    }
+  },
+  {
+    "name": "a travel written as a string",
+    "valid": false,
+    "why": "Text is not a distance.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, "1", 1]
+    }
+  },
+  {
+    "name": "a travel holding an object",
+    "valid": false,
+    "why": "An object is not a distance.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "travel": [0, {"mm": 1}, 1]
+    }
+  },
+  {
+    "name": "steps holding null",
+    "valid": false,
+    "why": "Only an absent steps makes each part a run of its own; one that is there holds runs.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": null
+    }
+  },
+  {
+    "name": "steps that are not a list",
+    "valid": false,
+    "why": "An object keyed by position is not a list of runs.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": {"0": [0], "1": [1, 2]}
+    }
+  },
+  {
+    "name": "steps written as the order itself",
+    "valid": false,
+    "why": "Each run is a list; a bare ordinal is not a run of one.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [0, 1, 2]
+    }
+  },
+  {
+    "name": "an empty list of steps",
+    "valid": false,
+    "why": "No runs add up to no order.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": []
+    }
+  },
+  {
+    "name": "an empty run",
+    "valid": false,
+    "why": "A run is never empty.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0], [], [1, 2]]
+    }
+  },
+  {
+    "name": "runs leaving a part out",
+    "valid": false,
+    "why": "The runs add up to the whole order.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0], [1]]
+    }
+  },
+  {
+    "name": "runs naming a part twice",
+    "valid": false,
+    "why": "The runs add up to the order exactly, each part once.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0], [1, 2], [2]]
+    }
+  },
+  {
+    "name": "runs out of the order's sequence",
+    "valid": false,
+    "why": "The runs keep the order's sequence, not only its parts.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0], [2, 1]]
+    }
+  },
+  {
+    "name": "runs cut at other places in the order's sequence",
+    "valid": true,
+    "why": "Where the order is cut is free, as long as the runs add up to it.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0, 1], [2]]
+    }
+  },
+  {
+    "name": "a run naming a part as false",
+    "valid": false,
+    "why": "Python's False equals 0, the order's first part; a boolean is not an ordinal.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[false], [1, 2]]
+    }
+  },
+  {
+    "name": "runs written with integral floats",
+    "valid": true,
+    "why": "0.0, 1.0 and 2.0 are the parts 0, 1 and 2 to both readers.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0.0], [1.0, 2.0]]
+    }
+  },
+  {
+    "name": "a run holding a nested list",
+    "valid": false,
+    "why": "A run holds ordinals, not lists of them.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1, 0, 0], [-1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "steps": [[0], [[1], 2]]
+    }
+  },
+  {
+    "name": "sub-assemblies without steps",
+    "valid": false,
+    "why": "A sub-assembly is parts of one run, so steps have to be there.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "an empty list of sub-assemblies without steps",
+    "valid": false,
+    "why": "The key asks for steps even when it lists nothing.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "subassemblies": []
+    }
+  },
+  {
+    "name": "sub-assemblies holding null",
+    "valid": false,
+    "why": "A key that is there holds a list.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": null
+    }
+  },
+  {
+    "name": "sub-assemblies given as one object",
+    "valid": false,
+    "why": "Even one sub-assembly is given in a list.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": {"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}
+    }
+  },
+  {
+    "name": "a sub-assembly that is a list of parts",
+    "valid": false,
+    "why": "Each sub-assembly is an object.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [[1, 2]]
+    }
+  },
+  {
+    "name": "a second sub-assembly that is null",
+    "valid": false,
+    "why": "Every entry is an object, not only the first.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}, null]
+    }
+  },
+  {
+    "name": "a sub-assembly naming no parts",
+    "valid": false,
+    "why": "A sub-assembly lists its parts.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly of one part",
+    "valid": false,
+    "why": "A sub-assembly has two parts or more.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [2], "splits": [[0, 1, 0]], "split_travel": [0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly naming a part twice",
+    "valid": false,
+    "why": "A sub-assembly's parts are distinct.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [2, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly naming a part twice, once as 1.0",
+    "valid": false,
+    "why": "1 and 1.0 are one part to both readers.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 1.0], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly naming a part as true",
+    "valid": false,
+    "why": "Python's True equals 1, a part of the run; a boolean is not an ordinal.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [true, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly naming a part not drawn",
+    "valid": false,
+    "why": "Part 3 is in no run.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 3], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly holding a nested list",
+    "valid": false,
+    "why": "A member is an ordinal, not a list of one.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [[1], 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly across two runs",
+    "valid": false,
+    "why": "A sub-assembly's parts go on in one run.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1], [2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a part in two sub-assemblies",
+    "valid": false,
+    "why": "Sub-assemblies share no part.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[0, 0, 1], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0.5, 0.5, 0.75],
+      "steps": [[0, 1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}, {"parts": [0, 1], "splits": [[], [1, 0, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly written with integral floats",
+    "valid": true,
+    "why": "1.0 and 2.0 are the parts 1 and 2 to both readers.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1.0, 2.0], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly with no splits",
+    "valid": false,
+    "why": "A sub-assembly lists its splits.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a split slot missing",
+    "valid": false,
+    "why": "splits has a slot for every member.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a split of two numbers",
+    "valid": false,
+    "why": "A split slot is empty or exactly three numbers.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a split slot holding null",
+    "valid": false,
+    "why": "A member that stays with the rest is an empty list, not null.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [null, [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a split of booleans",
+    "valid": false,
+    "why": "Python reads False and True as 0 and 1; a boolean is not a number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [false, true, false]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a split too short to be a heading, with no split travel",
+    "valid": true,
+    "why": "Three numbers with no length to speak of are no split heading, so the member travels 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1e-12]], "split_travel": [0, 0]}]
+    }
+  },
+  {
+    "name": "a split too short to be a heading, with a split travel",
+    "valid": false,
+    "why": "No split heading, so the split travel has to be exactly 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1e-12]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly with no split travel",
+    "valid": false,
+    "why": "A sub-assembly lists its split travel.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]]}]
+    }
+  },
+  {
+    "name": "a split travel slot missing",
+    "valid": false,
+    "why": "split_travel has an entry for every member.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0]}]
+    }
+  },
+  {
+    "name": "a negative split travel",
+    "valid": false,
+    "why": "A split travel is at least 0.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, -0.25]}]
+    }
+  },
+  {
+    "name": "a split travel at the cap",
+    "valid": true,
+    "why": "The cap is the model's part count times MAX_TRAVEL_PER_PART, not the sub-assembly's.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 8.196000000000002]}]
+    }
+  },
+  {
+    "name": "a split travel just past the cap",
+    "valid": false,
+    "why": "The next double above the cap is past it.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 8.196000000000003]}]
+    }
+  },
+  {
+    "name": "no split travel for a member that splits",
+    "valid": false,
+    "why": "A member with a split heading travels more than none.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0]}]
+    }
+  },
+  {
+    "name": "a split travel for a member that stays",
+    "valid": false,
+    "why": "Unlike travel, a split travel is exactly 0 where there is no split heading.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0.1, 0.25]}]
+    }
+  },
+  {
+    "name": "a split travel of false for a member that stays",
+    "valid": false,
+    "why": "Python's False equals the 0 a member that stays travels; a boolean is not a number.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [false, 0.25]}]
+    }
+  },
+  {
+    "name": "members leaving the model opposite ways",
+    "valid": false,
+    "why": "A sub-assembly comes off whole, so along one heading.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, -1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members of which only the first leaves the model",
+    "valid": false,
+    "why": "Either every member has a heading or none does.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], []],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members of which only the last leaves the model",
+    "valid": false,
+    "why": "Either every member has a heading or none does, whichever of them comes first.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members leaving the model the same way at different lengths",
+    "valid": true,
+    "why": "Headings are compared as directions, whatever their lengths.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 250]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members leaving the model a hair apart",
+    "valid": true,
+    "why": "About 5e-7 short of parallel, inside SAME_HEADING_TOLERANCE.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0.001, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members leaving the model just too far apart",
+    "valid": false,
+    "why": "About 2e-6 short of parallel, outside SAME_HEADING_TOLERANCE.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0.002, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members held to the first of them, not to one another",
+    "valid": true,
+    "why": "Each is within 4.1e-7 of the first, though the outer two are 1.6e-6 apart.",
+    "parts": [0, 1, 2, 3],
+    "payload": {
+      "order": [0, 1, 2, 3],
+      "releases": [[], [0.0009, 0, 1], [0, 0, 1], [-0.0009, 0, 1]],
+      "stretch": [1, 1, 1, 1],
+      "explode_fraction": 0.35,
+      "steps": [[0], [1, 2, 3]],
+      "subassemblies": [{"parts": [2, 1, 3], "splits": [[], [1, 0, 0], [-1, 0, 0]], "split_travel": [0, 0.2, 0.2]}]
+    }
+  },
+  {
+    "name": "members held to a first at one edge of their spread",
+    "valid": false,
+    "why": "Measured from the first, the last is 1.6e-6 short of parallel.",
+    "parts": [0, 1, 2, 3],
+    "payload": {
+      "order": [0, 1, 2, 3],
+      "releases": [[], [0.0009, 0, 1], [0, 0, 1], [-0.0009, 0, 1]],
+      "stretch": [1, 1, 1, 1],
+      "explode_fraction": 0.35,
+      "steps": [[0], [1, 2, 3]],
+      "subassemblies": [{"parts": [1, 2, 3], "splits": [[1, 0, 0], [], [-1, 0, 0]], "split_travel": [0.2, 0, 0.2]}]
+    }
+  },
+  {
+    "name": "members sharing a heading written in 1e308s",
+    "valid": true,
+    "why": "Its length is still finite, so it is the direction of 1, 1, 1.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1e308, 1e308, 1e308], [1, 1, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members that stay, one empty and one too short to be a heading",
+    "valid": true,
+    "why": "Neither has a heading, which is none of them having one.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1e-12], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "steps": [[0, 1], [2]],
+      "subassemblies": [{"parts": [0, 1], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members of which one leaves and one is too short to be a heading",
+    "valid": false,
+    "why": "A heading too short to be one is none, beside a member that has one.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1e-12]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "keys it does not know at the top level",
+    "valid": true,
+    "why": "Unknown keys are ignored, even ones named like a sub-assembly's.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "version": 2,
+      "parts": "junk",
+      "splits": null,
+      "joints": [[0]]
+    }
+  },
+  {
+    "name": "a top-level key named __proto__",
+    "valid": true,
+    "why": "JSON makes it a key of its own to both readers, not a prototype the fields are read through.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [1, 0, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.5,
+      "__proto__": {"steps": "junk", "subassemblies": null}
+    }
+  },
+  {
+    "name": "keys it does not know in a sub-assembly, named like top-level ones",
+    "valid": true,
+    "why": "Unknown keys in an entry are ignored, even a travel and steps holding junk.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.75],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25], "travel": "junk", "steps": null, "label": "pin"}]
+    }
+  },
+  {
+    "name": "members sharing a heading of numbers too large to square",
+    "valid": true,
+    "why": "Three finite numbers have a length and a direction even where their squares overflow a double; both members point the same way.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1.5e308, 1.5e308, 0], [1.5e308, 1.5e308, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a sub-assembly member with a heading and no travel of its own",
+    "valid": false,
+    "why": "The five fields stand on their own: a part with a heading travels, whatever the furthest member of its group travels.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members a hair outside the tolerance only when their dot product is summed x, y, z",
+    "valid": false,
+    "why": "Summed in the build's axis order the two headings fall just short of one direction; summed x, z, y they would not. Both checks sum x, y, z.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [-0.7789766144821564, -0.9540528422959453, 0.3422558299669412], [-0.6090451423643737, -0.7470076099418756, 0.26654013816175287]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members a hair inside the tolerance only when their dot product is summed x, y, z",
+    "valid": true,
+    "why": "Summed in the build's axis order the two headings reach one direction; summed x, z, y they would fall just short. Both checks sum x, y, z.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [-0.8782157963490305, -0.6899612642608615, 0.3396670777875052], [-0.7531105051547988, -0.5905768968287753, 0.2899025628682471]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "a member's heading too large to square beside a short one the same way",
+    "valid": true,
+    "why": "Length does not change a direction, however long; the two members still come off as one.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [1.5e308, 1.5e308, 0], [1, 1, 0]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1]], "split_travel": [0, 0.25]}]
+    }
+  }
+]

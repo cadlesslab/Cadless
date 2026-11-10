@@ -10,15 +10,21 @@ import {
   partOffsets,
   sceneHeading,
   largestDimension,
-  takeApartOrder,
+  type Motion,
   type Vec3,
 } from "./assemblyMotion";
+import motionCasesSource from "./motionCases.json?raw";
 
 /** Each component within float noise. `toEqual` would also tell -0 from 0,
  * which nothing that reads a position cares about. */
 function expectVec(actual: readonly number[] | null | undefined, expected: Vec3) {
   expect(actual).toBeTruthy();
   expected.forEach((v, i) => expect(actual![i]).toBeCloseTo(v, 9));
+}
+
+/** The parts each joint moves, in the order the joints play. */
+function partsByJoint(motion: Motion): number[][] {
+  return motion.joints.map((joint) => joint.map((movement) => movement.part));
 }
 
 // A base that stays put, a part slid on from above (released along CAD +Z), and
@@ -39,6 +45,36 @@ function shelf() {
   return motion!;
 }
 
+// A tube that stays, with a cap pressed onto each end at the same time: one
+// run, so the caps come off together, each along its own heading.
+const CAPS = {
+  order: [0, 1, 2],
+  releases: [[], [1, 0, 0], [-1, 0, 0]],
+  stretch: [1, 1, 1],
+  explode_fraction: 0.5,
+  steps: [[0], [1, 2]],
+};
+
+// A base that stays, and a bracket with its pin, fitted to each other off the
+// model and then slid onto it from above (CAD +Z) as one piece. The pin reaches
+// deeper into the base, so it has further to go than the bracket. Off the
+// model, the pin comes out of the bracket along CAD +Y and the bracket stays.
+const BRACKET_FIELDS = {
+  order: [0, 1, 2],
+  releases: [[], [0, 0, 1], [0, 0, 1]],
+  stretch: [1, 1, 1],
+  explode_fraction: 0.35,
+  travel: [0, 0.5, 0.75],
+};
+const PINNED = { parts: [1, 2], splits: [[], [0, 1, 0]], split_travel: [0, 0.25] };
+const BRACKET = { ...BRACKET_FIELDS, steps: [[0], [1, 2]], subassemblies: [PINNED] };
+
+/** The bracket, with `fields` changed in its sub-assembly. */
+const pinnedWith = (fields: Record<string, unknown>) => ({
+  ...BRACKET,
+  subassemblies: [{ ...PINNED, ...fields }],
+});
+
 describe("sceneHeading", () => {
   it("turns a CAD +Z heading into scene +Y", () => {
     expectVec(sceneHeading([0, 0, 1]), [0, 1, 0]);
@@ -52,6 +88,10 @@ describe("sceneHeading", () => {
     expectVec(sceneHeading([3, 0, 4]), [0.6, 0.8, 0]);
   });
 
+  it("keeps the direction of a heading whose numbers are too large to square", () => {
+    expectVec(sceneHeading([1.5e308, 0, 1.5e308]), [Math.SQRT1_2, Math.SQRT1_2, 0]);
+  });
+
   it("is no direction for the part left standing", () => {
     expect(sceneHeading([])).toBeNull();
     expect(sceneHeading([0, 0, 0])).toBeNull();
@@ -59,9 +99,30 @@ describe("sceneHeading", () => {
   });
 });
 
-describe("takeApartOrder", () => {
-  it("takes the last part placed off first, and skips the part that stays", () => {
-    expect(takeApartOrder(shelf())).toEqual([2, 1]);
+describe("joints", () => {
+  it("takes the last part placed off first, one a joint, and skips the part that stays", () => {
+    expect(partsByJoint(shelf())).toEqual([[2], [1]]);
+  });
+
+  it("plays a run as its parts coming off and then its sub-assemblies coming apart", () => {
+    // Last run first: a cover slid off sideways on its own; a pair of clips
+    // lifted off together and then parted; and a base of two pieces, which
+    // stays, so it only comes apart.
+    const motion = parseMotion(
+      {
+        order: [0, 1, 2, 3, 4],
+        releases: [[], [], [0, 0, 1], [0, 0, 1], [1, 0, 0]],
+        stretch: [1, 1, 1, 1, 1],
+        explode_fraction: 0.35,
+        steps: [[0, 1], [2, 3], [4]],
+        subassemblies: [
+          { parts: [0, 1], splits: [[], [0, 0, 1]], split_travel: [0, 0.3] },
+          { parts: [2, 3], splits: [[1, 0, 0], [-1, 0, 0]], split_travel: [0.2, 0.2] },
+        ],
+      },
+      [0, 1, 2, 3, 4],
+    )!;
+    expect(partsByJoint(motion)).toEqual([[4], [2, 3], [2, 3], [1]]);
   });
 });
 
@@ -137,6 +198,47 @@ describe("partOffsets", () => {
     expectVec(at[1], [0, 25, 0]);
     expectVec(at[2], [15, 0, 0]);
     expectVec(at[0], [0, 0, 0]);
+  });
+
+  describe("parts that went on at the same time", () => {
+    const caps = () => parseMotion(CAPS, PARTS)!;
+
+    it("moves both at once, each halfway along its own heading at 0.5", () => {
+      const at = partOffsets(caps(), 0.5, SIZE);
+      expectVec(at[1], [5, 0, 0]);
+      expectVec(at[2], [-5, 0, 0]);
+    });
+
+    it("has both fully out at the end of their joint", () => {
+      const at = partOffsets(caps(), 1, SIZE);
+      expectVec(at[1], [10, 0, 0]);
+      expectVec(at[2], [-10, 0, 0]);
+    });
+  });
+
+  describe("a sub-assembly", () => {
+    const bracket = () => parseMotion(BRACKET, PARTS)!;
+
+    it("comes off whole, its members halfway together at 0.5", () => {
+      // released along CAD +Z, so the piece rises along scene +Y
+      const at = partOffsets(bracket(), 0.5, SIZE);
+      expectVec(at[1], [0, 7.5, 0]);
+      expectVec(at[2], [0, 7.5, 0]);
+    });
+
+    it("comes off as far as the member with furthest to go", () => {
+      // The bracket's own travel would leave it 5 short of the pin it holds.
+      expectVec(partOffsets(bracket(), 1, SIZE)[1], [0, 15, 0]);
+    });
+
+    it("then comes apart, each member's way off the rest added to where the piece went", () => {
+      // The pin's split is CAD +Y, scene -Z: halfway out of the bracket at 1.5.
+      expectVec(partOffsets(bracket(), 1.5, SIZE)[2], [0, 15, -2.5]);
+    });
+
+    it("leaves a member with no split where the piece went", () => {
+      expectVec(partOffsets(bracket(), 2, SIZE)[1], [0, 15, 0]);
+    });
   });
 });
 
@@ -220,6 +322,121 @@ describe("parseMotion", () => {
     ["no travel for a part that moves", { ...PAYLOAD, travel: [0, 0, 1] }, PARTS],
   ])("refuses %s", (_, raw, parts) => {
     expect(parseMotion(raw, parts)).toBeNull();
+  });
+
+  it("takes members heading the same way to within the tolerance as sharing a heading", () => {
+    // About 5e-7 short of parallel, inside the 1e-6 the engine allows.
+    expect(
+      parseMotion({ ...BRACKET, releases: [[], [0, 0, 1], [0.001, 0, 1]] }, PARTS),
+    ).not.toBeNull();
+  });
+
+  it("ignores keys it does not know, in the file and in a sub-assembly", () => {
+    const later = { ...pinnedWith({ name: "pin" }), notes: "x" };
+    expect(parseMotion(later, PARTS)).toEqual(parseMotion(BRACKET, PARTS));
+  });
+
+  // A grouping is held to the same standard: each case is runs that are not the
+  // order the parts go together in, or a sub-assembly that could not come off
+  // the model as one piece and then apart as the file says.
+  it.each<[string, unknown]>([
+    ["steps holding null", { ...CAPS, steps: null }],
+    ["steps that are not a list", { ...CAPS, steps: { 0: [0], 1: [1, 2] } }],
+    ["a run that is not a list", { ...CAPS, steps: [[0], 1, 2] }],
+    ["an empty run", { ...CAPS, steps: [[0], [], [1, 2]] }],
+    ["runs that leave a part out", { ...CAPS, steps: [[0], [1]] }],
+    ["runs naming a part twice", { ...CAPS, steps: [[0], [1, 2], [2]] }],
+    ["runs out of the order's sequence", { ...CAPS, steps: [[0], [2, 1]] }],
+    // true is not the part numbered 1, whatever a language makes of it.
+    ["a run naming a part as true", { ...CAPS, steps: [[0], [true, 2]] }],
+    ["sub-assemblies without steps, even none", { ...BRACKET_FIELDS, subassemblies: [] }],
+    ["sub-assemblies holding null", { ...BRACKET, subassemblies: null }],
+    ["sub-assemblies that are not a list", { ...BRACKET, subassemblies: PINNED }],
+    ["a sub-assembly that is not an object", { ...BRACKET, subassemblies: [null] }],
+    ["a sub-assembly naming no parts", pinnedWith({ parts: undefined })],
+    [
+      "a sub-assembly of one part",
+      pinnedWith({ parts: [2], splits: [[0, 1, 0]], split_travel: [0.25] }),
+    ],
+    ["a sub-assembly naming a part twice", pinnedWith({ parts: [2, 2] })],
+    ["a sub-assembly naming a part not drawn", pinnedWith({ parts: [1, 3] })],
+    ["a sub-assembly naming only parts not drawn", pinnedWith({ parts: [3, 4] })],
+    ["a sub-assembly naming a part as true", pinnedWith({ parts: [true, 2] })],
+    ["a sub-assembly across two runs", { ...BRACKET, steps: [[0], [1], [2]] }],
+    [
+      "a part in two sub-assemblies",
+      {
+        ...BRACKET,
+        releases: [[0, 0, 1], [0, 0, 1], [0, 0, 1]],
+        travel: [0.5, 0.5, 0.75],
+        steps: [[0, 1, 2]],
+        subassemblies: [
+          PINNED,
+          { parts: [0, 1], splits: [[], [1, 0, 0]], split_travel: [0, 0.25] },
+        ],
+      },
+    ],
+    // These two with no split travel either, so only the splits are wrong.
+    ["a split slot missing", pinnedWith({ splits: [[]], split_travel: [0, 0] })],
+    [
+      "a split that is not three numbers",
+      pinnedWith({ splits: [[], [0, 1]], split_travel: [0, 0] }),
+    ],
+    ["no split travel", pinnedWith({ split_travel: undefined })],
+    ["a split travel slot missing", pinnedWith({ split_travel: [0] })],
+    ["a split travel written as a string", pinnedWith({ split_travel: [0, "0.25"] })],
+    ["a negative split travel", pinnedWith({ split_travel: [0, -0.25] })],
+    [
+      "a split travel beyond any the engine writes",
+      pinnedWith({ split_travel: [0, PARTS.length * 2.732 + 0.01] }),
+    ],
+    ["no split travel for a member that comes apart", pinnedWith({ split_travel: [0, 0] })],
+    ["a split travel for a member that stays", pinnedWith({ split_travel: [0.1, 0.25] })],
+    [
+      "members of which only the first leaves the model",
+      { ...BRACKET, releases: [[], [0, 0, 1], []] },
+    ],
+    [
+      "members of which only the last leaves the model",
+      { ...BRACKET, releases: [[], [], [0, 0, 1]] },
+    ],
+    [
+      "members leaving the model opposite ways",
+      { ...BRACKET, releases: [[], [0, 0, 1], [0, 0, -1]] },
+    ],
+    // About 2e-6 short of parallel: just outside the tolerance.
+    [
+      "members leaving the model ways just too far apart to share",
+      { ...BRACKET, releases: [[], [0, 0, 1], [0.002, 0, 1]] },
+    ],
+  ])("refuses %s", (_, raw) => {
+    expect(parseMotion(raw, PARTS)).toBeNull();
+  });
+});
+
+/** A case both checks of a motion are held to: this parser, and the engine's
+ * check of a file it writes or takes in. */
+interface MotionCase {
+  name: string;
+  parts: number[];
+  payload: unknown;
+  valid: boolean;
+  why: string;
+}
+
+// The engine answers these same cases, and the two have to answer each one
+// alike: a motion the engine passes and this refuses is a player that never
+// appears, and one it refuses that this plays is an item turned away for
+// nothing. Kept as JSON so that each side reads the same text with its own
+// reader, which is where the two languages part first: 2.0 is an integer here
+// and a float there, `true` is no number here and 1 there, and an integer too
+// long for a double is Infinity here and an int there. `?raw` rather than
+// `node:fs`, which this package type-checks without.
+const MOTION_CASES = JSON.parse(motionCasesSource) as MotionCase[];
+
+describe("the motions the engine judges too", () => {
+  it.each<[string, MotionCase]>(MOTION_CASES.map((c) => [c.name, c]))("%s", (_, c) => {
+    expect(parseMotion(c.payload, c.parts) !== null, c.why).toBe(c.valid);
   });
 });
 

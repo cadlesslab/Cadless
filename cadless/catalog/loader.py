@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 
 from cadless import exporters
+from cadless.assembly_motion import MOTION_FILE, MOTION_KIND
 from cadless.catalog.domains import get_domain
 from cadless.catalog.importer import discard_item_dir, imported_item_dir
 from cadless.catalog.ledger import Ledger, LedgerBusy, LedgerUnreadable
@@ -37,6 +38,9 @@ from cadless.scoped_store import AnyStore, system_view
 from cadless.store import Store
 
 logger = logging.getLogger(__name__)
+
+# The name a build gives each file it writes once for the whole of it, by kind.
+_WHOLE_BUILD_NAMES = {**exporters.ASSEMBLY_FILES, MOTION_KIND: MOTION_FILE}
 
 
 def item_content_hash(house_dir: Path, manifest: CatalogManifest | None = None) -> str:
@@ -133,12 +137,13 @@ def _copy_step_kind(
     left out whole, the parts already copied taken back out: the store numbers
     parts in the order they are added, so the parts after a gap would each be
     filed one lower than they are. Each path is checked as its own file is
-    opened, not all of them before the first copy. A whole-assembly file takes
-    the name the worker gives it, as a part file does.
+    opened, not all of them before the first copy. A file of which a build has
+    one -- the whole assembly, or its motion -- takes the name the build gives
+    it, as a part file does.
     """
     copied: list[str] = []
     for i, key in enumerate(keys):
-        name = exporters.ASSEMBLY_FILES.get(kind) or f"{exporters.part_name(i, len(keys))}.{kind}"
+        name = _WHOLE_BUILD_NAMES.get(kind) or f"{exporters.part_name(i, len(keys))}.{kind}"
         dst = _copy_artifact(store, version_id, step_artifact_path(item, step, key), name)
         if dst is None:
             for done in copied:
