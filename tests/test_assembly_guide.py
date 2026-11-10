@@ -597,6 +597,35 @@ def test_a_grouping_built_from_arrays_is_written_as_numbers():
     assert payload["subassemblies"][0]["splits"] == [[], [0.0, 0.0, 1.0]]
 
 
+def test_members_held_as_single_precision_floats_are_whole_numbers_still():
+    from cadless.assembly_guide import motion_payload
+
+    payload = motion_payload(
+        _SLEEVE_ORDER,
+        _SLEEVE_RELEASES,
+        _sleeve_meshes(),
+        steps=_SLEEVE_STEPS,
+        subassemblies=[
+            {"parts": np.array([1, 2], dtype=np.float32), "splits": [[], [0.0, 0.0, 1.0]]}
+        ],
+    )
+    assert payload["subassemblies"][0]["parts"] == [1, 2]
+
+
+def test_members_given_as_a_set_are_refused_rather_than_paired_by_chance():
+    # A set has no order, and a member is paired with its split by position.
+    from cadless.assembly_guide import motion_payload
+
+    with pytest.raises(ValueError, match="sub-assembly 0 is not a mapping with a list of parts"):
+        motion_payload(
+            _SLEEVE_ORDER,
+            _SLEEVE_RELEASES,
+            _sleeve_meshes(),
+            steps=_SLEEVE_STEPS,
+            subassemblies=[{"parts": {1, 2}, "splits": [[], [0.0, 0.0, 1.0]]}],
+        )
+
+
 def test_a_sub_assembly_with_no_splits_is_refused_as_a_grouping():
     from cadless.assembly_guide import motion_payload
 

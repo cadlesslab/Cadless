@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import numbers
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 
 import numpy as np
 
@@ -209,15 +210,18 @@ def _split_travels(
 
 
 def _listed(value: object) -> list | None:
-    """``value``'s entries as a list, if it is a sequence of them -- a list, a
-    tuple, an array, whatever a caller built its grouping from -- and ``None``
-    for a string, a mapping or anything that is not one."""
-    if isinstance(value, (str, bytes, Mapping)):
+    """``value``'s entries as a list, if it holds them in an order -- a list, a
+    tuple, an array, a generator, whatever a caller built its grouping from --
+    and ``None`` otherwise: for a string, bytes or a mapping, which hold no
+    entries of this kind, and for a set, whose order is no order, since members
+    are paired with their splits by position."""
+    if isinstance(value, (str, bytes, bytearray, memoryview, Mapping, AbstractSet)):
         return None
     try:
-        return list(value)
+        entries = iter(value)
     except TypeError:
         return None
+    return list(entries)
 
 
 def _ordinals(run: object) -> object:
@@ -236,7 +240,7 @@ def _ordinal(value: object) -> object:
         return value
     if isinstance(value, numbers.Integral):
         return int(value)
-    if isinstance(value, float) and value.is_integer():
+    if isinstance(value, numbers.Real) and float(value).is_integer():
         return int(value)
     return value
 

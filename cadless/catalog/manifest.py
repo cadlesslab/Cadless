@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from cadless.artifact_kinds import ASSEMBLY_FILES, PART_KINDS
-from cadless.assembly_motion import MAX_MOTION_BYTES, MOTION_KIND, parse_motion, require_motion
+from cadless.assembly_motion import MAX_MOTION_BYTES, MOTION_KIND, read_motion
 from cadless.assembly_tree import MAX_PARTS, NAME_MAX, readable
 from cadless.catalog.domains import find_domain
 from cadless.catalog.pack import PackError, safe_entry_name
@@ -345,7 +345,7 @@ def check_motions(manifest: CatalogManifest, read: Callable[[str], bytes | None]
             if raw is None:
                 absent.add(relative)
                 continue
-            require_motion(parse_motion(raw), parts)
+            read_motion(raw, parts)
         except ValueError as exc:
             raise ValueError(
                 f"step {step.index}'s {MOTION_KIND} artifact {relative!r} "

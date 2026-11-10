@@ -1167,7 +1167,8 @@ def test_a_motion_on_a_step_of_one_part_is_refused(tmp_path):
 def test_a_motion_several_steps_share_is_read_once(tmp_path, monkeypatch):
     """Judged once per number of parts a step draws, so a manifest repeating a
     path does not repeat the reading of the file behind it."""
-    import cadless.catalog.manifest as manifest_module
+    import cadless.assembly_motion as motion_module
+    from cadless.catalog.manifest import load_manifest
 
     house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
     written = json.loads((house / "manifest.json").read_text())
@@ -1177,17 +1178,34 @@ def test_a_motion_several_steps_share_is_read_once(tmp_path, monkeypatch):
         written["steps"].append({**step, "index": index, "code": f"steps/0{index}.py"})
     (house / "manifest.json").write_text(json.dumps(written))
     reads = []
-    real_parse = manifest_module.parse_motion
+    real_parse = motion_module.parse_motion
 
     def counted(raw):
         reads.append(len(raw))
         return real_parse(raw)
 
-    monkeypatch.setattr(manifest_module, "parse_motion", counted)
+    monkeypatch.setattr(motion_module, "parse_motion", counted)
 
-    manifest_module.load_manifest(house)
+    load_manifest(house)
 
     assert reads == [len(_LID_MOTION)]
+
+
+def test_a_shared_motion_is_judged_again_for_a_step_drawing_another_count(tmp_path):
+    """Passed for two parts, the same file is still no motion of three."""
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
+    written = json.loads((house / "manifest.json").read_text())
+    step = written["steps"][0]
+    (house / "steps" / "02.py").write_text("result = 1\n")
+    (house / "artifacts" / "01" / "model_p2.glb").write_bytes(b"glTF" + bytes([2]))
+    artifacts = {**step["artifacts"], "glb:2": "artifacts/01/model_p2.glb"}
+    written["steps"].append({**step, "index": 2, "code": "steps/02.py", "artifacts": artifacts})
+    (house / "manifest.json").write_text(json.dumps(written))
+
+    with pytest.raises(ValueError, match="step 2.*order lists 2 parts, but 3 are drawn"):
+        load_manifest(house)
 
 
 def test_a_motion_judged_is_let_go_before_the_next_is_read(tmp_path, monkeypatch):
@@ -1196,7 +1214,8 @@ def test_a_motion_judged_is_let_go_before_the_next_is_read(tmp_path, monkeypatch
     import gc
     import weakref
 
-    import cadless.catalog.manifest as manifest_module
+    import cadless.assembly_motion as motion_module
+    from cadless.catalog.manifest import load_manifest
 
     house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
     written = json.loads((house / "manifest.json").read_text())
@@ -1214,7 +1233,7 @@ def test_a_motion_judged_is_let_go_before_the_next_is_read(tmp_path, monkeypatch
         pass
 
     earlier = []
-    real_parse = manifest_module.parse_motion
+    real_parse = motion_module.parse_motion
 
     def parse(raw):
         gc.collect()
@@ -1223,9 +1242,9 @@ def test_a_motion_judged_is_let_go_before_the_next_is_read(tmp_path, monkeypatch
         earlier.append(weakref.ref(payload))
         return payload
 
-    monkeypatch.setattr(manifest_module, "parse_motion", parse)
+    monkeypatch.setattr(motion_module, "parse_motion", parse)
 
-    manifest_module.load_manifest(house)
+    load_manifest(house)
 
     assert len(earlier) == 3
 
