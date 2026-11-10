@@ -179,7 +179,8 @@ one function, so they cannot disagree about which files exist.
 
 **Not every artifact kind is an export format, and the difference decides where
 it is declared.** `thumbnail`, `guide` and `assembly` — two pictures and the
-motion an accepted assembly is played from — are things the engine made *about*
+motion an assembly is played from, an accepted build's or the one a catalog
+item carries — are things the engine made *about*
 a build rather than formats the build was converted *to*: they get a `_MEDIA`
 entry so the download route can serve them, and they stay out of `EXPORTERS`,
 out of the frontend `ArtifactKind`, and out of the export menu. Putting one in
