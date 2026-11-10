@@ -44,6 +44,14 @@ def test_the_viewport_and_the_engine_hold_each_limit_at_one_value(name):
     assert _ts_number(name) == getattr(assembly_motion, name)
 
 
+def test_the_viewport_and_the_catalog_agree_on_the_fewest_parts_drawn_apart():
+    # Below it the viewport draws a version whole, with no part to move, so a
+    # catalog motion on such a step is one no viewer would play.
+    from cadless.catalog.manifest import MIN_DRAWN_PARTS
+
+    assert ts_number(FRONTEND_SRC / "viewport" / "preview.ts", "MIN_DRAWN_PARTS") == MIN_DRAWN_PARTS
+
+
 @pytest.mark.parametrize("case", _MOTION_CASES, ids=[case["name"] for case in _MOTION_CASES])
 def test_the_engine_answers_each_case_as_the_viewport_does(case):
     problems = assembly_motion.motion_problems(case["payload"], case["parts"])

@@ -23,7 +23,7 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 
-from cadless.assembly_motion import HEADING_EPSILON, SAME_HEADING_TOLERANCE, motion_problems
+from cadless.assembly_motion import HEADING_EPSILON, SAME_HEADING_TOLERANCE, require_motion
 from cadless.assembly_motion import MOTION_FILE as MOTION_FILE  # where callers have always found it
 from cadless.catalog.thumbnail import (
     DEFAULT_SIZE,
@@ -135,10 +135,7 @@ def motion_payload(
     # One part for each entry of the order, as the viewport counts the parts it
     # draws: counted from the parts the order names instead, an order naming one
     # part twice would be checked against itself and pass.
-    problems = motion_problems(payload, range(len(order)))
-    if problems:
-        raise ValueError("this grouping is not a motion the viewport plays: " + "; ".join(problems))
-    return payload
+    return require_motion(payload, range(len(order)))
 
 
 def _subassemblies(
@@ -157,9 +154,9 @@ def _subassemblies(
     """
     written = []
     for position, sub in enumerate(subassemblies):
-        parts = sub.get("parts") if isinstance(sub, Mapping) else None
-        splits = sub.get("splits") if isinstance(sub, Mapping) else None
-        if not isinstance(parts, (list, tuple)) or not isinstance(splits, (list, tuple)):
+        parts = _listed(sub.get("parts")) if isinstance(sub, Mapping) else None
+        splits = _listed(sub.get("splits")) if isinstance(sub, Mapping) else None
+        if parts is None or splits is None:
             raise ValueError(
                 f"this grouping is not a motion the viewport plays: sub-assembly {position} "
                 "is not a mapping with a list of parts and a list of splits"
@@ -211,14 +208,27 @@ def _split_travels(
     return [measured.get(member, 0.0) for member in members]
 
 
+def _listed(value: object) -> list | None:
+    """``value``'s entries as a list, if it is a sequence of them -- a list, a
+    tuple, an array, whatever a caller built its grouping from -- and ``None``
+    for a string, a mapping or anything that is not one."""
+    if isinstance(value, (str, bytes, Mapping)):
+        return None
+    try:
+        return list(value)
+    except TypeError:
+        return None
+
+
 def _ordinals(run: object) -> object:
     """A run or a sub-assembly's members with each whole number written as an
-    ``int``, and anything else -- a fraction, ``True``, a run that is not a list
-    -- left as it came, for the check to name rather than this to round into a
-    part nobody named."""
-    if not isinstance(run, (list, tuple)):
+    ``int``, and anything else -- a fraction, ``True``, a run that is not a
+    sequence -- left as it came, for the check to name rather than this to round
+    into a part nobody named."""
+    listed = _listed(run)
+    if listed is None:
         return run
-    return [_ordinal(value) for value in run]
+    return [_ordinal(value) for value in listed]
 
 
 def _ordinal(value: object) -> object:
@@ -233,10 +243,11 @@ def _ordinal(value: object) -> object:
 
 def _numbers(split: object) -> object:
     """A split with each number in it written as a ``float``, otherwise as it came."""
-    if not isinstance(split, (list, tuple)):
+    listed = _listed(split)
+    if listed is None:
         return split
     return [
-        float(c) if isinstance(c, numbers.Real) and not isinstance(c, bool) else c for c in split
+        float(c) if isinstance(c, numbers.Real) and not isinstance(c, bool) else c for c in listed
     ]
 
 

@@ -1190,6 +1190,46 @@ def test_a_motion_several_steps_share_is_read_once(tmp_path, monkeypatch):
     assert reads == [len(_LID_MOTION)]
 
 
+def test_a_motion_judged_is_let_go_before_the_next_is_read(tmp_path, monkeypatch):
+    """Only a verdict is kept per file: an item of many motions never holds more
+    than one of them read at once."""
+    import gc
+    import weakref
+
+    import cadless.catalog.manifest as manifest_module
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
+    written = json.loads((house / "manifest.json").read_text())
+    step = written["steps"][0]
+    for index in (2, 3):
+        (house / "steps" / f"0{index}.py").write_text("result = 1\n")
+        (house / "artifacts" / "01" / f"motion{index}.json").write_bytes(_LID_MOTION)
+        artifacts = {**step["artifacts"], "assembly": f"artifacts/01/motion{index}.json"}
+        written["steps"].append(
+            {**step, "index": index, "code": f"steps/0{index}.py", "artifacts": artifacts}
+        )
+    (house / "manifest.json").write_text(json.dumps(written))
+
+    class Held(dict):
+        pass
+
+    earlier = []
+    real_parse = manifest_module.parse_motion
+
+    def parse(raw):
+        gc.collect()
+        assert all(ref() is None for ref in earlier), "a motion judged earlier is still held"
+        payload = Held(real_parse(raw))
+        earlier.append(weakref.ref(payload))
+        return payload
+
+    monkeypatch.setattr(manifest_module, "parse_motion", parse)
+
+    manifest_module.load_manifest(house)
+
+    assert len(earlier) == 3
+
+
 def test_a_motion_keyed_twice_on_one_step_is_refused(tmp_path):
     """One file for the whole build: a second key would file a second copy of it."""
     from cadless.catalog.manifest import load_manifest

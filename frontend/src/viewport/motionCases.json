@@ -1715,6 +1715,21 @@
     }
   },
   {
+    "name": "a sub-assembly member with a heading and no travel of its own",
+    "valid": false,
+    "why": "The five fields stand on their own: a part with a heading travels, whatever the furthest member of its group travels.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [0, 0, 1], [0, 0, 1]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 1, 0]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
     "name": "members a hair outside the tolerance only when their dot product is summed x, y, z",
     "valid": false,
     "why": "Summed in the build's axis order the two headings fall just short of one direction; summed x, z, y they would not. Both checks sum x, y, z.",

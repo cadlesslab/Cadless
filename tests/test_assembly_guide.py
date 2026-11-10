@@ -561,28 +561,40 @@ def test_members_listed_against_the_order_are_measured_in_the_order_they_go_toge
     assert -30 + pin * size > 20
 
 
-def test_a_grouped_motion_without_its_grouping_is_a_motion_still():
-    # What a viewer that predates the grouping plays: the five fields alone.
-    from cadless.assembly_guide import motion_payload
-    from cadless.assembly_motion import motion_problems
-
-    payload = motion_payload(
-        _SLEEVE_ORDER,
-        _SLEEVE_RELEASES,
-        _sleeve_meshes(),
-        steps=_SLEEVE_STEPS,
-        subassemblies=_PINNED,
-    )
-    older = {key: value for key, value in payload.items() if key not in ("steps", "subassemblies")}
-    assert motion_problems(older, range(3)) == []
-
-
-def test_a_member_that_is_not_a_whole_number_is_named_rather_than_rounded():
+def test_a_run_entry_that_is_not_a_whole_number_is_named_rather_than_rounded():
     # Rounded, 1.7 would become part 1: a grouping the caller never wrote.
     from cadless.assembly_guide import motion_payload
 
     with pytest.raises(ValueError, match="run 1 is not a non-empty list of whole numbers"):
         motion_payload(_SLEEVE_ORDER, _SLEEVE_RELEASES, steps=[[0], [1.7, 2]])
+
+
+def test_a_member_that_is_not_a_whole_number_is_named_rather_than_rounded():
+    from cadless.assembly_guide import motion_payload
+
+    with pytest.raises(ValueError, match="parts are not two or more different whole numbers"):
+        motion_payload(
+            _SLEEVE_ORDER,
+            _SLEEVE_RELEASES,
+            _sleeve_meshes(),
+            steps=_SLEEVE_STEPS,
+            subassemblies=[{"parts": [1.7, 2], "splits": [[], [0.0, 0.0, 1.0]]}],
+        )
+
+
+def test_a_grouping_built_from_arrays_is_written_as_numbers():
+    # A caller that cut its order with numpy hands over arrays, not lists.
+    from cadless.assembly_guide import motion_payload
+
+    payload = motion_payload(
+        _SLEEVE_ORDER,
+        _SLEEVE_RELEASES,
+        _sleeve_meshes(),
+        steps=np.split(np.array(_SLEEVE_ORDER), [1]),
+        subassemblies=[{"parts": np.array([1, 2]), "splits": [[], np.array([0.0, 0.0, 1.0])]}],
+    )
+    assert payload["steps"] == [[0], [1, 2]]
+    assert payload["subassemblies"][0]["splits"] == [[], [0.0, 0.0, 1.0]]
 
 
 def test_a_sub_assembly_with_no_splits_is_refused_as_a_grouping():

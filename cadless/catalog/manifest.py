@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from cadless.artifact_kinds import ASSEMBLY_FILES, PART_KINDS
-from cadless.assembly_motion import MAX_MOTION_BYTES, MOTION_KIND, motion_problems, parse_motion
+from cadless.assembly_motion import MAX_MOTION_BYTES, MOTION_KIND, parse_motion, require_motion
 from cadless.assembly_tree import MAX_PARTS, NAME_MAX, readable
 from cadless.catalog.domains import find_domain
 from cadless.catalog.pack import PackError, safe_entry_name
@@ -24,6 +24,9 @@ from cadless.catalog.pack import PackError, safe_entry_name
 # The part format the viewport draws a version from: the files whose numbers a
 # step's motion names its parts by.
 _DRAWN_KIND = "glb"
+# The fewest of those a version is drawn in parts from; with fewer it is drawn
+# whole. Held equal to the viewport's own threshold by a mirror test.
+MIN_DRAWN_PARTS = 2
 
 # An artifact's kind becomes the extension of the file the loader writes, so the
 # shape this allows is the shape a file extension actually is.
@@ -189,7 +192,7 @@ class CatalogStep(BaseModel):
         What the step's motion names its parts by, and so what it is read against.
         """
         count = len(self.artifact_parts().get(_DRAWN_KIND, []))
-        return range(count if count >= 2 else 0)
+        return range(count if count >= MIN_DRAWN_PARTS else 0)
 
 
 class CatalogManifest(BaseModel):
@@ -322,37 +325,33 @@ def check_motions(manifest: CatalogManifest, read: Callable[[str], bytes | None]
 
     ``read`` gives a motion's bytes by the path the manifest lists it under, or
     ``None`` for one that is not there, which is left alone as any missing
-    artifact is. Each file is read and parsed once however many steps list it,
-    and judged once for each number of parts a step draws: steps may share a
-    motion, and judging it afresh for every step would let a few lines of
-    manifest repeat the work of reading a whole file as often as they like.
+    artifact is. Steps may share a motion, and judging it afresh for every step
+    would let a few lines of manifest repeat the reading of a whole file as
+    often as they like; so each file is read and judged once, and what is kept
+    of it is the number of parts it passed for -- one at most, an order being as
+    long as the parts it names -- never the file itself, which would hold every
+    motion an item carries in memory at once. A step drawing another number of
+    parts from a file already passed is judged afresh, and refused.
     """
-    payloads: dict[str, object] = {}
-    judged: set[tuple[str, int]] = set()
+    passed: dict[str, int] = {}
+    absent: set[str] = set()
     for step in manifest.steps:
         relative = step.artifacts.get(MOTION_KIND)
         parts = step.drawn_parts()
-        if relative is None or (relative, len(parts)) in judged:
+        if relative is None or relative in absent or passed.get(relative) == len(parts):
             continue
         try:
-            if relative not in payloads:
-                raw = read(relative)
-                payloads[relative] = _ABSENT if raw is None else parse_motion(raw)
-            if payloads[relative] is _ABSENT:
+            raw = read(relative)
+            if raw is None:
+                absent.add(relative)
                 continue
-            problems = motion_problems(payloads[relative], parts)
-            if problems:
-                raise ValueError("the motion would not play: " + "; ".join(problems))
+            require_motion(parse_motion(raw), parts)
         except ValueError as exc:
             raise ValueError(
                 f"step {step.index}'s {MOTION_KIND} artifact {relative!r} "
                 f"is not a motion the viewport can play for that step: {exc}"
             ) from exc
-        judged.add((relative, len(parts)))
-
-
-# What a motion the manifest lists and the item does not have is read as.
-_ABSENT = object()
+        passed[relative] = len(parts)
 
 
 def _motion_bytes(item: Path, relative: str) -> bytes | None:

@@ -172,17 +172,19 @@ The viewport takes the parts apart a run at a time, the last run first: every
 part of the run that has a heading moves at once, a sub-assembly by the largest
 travel among its members, and then the run's sub-assemblies come apart, as a
 move of their own. The toolbar's "Step N of K" counts those moves, not the
-file's runs: a run with sub-assemblies that come apart is two of them, and a run
-in which nothing moves is none. Putting the parts back plays the same moves in
-reverse. Keys it does not know are ignored, and the first five fields keep their
+file's runs: each run is at most two of them — its parts leaving the model, then
+its sub-assemblies coming apart — and a move with nothing in it is not played.
+Putting the parts back plays the same moves in reverse. Keys it does not know are ignored, and the first five fields keep their
 meaning whatever else a file carries, so a viewer that predates `steps` and
 `subassemblies` plays the same file a part at a time.
 
 `cadless.assembly_guide.motion_payload` returns the motion to write, from an
 order, the headings and the parts' meshes, measuring the travels as a checked
 build's are measured, and raises rather than return a grouped motion the
-viewport would not play; `cadless.assembly_motion.read_motion` is the check the
-loader and an import run.
+viewport would not play. `cadless.assembly_motion.read_motion` reads and judges
+one file against a step's part ordinals, and `load_manifest` and an import run
+the same judgement on every step through `cadless.catalog.manifest.check_motions`,
+each file once.
 
 ## The CLI
 
@@ -307,7 +309,7 @@ Metric sets compose: `BASE_METRICS` (volume, bbox) applies everywhere,
 - [ ] `domain` names a registered domain
 - [ ] Step indices start at 1 and are contiguous; every `code` path exists; no `code`, artifact or `thumbnail` path leaves the item directory
 - [ ] Each artifact key is a kind (`glb`) or a kind and a part number from 1 (`glb:1`), with no part number skipped; `assembly_glb` / `assembly_step` / `assembly` at most once each
-- [ ] An `assembly` motion, if given, passes `cadless.assembly_motion.read_motion` against its step's `glb` parts
+- [ ] An `assembly` motion, if given, sits on a step of two or more `glb` parts and passes `cadless.assembly_motion.read_motion` against their ordinals, 0 up to one fewer than their count — `load_manifest` checks it so
 - [ ] `parts`, if given, names each part once, in part order
 - [ ] Each step script assigns its output to `result`
 - [ ] `list` shows the item before you try to `load` it

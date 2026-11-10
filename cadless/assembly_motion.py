@@ -93,8 +93,13 @@ _ARRAY = (list, tuple)
 def read_motion(raw: bytes, parts: Sequence[int]) -> dict:
     """The motion in ``raw``, read as a motion of ``parts``, or a ``ValueError``
     saying why it is not one: whatever :func:`parse_motion` refuses, and then
-    anything :func:`motion_problems` finds wrong, every problem named."""
-    payload = parse_motion(raw)
+    whatever :func:`require_motion` does."""
+    return require_motion(parse_motion(raw), parts)
+
+
+def require_motion(payload: object, parts: Sequence[int]) -> dict:
+    """``payload``, if it is a motion the viewport plays over ``parts``; a
+    ``ValueError`` naming every problem :func:`motion_problems` finds otherwise."""
     problems = motion_problems(payload, parts)
     if problems:
         raise ValueError("the motion would not play: " + "; ".join(problems))
@@ -115,8 +120,8 @@ def parse_motion(raw: bytes) -> object:
     changes nothing, and anywhere else it is not JSON -- and an integer with more
     digits than Python reads as one is read as the float a browser makes of it.
 
-    Apart from :func:`read_motion` so that a file several steps share can be
-    read once and judged against each step's parts.
+    Apart from :func:`read_motion` so that what reads a file and what judges it
+    can each be called on its own.
     """
     if len(raw) > MAX_MOTION_BYTES:
         raise ValueError(

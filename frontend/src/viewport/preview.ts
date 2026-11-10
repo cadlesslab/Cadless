@@ -26,6 +26,11 @@ const MODEL_UNREADABLE = "This model could not be loaded.";
 const PREVIEW_UNREADABLE = "That catalogue's preview could not be loaded.";
 const PREVIEW_HAS_NO_MESH = "This catalogue has no model to preview.";
 
+/** The fewest GLB parts a version is drawn in parts from; with fewer it is drawn
+ * whole, with no part to move. The engine refuses a catalog motion on a step
+ * below it, and a mirror test holds the two at one value. */
+const MIN_DRAWN_PARTS = 2;
+
 export interface ViewerSubject {
   /** The GLBs to draw, or none when there is nothing to draw: for the active
    * version in parts its whole-assembly file, or one per part in part order;
@@ -146,7 +151,7 @@ function modelUrls(
   wholeRefused: boolean,
 ): { urls: string[]; parts: number[]; names: (string | null)[]; fromAssemblyFile: boolean } {
   const parts = partsOf(version, "glb");
-  if (parts.length < 2) {
+  if (parts.length < MIN_DRAWN_PARTS) {
     return { urls: [glbUrl(version.id)], parts: [], names: [], fromAssemblyFile: false };
   }
   const ordinals = parts.map((a) => a.part);
