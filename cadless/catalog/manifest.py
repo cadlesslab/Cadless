@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from cadless.artifact_kinds import ASSEMBLY_FILES, PART_KINDS
-from cadless.assembly_motion import MAX_MOTION_BYTES, MOTION_KIND, read_motion
+from cadless.assembly_motion import MAX_MOTION_BYTES, MOTION_KIND, motion_problems, parse_motion
 from cadless.assembly_tree import MAX_PARTS, NAME_MAX, readable
 from cadless.catalog.domains import find_domain
 from cadless.catalog.pack import PackError, safe_entry_name
@@ -181,11 +182,14 @@ class CatalogStep(BaseModel):
         return {kind: [key for _, key in sorted(numbered)] for kind, numbered in parts.items()}
 
     def drawn_parts(self) -> range:
-        """The ordinals the viewport draws this step's parts under: one per glb file.
+        """The ordinals the viewport draws this step's parts under: one per glb
+        file, where there are two or more, and none for a step of one, which is
+        drawn whole with nothing to move.
 
         What the step's motion names its parts by, and so what it is read against.
         """
-        return range(len(self.artifact_parts().get(_DRAWN_KIND, [])))
+        count = len(self.artifact_parts().get(_DRAWN_KIND, []))
+        return range(count if count >= 2 else 0)
 
 
 class CatalogManifest(BaseModel):
@@ -306,39 +310,67 @@ def load_manifest(house_dir: Path) -> CatalogManifest:
         # Artifacts and the thumbnail may be missing; here they only have to stay inside.
         for key in step.artifacts:
             step_artifact_path(house_dir, step, key)
-        if MOTION_KIND in step.artifacts:
-            _check_motion(house_dir, step)
     if manifest.thumbnail is not None:
         thumbnail_path(house_dir, manifest)
+    check_motions(manifest, lambda relative: _motion_bytes(house_dir, relative))
     return manifest
 
 
-def _check_motion(item: Path, step: CatalogStep) -> None:
-    """Refuse ``step``'s motion if the viewport would not play it.
+def check_motions(manifest: CatalogManifest, read: Callable[[str], bytes | None]) -> None:
+    """Refuse the first step whose motion the viewport would not play over that
+    step's parts, with a ``ValueError`` naming the step.
+
+    ``read`` gives a motion's bytes by the path the manifest lists it under, or
+    ``None`` for one that is not there, which is left alone as any missing
+    artifact is. Each file is read and parsed once however many steps list it,
+    and judged once for each number of parts a step draws: steps may share a
+    motion, and judging it afresh for every step would let a few lines of
+    manifest repeat the work of reading a whole file as often as they like.
+    """
+    payloads: dict[str, object] = {}
+    judged: set[tuple[str, int]] = set()
+    for step in manifest.steps:
+        relative = step.artifacts.get(MOTION_KIND)
+        parts = step.drawn_parts()
+        if relative is None or (relative, len(parts)) in judged:
+            continue
+        try:
+            if relative not in payloads:
+                raw = read(relative)
+                payloads[relative] = _ABSENT if raw is None else parse_motion(raw)
+            if payloads[relative] is _ABSENT:
+                continue
+            problems = motion_problems(payloads[relative], parts)
+            if problems:
+                raise ValueError("the motion would not play: " + "; ".join(problems))
+        except ValueError as exc:
+            raise ValueError(
+                f"step {step.index}'s {MOTION_KIND} artifact {relative!r} "
+                f"is not a motion the viewport can play for that step: {exc}"
+            ) from exc
+        judged.add((relative, len(parts)))
+
+
+# What a motion the manifest lists and the item does not have is read as.
+_ABSENT = object()
+
+
+def _motion_bytes(item: Path, relative: str) -> bytes | None:
+    """A listed motion's bytes, or ``None`` when the item does not have it.
 
     Its size is taken before any of it is read, so a file far past the largest
     a motion may be is refused unread; and no more than one byte past that is
     read even so, so a file that grew in between is still refused for its size
     rather than read whole.
     """
-    path = step_artifact_path(item, step, MOTION_KIND)
+    path = _inside_item(item, relative, "artifact")
     if not path.is_file():
-        return
-    refusal = (
-        f"step {step.index}'s {MOTION_KIND} artifact {step.artifacts[MOTION_KIND]!r} "
-        "is not a motion the viewport can play for that step"
-    )
+        return None
     size = path.stat().st_size
     if size > MAX_MOTION_BYTES:
-        raise ValueError(
-            f"{refusal}: it is {size} bytes, more than the {MAX_MOTION_BYTES} a motion may take"
-        )
+        raise ValueError(f"it is {size} bytes, more than the {MAX_MOTION_BYTES} a motion may take")
     with path.open("rb") as motion:
-        raw = motion.read(MAX_MOTION_BYTES + 1)
-    try:
-        read_motion(raw, step.drawn_parts())
-    except ValueError as exc:
-        raise ValueError(f"{refusal}: {exc}") from exc
+        return motion.read(MAX_MOTION_BYTES + 1)
 
 
 def read_source_json(item_dir: Path) -> dict | None:

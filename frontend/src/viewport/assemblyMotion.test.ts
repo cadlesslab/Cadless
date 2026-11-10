@@ -124,27 +124,6 @@ describe("joints", () => {
     )!;
     expect(partsByJoint(motion)).toEqual([[4], [2, 3], [2, 3], [1]]);
   });
-
-  it("is played a part at a time by a viewer that does not read the grouping", () => {
-    // The first five fields keep their meaning whatever else the file carries.
-    const older: Record<string, unknown> = { ...BRACKET };
-    delete older.steps;
-    delete older.subassemblies;
-    const motion = parseMotion(older, PARTS);
-    expect(motion).toEqual(
-      parseMotion(
-        {
-          order: [0, 1, 2],
-          releases: [[], [0, 0, 1], [0, 0, 1]],
-          stretch: [1, 1, 1],
-          explode_fraction: 0.35,
-          travel: [0, 0.5, 0.75],
-        },
-        PARTS,
-      ),
-    );
-    expect(partsByJoint(motion!)).toEqual([[2], [1]]);
-  });
 });
 
 describe("partOffsets", () => {

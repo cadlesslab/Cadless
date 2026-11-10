@@ -1715,6 +1715,36 @@
     }
   },
   {
+    "name": "members a hair outside the tolerance only when their dot product is summed x, y, z",
+    "valid": false,
+    "why": "Summed in the build's axis order the two headings fall just short of one direction; summed x, z, y they would not. Both checks sum x, y, z.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [-0.7789766144821564, -0.9540528422959453, 0.3422558299669412], [-0.6090451423643737, -0.7470076099418756, 0.26654013816175287]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
+    "name": "members a hair inside the tolerance only when their dot product is summed x, y, z",
+    "valid": true,
+    "why": "Summed in the build's axis order the two headings reach one direction; summed x, z, y they would fall just short. Both checks sum x, y, z.",
+    "parts": [0, 1, 2],
+    "payload": {
+      "order": [0, 1, 2],
+      "releases": [[], [-0.8782157963490305, -0.6899612642608615, 0.3396670777875052], [-0.7531105051547988, -0.5905768968287753, 0.2899025628682471]],
+      "stretch": [1, 1, 1],
+      "explode_fraction": 0.35,
+      "travel": [0, 0.5, 0.5],
+      "steps": [[0], [1, 2]],
+      "subassemblies": [{"parts": [1, 2], "splits": [[], [0, 0, 1]], "split_travel": [0, 0.25]}]
+    }
+  },
+  {
     "name": "a member's heading too large to square beside a short one the same way",
     "valid": true,
     "why": "Length does not change a direction, however long; the two members still come off as one.",

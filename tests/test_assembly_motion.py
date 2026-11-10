@@ -116,7 +116,8 @@ def test_a_heading_just_longer_than_the_threshold_is_a_heading():
 
 
 def test_the_widest_spacing_and_the_furthest_travel_accepted_are_accepted():
-    motion = _with(_shelf(), explode_fraction=1, travel=[0, 8.196, 0.4])
+    # 8.196000000000002 is three parts' cap exactly, as a double computes it.
+    motion = _with(_shelf(), explode_fraction=1, travel=[0, 8.196000000000002, 0.4])
     assert motion_problems(motion, _SHELF_PARTS) == []
 
 
@@ -543,9 +544,28 @@ def test_a_file_over_the_limit_is_refused_before_any_of_it_is_decoded():
         read_motion(b"\xff" * (MAX_MOTION_BYTES + 1), _SHELF_PARTS)
 
 
-def test_a_file_that_is_not_utf8_is_refused():
-    with pytest.raises(ValueError, match="UTF-8"):
-        read_motion(b'{"order": "\xff"}', _SHELF_PARTS)
+def test_bytes_that_are_not_utf8_outside_a_string_are_not_json():
+    # Read as a browser reads them, as the replacement character -- which is
+    # no JSON value either.
+    with pytest.raises(ValueError, match="not JSON"):
+        read_motion(b'{"order": \xff}', _SHELF_PARTS)
+
+
+def test_bytes_that_are_not_utf8_inside_a_string_nothing_reads_are_read_past():
+    # A browser decodes them to the replacement character and plays the file.
+    raw = _encoded(_shelf())[:-1] + b', "note": "\xff\xfe"}'
+    assert read_motion(raw, _SHELF_PARTS)["order"] == [0, 1, 2]
+
+
+def test_a_leading_byte_order_mark_is_dropped_as_a_browser_drops_it():
+    raw = b"\xef\xbb\xbf" + _encoded(_shelf())
+    assert read_motion(raw, _SHELF_PARTS)["order"] == [0, 1, 2]
+
+
+def test_an_integer_too_long_for_python_under_a_key_nothing_reads_is_read_past():
+    # A browser reads it as a float; Python refuses to turn it into an int.
+    raw = _encoded(_shelf())[:-1] + b', "note": 1' + b"0" * 5000 + b"}"
+    assert read_motion(raw, _SHELF_PARTS)["order"] == [0, 1, 2]
 
 
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])

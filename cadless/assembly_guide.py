@@ -17,6 +17,8 @@ kernel and does not pay for one.
 
 from __future__ import annotations
 
+import math
+import numbers
 from collections.abc import Mapping, Sequence
 
 import numpy as np
@@ -127,7 +129,7 @@ def motion_payload(
     if steps is None and subassemblies is None:
         return payload
     if steps is not None:
-        payload["steps"] = [[int(index) for index in run] for run in steps]
+        payload["steps"] = [_ordinals(run) for run in steps]
     if subassemblies is not None:
         payload["subassemblies"] = _subassemblies(order, subassemblies, part_meshes)
     # One part for each entry of the order, as the viewport counts the parts it
@@ -148,16 +150,21 @@ def _subassemblies(
 
     Members and splits are written as numbers, the way the order and the
     headings are, but left in the shape they came in -- a split of the wrong
-    length, a member the order does not name -- for the check that follows to
-    name, rather than tidied here into something nobody was told about.
+    length, a member the order does not name, a member that is not a whole
+    number -- for the check that follows to name, rather than tidied here into
+    something nobody was told about. Only one with no list of parts or of splits
+    to write is refused here, there being nothing to leave for the check.
     """
-    written = [
-        {
-            "parts": [int(index) for index in sub["parts"]],
-            "splits": [[float(c) for c in split] for split in sub["splits"]],
-        }
-        for sub in subassemblies
-    ]
+    written = []
+    for position, sub in enumerate(subassemblies):
+        parts = sub.get("parts") if isinstance(sub, Mapping) else None
+        splits = sub.get("splits") if isinstance(sub, Mapping) else None
+        if not isinstance(parts, (list, tuple)) or not isinstance(splits, (list, tuple)):
+            raise ValueError(
+                f"this grouping is not a motion the viewport plays: sub-assembly {position} "
+                "is not a mapping with a list of parts and a list of splits"
+            )
+        written.append({"parts": _ordinals(parts), "splits": [_numbers(s) for s in splits]})
     if not written:
         return written
     if part_meshes is None or sorted(order) != list(range(len(part_meshes))):
@@ -186,8 +193,12 @@ def _split_travels(
     does not name is not measured and goes nowhere.
     """
     members = sub["parts"]
+    if not all(isinstance(member, int) and not isinstance(member, bool) for member in members):
+        # Nothing to measure a member by that is not a part's number; the check
+        # that follows names it.
+        return [0.0] * len(members)
     split_of = {
-        member: sub["splits"][position] if position < len(sub["splits"]) else []
+        member: _measurable(sub["splits"][position]) if position < len(sub["splits"]) else []
         for position, member in enumerate(members)
     }
     placed = [index for index in order if index in split_of]
@@ -198,6 +209,47 @@ def _split_travels(
     )
     measured = dict(zip(placed, travels, strict=True))
     return [measured.get(member, 0.0) for member in members]
+
+
+def _ordinals(run: object) -> object:
+    """A run or a sub-assembly's members with each whole number written as an
+    ``int``, and anything else -- a fraction, ``True``, a run that is not a list
+    -- left as it came, for the check to name rather than this to round into a
+    part nobody named."""
+    if not isinstance(run, (list, tuple)):
+        return run
+    return [_ordinal(value) for value in run]
+
+
+def _ordinal(value: object) -> object:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _numbers(split: object) -> object:
+    """A split with each number in it written as a ``float``, otherwise as it came."""
+    if not isinstance(split, (list, tuple)):
+        return split
+    return [
+        float(c) if isinstance(c, numbers.Real) and not isinstance(c, bool) else c for c in split
+    ]
+
+
+def _measurable(split: object) -> list:
+    """A split a member can be moved along -- three finite numbers -- or ``[]``,
+    which moves it nowhere: the check that follows names a split that is neither."""
+    if (
+        isinstance(split, list)
+        and len(split) == 3
+        and all(isinstance(c, float) and math.isfinite(c) for c in split)
+    ):
+        return split
+    return []
 
 
 def compose(meshes: Sequence[np.ndarray], offsets: Sequence[Sequence[float]]) -> np.ndarray:

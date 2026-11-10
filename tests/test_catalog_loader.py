@@ -1073,9 +1073,13 @@ _LID_MOTION = json.dumps(
 
 
 def _write_motion_item(
-    catalog_dir: Path, house_id: str, motion: bytes | None, keys: tuple[str, ...] = ("assembly",)
+    catalog_dir: Path,
+    house_id: str,
+    motion: bytes | None,
+    keys: tuple[str, ...] = ("assembly",),
+    glbs: int = 2,
 ) -> Path:
-    """One step of two glb parts listing ``motion`` under each of ``keys``.
+    """One step of ``glbs`` glb parts listing ``motion`` under each of ``keys``.
 
     The motion sits in the item under a name of the author's choosing; ``None``
     lists one the item does not have.
@@ -1086,7 +1090,7 @@ def _write_motion_item(
     art = house / "artifacts" / "01"
     art.mkdir(parents=True, exist_ok=True)
     artifacts = {}
-    for n in range(2):
+    for n in range(glbs):
         (art / f"model_p{n}.glb").write_bytes(b"glTF" + bytes([n]))
         artifacts["glb" if n == 0 else f"glb:{n}"] = f"artifacts/01/model_p{n}.glb"
     if motion is not None:
@@ -1144,6 +1148,46 @@ def test_a_motion_too_large_to_be_one_is_refused_without_being_read(tmp_path, mo
 
     with pytest.raises(ValueError, match="step 1.*more than the"):
         load_manifest(house)
+
+
+def test_a_motion_on_a_step_of_one_part_is_refused(tmp_path):
+    """A step of one glb file is drawn whole, with no part to move, so no motion
+    plays on it -- not even one naming that one part."""
+    from cadless.catalog.manifest import load_manifest
+
+    one = json.dumps(
+        {"order": [0], "releases": [[0, 0, 1]], "stretch": [1], "explode_fraction": 0.35}
+    ).encode()
+    house = _write_motion_item(tmp_path / "cat", "kit", one, glbs=1)
+
+    with pytest.raises(ValueError, match="step 1.*order lists 1 parts, but 0 are drawn"):
+        load_manifest(house)
+
+
+def test_a_motion_several_steps_share_is_read_once(tmp_path, monkeypatch):
+    """Judged once per number of parts a step draws, so a manifest repeating a
+    path does not repeat the reading of the file behind it."""
+    import cadless.catalog.manifest as manifest_module
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION)
+    written = json.loads((house / "manifest.json").read_text())
+    step = written["steps"][0]
+    for index in (2, 3, 4):
+        (house / "steps" / f"0{index}.py").write_text("result = 1\n")
+        written["steps"].append({**step, "index": index, "code": f"steps/0{index}.py"})
+    (house / "manifest.json").write_text(json.dumps(written))
+    reads = []
+    real_parse = manifest_module.parse_motion
+
+    def counted(raw):
+        reads.append(len(raw))
+        return real_parse(raw)
+
+    monkeypatch.setattr(manifest_module, "parse_motion", counted)
+
+    manifest_module.load_manifest(house)
+
+    assert reads == [len(_LID_MOTION)]
 
 
 def test_a_motion_keyed_twice_on_one_step_is_refused(tmp_path):

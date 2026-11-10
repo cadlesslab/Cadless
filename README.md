@@ -23,8 +23,8 @@ Ask for a design as several interlocking parts and Cadless checks that they go
 together — each inside the printer's build volume, no two sharing space — and
 measures an order in which they come apart. The viewport plays that order a
 step at a time, apart and back together; a catalog kit can carry a motion of its
-own, in which several parts move in one step and a sub-assembly comes off whole
-before it comes apart. Below, two designs from the bundled
+own, in which several parts can leave together and a sub-assembly comes off
+whole before it comes apart. Below, two designs from the bundled
 catalog rebuilt as assemblies: a piston assembly and a butt hinge.
 
 <p align="center">

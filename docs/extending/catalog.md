@@ -137,28 +137,29 @@ in [core-modules.md](./core-modules.md#changing-the-validator).
 ## A kit's assembly motion
 
 A build checked as an assembly gets its motion from that check
-([pipeline.md](../pipeline.md)). A catalog item carries its own: whoever bakes it
-writes the motion from the order and the headings their own tooling verified,
-and lists it on each step of several parts under the key `assembly`. The engine
-checks the file's shape when the item is loaded, and when a package carrying it
-is imported — before anything is written — and refuses the item, with the
-reason, if it is not a motion the viewport can play for that step's parts. It
-does not measure the parts again: the author vouches that they clear one
-another along the headings given.
+([pipeline.md](../pipeline.md)). A catalog item can carry its own: whoever bakes
+it writes the motion from the order and the headings their own tooling verified,
+and lists it, under the key `assembly`, on any step of two or more `glb` parts it
+wants played. The engine checks the file's shape when the item is loaded, and
+when a package carrying it is imported — before anything is written — and
+refuses the item, with the reason, if it is not a motion the viewport can play
+for that step's parts. It does not measure the parts again: the author vouches
+that they clear one another along the headings given.
 
 The file is one JSON object. A part is named by its ordinal, the number of its
-`glb` file in the step (`glb` is 0, `glb:1` is 1, …), and every list indexed by
-part has one entry per part:
+`glb` file in the step (`glb` is 0, `glb:1` is 1, …). Every list indexed by part
+has one entry per part, and every distance is a fraction of the assembled
+model's largest dimension, at most 2.732 times the part count:
 
 | Field | Meaning |
 | --- | --- |
 | `order` | the ordinals in the order the parts go together, each once |
 | `releases` | per part, the heading it comes off along — three numbers in the build's frame, Z up — or `[]` for a part that stays where it is; at least one part has a heading |
 | `stretch` | per part, how many spacings it goes out when no travel is given: an integer from 1 to the part count |
-| `explode_fraction` | that spacing, as a fraction of the assembled model's largest dimension: above 0 and at most 1 |
-| `travel` | optional: per part, how far it goes out, as a fraction of the same dimension; above 0 for every part with a heading |
+| `explode_fraction` | that spacing: above 0 and at most 1 |
+| `travel` | optional: per part, how far it goes out; above 0 for every part with a heading |
 | `steps` | optional: `order` cut into runs, in order; a run's parts move at once. Absent, every part is a run of its own |
-| `subassemblies` | optional, and only beside `steps`: groups of two or more parts inside one run, which come off whole along the heading their members share in `releases` and then come apart — `splits` gives each member's heading off the group (`[]` for a member that stays with it) and `split_travel` how far it goes (0 for one that stays) |
+| `subassemblies` | optional, and only beside `steps`: groups of two or more parts inside one run, no part in two of them. A group comes off whole, along the heading its members share in `releases` — or not at all, when none of them has one — and then comes apart: `splits` gives each member's heading off the group, `[]` for a member that stays with it, and `split_travel` how far it goes, above 0 along a split and 0 for a member that stays |
 
 ```json
 {"order": [0, 1, 2, 3, 4], "releases": [[], [0, 0, 1], [1, 0, 0], [1, 0, 0], [0, -1, 0]],
@@ -169,17 +170,19 @@ part has one entry per part:
 
 The viewport takes the parts apart a run at a time, the last run first: every
 part of the run that has a heading moves at once, a sub-assembly by the largest
-travel among its members, and then, as a step of its own, the run's
-sub-assemblies come apart. Putting them back plays the same steps in reverse.
-Keys it does not know are ignored, and the first five fields keep their meaning
-whatever else a file carries, so a viewer that predates `steps` and
+travel among its members, and then the run's sub-assemblies come apart, as a
+move of their own. The toolbar's "Step N of K" counts those moves, not the
+file's runs: a run with sub-assemblies that come apart is two of them, and a run
+in which nothing moves is none. Putting the parts back plays the same moves in
+reverse. Keys it does not know are ignored, and the first five fields keep their
+meaning whatever else a file carries, so a viewer that predates `steps` and
 `subassemblies` plays the same file a part at a time.
 
-`cadless.assembly_guide.motion_payload` writes the file from an order, the
-headings and the parts' meshes, measuring the travels as a checked build's are
-measured, and raises rather than return a grouped motion the viewport would not
-play; `cadless.assembly_motion.read_motion` is the check the loader and an
-import run.
+`cadless.assembly_guide.motion_payload` returns the motion to write, from an
+order, the headings and the parts' meshes, measuring the travels as a checked
+build's are measured, and raises rather than return a grouped motion the
+viewport would not play; `cadless.assembly_motion.read_motion` is the check the
+loader and an import run.
 
 ## The CLI
 

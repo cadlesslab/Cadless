@@ -5,8 +5,9 @@ catalog item carries the one whoever baked it wrote. Either way the viewport
 plays a motion only if it describes the parts on screen, and a motion it
 refuses shows as nothing failing at all -- only a model with no player. So the
 rules it plays by are stated here, once, for whatever writes a motion and
-whatever takes one in, and a file is refused where it is made or received
-rather than found unplayable where it is shown.
+whatever takes one in: a catalog item is refused where it comes in, and a
+grouped motion where it is made, rather than found unplayable where it is
+shown.
 
 The file is one JSON object. A part is named by its ordinal, and every list
 indexed by part has one entry per drawn part:
@@ -20,13 +21,17 @@ indexed by part has one entry per drawn part:
 - ``explode_fraction``: that spacing, as a fraction of the assembled model's
   largest dimension.
 - ``travel``, optional: per part, how far it goes out, as a fraction of the
-  same dimension; more than none for every part with a heading.
+  same dimension; more than none for every part with a heading, and at most
+  :data:`MAX_TRAVEL_PER_PART` times the part count.
 - ``steps``, optional: ``order`` cut into runs, in order; the parts of one run
   move at the same time. Absent, every part is a run of its own.
 - ``subassemblies``, optional and only beside ``steps``: groups of two or more
-  parts inside one run, which come off whole -- along the heading their members
-  share in ``releases``, or not at all when none of them has one -- and then
-  come apart, each member along its slot in ``splits`` by its ``split_travel``.
+  parts inside one run, no part in two of them, which come off whole -- along
+  the heading their members share in ``releases``, or not at all when none of
+  them has one -- and then come apart, each member along its slot in
+  ``splits`` (``[]`` for one that stays) by its ``split_travel``: a fraction of
+  the same dimension, capped as ``travel`` is, more than none along a split and
+  none without one.
 
 A key nothing here reads is ignored, at the top and in a sub-assembly alike, so
 a file can carry what a later viewer plays without an earlier one refusing it.
@@ -87,32 +92,43 @@ _ARRAY = (list, tuple)
 
 def read_motion(raw: bytes, parts: Sequence[int]) -> dict:
     """The motion in ``raw``, read as a motion of ``parts``, or a ``ValueError``
-    saying why it is not one.
+    saying why it is not one: whatever :func:`parse_motion` refuses, and then
+    anything :func:`motion_problems` finds wrong, every problem named."""
+    payload = parse_motion(raw)
+    problems = motion_problems(payload, parts)
+    if problems:
+        raise ValueError("the motion would not play: " + "; ".join(problems))
+    return payload
 
-    Refused, in this order: more than :data:`MAX_MOTION_BYTES`, before a byte of
-    it is decoded; bytes that are not UTF-8 JSON; the ``NaN``, ``Infinity`` and
-    ``-Infinity`` that Python reads and JSON has no spelling for, wherever they
-    are; nesting too deep to read; and anything :func:`motion_problems` finds
-    wrong, every problem named.
+
+def parse_motion(raw: bytes) -> object:
+    """The JSON value in ``raw``, read as a browser reads a file it fetches, or a
+    ``ValueError`` saying why there is none.
+
+    Refused: more than :data:`MAX_MOTION_BYTES`, before a byte of it is decoded;
+    text that is not JSON; the ``NaN``, ``Infinity`` and ``-Infinity`` that
+    Python reads and JSON has no spelling for, wherever they are; and nesting
+    too deep to read. Otherwise read as leniently as the viewport's own reading
+    is, because a file refused here that the viewport plays is an item turned
+    away for nothing: one leading byte-order mark is dropped, bytes that are not
+    UTF-8 become the replacement character -- inside a string nothing reads that
+    changes nothing, and anywhere else it is not JSON -- and an integer with more
+    digits than Python reads as one is read as the float a browser makes of it.
+
+    Apart from :func:`read_motion` so that a file several steps share can be
+    read once and judged against each step's parts.
     """
     if len(raw) > MAX_MOTION_BYTES:
         raise ValueError(
             f"the motion is {len(raw)} bytes, more than the {MAX_MOTION_BYTES} a motion may take"
         )
+    text = raw.decode("utf-8-sig", errors="replace")
     try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"the motion is not UTF-8 text: {exc.reason} at byte {exc.start}") from exc
-    try:
-        payload = json.loads(text, parse_constant=_refuse_constant)
+        return json.loads(text, parse_constant=_refuse_constant, parse_int=_integer)
     except RecursionError as exc:
         raise ValueError("the motion nests too deeply to be read") from exc
     except ValueError as exc:
         raise ValueError(f"the motion is not JSON: {exc}") from exc
-    problems = motion_problems(payload, parts)
-    if problems:
-        raise ValueError("the motion would not play: " + "; ".join(problems))
-    return payload
 
 
 def motion_problems(payload: object, parts: Sequence[int]) -> list[str]:
@@ -472,3 +488,13 @@ def _is_whole(value: object) -> bool:
 
 def _refuse_constant(name: str) -> None:
     raise ValueError(f"{name} is not a number JSON can carry")
+
+
+def _integer(digits: str) -> int | float:
+    """A JSON integer as Python reads one, or -- past the most digits Python
+    turns into an ``int`` -- as the float a browser reads, infinite if it must
+    be."""
+    try:
+        return int(digits)
+    except ValueError:
+        return float(digits)

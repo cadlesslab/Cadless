@@ -1,8 +1,9 @@
 /** Where each part of an assembly sits at any point of taking it apart.
  *
- * The engine measured the order the parts go together in and, per part, the
- * direction it was released along when a collision-free way out was found. A
- * file can also group that order: its `steps` cut it into runs of parts that go
+ * A motion gives the order the parts go together in and, per part, the
+ * direction it leaves along: measured by the engine for a build it checked as
+ * an assembly, or written by whoever authored a catalog item. A file can also
+ * group that order: its `steps` cut it into runs of parts that go
  * on at the same time, and its sub-assemblies are parts of one run fitted to one
  * another first and then to the model as one piece. This turns all of that into
  * offsets the viewport can apply, as pure functions so the motion can be checked
@@ -38,10 +39,10 @@ export interface Motion {
   /** Part ordinals, in the order the parts go together. */
   order: number[];
   /** Indexed by part ordinal: how far the part goes out, as a fraction of the
-   * assembled model's largest dimension. The engine's measure of each part's
-   * travel where it sent one, so the viewport and the written guide's frames
-   * agree on how far apart "apart" is; otherwise the spacing an older engine
-   * sent, its fraction times its count for that part. A member of a
+   * assembled model's largest dimension. The file's own travel where it carries
+   * one -- for a build the engine checked, its measure, so the viewport and the
+   * written guide's frames agree on how far apart "apart" is; otherwise the
+   * spacing an older file carries, its fraction times its count for that part. A member of a
    * sub-assembly comes off the model by the furthest of its members' instead,
    * because the piece comes off as one. */
   travel: number[];
