@@ -1064,6 +1064,100 @@ def test_a_legacy_item_records_no_part_names(tmp_path):
     assert version.parts is None
 
 
+# --- the motion a step carries ------------------------------------------------
+
+# A motion for a step of two parts: a base that stays and a lid lifted off it.
+_LID_MOTION = json.dumps(
+    {"order": [0, 1], "releases": [[], [0, 0, 1]], "stretch": [1, 1], "explode_fraction": 0.35}
+).encode()
+
+
+def _write_motion_item(
+    catalog_dir: Path, house_id: str, motion: bytes | None, keys: tuple[str, ...] = ("assembly",)
+) -> Path:
+    """One step of two glb parts listing ``motion`` under each of ``keys``.
+
+    The motion sits in the item under a name of the author's choosing; ``None``
+    lists one the item does not have.
+    """
+    house = catalog_dir / house_id
+    (house / "steps").mkdir(parents=True, exist_ok=True)
+    (house / "steps" / "01.py").write_text("result = 1\n")
+    art = house / "artifacts" / "01"
+    art.mkdir(parents=True, exist_ok=True)
+    artifacts = {}
+    for n in range(2):
+        (art / f"model_p{n}.glb").write_bytes(b"glTF" + bytes([n]))
+        artifacts["glb" if n == 0 else f"glb:{n}"] = f"artifacts/01/model_p{n}.glb"
+    if motion is not None:
+        (art / "motion.json").write_bytes(motion)
+    for key in keys:
+        artifacts[key] = "artifacts/01/motion.json"
+    step = {"index": 1, "instruction": "build it", "code": "steps/01.py", "artifacts": artifacts}
+    (house / "manifest.json").write_text(
+        json.dumps({"id": house_id, "name": house_id, "steps": [step]})
+    )
+    return house
+
+
+def test_a_step_s_motion_is_filed_under_the_name_a_build_gives_its_own(tmp_path):
+    """The viewer asks a version for its motion by kind, and a version built
+    here keeps it as `assembly.json`; a loaded item's reads back the same."""
+    _, rows = _loaded(tmp_path, _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION))
+    motions = [
+        (a.part, Path(a.path).name, Path(a.path).read_bytes()) for a in rows if a.kind == "assembly"
+    ]
+    assert motions == [(0, "assembly.json", _LID_MOTION)]
+
+
+def test_a_motion_the_viewer_would_not_play_is_refused_with_its_step(tmp_path):
+    from cadless.catalog.manifest import load_manifest
+
+    for_three = json.dumps({**json.loads(_LID_MOTION), "order": [0, 1, 2]}).encode()
+    house = _write_motion_item(tmp_path / "cat", "kit", for_three)
+
+    with pytest.raises(ValueError, match="step 1.*order lists 3 parts, but 2 are drawn"):
+        load_manifest(house)
+
+
+def test_a_listed_motion_that_is_not_there_is_left_alone(tmp_path):
+    """Missing, as any other artifact may be; the version simply has none."""
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", None)
+
+    assert load_manifest(house).steps[0].artifacts["assembly"] == "artifacts/01/motion.json"
+
+
+def test_a_motion_too_large_to_be_one_is_refused_without_being_read(tmp_path, monkeypatch):
+    from cadless.assembly_motion import MAX_MOTION_BYTES
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(tmp_path / "cat", "kit", _LID_MOTION.ljust(MAX_MOTION_BYTES + 1))
+    real_open = Path.open
+
+    def open_anything_but_the_motion(self, *args, **kwargs):
+        assert self.name != "motion.json", "the motion was opened"
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_anything_but_the_motion)
+
+    with pytest.raises(ValueError, match="step 1.*more than the"):
+        load_manifest(house)
+
+
+def test_a_motion_keyed_twice_on_one_step_is_refused(tmp_path):
+    """One file for the whole build: a second key would file a second copy of it."""
+    from cadless.catalog.manifest import load_manifest
+
+    house = _write_motion_item(
+        tmp_path / "cat", "kit", _LID_MOTION, keys=("assembly", "assembly:1")
+    )
+
+    with pytest.raises(ValueError, match="keyed once"):
+        load_manifest(house)
+
+
 def _write_measured_item(catalog_dir: Path, item_id: str, domain: str, bbox, volume) -> Path:
     """A one-step item whose step records its size and volume as the bake does: in
     the units the item's domain is authored in."""

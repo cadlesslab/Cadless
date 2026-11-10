@@ -26,6 +26,7 @@ from typing import Any
 
 from pydantic_core import PydanticSerializationError
 
+from cadless.assembly_motion import MOTION_KIND, read_motion
 from cadless.catalog.manifest import CatalogManifest, discover_houses, read_source_json
 from cadless.catalog.origins import (
     ENGINE_PROVENANCE_KEYS,
@@ -468,6 +469,18 @@ def _checked_manifest(package: ClsPackage) -> CatalogManifest:
                     f"step {step.index}'s {key} artifact names {relative!r}, "
                     "which this package does not carry"
                 )
+        # Read from what the package carries, the same check `load_manifest`
+        # makes on the file: found after the write instead, it would leave an
+        # item on disk holding its id that no load will take.
+        motion = step.artifacts.get(MOTION_KIND)
+        if motion is not None:
+            try:
+                read_motion(package.entries[motion], step.drawn_parts())
+            except ValueError as exc:
+                raise CatalogImportError(
+                    f"step {step.index}'s {MOTION_KIND} artifact names {motion!r}, "
+                    f"which is not a motion the viewport can play for that step: {exc}"
+                ) from exc
     if manifest.thumbnail is not None and manifest.thumbnail not in carried:
         raise CatalogImportError(
             f"this package's thumbnail names {manifest.thumbnail!r}, which it does not carry"
