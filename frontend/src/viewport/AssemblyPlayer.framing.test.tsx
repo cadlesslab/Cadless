@@ -1,14 +1,16 @@
 /** Where the camera goes while an assembly plays apart and back together.
  *
  * There is no WebGL here, so drei's `<Bounds>` is stood in for by the part of it
- * the player drives, applied at once rather than animated: a perspective `fit`
- * is drei's `reset` — the camera put on the line from the box's centre through
- * where it stands, at the distance that fits the box — an orthographic `fit`
- * changes only the zoom, and `moveTo`/`lookAt` set the end of the move. That is
- * drei 9.122.0's own arithmetic, which is what decides where a reader is left
- * looking. */
+ * the player asks of it, applied at once rather than animated: a perspective
+ * `fit` is drei's `reset` — the camera put on the line from the box's centre
+ * through where it stands, at the distance that fits the box — and an
+ * orthographic `fit` changes only the zoom. That is the arithmetic drei's own
+ * Bounds does. The orbit controls aim the camera at their target, as the real
+ * ones do on every update; the player's own moves are stepped through to their
+ * end. */
 import { act, render } from "@testing-library/react";
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const FOV = 50;
@@ -17,6 +19,9 @@ const MARGIN = 1.25;
 let frame: ((state: unknown, delta: number) => void) | null = null;
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
 let controls: THREE.EventDispatcher<{ start: object }> & { target: THREE.Vector3; maxDistance: number; update: () => void };
+// What the player asked drei to move or aim, which it must not on a perspective
+// camera: drei's move tilts the camera's up while it runs.
+let asked: string[] = [];
 
 function standInBounds() {
   const box = new THREE.Box3();
@@ -77,10 +82,12 @@ function standInBounds() {
       return api;
     },
     moveTo(position: THREE.Vector3) {
+      asked.push("moveTo");
       camera.position.copy(position);
       return api;
     },
     lookAt({ target }: { target: THREE.Vector3 }) {
+      asked.push("lookAt");
       controls.target.copy(target);
       camera.lookAt(target);
       return api;
@@ -95,7 +102,7 @@ vi.mock("@react-three/fiber", () => ({
   useFrame: (callback: (state: unknown, delta: number) => void) => {
     frame = callback;
   },
-  useThree: (select: (state: unknown) => unknown) => select({ camera, controls }),
+  useThree: (select: (state: unknown) => unknown) => select({ camera, controls, invalidate: () => {} }),
 }));
 vi.mock("@react-three/drei", () => ({ useBounds: () => bounds }));
 
@@ -138,18 +145,37 @@ function viewDirection(): THREE.Vector3 {
   return camera.position.clone().sub(controls.target).normalize();
 }
 
-function playTo(position: number) {
+/** Puts the parts at `position`, and lets a move it sets off run `seconds`. */
+function playTo(position: number, seconds = 5) {
   act(() => viewportStore.setAssemblyPosition(position));
   frame?.(null, 0.016);
+  frame?.(null, seconds);
+}
+
+/** A press, move or release of the mouse at `x` across the controls' element. */
+function pointer(element: HTMLElement, type: string, x: number) {
+  const event = new MouseEvent(type, { clientX: x, clientY: 300, button: 0, bubbles: true });
+  Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+  element.dispatchEvent(event);
+}
+
+/** `seconds` of frames at sixty a second, the controls updating first on each, as
+ * drei's do. */
+function run(orbit: OrbitControls, seconds: number) {
+  for (let i = 0; i < seconds * 60; i += 1) {
+    orbit.update();
+    frame?.(null, 1 / 60);
+  }
 }
 
 beforeEach(() => {
   frame = null;
+  asked = [];
   camera = new THREE.PerspectiveCamera(FOV, 1.5, 0.1, 1000);
   controls = Object.assign(new THREE.EventDispatcher<{ start: object }>(), {
     target: new THREE.Vector3(0.5, 0, 0),
     maxDistance: Infinity,
-    update: () => {},
+    update: () => camera.lookAt(controls.target),
   });
   camera.position.set(3.5, 3, 3);
   camera.lookAt(controls.target);
@@ -196,21 +222,34 @@ describe("AssemblyPlayer framing", () => {
     // The fit drei's <Bounds> makes of the model as it loads.
     bounds.refresh(new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(1.5, 0.5, 0.5))).fit();
     const zoom = camera.zoom;
-    const before = viewDirection();
     mount();
 
     playTo(1);
+    // The parts out need the wider view, or there is nothing to come back from.
     expect(camera.zoom).toBeLessThan(zoom);
-    expect(viewDirection().angleTo(before)).toBeLessThan(1e-6);
     playTo(0);
 
     expect(camera.zoom).toBeCloseTo(zoom, 9);
   });
 
+  it("still comes back if the reader moved the camera or asked for a view before the parts left", () => {
+    mount();
+    controls.dispatchEvent({ type: "start" });
+    act(() => viewportStore.view("top"));
+    const position = camera.position.clone();
+    const target = controls.target.clone();
+
+    playTo(1);
+    playTo(0);
+
+    expect(camera.position.distanceTo(position)).toBeLessThan(1e-6);
+    expect(controls.target.distanceTo(target)).toBeLessThan(1e-6);
+  });
+
   it("leaves a view the reader asked for while apart", () => {
     mount();
     playTo(1);
-    // What the view toolbar does; the rig moves the camera for it.
+    // Asking for a view moves the camera; here it is moved by hand.
     act(() => viewportStore.view("top"));
     camera.position.set(0.5, 6, 0.001);
     controls.target.set(0.5, 1.5, 0);
@@ -219,6 +258,72 @@ describe("AssemblyPlayer framing", () => {
     playTo(0);
 
     expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
+  });
+
+  it("moves a perspective camera itself rather than through drei's move", () => {
+    mount();
+    playTo(1);
+    playTo(0);
+
+    expect(asked).toEqual([]);
+  });
+
+  it("comes back though the reader's last drag still carried the camera on as the parts left", () => {
+    // The viewport's controls are damped: let go of, they carry the camera on.
+    const element = document.createElement("div");
+    Object.defineProperty(element, "clientHeight", { value: 600 });
+    element.setPointerCapture = () => {};
+    element.releasePointerCapture = () => {};
+    document.body.appendChild(element);
+    const orbit = new OrbitControls(camera, element);
+    orbit.target.copy(controls.target);
+    orbit.enableDamping = true;
+    orbit.update();
+    controls = orbit as unknown as typeof controls;
+    mount();
+    pointer(element, "pointerdown", 300);
+    pointer(element, "pointermove", 330);
+    pointer(element, "pointerup", 330);
+
+    act(() => viewportStore.setAssemblyPosition(1));
+    // Where the reader was as the parts left: on that frame the controls move
+    // the camera on before the player looks.
+    orbit.update();
+    const position = camera.position.clone();
+    const target = orbit.target.clone();
+    frame?.(null, 1 / 60);
+    run(orbit, 2);
+    act(() => viewportStore.setAssemblyPosition(0));
+    run(orbit, 2);
+
+    expect(camera.position.distanceTo(position)).toBeLessThan(1e-4);
+    expect(orbit.target.distanceTo(target)).toBeLessThan(1e-4);
+    orbit.dispose();
+    element.remove();
+  });
+
+  it("lets go of the camera the moment the reader takes hold of it", () => {
+    mount();
+    playTo(1, 0.2);
+    controls.dispatchEvent({ type: "start" });
+    camera.position.set(-4, 1, 2);
+    const theirs = camera.position.clone();
+
+    frame?.(null, 5);
+
+    expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
+  });
+
+  it("takes the reader's view, not the camera on its way back, if the parts leave again", () => {
+    mount();
+    const position = camera.position.clone();
+    playTo(1);
+    // Home, and out again before the camera has finished coming back.
+    playTo(0, 0.2);
+    playTo(1);
+    playTo(0);
+
+    expect(camera.position.distanceTo(position)).toBeLessThan(1e-6);
   });
 
   it("leaves the reader's own view alone if they moved the camera while apart", () => {

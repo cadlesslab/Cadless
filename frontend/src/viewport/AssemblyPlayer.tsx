@@ -22,15 +22,31 @@ import { viewportStore } from "./viewportStore";
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 
-/** What the player reads of the default controls: where they look, and when the
- * reader takes hold of the camera. */
-type Controls = THREE.EventDispatcher<{ start: object }> & { target: THREE.Vector3 };
+/** What the player reads of the default controls: where they look, when the
+ * reader takes hold of the camera, and how to aim the camera at what they look
+ * at. */
+type Controls = THREE.EventDispatcher<{ start: object }> & {
+  target: THREE.Vector3;
+  update: () => void;
+};
 
-/** Where the reader was looking from before the parts left. */
+/** Where the camera stands and what it looks at. */
 interface Pose {
   position: THREE.Vector3;
   target: THREE.Vector3;
 }
+
+/** A move of the camera from one pose to another, `t` of the way through. */
+interface Move {
+  from: Pose;
+  to: Pose;
+  t: number;
+}
+
+/** How long a move takes, and how it eases: drei's Bounds' own, so the player's
+ * moves read like the viewport's other framing. */
+const MOVE_SECONDS = 1;
+const ease = (t: number) => 1 - Math.exp(-5 * t) + 0.007 * t;
 
 export function AssemblyPlayer({
   motion,
@@ -49,11 +65,13 @@ export function AssemblyPlayer({
   const bounds = useBounds();
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls) as Controls | null;
+  const invalidate = useThree((state) => state.invalidate);
   const size = useRef(0);
   const home = useRef<THREE.Box3 | null>(null);
   const apart = useRef<THREE.Box3 | null>(null);
   const framed = useRef(false);
   const before = useRef<Pose | null>(null);
+  const move = useRef<Move | null>(null);
   const taken = useRef(false);
   const commanded = useRef<unknown>(null);
   const wait = useRef(0);
@@ -105,6 +123,7 @@ export function AssemblyPlayer({
     if (!controls) return;
     const take = () => {
       taken.current = true;
+      move.current = null;
     };
     controls.addEventListener("start", take);
     return () => controls.removeEventListener("start", take);
@@ -137,21 +156,41 @@ export function AssemblyPlayer({
     // leaves the camera wherever its last framing put it. Widened from the angle
     // the reader is looking from, not drei's fit, which on a perspective camera
     // re-aims along the line from the new centre and so turns the view as the
-    // centre moves — towards the front, for parts that leave upward.
+    // centre moves — towards the front, for parts that leave upward. Moved by the
+    // player itself rather than by drei's lookAt, whose move tilts the camera's
+    // up while it runs and leaves it tilted when the reader cuts it short, so
+    // every later orbit rolls the horizon.
     if (!framed.current && position > 0 && apart.current) {
       framed.current = true;
       taken.current = false;
       commanded.current = state.command;
-      const target = controls?.target ?? apart.current.getCenter(new THREE.Vector3());
-      before.current = { position: camera.position.clone(), target: target.clone() };
-      frame(bounds, camera, before.current, apart.current);
+      // Where a move of the player's is still heading, if one is: the camera
+      // part way through it is not where the reader chose to look from.
+      before.current = move.current ? clone(move.current.to) : pose(camera, controls);
+      move.current = start(camera, controls, frame(bounds, camera, controls, before.current, apart.current));
     } else if (framed.current && position === 0) {
       framed.current = false;
+      // Read off what the reader did, never off where the camera is: the
+      // controls' damping carries a drag on after it is let go of, so a camera
+      // nobody has touched since is still not where the player left it.
       const chosen = taken.current || state.command !== commanded.current;
       if (!chosen && before.current && home.current) {
-        back(bounds, camera, before.current, home.current);
+        move.current = start(camera, controls, back(bounds, camera, controls, before.current, home.current));
       }
       before.current = null;
+    }
+
+    if (move.current && controls) {
+      const m = move.current;
+      m.t = reduced.current ? 1 : Math.min(1, m.t + delta / MOVE_SECONDS);
+      const k = m.t >= 1 ? 1 : ease(m.t);
+      camera.position.lerpVectors(m.from.position, m.to.position, k);
+      controls.target.lerpVectors(m.from.target, m.to.target, k);
+      // Aims the camera at the target about the world's up, which nothing here
+      // tilts.
+      controls.update();
+      invalidate();
+      if (m.t >= 1) move.current = null;
     }
   });
 
@@ -160,25 +199,49 @@ export function AssemblyPlayer({
 
 type Bounds = NonNullable<ReturnType<typeof useBounds>>;
 
-/** Fit `box` from the angle `from` looks along: the centre of the box, at the
- * distance that fits it. An orthographic camera's fit already keeps the angle
- * and changes only the zoom. */
-function frame(bounds: Bounds, camera: THREE.Camera, from: Pose, box: THREE.Box3) {
-  bounds.refresh(box).clip();
-  const direction = from.position.clone().sub(from.target);
-  if ((camera as THREE.OrthographicCamera).isOrthographicCamera || direction.lengthSq() === 0) {
-    bounds.fit();
-    return;
-  }
-  const { center, distance } = bounds.getSize();
-  bounds.moveTo(center.clone().addScaledVector(direction.normalize(), distance)).lookAt({ target: center });
+function pose(camera: THREE.Camera, controls: Controls | null): Pose {
+  const target = controls?.target ?? camera.getWorldDirection(new THREE.Vector3()).add(camera.position);
+  return { position: camera.position.clone(), target: target.clone() };
 }
 
-/** Back to where the reader was looking from, clipped and — orthographic —
- * zoomed for the model assembled. */
-function back(bounds: Bounds, camera: THREE.Camera, to: Pose, home: THREE.Box3) {
-  bounds.refresh(home).clip().moveTo(to.position.clone()).lookAt({ target: to.target.clone() });
-  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) bounds.fit();
+function clone(p: Pose): Pose {
+  return { position: p.position.clone(), target: p.target.clone() };
+}
+
+function orthographic(camera: THREE.Camera): boolean {
+  return (camera as THREE.OrthographicCamera).isOrthographicCamera === true;
+}
+
+/** The pose that fits `box` from the angle `from` looks along: aimed at the
+ * box's centre, at the distance that fits it. An orthographic camera keeps its
+ * pose and takes drei's fit, which changes only the zoom. */
+function frame(bounds: Bounds, camera: THREE.Camera, controls: Controls | null, from: Pose, box: THREE.Box3): Pose {
+  bounds.refresh(box).clip();
+  const direction = from.position.clone().sub(from.target);
+  if (orthographic(camera) || !controls || direction.lengthSq() === 0) {
+    bounds.fit();
+    return pose(camera, controls);
+  }
+  const { center, distance } = bounds.getSize();
+  return { position: center.clone().addScaledVector(direction.normalize(), distance), target: center.clone() };
+}
+
+/** The reader's pose again, clipped for the model assembled — and, for an
+ * orthographic camera, zoomed for it by drei's fit. */
+function back(bounds: Bounds, camera: THREE.Camera, controls: Controls | null, to: Pose, home: THREE.Box3): Pose {
+  bounds.refresh(home).clip();
+  if (orthographic(camera) || !controls) {
+    bounds.fit();
+    return pose(camera, controls);
+  }
+  return clone(to);
+}
+
+/** A move from where the camera is to `to`, or none where there is nothing the
+ * player moves itself. */
+function start(camera: THREE.Camera, controls: Controls | null, to: Pose): Move | null {
+  if (orthographic(camera) || !controls) return null;
+  return { from: pose(camera, controls), to: clone(to), t: 0 };
 }
 
 function rest(groups: Map<number, THREE.Group>) {

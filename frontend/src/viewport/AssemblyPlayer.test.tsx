@@ -2,7 +2,7 @@
  *
  * There is no WebGL here, so the r3f hooks the player leans on are stood in for:
  * `useFrame` hands its callback to the test to call, and `useBounds` answers its
- * framing calls and does nothing — where the camera goes is the framing test's.
+ * framing calls and does nothing: where the camera goes is not this file's subject.
  * Everything the player moves is a real group, and the section it has to stay
  * out of the way of is the real one. */
 import { act, render } from "@testing-library/react";
