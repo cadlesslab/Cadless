@@ -43,7 +43,9 @@ from cadless.catalog.thumbnail import (
 STEP_FRAME_MIN_PARTS = 4
 
 #: The gap a part is pushed out by once it has cleared its joint, as a fraction
-#: of the whole assembly's largest dimension.
+#: of the largest dimension of the parts measured together: the whole assembly,
+#: or a sub-assembly's members when what is measured is how far they come off
+#: one another.
 #:
 #: Far enough to show a gap at every joint, and no further: the frames of a set
 #: share one scale, so a part sent a long way shrinks every other frame to make
@@ -51,7 +53,13 @@ STEP_FRAME_MIN_PARTS = 4
 EXPLODE_FRACTION = 0.35
 
 #: How far the parts may spread once every one of them is out, as a multiple of
-#: the whole assembly's largest dimension, before the spacing is cut to fit.
+#: the largest dimension of the parts measured together, before the spacing is
+#: cut to fit. Measured with each part moved by its own travel, as the guide
+#: draws them: a viewer playing a grouped motion takes a sub-assembly off whole,
+#: as far as its furthest member goes, and then apart, which can spread past the
+#: bound by up to the sub-assembly's own spread as it comes apart. A
+#: sub-assembly's members coming off one another are held to their own size, not
+#: to the room the whole model leaves.
 #:
 #: A part that has to clear one already out clears that part's spacing too, so
 #: down a chain of parts leaving the same way the spacing is counted once per
@@ -61,8 +69,8 @@ EXPLODE_FRACTION = 0.35
 MAX_SPREAD = 2.5
 
 #: The least spacing a part keeps however long its chain, as a fraction of the
-#: whole assembly's largest dimension: below it a joint reads as closed, and a
-#: chain that cannot fit the bound with it spreads further instead.
+#: largest dimension of the parts measured together: below it a joint reads as
+#: closed, and a chain that cannot fit the bound with it spreads further instead.
 MIN_EXPLODE_FRACTION = 0.02
 
 #: How many halvings the spacing is fitted by — far finer than any difference a
@@ -383,35 +391,76 @@ def _travels(
     """How far each part goes out, in the meshes' own units, per part index.
 
     What each part has to clear, plus a spacing every part gets: the usual one,
-    or — where the parts out at it would spread further than ``MAX_SPREAD`` of
-    the assembly's size — the largest spacing down to ``MIN_EXPLODE_FRACTION``
-    whose spread stays within it. The spread only grows with the spacing, so
-    halving between the two finds it.
+    or — where the parts out at it, each moved by its own travel as the guide
+    draws them, would spread further than ``MAX_SPREAD`` of the assembly's size
+    — a smaller one found by halving down to ``MIN_EXPLODE_FRACTION``: the
+    largest of those tried whose spread stays within the bound. Halving assumes
+    the spread grows with the spacing, as it does down a chain; a part leaving
+    inward from an edge can shrink it, so the spacing found need not be the
+    largest that would fit. Where none tried fits, the floor is kept, and the
+    parts spread as far as it takes them — past the bound when even the floor
+    does not fit.
+
+    Each part's vertices are read once, into boxes: everything a travel is
+    measured from is the extremes of a part along its heading and across it,
+    and a part out is the same box moved, so trying another spacing costs no
+    second pass over the meshes.
     """
     points = [np.asarray(mesh, dtype=np.float64).reshape(-1, 3) for mesh in part_meshes]
     size = _largest_dimension(part_meshes)
-    travels = _spaced_travels(points, order, releases, size * EXPLODE_FRACTION)
+    seen = _seen_along(points, releases)
+    extents = [(mine.min(axis=0), mine.max(axis=0)) if len(mine) else None for mine in points]
+    travels = _spaced_travels(seen, len(points), order, releases, size * EXPLODE_FRACTION)
     if (
         not (np.isfinite(size) and size > 0)
-        or _spread(points, releases, travels) <= MAX_SPREAD * size
+        or _spread(extents, releases, travels) <= MAX_SPREAD * size
     ):
         return travels
     fits, cut = MIN_EXPLODE_FRACTION, EXPLODE_FRACTION
     fitted = None
     for _ in range(_FIT_STEPS):
         middle = (fits + cut) / 2
-        candidate = _spaced_travels(points, order, releases, size * middle)
-        if _spread(points, releases, candidate) <= MAX_SPREAD * size:
+        candidate = _spaced_travels(seen, len(points), order, releases, size * middle)
+        if _spread(extents, releases, candidate) <= MAX_SPREAD * size:
             fits, fitted = middle, candidate
         else:
             cut = middle
     if fitted is None:
-        return _spaced_travels(points, order, releases, size * MIN_EXPLODE_FRACTION)
+        return _spaced_travels(seen, len(points), order, releases, size * MIN_EXPLODE_FRACTION)
     return fitted
 
 
+#: Per unit heading: the heading and the two directions across it as rows, and
+#: each part's lowest and highest point along those three, or ``None`` for a
+#: part with no triangles.
+_Seen = dict[tuple[float, ...], tuple[np.ndarray, list[tuple[np.ndarray, np.ndarray] | None]]]
+
+
+def _seen_along(points: Sequence[np.ndarray], releases: Sequence[Sequence[float]]) -> _Seen:
+    """Every part seen down every heading a part leaves along, read once."""
+    seen: _Seen = {}
+    for index, release in enumerate(releases):
+        if index >= len(points) or not _is_heading(release):
+            continue
+        heading = _unit(release)
+        key = tuple(heading)
+        if key in seen:
+            continue
+        axes = np.vstack([heading, _across(heading)])
+        boxes: list[tuple[np.ndarray, np.ndarray] | None] = []
+        for mine in points:
+            if len(mine):
+                along = mine @ axes.T
+                boxes.append((along.min(axis=0), along.max(axis=0)))
+            else:
+                boxes.append(None)
+        seen[key] = (axes, boxes)
+    return seen
+
+
 def _spaced_travels(
-    points: Sequence[np.ndarray],
+    seen: _Seen,
+    count: int,
     order: Sequence[int],
     releases: Sequence[Sequence[float]],
     spacing: float,
@@ -434,48 +483,58 @@ def _spaced_travels(
     in the safe direction: they can only find more in the way. The reach along
     it is read off mesh vertices, and a curved surface's furthest point can fall
     between them, so it can come out short by the tessellation's deviation; the
-    spacing on top, there for the gap a reader sees, is far wider than that.
+    spacing on top, there for the gap a reader sees, is wider than that.
 
     Walked in the order the parts go together, so each part placed before this
     one has its travel by the time it is needed. A part with no heading stays
     put and travels nothing, and a part with no triangles has nothing to clear
     and is in no one's way.
     """
-    travels = [0.0] * len(points)
+    travels = [0.0] * count
     for position, index in enumerate(order):
-        if index >= len(releases) or not _is_heading(releases[index]):
+        if index >= len(releases) or index >= count or not _is_heading(releases[index]):
             continue
-        heading = _unit(releases[index])
-        across = _across(heading)
-        mine = points[index]
+        axes, boxes = seen[tuple(_unit(releases[index]))]
+        mine = boxes[index]
         reach = 0.0
         for other in order[:position]:
-            theirs = points[other]
-            if not len(mine) or not len(theirs):
+            theirs = boxes[other] if other < count else None
+            if mine is None or theirs is None:
                 continue
+            low, high = theirs
             if travels[other]:
-                out = theirs + _unit(releases[other]) * travels[other]
-                theirs = np.concatenate([theirs, out])
-            if _apart_seen_along(mine @ across.T, theirs @ across.T):
+                # Out, it is the same box moved along its own heading.
+                shift = (axes @ _unit(releases[other])) * travels[other]
+                low, high = np.minimum(low, low + shift), np.maximum(high, high + shift)
+            # Apart seen down the heading when the boxes across it do not meet;
+            # boxes that touch count as meeting, so a part exactly as wide as
+            # the gap it slides through is still treated as in the way.
+            if np.any(mine[1][1:] < low[1:]) or np.any(high[1:] < mine[0][1:]):
                 continue
-            reach = max(reach, float((theirs @ heading).max() - (mine @ heading).min()))
+            reach = max(reach, float(high[0] - mine[0][0]))
         travels[index] = reach + spacing
     return travels
 
 
 def _spread(
-    points: Sequence[np.ndarray], releases: Sequence[Sequence[float]], travels: Sequence[float]
+    extents: Sequence[tuple[np.ndarray, np.ndarray] | None],
+    releases: Sequence[Sequence[float]],
+    travels: Sequence[float],
 ) -> float:
-    """The largest dimension of every part moved out by its travel."""
-    out = [
-        mine + _unit(releases[index]) * travels[index] if travels[index] else mine
-        for index, mine in enumerate(points)
-        if len(mine)
-    ]
-    if not out:
+    """The largest dimension of every part moved out by its own travel."""
+    lows, highs = [], []
+    for index, extent in enumerate(extents):
+        if extent is None:
+            continue
+        low, high = extent
+        if travels[index]:
+            shift = _unit(releases[index]) * travels[index]
+            low, high = low + shift, high + shift
+        lows.append(low)
+        highs.append(high)
+    if not lows:
         return 0.0
-    every = np.concatenate(out)
-    return float((every.max(axis=0) - every.min(axis=0)).max())
+    return float((np.max(highs, axis=0) - np.min(lows, axis=0)).max())
 
 
 def _across(heading: np.ndarray) -> np.ndarray:
@@ -484,18 +543,6 @@ def _across(heading: np.ndarray) -> np.ndarray:
     first = np.cross(heading, helper)
     first /= float(np.linalg.norm(first))
     return np.stack([first, np.cross(heading, first)])
-
-
-def _apart_seen_along(mine: np.ndarray, theirs: np.ndarray) -> bool:
-    """Whether two point sets, projected on a plane, have boxes that do not meet.
-
-    Boxes that touch count as meeting, so a part exactly as wide as the gap it
-    slides through is still treated as in the way.
-    """
-    return bool(
-        np.any(mine.max(axis=0) < theirs.min(axis=0))
-        or np.any(theirs.max(axis=0) < mine.min(axis=0))
-    )
 
 
 def _stretch(index: int, order: Sequence[int], releases: Sequence[Sequence[float]]) -> int:

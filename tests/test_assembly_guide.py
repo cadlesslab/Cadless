@@ -209,6 +209,20 @@ def test_a_part_clears_where_an_earlier_part_ended_up_not_only_where_it_was():
     assert 0 + _travel_mm(payload, 2, meshes) > sleeve_top
 
 
+def test_a_part_clears_where_an_earlier_part_ends_up_across_its_path():
+    # A tall post beside the cap slides out sideways after the cap is lifted off,
+    # and ends up standing where the cap's way out runs. At rest it is in no way
+    # of the cap; out, it is, so the cap goes up past its top.
+    from cadless.assembly_guide import motion_payload
+
+    base = _block((-40, -10, -10), (40, 10, -1))
+    post = _block((-30, -5, 0), (-20, 5, 40))
+    cap = _block((-5, -5, 0), (5, 5, 10))
+    meshes = [base, post, cap]
+    payload = motion_payload([0, 1, 2], [[], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], meshes)
+    assert 0 + _travel_mm(payload, 2, meshes) > 40
+
+
 def test_a_part_clears_where_an_earlier_part_rests_when_that_part_leaves_the_other_way():
     # The sleeve comes off downward after the pin comes off upward. While the pin
     # leaves, the sleeve is still where it rests; cleared only from where the
@@ -349,26 +363,70 @@ def _gaps(travel: list[float]) -> list[float]:
     return [travel[i + 1] - travel[i] for i in range(len(travel) - 1)]
 
 
-def test_a_long_chain_spreads_no_further_than_two_and_a_half_times_the_model():
+def test_a_long_chain_spreads_as_far_as_two_and_a_half_times_the_model_and_no_further():
     # Twenty pieces leaving one after another the same way: each piece's spacing
-    # is added onto the one before, and at the usual spacing the beam spread out
-    # is more than seven times its length, each piece a speck in the frame.
+    # is added onto the one before, which at the usual spacing spreads the beam
+    # well past the bound. Cut to fit, it fills the bound rather than falling
+    # short of it, so the spacing kept is the most that fits.
     from cadless.assembly_guide import motion_payload
 
     meshes, order, releases = _beam(20)
-    assert _spread(motion_payload(order, releases, meshes), meshes, releases) <= 2.5 + 1e-6
+    assert 2.4 < _spread(motion_payload(order, releases, meshes), meshes, releases) <= 2.5 + 1e-6
 
 
 def test_a_chain_too_long_to_fit_keeps_the_least_gap_at_every_joint():
     # A hundred pieces cannot be spread within the bound with a gap a reader can
-    # see at every joint, and the gap is what gives: every joint still opens by
+    # see at every joint, and the bound is what gives: every joint still opens by
     # the least spacing, and the beam spreads further than the bound.
     from cadless.assembly_guide import motion_payload
 
     meshes, order, releases = _beam(100)
     payload = motion_payload(order, releases, meshes)
     assert min(_gaps(payload["travel"])) == pytest.approx(0.02)
-    assert _spread(payload, meshes, releases) > 2.5
+
+
+def test_the_guide_draws_a_long_chain_by_the_travel_the_viewport_plays(monkeypatch):
+    # Cut to fit, the travel is still one travel: the guide's drawings move the
+    # pieces exactly as far as the motion file sends them.
+    from cadless import assembly_guide
+
+    meshes, order, releases = _beam(20)
+    drawn = []
+    real = assembly_guide._frame_offsets
+
+    def recording(shown, releases_, moving, travels):
+        drawn.append(list(travels))
+        return real(shown, releases_, moving, travels)
+
+    monkeypatch.setattr(assembly_guide, "_frame_offsets", recording)
+    assert assembly_guide.guide_frames(meshes, order, releases)
+    played = assembly_guide.motion_payload(order, releases, meshes)["travel"]
+    assert drawn[-1] == pytest.approx([travel * 200.0 for travel in played])
+
+
+def test_a_sub_assembly_comes_apart_within_two_and_a_half_times_its_own_size():
+    # The bound is the parts measured together: off the model, a sub-assembly's
+    # pieces coming off one another are held to the sub-assembly's own size, not
+    # to the room a much longer base leaves.
+    from cadless.assembly_guide import motion_payload
+
+    beam, _, _ = _beam(8)
+    meshes = [_block((-150, -20, -10), (150, 20, 0)), *beam]
+    splits = [[]] + [[-1.0, 0.0, 0.0]] * 7
+    payload = motion_payload(
+        list(range(9)),
+        [[]] + [[0.0, 0.0, 1.0]] * 8,
+        meshes,
+        steps=[[0], list(range(1, 9))],
+        subassemblies=[{"parts": list(range(1, 9)), "splits": splits}],
+    )
+    split_travel = payload["subassemblies"][0]["split_travel"]
+    out = [
+        piece.reshape(-1, 3) + np.asarray(split or [0.0, 0.0, 0.0]) * travel * 300.0
+        for piece, split, travel in zip(beam, splits, split_travel, strict=True)
+    ]
+    every = np.concatenate(out)
+    assert 2.4 < float((every.max(axis=0) - every.min(axis=0)).max()) / 80.0 <= 2.5 + 1e-6
 
 
 # --- how many frames ------------------------------------------------------
