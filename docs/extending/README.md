@@ -343,9 +343,11 @@ file for the installation means one visitor's save is everybody's, and the
 credential being written is yours rather than theirs. Configure a hosted build
 from its launch environment. `GET /settings` still answers — the panel renders
 from it — and still reports only whether each key is set. The chat does not
-read it there: it offers its Forge and Assembly options only where settings can
-be configured, so with `CADLESS_REQUIRE_IDENTITY` set neither option is offered,
-even with `CADLESS_FORGE_ENABLED` or `CADLESS_ASSEMBLY_ENABLED` on.
+read its switches there, because a hosted build's front door may refuse every
+settings route: it reads `forge_enabled` and `assembly_enabled` from
+`GET /printing/capability`, so with `CADLESS_REQUIRE_IDENTITY` set the chat still
+offers Forge while `CADLESS_FORGE_ENABLED` is on and Assembly while
+`CADLESS_ASSEMBLY_ENABLED` is on.
 
 The last one needs a decision from you if you host untrusted callers.
 `POST /packages/import` and `DELETE /catalog/{id}` act for the installation,
