@@ -43,8 +43,8 @@ interface Move {
   t: number;
 }
 
-/** How long a move takes, and how it eases: drei's Bounds' own, so the player's
- * moves read like the viewport's other framing. */
+/** How long a move takes, and how it eases: copied from drei's Bounds' default
+ * move, so the player's moves read like the viewport's other framing. */
 const MOVE_SECONDS = 1;
 const ease = (t: number) => 1 - Math.exp(-5 * t) + 0.007 * t;
 
@@ -180,6 +180,9 @@ export function AssemblyPlayer({
       before.current = null;
     }
 
+    // A view asked for mid-move is the reader's to keep, as a camera taken hold
+    // of is: the move stops rather than carry the camera off it.
+    if (move.current && state.command !== commanded.current) move.current = null;
     if (move.current && controls) {
       const m = move.current;
       m.t = reduced.current ? 1 : Math.min(1, m.t + delta / MOVE_SECONDS);
@@ -213,8 +216,10 @@ function orthographic(camera: THREE.Camera): boolean {
 }
 
 /** The pose that fits `box` from the angle `from` looks along: aimed at the
- * box's centre, at the distance that fits it. An orthographic camera keeps its
- * pose and takes drei's fit, which changes only the zoom. */
+ * box's centre, at the distance that fits it. Where the player does not move the
+ * camera itself — an orthographic camera, no controls to aim through, or no
+ * angle to look along — drei's fit frames it instead (on an orthographic camera
+ * changing only the zoom), and the pose given is where the camera stands. */
 function frame(bounds: Bounds, camera: THREE.Camera, controls: Controls | null, from: Pose, box: THREE.Box3): Pose {
   bounds.refresh(box).clip();
   const direction = from.position.clone().sub(from.target);
@@ -226,8 +231,11 @@ function frame(bounds: Bounds, camera: THREE.Camera, controls: Controls | null, 
   return { position: center.clone().addScaledVector(direction.normalize(), distance), target: center.clone() };
 }
 
-/** The reader's pose again, clipped for the model assembled — and, for an
- * orthographic camera, zoomed for it by drei's fit. */
+/** The reader's pose again, clipped for the model assembled. Where the player
+ * does not move the camera itself — an orthographic camera, or no controls to
+ * aim through — drei's fit frames the model assembled instead (on an
+ * orthographic camera changing only the zoom), and the pose given is where the
+ * camera stands. */
 function back(bounds: Bounds, camera: THREE.Camera, controls: Controls | null, to: Pose, home: THREE.Box3): Pose {
   bounds.refresh(home).clip();
   if (orthographic(camera) || !controls) {

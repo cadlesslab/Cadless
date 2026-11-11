@@ -314,6 +314,20 @@ describe("AssemblyPlayer framing", () => {
     expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
   });
 
+  it("lets go of the camera the moment the reader asks for a view", () => {
+    mount();
+    playTo(1, 0.2);
+    // Asking for a view moves the camera; here it is moved by hand.
+    act(() => viewportStore.view("top"));
+    camera.position.set(0.5, 6, 0.001);
+    controls.target.set(0.5, 1.5, 0);
+    const theirs = camera.position.clone();
+
+    frame?.(null, 5);
+
+    expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
+  });
+
   it("takes the reader's view, not the camera on its way back, if the parts leave again", () => {
     mount();
     const position = camera.position.clone();
