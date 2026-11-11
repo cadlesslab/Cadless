@@ -2,22 +2,36 @@
  *
  * There is no WebGL here, so the r3f hooks the player leans on are stood in for:
  * `useFrame` hands its callback to the test to call, and `useBounds` answers its
- * framing calls and does nothing. Everything the player moves is a real group,
- * and the section it has to stay out of the way of is the real one. */
+ * framing calls and does nothing: where the camera goes is not this file's subject.
+ * Everything the player moves is a real group, and the section it has to stay
+ * out of the way of is the real one. */
 import { act, render } from "@testing-library/react";
 import * as THREE from "three";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let frame: ((state: unknown, delta: number) => void) | null = null;
+let camera: THREE.PerspectiveCamera | null = null;
+function theCamera(): THREE.PerspectiveCamera {
+  camera ??= new THREE.PerspectiveCamera();
+  return camera;
+}
 vi.mock("@react-three/fiber", () => ({
   useFrame: (callback: (state: unknown, delta: number) => void) => {
     frame = callback;
   },
-  useThree: (select: (state: unknown) => unknown) => select({ gl: { localClippingEnabled: false } }),
+  useThree: (select: (state: unknown) => unknown) =>
+    select({ gl: { localClippingEnabled: false }, camera: theCamera(), controls: null }),
 }));
 vi.mock("@react-three/drei", () => ({
   useBounds: () => {
-    const api = { refresh: () => api, clip: () => api, fit: () => api };
+    const api = {
+      refresh: () => api,
+      clip: () => api,
+      fit: () => api,
+      moveTo: () => api,
+      lookAt: () => api,
+      getSize: () => ({ center: new THREE.Vector3(), distance: 1 }),
+    };
     return api;
   },
 }));

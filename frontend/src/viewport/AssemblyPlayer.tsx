@@ -7,7 +7,7 @@
  * this only advances it while playing and puts each part where it says. The
  * arithmetic is in `assemblyMotion`, where it can be tested without a Canvas. */
 import { useBounds } from "@react-three/drei";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { type MutableRefObject, type RefObject, useEffect, useRef } from "react";
 import * as THREE from "three";
 
@@ -21,6 +21,37 @@ import {
 import { viewportStore } from "./viewportStore";
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+
+/** What the player reads of the default controls: where they look, when the
+ * reader takes hold of the camera, and how to aim the camera at what they look
+ * at. */
+type Controls = THREE.EventDispatcher<{ start: object }> & {
+  target: THREE.Vector3;
+  update: () => void;
+};
+
+/** Where the camera stands and what it looks at. */
+interface Pose {
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+}
+
+/** A move of the camera from one pose to another, `t` of the way through. */
+interface Move {
+  from: Pose;
+  to: Pose;
+  t: number;
+}
+
+/** How long a move takes, and how it eases: copied from drei's Bounds' default
+ * move, so the player's moves read like the viewport's other framing. */
+const MOVE_SECONDS = 1;
+const ease = (t: number) => 1 - Math.exp(-5 * t) + 0.007 * t;
+
+/** How much, as a share of itself, the camera's distance from its target may
+ * change in a frame and still count as unchanged: the controls' own updates
+ * round it by far less, and drei's framing moves it by far more. */
+const SETTLED = 1e-9;
 
 export function AssemblyPlayer({
   motion,
@@ -37,9 +68,21 @@ export function AssemblyPlayer({
   onApartBox: (box: THREE.Box3 | null) => void;
 }) {
   const bounds = useBounds();
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls) as Controls | null;
+  const invalidate = useThree((state) => state.invalidate);
   const size = useRef(0);
+  const home = useRef<THREE.Box3 | null>(null);
   const apart = useRef<THREE.Box3 | null>(null);
+  /** Whether the parts are out of home, from the frame they leave. */
+  const out = useRef(false);
   const framed = useRef(false);
+  const before = useRef<Pose | null>(null);
+  const move = useRef<Move | null>(null);
+  const taken = useRef(false);
+  const commanded = useRef<unknown>(null);
+  /** The camera's distance from its target as the last frame ended. */
+  const reach = useRef<number | null>(null);
   const wait = useRef(0);
   const reduced = useRef(false);
 
@@ -55,8 +98,10 @@ export function AssemblyPlayer({
     // Where nothing can say, motion is not reduced: the player still runs.
     reduced.current = globalThis.matchMedia?.(REDUCED_MOTION).matches ?? false;
     size.current = largestDimension(assembled);
+    home.current = assembled;
     const steps = motion.joints.length;
     apart.current = apartBox(groups, partOffsets(motion, steps, size.current));
+    out.current = false;
     framed.current = false;
     onApartBox(apart.current);
 
@@ -81,6 +126,19 @@ export function AssemblyPlayer({
     };
   }, [motion, modelRef, partGroups, onApartBox]);
 
+  // A reader who takes hold of the camera while the parts are out has chosen
+  // where to look from, and putting the parts back must not take that away; so
+  // has one who asks for a view, which the frame below reads off the store.
+  useEffect(() => {
+    if (!controls) return;
+    const take = () => {
+      taken.current = true;
+      move.current = null;
+    };
+    controls.addEventListener("start", take);
+    return () => controls.removeEventListener("start", take);
+  }, [controls]);
+
   useFrame((_, delta) => {
     const state = viewportStore.get();
     let position = state.assemblyPosition;
@@ -103,16 +161,122 @@ export function AssemblyPlayer({
       wait.current = 0;
     }
 
-    // Framed once, the first time the parts leave: the assembled framing
-    // would cut off a part on its way out. Once, so a reader who has moved
-    // the camera since is not pulled back to it on every play.
-    if (!framed.current && position > 0 && apart.current) {
-      framed.current = true;
-      bounds.refresh(apart.current).clip().fit();
+    // Widened when the parts leave home, since the assembled framing would cut
+    // off a part on its way out, and put back once they are home again: drei
+    // leaves the camera wherever its last framing put it. Widened from the angle
+    // the reader is looking from, not drei's fit, which on a perspective camera
+    // re-aims along the line from the new centre and so turns the view as the
+    // centre moves — towards the front, for parts that leave upward. Moved by the
+    // player itself rather than by drei's lookAt, whose move tilts the camera's
+    // up while it runs and leaves it tilted when the reader cuts it short, so
+    // every later orbit rolls the horizon.
+    //
+    // Not while drei is still framing a view: its move takes the camera toward
+    // or away from what it looks at, a box refreshed mid-move stops it where it
+    // stands, and the reader's view is where it was going. The controls carrying
+    // a drag on only turn the camera about that point or slide the two together,
+    // keeping the distance, so they hold nothing up.
+    const distance = controls ? camera.position.distanceTo(controls.target) : null;
+    const settling =
+      distance !== null && reach.current !== null && Math.abs(distance - reach.current) > SETTLED * distance;
+    // The reader's choices count from the frame the parts leave, not from when
+    // the widening starts: one who takes hold of the camera or asks for a view
+    // while drei is still framing has chosen, and is neither widened nor brought
+    // back. Read off what the reader did, never off where the camera is: the
+    // controls' damping carries a drag on after it is let go of, so a camera
+    // nobody has touched since is still not where the player left it.
+    if (!out.current && position > 0) {
+      out.current = true;
+      taken.current = false;
+      commanded.current = state.command;
     }
+    const chosen = taken.current || state.command !== commanded.current;
+    if (out.current && !framed.current && position > 0 && apart.current && !settling && !chosen) {
+      framed.current = true;
+      // Where a move of the player's is still heading, if one is: the camera
+      // part way through it is not where the reader chose to look from.
+      before.current = move.current ? clone(move.current.to) : pose(camera, controls);
+      move.current = start(camera, controls, frame(bounds, camera, controls, before.current, apart.current));
+    } else if (out.current && position === 0) {
+      out.current = false;
+      if (!chosen && before.current && home.current) {
+        move.current = start(camera, controls, back(bounds, camera, controls, before.current, home.current));
+      }
+      framed.current = false;
+      before.current = null;
+    }
+
+    // A view asked for mid-move is the reader's to keep, as a camera taken hold
+    // of is: the move stops rather than carry the camera off it.
+    if (move.current && state.command !== commanded.current) move.current = null;
+    if (move.current && controls) {
+      const m = move.current;
+      m.t = reduced.current ? 1 : Math.min(1, m.t + delta / MOVE_SECONDS);
+      const k = m.t >= 1 ? 1 : ease(m.t);
+      camera.position.lerpVectors(m.from.position, m.to.position, k);
+      controls.target.lerpVectors(m.from.target, m.to.target, k);
+      // Aims the camera at the target about the world's up, which nothing here
+      // tilts.
+      controls.update();
+      invalidate();
+      if (m.t >= 1) move.current = null;
+    }
+    reach.current = controls ? camera.position.distanceTo(controls.target) : null;
   });
 
   return null;
+}
+
+type Bounds = NonNullable<ReturnType<typeof useBounds>>;
+
+function pose(camera: THREE.Camera, controls: Controls | null): Pose {
+  const target = controls?.target ?? camera.getWorldDirection(new THREE.Vector3()).add(camera.position);
+  return { position: camera.position.clone(), target: target.clone() };
+}
+
+function clone(p: Pose): Pose {
+  return { position: p.position.clone(), target: p.target.clone() };
+}
+
+function orthographic(camera: THREE.Camera): boolean {
+  return (camera as THREE.OrthographicCamera).isOrthographicCamera === true;
+}
+
+/** The pose that fits `box` from the angle `from` looks along: aimed at the
+ * box's centre, at the distance that fits it. Where the player does not move the
+ * camera itself — an orthographic camera, no controls to aim through, or no
+ * angle to look along — drei's fit frames it instead (on an orthographic camera
+ * changing only the zoom), and the pose given is where the camera stands. */
+function frame(bounds: Bounds, camera: THREE.Camera, controls: Controls | null, from: Pose, box: THREE.Box3): Pose {
+  bounds.refresh(box).clip();
+  const direction = from.position.clone().sub(from.target);
+  if (orthographic(camera) || !controls || direction.lengthSq() === 0) {
+    bounds.fit();
+    return pose(camera, controls);
+  }
+  const { center, distance } = bounds.getSize();
+  return { position: center.clone().addScaledVector(direction.normalize(), distance), target: center.clone() };
+}
+
+/** The reader's pose again, clipped for the model assembled. Where the player
+ * does not move the camera itself — an orthographic camera, or no controls to
+ * aim through — drei's fit frames the model assembled instead (on an
+ * orthographic camera changing only the zoom), and the pose given is where the
+ * camera stands. */
+function back(bounds: Bounds, camera: THREE.Camera, controls: Controls | null, to: Pose, home: THREE.Box3): Pose {
+  bounds.refresh(home).clip();
+  if (orthographic(camera) || !controls) {
+    bounds.fit();
+    return pose(camera, controls);
+  }
+  return clone(to);
+}
+
+/** A move from where the camera is to `to`, or none where there is nothing the
+ * player moves itself. */
+function start(camera: THREE.Camera, controls: Controls | null, to: Pose): Move | null {
+  if (orthographic(camera) || !controls) return null;
+  return { from: pose(camera, controls), to: clone(to), t: 0 };
 }
 
 function rest(groups: Map<number, THREE.Group>) {
