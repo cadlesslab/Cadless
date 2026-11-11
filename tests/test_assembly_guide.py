@@ -315,6 +315,62 @@ def test_no_travel_is_written_when_the_meshes_measure_nothing():
     assert "travel" not in motion_payload([0, 1], [[], [0.0, 0.0, 1.0]], [_cube(), far])
 
 
+# --- how far the parts spread, all of them out ----------------------------
+
+
+def _beam(pieces: int):
+    """A beam split end to end into ``pieces``, the first of them at the right
+    end staying put and each of the others slid on along +X after the one to its
+    right, so every one of them comes off along -X, the leftmost first. Each
+    piece has to clear the one to its right where that one ends up, so the
+    spacing adds up along the beam."""
+    meshes = [_block((-10 * (i + 1), 0, 0), (-10 * i, 5, 5)) for i in range(pieces)]
+    order = list(range(pieces))
+    releases = [[]] + [[-1.0, 0.0, 0.0]] * (pieces - 1)
+    return meshes, order, releases
+
+
+def _spread(payload: dict, meshes, releases) -> float:
+    """The parts fully out, each moved its travel along its heading: their
+    extent as a multiple of the assembled model's largest dimension."""
+    points = [m.reshape(-1, 3) for m in meshes]
+    whole = np.concatenate(points)
+    size = float((whole.max(axis=0) - whole.min(axis=0)).max())
+    out = [
+        p + np.asarray(r or [0.0, 0.0, 0.0]) * payload["travel"][i] * size
+        for i, (p, r) in enumerate(zip(points, releases, strict=True))
+    ]
+    spread = np.concatenate(out)
+    return float((spread.max(axis=0) - spread.min(axis=0)).max()) / size
+
+
+def _gaps(travel: list[float]) -> list[float]:
+    """How much further each piece of the beam goes than the one to its right."""
+    return [travel[i + 1] - travel[i] for i in range(len(travel) - 1)]
+
+
+def test_a_long_chain_spreads_no_further_than_two_and_a_half_times_the_model():
+    # Twenty pieces leaving one after another the same way: each piece's spacing
+    # is added onto the one before, and at the usual spacing the beam spread out
+    # is more than seven times its length, each piece a speck in the frame.
+    from cadless.assembly_guide import motion_payload
+
+    meshes, order, releases = _beam(20)
+    assert _spread(motion_payload(order, releases, meshes), meshes, releases) <= 2.5 + 1e-6
+
+
+def test_a_chain_too_long_to_fit_keeps_the_least_gap_at_every_joint():
+    # A hundred pieces cannot be spread within the bound with a gap a reader can
+    # see at every joint, and the gap is what gives: every joint still opens by
+    # the least spacing, and the beam spreads further than the bound.
+    from cadless.assembly_guide import motion_payload
+
+    meshes, order, releases = _beam(100)
+    payload = motion_payload(order, releases, meshes)
+    assert min(_gaps(payload["travel"])) == pytest.approx(0.02)
+    assert _spread(payload, meshes, releases) > 2.5
+
+
 # --- how many frames ------------------------------------------------------
 
 

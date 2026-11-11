@@ -315,7 +315,10 @@ candidate judging, the identity seam and the image decisions are recorded under
    `assembly` artifact the viewport plays the parts apart and back together
    from, together with how far each part goes — measured from the exported
    meshes as the length the part is engaged plus a spacing, so it clears every
-   part placed before it both at rest and once that part is out too. The guide's
+   part placed before it both at rest and once that part is out too. The spacing
+   adds up down a chain of parts leaving the same way, so where the parts out
+   would spread further than a bound it is cut to fit, never below a gap a reader
+   can see; what each part has to clear is never cut. The guide's
    drawings move the parts by the same travels, so the two agree on what
    "apart" is and the viewport never decides on its own how far is clear. The
    spacing alone, with a count per part for pieces leaving the same way, is

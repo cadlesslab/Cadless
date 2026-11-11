@@ -50,6 +50,25 @@ STEP_FRAME_MIN_PARTS = 4
 #: room for it. A part with nothing engaged travels exactly this far.
 EXPLODE_FRACTION = 0.35
 
+#: How far the parts may spread once every one of them is out, as a multiple of
+#: the whole assembly's largest dimension, before the spacing is cut to fit.
+#:
+#: A part that has to clear one already out clears that part's spacing too, so
+#: down a chain of parts leaving the same way the spacing is counted once per
+#: link: a long chain spreads the model many times its size and leaves each
+#: piece a speck in the frame that has to hold them all. Only the spacing is
+#: cut — what each part has to clear never is, so every joint still opens.
+MAX_SPREAD = 2.5
+
+#: The least spacing a part keeps however long its chain, as a fraction of the
+#: whole assembly's largest dimension: below it a joint reads as closed, and a
+#: chain that cannot fit the bound with it spreads further instead.
+MIN_EXPLODE_FRACTION = 0.02
+
+#: How many halvings the spacing is fitted by — far finer than any difference a
+#: reader could see between two spreads.
+_FIT_STEPS = 8
+
 #: Beyond this share of a unit heading along X, the heading is too near X for X
 #: to serve as the second axis its cross product needs; Y is used instead. Any
 #: value well short of one keeps the cross product far from zero length.
@@ -363,15 +382,51 @@ def _travels(
 ) -> list[float]:
     """How far each part goes out, in the meshes' own units, per part index.
 
-    The length a part is engaged along its heading, plus the spacing every part
-    gets. Engaged means: how far it has to go before it is beyond every part
-    placed before it that lies across its path -- beyond where that part rests,
-    and beyond where that part ends up once it is out too. Both, because the
-    part placed before it comes off after it, along a heading of its own; its
-    whole way out lies between those two places, so a part beyond both along
-    its own heading never meets it. Cleared from only one of them, a pin could
-    end inside or against a sleeve that went out the same way, or still be in a
-    sleeve that went the other way.
+    What each part has to clear, plus a spacing every part gets: the usual one,
+    or — where the parts out at it would spread further than ``MAX_SPREAD`` of
+    the assembly's size — the largest spacing down to ``MIN_EXPLODE_FRACTION``
+    whose spread stays within it. The spread only grows with the spacing, so
+    halving between the two finds it.
+    """
+    points = [np.asarray(mesh, dtype=np.float64).reshape(-1, 3) for mesh in part_meshes]
+    size = _largest_dimension(part_meshes)
+    travels = _spaced_travels(points, order, releases, size * EXPLODE_FRACTION)
+    if (
+        not (np.isfinite(size) and size > 0)
+        or _spread(points, releases, travels) <= MAX_SPREAD * size
+    ):
+        return travels
+    fits, cut = MIN_EXPLODE_FRACTION, EXPLODE_FRACTION
+    fitted = None
+    for _ in range(_FIT_STEPS):
+        middle = (fits + cut) / 2
+        candidate = _spaced_travels(points, order, releases, size * middle)
+        if _spread(points, releases, candidate) <= MAX_SPREAD * size:
+            fits, fitted = middle, candidate
+        else:
+            cut = middle
+    if fitted is None:
+        return _spaced_travels(points, order, releases, size * MIN_EXPLODE_FRACTION)
+    return fitted
+
+
+def _spaced_travels(
+    points: Sequence[np.ndarray],
+    order: Sequence[int],
+    releases: Sequence[Sequence[float]],
+    spacing: float,
+) -> list[float]:
+    """How far each part goes out with ``spacing`` past what it has to clear.
+
+    The length a part is engaged along its heading, plus the spacing. Engaged
+    means: how far it has to go before it is beyond every part placed before it
+    that lies across its path -- beyond where that part rests, and beyond where
+    that part ends up once it is out too. Both, because the part placed before
+    it comes off after it, along a heading of its own; its whole way out lies
+    between those two places, so a part beyond both along its own heading never
+    meets it. Cleared from only one of them, a pin could end inside or against a
+    sleeve that went out the same way, or still be in a sleeve that went the
+    other way.
 
     Across its path means the two overlap seen down the heading. A part off to
     one side is in no way of it, and counting it would send the part out past
@@ -386,8 +441,6 @@ def _travels(
     put and travels nothing, and a part with no triangles has nothing to clear
     and is in no one's way.
     """
-    points = [np.asarray(mesh, dtype=np.float64).reshape(-1, 3) for mesh in part_meshes]
-    spacing = _largest_dimension(part_meshes) * EXPLODE_FRACTION
     travels = [0.0] * len(points)
     for position, index in enumerate(order):
         if index >= len(releases) or not _is_heading(releases[index]):
@@ -408,6 +461,21 @@ def _travels(
             reach = max(reach, float((theirs @ heading).max() - (mine @ heading).min()))
         travels[index] = reach + spacing
     return travels
+
+
+def _spread(
+    points: Sequence[np.ndarray], releases: Sequence[Sequence[float]], travels: Sequence[float]
+) -> float:
+    """The largest dimension of every part moved out by its travel."""
+    out = [
+        mine + _unit(releases[index]) * travels[index] if travels[index] else mine
+        for index, mine in enumerate(points)
+        if len(mine)
+    ]
+    if not out:
+        return 0.0
+    every = np.concatenate(out)
+    return float((every.max(axis=0) - every.min(axis=0)).max())
 
 
 def _across(heading: np.ndarray) -> np.ndarray:
