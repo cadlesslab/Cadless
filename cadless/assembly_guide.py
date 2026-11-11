@@ -487,14 +487,19 @@ def _spaced_travels(
 
     Walked in the order the parts go together, so each part placed before this
     one has its travel by the time it is needed. A part with no heading stays
-    put and travels nothing, and a part with no triangles has nothing to clear
-    and is in no one's way.
+    put and travels nothing, a part with no triangles has nothing to clear and
+    is in no one's way, and a part whose heading has no finite direction, seen
+    along nothing, keeps the spacing alone.
     """
     travels = [0.0] * count
     for position, index in enumerate(order):
         if index >= len(releases) or index >= count or not _is_heading(releases[index]):
             continue
-        axes, boxes = seen[tuple(_unit(releases[index]))]
+        entry = seen.get(tuple(_unit(releases[index])))
+        if entry is None:
+            travels[index] = spacing
+            continue
+        axes, boxes = entry
         mine = boxes[index]
         reach = 0.0
         for other in order[:position]:
@@ -521,7 +526,12 @@ def _spread(
     releases: Sequence[Sequence[float]],
     travels: Sequence[float],
 ) -> float:
-    """The largest dimension of every part moved out by its own travel."""
+    """The largest dimension of every part moved out by its own travel.
+
+    A part whose heading has no finite direction is measured where it rests:
+    out along nothing, it would make the spread no number at all, which no
+    spacing fits.
+    """
     lows, highs = [], []
     for index, extent in enumerate(extents):
         if extent is None:
@@ -529,7 +539,8 @@ def _spread(
         low, high = extent
         if travels[index]:
             shift = _unit(releases[index]) * travels[index]
-            low, high = low + shift, high + shift
+            if np.all(np.isfinite(shift)):
+                low, high = low + shift, high + shift
         lows.append(low)
         highs.append(high)
     if not lows:

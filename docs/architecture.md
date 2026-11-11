@@ -335,10 +335,10 @@ candidate judging, the identity seam and the image decisions are recorded under
    statement of what it plays (`cadless/assembly_motion.py`, held to the
    viewport's parser by a shared case file). The geometry behind such a motion
    is the author's word: the engine checks the file's shape, never re-measures
-   the parts. A sub-assembly's members are spaced against its own size, and the
-   viewport takes it off whole, as far as its furthest member goes, before
-   taking it apart, so a grouped motion can spread past the bound by up to a
-   sub-assembly's own spread as it comes apart.
+   the parts. Written by `motion_payload`, a sub-assembly's members are spaced
+   against its own size, and the viewport takes it off whole, as far as its
+   furthest member goes, before taking it apart, so a grouped motion can spread
+   past the bound by up to a sub-assembly's own spread as it comes apart.
 
 Catalog rebuilds enter at the validation/execution boundary without an LLM. The
 catalog authoring runs in a private pipeline; runtime containers mount

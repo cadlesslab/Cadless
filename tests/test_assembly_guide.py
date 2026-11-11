@@ -315,6 +315,23 @@ def test_a_part_with_no_triangles_is_in_no_ones_way():
     assert len(guide_frames([block, empty, pin], [0, 1, 2], releases)) == 1
 
 
+def test_a_heading_with_no_finite_direction_does_not_stop_the_measuring():
+    # An infinite heading gives no direction to see the parts along; that part
+    # keeps a spacing, and the others are measured as beside a part standing
+    # still.
+    from cadless.assembly_guide import motion_payload
+
+    block = _block((-20, -20, 0), (20, 20, 10))
+    side = _block((30, 30, 0), (40, 40, 10))
+    pin = _block((-2, -2, -30), (2, 2, 60))
+    releases = [[], [float("inf"), 0.0, 0.0], [0.0, 0.0, 1.0]]
+    travel = motion_payload([0, 1, 2], releases, [block, side, pin])["travel"]
+    still = motion_payload([0, 1, 2], [[], [], [0.0, 0.0, 1.0]], [block, side, pin])["travel"]
+    assert all(np.isfinite(travel))
+    assert travel[1] > 0
+    assert travel[2] == pytest.approx(still[2])
+
+
 def test_no_travel_is_written_when_the_meshes_measure_nothing():
     # No vertex at all, or one out at infinity, leaves nothing a travel could be
     # a fraction of. The order and headings still stand.
