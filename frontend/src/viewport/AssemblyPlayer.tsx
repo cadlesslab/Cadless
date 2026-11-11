@@ -7,7 +7,7 @@
  * this only advances it while playing and puts each part where it says. The
  * arithmetic is in `assemblyMotion`, where it can be tested without a Canvas. */
 import { useBounds } from "@react-three/drei";
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { type MutableRefObject, type RefObject, useEffect, useRef } from "react";
 import * as THREE from "three";
 
@@ -21,6 +21,16 @@ import {
 import { viewportStore } from "./viewportStore";
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+
+/** What the player reads of the default controls: where they look, and when the
+ * reader takes hold of the camera. */
+type Controls = THREE.EventDispatcher<{ start: object }> & { target: THREE.Vector3 };
+
+/** Where the reader was looking from before the parts left. */
+interface Pose {
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+}
 
 export function AssemblyPlayer({
   motion,
@@ -37,9 +47,15 @@ export function AssemblyPlayer({
   onApartBox: (box: THREE.Box3 | null) => void;
 }) {
   const bounds = useBounds();
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls) as Controls | null;
   const size = useRef(0);
+  const home = useRef<THREE.Box3 | null>(null);
   const apart = useRef<THREE.Box3 | null>(null);
   const framed = useRef(false);
+  const before = useRef<Pose | null>(null);
+  const taken = useRef(false);
+  const commanded = useRef<unknown>(null);
   const wait = useRef(0);
   const reduced = useRef(false);
 
@@ -55,6 +71,7 @@ export function AssemblyPlayer({
     // Where nothing can say, motion is not reduced: the player still runs.
     reduced.current = globalThis.matchMedia?.(REDUCED_MOTION).matches ?? false;
     size.current = largestDimension(assembled);
+    home.current = assembled;
     const steps = motion.joints.length;
     apart.current = apartBox(groups, partOffsets(motion, steps, size.current));
     framed.current = false;
@@ -81,6 +98,18 @@ export function AssemblyPlayer({
     };
   }, [motion, modelRef, partGroups, onApartBox]);
 
+  // A reader who takes hold of the camera while the parts are out has chosen
+  // where to look from, and putting the parts back must not take that away; so
+  // has one who asks for a view, which the frame below reads off the store.
+  useEffect(() => {
+    if (!controls) return;
+    const take = () => {
+      taken.current = true;
+    };
+    controls.addEventListener("start", take);
+    return () => controls.removeEventListener("start", take);
+  }, [controls]);
+
   useFrame((_, delta) => {
     const state = viewportStore.get();
     let position = state.assemblyPosition;
@@ -103,16 +132,53 @@ export function AssemblyPlayer({
       wait.current = 0;
     }
 
-    // Framed once, the first time the parts leave: the assembled framing
-    // would cut off a part on its way out. Once, so a reader who has moved
-    // the camera since is not pulled back to it on every play.
+    // Widened when the parts leave home, since the assembled framing would cut
+    // off a part on its way out, and put back once they are home again: drei
+    // leaves the camera wherever its last framing put it. Widened from the angle
+    // the reader is looking from, not drei's fit, which on a perspective camera
+    // re-aims along the line from the new centre and so turns the view as the
+    // centre moves — towards the front, for parts that leave upward.
     if (!framed.current && position > 0 && apart.current) {
       framed.current = true;
-      bounds.refresh(apart.current).clip().fit();
+      taken.current = false;
+      commanded.current = state.command;
+      const target = controls?.target ?? apart.current.getCenter(new THREE.Vector3());
+      before.current = { position: camera.position.clone(), target: target.clone() };
+      frame(bounds, camera, before.current, apart.current);
+    } else if (framed.current && position === 0) {
+      framed.current = false;
+      const chosen = taken.current || state.command !== commanded.current;
+      if (!chosen && before.current && home.current) {
+        back(bounds, camera, before.current, home.current);
+      }
+      before.current = null;
     }
   });
 
   return null;
+}
+
+type Bounds = NonNullable<ReturnType<typeof useBounds>>;
+
+/** Fit `box` from the angle `from` looks along: the centre of the box, at the
+ * distance that fits it. An orthographic camera's fit already keeps the angle
+ * and changes only the zoom. */
+function frame(bounds: Bounds, camera: THREE.Camera, from: Pose, box: THREE.Box3) {
+  bounds.refresh(box).clip();
+  const direction = from.position.clone().sub(from.target);
+  if ((camera as THREE.OrthographicCamera).isOrthographicCamera || direction.lengthSq() === 0) {
+    bounds.fit();
+    return;
+  }
+  const { center, distance } = bounds.getSize();
+  bounds.moveTo(center.clone().addScaledVector(direction.normalize(), distance)).lookAt({ target: center });
+}
+
+/** Back to where the reader was looking from, clipped and — orthographic —
+ * zoomed for the model assembled. */
+function back(bounds: Bounds, camera: THREE.Camera, to: Pose, home: THREE.Box3) {
+  bounds.refresh(home).clip().moveTo(to.position.clone()).lookAt({ target: to.target.clone() });
+  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) bounds.fit();
 }
 
 function rest(groups: Map<number, THREE.Group>) {
