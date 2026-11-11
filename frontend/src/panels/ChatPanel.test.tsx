@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatEvent, MessageOut, Version } from "../api";
@@ -24,8 +25,9 @@ vi.mock("../api", async (orig) => ({
   listProjects: vi.fn(async () => []),
   listVersions: vi.fn(async () => []),
   getMessages: vi.fn(async () => []),
-  fetchPrintCapability: vi.fn(async () => ({ can_configure: true })),
-  getSettings: vi.fn(async () => settingsWith({})),
+  fetchPrintCapability: vi.fn(async () => capabilityWith({})),
+  // Mocked so a test can say no settings route was read.
+  getSettings: vi.fn(async () => ({}) as api.SettingsStatus),
   cloneProject: vi.fn(async (_pid: number, name?: string) => ({
     id: 999, name: name ?? "copy", created_at: "", updated_at: "", current_version_id: null,
   })),
@@ -33,19 +35,19 @@ vi.mock("../api", async (orig) => ({
 
 const project = { id: 1, name: "P", created_at: "", updated_at: "", current_version_id: null };
 
-// Only the switches the panel reads; the rest of the status is the settings
-// panels' business.
-function settingsWith(switches: Partial<api.SettingsStatus>): api.SettingsStatus {
-  return switches as api.SettingsStatus;
+// The print capability of a build that can be configured, naming only what a
+// test sets; the hosted case overrides `can_configure`, which the panel must not
+// consult.
+function capabilityWith(fields: Partial<api.PrintCapability>): api.PrintCapability {
+  return { can_configure: true, ...fields } as api.PrintCapability;
 }
 
-// Waits for the panel's capability and settings reads to land, so an option
-// that is missing is the panel's answer rather than a read still in flight.
+// Waits for the panel's capability read to land, so an option that is missing
+// is the panel's answer rather than a read still in flight.
 async function readsSettled() {
   await waitFor(() => expect(api.fetchPrintCapability).toHaveBeenCalled());
   await act(async () => {
     await Promise.allSettled(vi.mocked(api.fetchPrintCapability).mock.results.map((r) => r.value));
-    await Promise.allSettled(vi.mocked(api.getSettings).mock.results.map((r) => r.value));
   });
 }
 
@@ -221,7 +223,7 @@ describe("ChatPanel", () => {
   });
 
   it("opts the turn into forge mode when the Forge toggle is on", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ forge_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ forge_enabled: true }));
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
     fireEvent.click(await screen.findByRole("button", { name: /Forge/i }));
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
@@ -230,7 +232,7 @@ describe("ChatPanel", () => {
   });
 
   it("opts the turn into assembly output when the Assembly toggle is on", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
     fireEvent.click(await screen.findByRole("button", { name: /Assembly/i }));
     fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
@@ -244,7 +246,7 @@ describe("ChatPanel", () => {
     ["Assembly", "assembly_enabled", "Forge"],
     ["Forge", "forge_enabled", "Assembly"],
   ] as const)("offers the %s option while the server's switch for it is on", async (name, flag, other) => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ [flag]: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ [flag]: true }));
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
     expect(await screen.findByRole("button", { name: new RegExp(name) })).toBeInTheDocument();
     // Its own switch, not either one: the other option's switch is off.
@@ -252,27 +254,44 @@ describe("ChatPanel", () => {
   });
 
   it.each([
-    ["its switch is off", () => Promise.resolve(settingsWith({ assembly_enabled: false, forge_enabled: false }))],
-    ["the settings name no switch for it", () => Promise.resolve(settingsWith({}))],
-    ["the settings read is refused", () => Promise.reject(new Error("401"))],
+    ["its switch is off", () => Promise.resolve(capabilityWith({ assembly_enabled: false, forge_enabled: false }))],
+    ["the capability names no switch, as a server older than the fields", () => Promise.resolve(capabilityWith({}))],
+    ["the capability read is refused", () => Promise.reject(new Error("401"))],
   ])("offers neither Assembly nor Forge when %s", async (_, answer) => {
-    vi.mocked(api.getSettings).mockImplementationOnce(answer);
+    vi.mocked(api.fetchPrintCapability).mockImplementationOnce(answer);
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
     await readsSettled();
-    expect(api.getSettings).toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Assembly/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /Forge/i })).toBeNull();
   });
 
-  it("asks for no settings where they cannot be configured", async () => {
-    // Where settings cannot be configured a front door may refuse the read, so
-    // the panel spends no request on it and offers neither option.
-    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce({ can_configure: false } as api.PrintCapability);
+  it.each([
+    ["Assembly", "assembly_enabled"],
+    ["Forge", "forge_enabled"],
+  ] as const)("offers %s on a build whose settings cannot be configured", async (name, flag) => {
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(
+      capabilityWith({ can_configure: false, [flag]: true }),
+    );
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
-    await readsSettled();
+    expect(await screen.findByRole("button", { name: new RegExp(name) })).toBeInTheDocument();
+    // Such a build's front door may refuse every settings route.
     expect(api.getSettings).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: /Assembly/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Forge/i })).toBeNull();
+  });
+
+  it("still offers the option when its mount effect runs twice, as under StrictMode", async () => {
+    // StrictMode runs the mount effect, its cleanup and the effect again: the
+    // option has to come from the second run's answer, which a read made once
+    // per panel never gives.
+    vi.mocked(api.fetchPrintCapability)
+      .mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }))
+      .mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
+    renderWithProviders(
+      <StrictMode>
+        <ChatPanel />
+      </StrictMode>,
+      { activeProjectId: 1, projects: [project] },
+    );
+    expect(await screen.findByRole("button", { name: /Assembly/i })).toBeInTheDocument();
   });
 
   // ---- the Assembly option starts from the model the next turn edits ----
@@ -304,7 +323,7 @@ describe("ChatPanel", () => {
   }
 
   it("starts the Assembly option on for a model built as an assembly", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
     expect(await assemblyOffered()).toHaveAttribute("aria-pressed", "true");
     send("make it 450 mm wide");
@@ -315,7 +334,7 @@ describe("ChatPanel", () => {
     ["was not", false],
     ["does not say whether it was", undefined],
   ])("starts it off for a model that %s built as one", async (_, asAssembly) => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     renderWithProviders(<ChatPanel />, onModel(7, [built(7, asAssembly)]));
     expect(await assemblyOffered()).toHaveAttribute("aria-pressed", "false");
   });
@@ -324,7 +343,7 @@ describe("ChatPanel", () => {
     ["the model edited is an assembly and the one on screen is not", 7, 8, "true"],
     ["the one on screen is an assembly and the model edited is not", 8, 7, "false"],
   ])("follows the model the turn edits when %s", async (_, current, viewing, pressed) => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     renderWithProviders(<ChatPanel />, onModel(current, [built(7, true), built(8, false)], viewing));
     expect(await assemblyOffered()).toHaveAttribute("aria-pressed", pressed);
   });
@@ -337,7 +356,7 @@ describe("ChatPanel", () => {
   });
 
   it("keeps the user's own switch until the model the turn edits changes", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
     const toggle = await assemblyOffered();
     fireEvent.click(toggle);
@@ -350,7 +369,7 @@ describe("ChatPanel", () => {
   });
 
   it("starts again when the same model's record changes", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     // A server older than the field sends none, so the model reads as not one.
     const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7)]));
     const toggle = await assemblyOffered();
@@ -360,7 +379,7 @@ describe("ChatPanel", () => {
   });
 
   it("keeps the user's own switch when the open project is opened again", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
     const toggle = await assemblyOffered();
     fireEvent.click(toggle);
@@ -371,7 +390,7 @@ describe("ChatPanel", () => {
   });
 
   it("keeps the option while the model a turn built is on its way", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     const { store } = renderWithProviders(<ChatPanel />, onModel(7, [built(7, true)]));
     const toggle = await assemblyOffered();
     // A settling turn reads the project, naming the model it built, before the
@@ -383,7 +402,7 @@ describe("ChatPanel", () => {
   });
 
   it("starts from the other project's model when the project changes", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     const other = { ...project, id: 2, name: "Q", current_version_id: 8 };
     const { store } = renderWithProviders(<ChatPanel />, {
       ...onModel(7, [built(7, false)]),
@@ -400,7 +419,7 @@ describe("ChatPanel", () => {
   });
 
   it("starts again in another project, though neither has a model yet", async () => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ assembly_enabled: true }));
     const { store } = renderWithProviders(<ChatPanel />, {
       activeProjectId: 1,
       projects: [project, { ...project, id: 2, name: "Q" }],
@@ -431,7 +450,7 @@ describe("ChatPanel", () => {
       { chatEvents: [{ event: "clarification", questions: [{ text: "Regenerate it?", options: ["Yes, regenerate it"] }] }] as ChatEvent[] },
     ],
   ])("sends a chip's answer from %s with the composer's options", async (_, transcript) => {
-    vi.mocked(api.getSettings).mockResolvedValueOnce(settingsWith({ forge_enabled: true, assembly_enabled: true }));
+    vi.mocked(api.fetchPrintCapability).mockResolvedValueOnce(capabilityWith({ forge_enabled: true, assembly_enabled: true }));
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project], ...transcript });
     fireEvent.click(await screen.findByRole("button", { name: /Forge/i }));
     fireEvent.click(screen.getByRole("button", { name: /Assembly/i }));

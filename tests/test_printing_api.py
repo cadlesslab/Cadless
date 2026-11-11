@@ -188,6 +188,34 @@ class TestCapability:
         _configure()
         assert client.get("/printing/capability").json()["printer_configured"] is True
 
+    @pytest.mark.parametrize("switch", ["forge_enabled", "assembly_enabled"])
+    @pytest.mark.parametrize("on", [True, False])
+    def test_it_reports_each_chat_switch_as_the_server_holds_it(
+        self, client, monkeypatch, switch, on
+    ):
+        monkeypatch.setattr(slicing, "find_slicer", lambda: None)
+        monkeypatch.setattr(settings, switch, on)
+        assert client.get("/printing/capability").json()[switch] is on
+
+    @pytest.mark.parametrize("switch", ["forge_enabled", "assembly_enabled"])
+    def test_a_build_that_cannot_be_configured_still_reports_its_switches(
+        self, store, monkeypatch, switch
+    ):
+        """A hosted build answers `can_configure` false, and its front door may
+        refuse every settings route, so this route is where its chat learns that
+        an option is on."""
+        monkeypatch.setattr(slicing, "find_slicer", lambda: None)
+        monkeypatch.setattr(settings, "require_identity", True)
+        monkeypatch.setattr(settings, switch, True)
+        register_principal_resolver(lambda _request: Principal("someone"))
+        try:
+            with TestClient(create_app(store=store), headers=ACT) as hosted:
+                body = hosted.get("/printing/capability").json()
+        finally:
+            _unregister()
+        assert body["can_configure"] is False
+        assert body[switch] is True
+
 
 class TestConnectionTest:
     def test_no_address_anywhere_is_a_400(self, client):

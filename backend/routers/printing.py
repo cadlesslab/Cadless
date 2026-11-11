@@ -253,6 +253,13 @@ async def capability() -> dict:
         # keeps the rule in one place instead of restating it in TypeScript.
         "can_send": allowed.send,
         "can_download": allowed.download,
+        # The switches the chat's Forge and Assembly options depend on, which
+        # the server honours only while each is on. Reported here because this
+        # route answers on every build, while a hosted one's front door may
+        # refuse its settings routes outright — and a chat that could only read
+        # them there would never offer an option the server would honour.
+        "forge_enabled": bool(settings.forge_enabled),
+        "assembly_enabled": bool(settings.assembly_enabled),
     }
 
 

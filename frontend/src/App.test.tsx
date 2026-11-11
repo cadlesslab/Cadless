@@ -21,8 +21,7 @@ vi.mock("./useApp", () => ({
   useProjectActions: () => ({ selectProject: vi.fn(), refreshProjects: vi.fn() }),
 }));
 // The chat panel asks which of its options the server acts on when it mounts;
-// answered here as a build whose settings cannot be configured, so it reads no
-// further and offers neither.
+// answered here with a capability that names no switch, so it offers neither.
 vi.mock("./api", async (orig) => ({
   ...(await orig<typeof import("./api")>()),
   fetchPrintCapability: vi.fn(async () => ({ can_configure: false })),

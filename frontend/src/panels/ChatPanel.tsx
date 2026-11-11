@@ -122,22 +122,22 @@ export function ChatPanel({
   const [assembly, setAssembly] = useState(false);
   // Which of those opt-ins the server will act on. Each is offered only while
   // its switch is on: with the switch off the server ignores it, so the toggle
-  // would change nothing about the turn. The switches are read from the
-  // settings, and only where settings can be configured: elsewhere a front door
-  // may refuse the read, and a request spent on that on every mount is noise
-  // nobody can act on. A switch that cannot be read is taken as off: hiding an
-  // option the server would honour costs one opt-in, where offering one it
-  // ignores is the fault this fixes.
+  // would change nothing about the turn. The switches are read from the print
+  // capability rather than the settings, because it answers on every build: a
+  // hosted build's front door may refuse every settings route, and reading the
+  // switches there would leave its options hidden whatever they were. A switch that
+  // cannot be read — the read refused, or a server older than the report — is
+  // taken as off: hiding an option the server would honour costs one opt-in,
+  // where offering one it ignores is the fault this fixes.
   const [offered, setOffered] = useState(NOTHING_OFFERED);
   useEffect(() => {
     let alive = true;
     api
       .fetchPrintCapability()
-      .then((c) => (c.can_configure === true ? api.getSettings() : null))
-      .then((s) => {
-        const next = s && { forge: s.forge_enabled === true, assembly: s.assembly_enabled === true };
+      .then((c) => {
+        const next = { forge: c.forge_enabled === true, assembly: c.assembly_enabled === true };
         // Both off is how the panel starts, so there is nothing to set.
-        if (alive && next && (next.forge || next.assembly)) setOffered(next);
+        if (alive && (next.forge || next.assembly)) setOffered(next);
       })
       .catch(() => {
         if (alive) setOffered(NOTHING_OFFERED);

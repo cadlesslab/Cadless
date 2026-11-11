@@ -785,6 +785,11 @@ export interface PrintCapability {
   /** Whether the sliced job can be handed back as a file. True wherever there
    * is a slicer — it is the half that works from everywhere. */
   can_download: boolean;
+  /** The server's switches for a chat turn's Forge and Assembly options, which
+   * it honours only while each is on. Absent from a server older than the
+   * report, which reads as off. */
+  forge_enabled?: boolean;
+  assembly_enabled?: boolean;
 }
 
 /** What scaling a too-big model down would give.

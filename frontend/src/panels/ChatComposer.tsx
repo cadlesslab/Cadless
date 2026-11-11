@@ -215,7 +215,7 @@ export function ChatComposer({
             </Tooltip>
           )}
           {onToggleAssembly && (
-            <Tooltip label="Assembly: split a part too large for the printer in Settings into interlocking pieces that each fit its bed. Starts on when the model you are editing was built as an assembly.">
+            <Tooltip label="Assembly: split a part too large for the printer into interlocking pieces that each fit its bed. Starts on when the model you are editing was built as an assembly.">
               <Button
                 className="composer-assembly"
                 variant="ghost"
