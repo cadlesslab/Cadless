@@ -48,6 +48,11 @@ interface Move {
 const MOVE_SECONDS = 1;
 const ease = (t: number) => 1 - Math.exp(-5 * t) + 0.007 * t;
 
+/** How much, as a share of itself, the camera's distance from its target may
+ * change in a frame and still count as unchanged: the controls' own updates
+ * round it by far less, and drei's framing moves it by far more. */
+const SETTLED = 1e-9;
+
 export function AssemblyPlayer({
   motion,
   modelRef,
@@ -69,11 +74,15 @@ export function AssemblyPlayer({
   const size = useRef(0);
   const home = useRef<THREE.Box3 | null>(null);
   const apart = useRef<THREE.Box3 | null>(null);
+  /** Whether the parts are out of home, from the frame they leave. */
+  const out = useRef(false);
   const framed = useRef(false);
   const before = useRef<Pose | null>(null);
   const move = useRef<Move | null>(null);
   const taken = useRef(false);
   const commanded = useRef<unknown>(null);
+  /** The camera's distance from its target as the last frame ended. */
+  const reach = useRef<number | null>(null);
   const wait = useRef(0);
   const reduced = useRef(false);
 
@@ -92,6 +101,7 @@ export function AssemblyPlayer({
     home.current = assembled;
     const steps = motion.joints.length;
     apart.current = apartBox(groups, partOffsets(motion, steps, size.current));
+    out.current = false;
     framed.current = false;
     onApartBox(apart.current);
 
@@ -160,23 +170,39 @@ export function AssemblyPlayer({
     // player itself rather than by drei's lookAt, whose move tilts the camera's
     // up while it runs and leaves it tilted when the reader cuts it short, so
     // every later orbit rolls the horizon.
-    if (!framed.current && position > 0 && apart.current) {
-      framed.current = true;
+    //
+    // Not while drei is still framing a view: its move takes the camera toward
+    // or away from what it looks at, a box refreshed mid-move stops it where it
+    // stands, and the reader's view is where it was going. The controls carrying
+    // a drag on only turn the camera about that point or slide the two together,
+    // keeping the distance, so they hold nothing up.
+    const distance = controls ? camera.position.distanceTo(controls.target) : null;
+    const settling =
+      distance !== null && reach.current !== null && Math.abs(distance - reach.current) > SETTLED * distance;
+    // The reader's choices count from the frame the parts leave, not from when
+    // the widening starts: one who takes hold of the camera or asks for a view
+    // while drei is still framing has chosen, and is neither widened nor brought
+    // back. Read off what the reader did, never off where the camera is: the
+    // controls' damping carries a drag on after it is let go of, so a camera
+    // nobody has touched since is still not where the player left it.
+    if (!out.current && position > 0) {
+      out.current = true;
       taken.current = false;
       commanded.current = state.command;
+    }
+    const chosen = taken.current || state.command !== commanded.current;
+    if (out.current && !framed.current && position > 0 && apart.current && !settling && !chosen) {
+      framed.current = true;
       // Where a move of the player's is still heading, if one is: the camera
       // part way through it is not where the reader chose to look from.
       before.current = move.current ? clone(move.current.to) : pose(camera, controls);
       move.current = start(camera, controls, frame(bounds, camera, controls, before.current, apart.current));
-    } else if (framed.current && position === 0) {
-      framed.current = false;
-      // Read off what the reader did, never off where the camera is: the
-      // controls' damping carries a drag on after it is let go of, so a camera
-      // nobody has touched since is still not where the player left it.
-      const chosen = taken.current || state.command !== commanded.current;
+    } else if (out.current && position === 0) {
+      out.current = false;
       if (!chosen && before.current && home.current) {
         move.current = start(camera, controls, back(bounds, camera, controls, before.current, home.current));
       }
+      framed.current = false;
       before.current = null;
     }
 
@@ -195,6 +221,7 @@ export function AssemblyPlayer({
       invalidate();
       if (m.t >= 1) move.current = null;
     }
+    reach.current = controls ? camera.position.distanceTo(controls.target) : null;
   });
 
   return null;

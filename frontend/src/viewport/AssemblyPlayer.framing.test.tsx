@@ -159,6 +159,37 @@ function pointer(element: HTMLElement, type: string, x: number) {
   element.dispatchEvent(event);
 }
 
+/** A front view asked for, which drei frames by moving the camera in along the
+ * line to the model's centre, from 30 to 5, over a second. Its move stops where
+ * it stands if its box is refreshed or the reader takes hold of the camera, as
+ * drei's does. `step` runs a frame: the player, then drei. */
+function askForTheFrontView() {
+  const center = new THREE.Vector3(0.5, 0, 0);
+  const along = (distance: number) => center.clone().add(new THREE.Vector3(0, 0, distance));
+  let k = 0;
+  let moving = true;
+  const refresh = bounds.refresh;
+  bounds.refresh = (object?: THREE.Box3) => {
+    moving = false;
+    return refresh(object);
+  };
+  controls.addEventListener("start", () => {
+    moving = false;
+  });
+  act(() => viewportStore.view("front"));
+  controls.target.copy(center);
+  camera.position.copy(along(30));
+  controls.update();
+  const step = () => {
+    frame?.(null, 1 / 60);
+    if (!moving || k >= 1) return;
+    k = Math.min(1, k + 1 / 60);
+    camera.position.copy(along(30 - 25 * k));
+    controls.update();
+  };
+  return { along, step };
+}
+
 /** `seconds` of frames at sixty a second, the controls updating first on each, as
  * drei's do. */
 function run(orbit: OrbitControls, seconds: number) {
@@ -260,6 +291,24 @@ describe("AssemblyPlayer framing", () => {
     expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
   });
 
+  it("leaves an orthographic view the reader asked for while apart", () => {
+    camera = new THREE.OrthographicCamera(-3, 3, 2, -2, 0.1, 1000);
+    camera.position.set(3.5, 3, 3);
+    camera.lookAt(controls.target);
+    bounds = standInBounds();
+    bounds.refresh(new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(1.5, 0.5, 0.5))).fit();
+    mount();
+    playTo(1);
+    // Asking for a view sets the zoom; here it is set by hand.
+    act(() => viewportStore.view("top"));
+    camera.zoom = 0.37;
+    camera.updateProjectionMatrix();
+
+    playTo(0);
+
+    expect(camera.zoom).toBeCloseTo(0.37, 9);
+  });
+
   it("moves a perspective camera itself rather than through drei's move", () => {
     mount();
     playTo(1);
@@ -325,6 +374,38 @@ describe("AssemblyPlayer framing", () => {
 
     frame?.(null, 5);
 
+    expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
+  });
+
+  it("lets drei finish framing a view the reader asked for before it widens from it", () => {
+    mount();
+    const { along, step } = askForTheFrontView();
+    step();
+    step();
+
+    act(() => viewportStore.setAssemblyPosition(1));
+    for (let i = 0; i < 150; i += 1) step();
+    act(() => viewportStore.setAssemblyPosition(0));
+    for (let i = 0; i < 90; i += 1) step();
+
+    expect(camera.position.distanceTo(along(5))).toBeLessThan(1e-6);
+  });
+
+  it("leaves the camera to a reader who takes hold of it while drei is still framing", () => {
+    mount();
+    const { step } = askForTheFrontView();
+    step();
+    act(() => viewportStore.setAssemblyPosition(1));
+    step();
+    controls.dispatchEvent({ type: "start" });
+    camera.position.set(-4, 1, 2);
+    const theirs = camera.position.clone();
+
+    // Neither widened over the reader's hold, nor brought back from it.
+    for (let i = 0; i < 90; i += 1) step();
+    expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
+    act(() => viewportStore.setAssemblyPosition(0));
+    for (let i = 0; i < 90; i += 1) step();
     expect(camera.position.distanceTo(theirs)).toBeLessThan(1e-6);
   });
 
