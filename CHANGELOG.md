@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.4.0...backend-v1.5.0) (2026-11-12)
+
+
+### Features
+
+* offer the chat's Forge and Assembly options on a build that requires identity ([#90](https://github.com/cadlesslab/Cadless/issues/90)) ([e611341](https://github.com/cadlesslab/Cadless/commit/e61134109d21b553233ba0c1df66c73b0d889fee))
+
+
+### Fixes
+
+* keep a kit's parts close while it plays apart, and the camera on the reader's view ([#91](https://github.com/cadlesslab/Cadless/issues/91)) ([34e3fb6](https://github.com/cadlesslab/Cadless/commit/34e3fb65b6127103ba17f573b5a1a301a51016d9))
+
 ## [1.4.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.3.2...backend-v1.4.0) (2026-11-10)
 
 
