@@ -1523,6 +1523,21 @@ def test_a_size_given_for_the_model_already_built_backs_no_side_of_the_next(
     assert pipeline.assemblies[-1].requested_mm == (500.0,)
 
 
+def test_a_size_given_for_a_copied_model_backs_no_side_in_the_copy(client, store, monkeypatch):
+    # A copy is given its versions before its transcript, so by the clock every
+    # copied message comes after the model it asked for.
+    provider = _assembly_turns(monkeypatch, [500, 200, 70])
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+    _stream_assembly(client, pid, assembly=True, text="make the wheels 70 mm")
+    copy = client.post(f"/projects/{pid}/clone", json={"name": "P (copy)"}).json()["id"]
+
+    _stream_assembly(client, copy, assembly=True, text="now an RC truck, 500 mm long")
+
+    assert pipeline.assemblies[-1].requested_mm == (500.0,)
+
+
 def test_retries_of_turns_that_kept_nothing_back_each_side_once(client, store, monkeypatch):
     # The first turns kept no model, so their words are still the request; sent
     # again and again by Retry, "400 mm long" is still one side.

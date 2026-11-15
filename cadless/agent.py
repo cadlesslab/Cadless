@@ -167,6 +167,10 @@ _READ_MOST = 100_000
 #: How many lengths one message keeps, the first it states: enough for any size
 #: a person writes down, and a bound on what the turn holds for each message.
 _KEPT_MOST = 200
+#: How many lengths a turn keeps in all, the latest: a side is backed by one,
+#: so more than any request names add nothing, and every message sent into a
+#: turn would otherwise cost more than the one before.
+_HEARD_MOST = 2000
 # "in" followed by a word may be the preposition ("400 in length") rather than
 # inches ("16 in wide"), so such a length is read both ways.
 _WORD_AFTER = re.compile(r"\s+[A-Za-z]")
@@ -220,7 +224,7 @@ def heard_lengths(stated: Sequence[float] | None, text: str) -> list[float]:
     have = Counter(merged)
     for value, count in Counter(stated_lengths(text)).items():
         merged.extend([value] * (count - have[value]))
-    return merged
+    return merged[-_HEARD_MOST:]
 
 
 def _three_lengths(value: object) -> tuple[float, ...] | None:
@@ -246,7 +250,7 @@ def _held_size(
     """The part of a build call's ``requested`` size the turn holds its builds to.
 
     All of it where the call is ``resizing`` the model it acts on -- the one
-    the turn started on, or the latest build of it -- and the size is that
+    the turn started on, or the latest build in the turn -- and the size is that
     model's times one factor, since two of its sides are the
     model's and no words of the user's give them; a new model is never such a
     resize, whatever its proportions. Otherwise only the sides the user's words

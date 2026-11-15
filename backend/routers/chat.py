@@ -63,6 +63,7 @@ from cadless.params import extract_params
 from cadless.pipeline import Pipeline
 from cadless.rag import retrieve_grounding
 from cadless.scoped_store import ScopedStore
+from cadless.store import ScriptVersion
 from cadless.vlm_critique import VlmCritic
 
 logger = logging.getLogger(__name__)
@@ -259,7 +260,7 @@ def _blind_role(provider) -> str | None:
 
 async def _current_model(
     store: ScopedStore, project_id: int
-) -> tuple[str | None, dict, bool, tuple[float, float, float] | None, str | None]:
+) -> tuple[str | None, dict, bool, tuple[float, float, float] | None, ScriptVersion | None]:
     """Resolve the current code, params, assembly-ness and size for the agent's edit context.
 
     The third value comes from the version rather than from this turn's request on
@@ -272,8 +273,8 @@ async def _current_model(
     written in millimetres: a turn's builds measure a script in its own unit, so a
     size in any other would contradict the code and every check the turn runs.
 
-    The fifth is when the version was built, which bounds the earlier messages a
-    requested size is read from (:func:`_earlier_lengths`).
+    The fifth is the version itself, which bounds the earlier messages a
+    requested size is read from (:func:`_earlier_lengths`), or ``None``.
     """
     project = await store.get_project(project_id)
     if not project or project.current_version_id is None:
@@ -289,7 +290,7 @@ async def _current_model(
         version.parameters or extract_params(version.code),
         version.built_as_assembly,
         size,
-        version.created_at,
+        version,
     )
 
 
@@ -385,9 +386,26 @@ def _replay_rows(rows: list) -> list:
 _EARLIER_MOST = 20
 
 
-def _earlier_lengths(rows: list, built_at: str | None) -> list[float]:
+def _since_current_model(rows: list, version: ScriptVersion | None) -> list:
+    """The rows after the turn that built ``version``, the current model.
+
+    Found by the transcript's own link to the version, the first row naming it,
+    rather than by the clock: a copied project is given its versions before its
+    transcript, so by time every copied message would come after the model it
+    asked for. A version no row names, made outside a chat turn, falls back to
+    the time it was built.
+    """
+    if version is None:
+        return rows
+    for index, row in enumerate(rows):
+        if row.version_id == version.id:
+            return rows[index + 1 :]
+    return [row for row in rows if row.created_at > version.created_at]
+
+
+def _earlier_lengths(rows: list, version: ScriptVersion | None) -> list[float]:
     """The lengths the user's earlier messages state, in mm, since the current
-    model was built at ``built_at``.
+    model, ``version``, was built.
 
     Read from each user row's ``content`` -- what the user typed, or what a
     copied project's transcript carried over -- rather than from the replayed
@@ -400,11 +418,7 @@ def _earlier_lengths(rows: list, built_at: str | None) -> list[float]:
     Merged as :func:`cadless.agent.heard_lengths` merges them, so a retry that
     repeats a size does not back a second side.
     """
-    said = [
-        row.content or ""
-        for row in rows
-        if row.role == "user" and (built_at is None or row.created_at > built_at)
-    ]
+    said = [row.content or "" for row in _since_current_model(rows, version) if row.role == "user"]
     lengths: list[float] = []
     for text in said[-_EARLIER_MOST:]:
         lengths = heard_lengths(lengths, text)
@@ -502,10 +516,10 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
     # Read before this turn's message is stored: the turn reads its own words.
     earlier = await store.list_messages(session.id)
     history = _replay_rows(earlier)
-    code, params, current_is_assembly, current_size, built_at = await _current_model(
+    code, params, current_is_assembly, current_size, current = await _current_model(
         store, project_id
     )
-    said_before = await asyncio.to_thread(_earlier_lengths, earlier, built_at)
+    said_before = await asyncio.to_thread(_earlier_lengths, earlier, current)
 
     # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
     # ``content``, so once there is a picture the words have to be carried beside it
