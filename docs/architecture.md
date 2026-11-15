@@ -190,11 +190,12 @@ candidate judging, the identity seam and the image decisions are recorded under
    every call too and every build is held to it: the orchestrator states it with
    the build call, and the engine keeps only the sides the user's own words give
    — the turn's messages and the user's earlier ones since the current model was
-   built (not one sent into an earlier running turn), read from what the user
+   built, found by the transcript's own link to it (not one sent into an earlier
+   running turn), read from what the user
    typed rather than from the replayed history, which carries model-written
    readings and synopses — since the orchestrator otherwise fills in sides of
    its own and a build would be refused for a number nobody asked for. The first
-   statement in a turn holds for the rest of it — until the user sends another
+   size kept in a turn holds for the rest of it — until the user sends another
    message into the running turn — so a call that restates the request smaller
    after a refusal, or a parameter change made to the same end, is still judged
    against the request. A later turn starts with nothing pinned, so a resize the
