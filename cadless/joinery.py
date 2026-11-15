@@ -250,13 +250,15 @@ def _name(axis: Vector) -> str:
     return sign + letter
 
 
-def _describe(plane: Plane) -> str:
-    def number(value: float) -> str:
-        return f"{round(value, 2) + 0.0:g}"
+def _figure(value: float, places: int) -> str:
+    """A coordinate or a length for a sentence: rounded, and never ``-0``."""
+    return f"{round(value, places) + 0.0:g}"
 
+
+def _describe(plane: Plane) -> str:
     origin, normal = Vector(plane.origin), Vector(plane.z_dir).normalized()
-    at = ", ".join(number(v) for v in (origin.X, origin.Y, origin.Z))
-    facing = ", ".join(number(v) for v in (normal.X, normal.Y, normal.Z))
+    at = ", ".join(_figure(v, 2) for v in (origin.X, origin.Y, origin.Z))
+    facing = ", ".join(_figure(v, 2) for v in (normal.X, normal.Y, normal.Z))
     return f"the plane through ({at}) facing ({facing})"
 
 
@@ -288,17 +290,14 @@ _SOLIDS_NAMED = 4
 
 
 def _solids(solids) -> str:
-    """Each solid's size and centre, for a sentence."""
-
-    def number(value: float) -> str:
-        return f"{round(value, 1) + 0.0:g}"
-
+    """The largest solids' sizes and centres, for a sentence, and how many more."""
     ranked = sorted(solids, key=lambda solid: solid.volume, reverse=True)
     named = []
     for solid in ranked[:_SOLIDS_NAMED]:
         box = solid.bounding_box()
-        size = " x ".join(number(v) for v in (box.size.X, box.size.Y, box.size.Z))
-        centre = ", ".join(number(v) for v in (box.center().X, box.center().Y, box.center().Z))
+        size = " x ".join(_figure(v, 1) for v in (box.size.X, box.size.Y, box.size.Z))
+        middle = box.center()
+        centre = ", ".join(_figure(v, 1) for v in (middle.X, middle.Y, middle.Z))
         named.append(f"{size} mm at ({centre})")
     more = len(ranked) - len(named)
     return "; ".join(named) + (f"; and {more} more" if more else "")

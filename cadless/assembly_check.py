@@ -396,8 +396,9 @@ def evaluate_requested_size(
     millimetres by ``export_scale`` -- must have a side within the slack of each
     requested length, a different side for each, so which way the model lies on
     the bed is left to the split and a side the request left open holds nothing.
-    One sentence names the build's size and what was asked for when no side
-    keeps a requested length; a box or a requested size that cannot be read is
+    One sentence names the build's size and what was asked for when its sides
+    cannot keep every requested length, a different side for each; a box or a
+    requested size that cannot be read is
     reported as unchecked rather than passed, as the fit is.
     """
     report = AssemblyReport()

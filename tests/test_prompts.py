@@ -7,6 +7,7 @@ from cadless.llm.providers import StreamChunk
 from cadless.llm.types import StopReason, StreamEvent
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
+    _OPEN_SIDES,
     REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
     CutOffScript,
@@ -1102,8 +1103,8 @@ def test_the_edit_rules_name_two_requested_sides_and_leave_the_third_open():
 
 
 def test_a_whole_requested_size_leaves_no_side_open():
-    assert "leaves open" not in _assembly_rules(_asking_for(500.0, 250.0, 400.0))
-    assert "leaves open" not in _assembly_edit_rules(_asking_for(500.0, 250.0, 400.0))
+    assert _OPEN_SIDES not in _assembly_rules(_asking_for(500.0, 250.0, 400.0))
+    assert _OPEN_SIDES not in _assembly_edit_rules(_asking_for(500.0, 250.0, 400.0))
 
 
 def test_a_brief_without_a_size_names_none():

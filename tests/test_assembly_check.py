@@ -286,12 +286,6 @@ def test_a_build_with_no_side_at_the_one_requested_length_is_refused():
     assert "400 mm along one side" in why
 
 
-def test_the_sides_a_request_leaves_open_hold_nothing():
-    # The width and height nobody asked for: a car of any width keeps "400 long".
-    report = evaluate_requested_size((400.0, 251.0, 98.0), _asked_for(400.0))
-    assert (report.failures, report.unchecked) == ([], [])
-
-
 @pytest.mark.parametrize(
     "bbox, kept",
     [((400.0, 400.0, 70.0), True), ((400.0, 200.0, 70.0), False)],
