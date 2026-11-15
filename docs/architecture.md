@@ -186,15 +186,19 @@ candidate judging, the identity seam and the image decisions are recorded under
    the record does *not* hold is the machine: which bed and which clearance apply
    are read from the settings saved now, so changing printer changes what an edit
    must satisfy rather than pinning it to the one it was first built for. Where
-   the user gave the overall size, that reaches every call too and every build is
-   held to it: the orchestrator states it with the build call, and the first
+   the user gave an overall size — one side or all three — that reaches every call
+   too and every build is held to it: the orchestrator states it with the build
+   call, and the engine keeps only the sides the user's own words in the turn
+   give, since the orchestrator otherwise fills in sides of its own and a build
+   would be refused for a number nobody asked for. The first
    statement in a turn holds for the rest of it — until the user sends another
    message into the running turn — so a call that restates the request smaller
    after a refusal, or a parameter change made to the same end, is still judged
    against the request. A later turn starts with nothing pinned, so a resize the
    user asks for then is free. A resize that keeps the current model's
    proportions is stated the same way, its three sides the model's measured size
-   times one factor: the context the orchestrator edits from states the size the
+   times one factor, and all three are kept although the user gave one: the
+   context the orchestrator edits from states the size the
    model was measured at when the turn began, and a build later in the turn
    reports its own, because a constant in the script measures one feature rather
    than the whole model. That size is stated only where the project's scripts
