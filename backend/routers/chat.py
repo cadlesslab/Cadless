@@ -49,7 +49,7 @@ from cadless.agent import (
     Agent,
     SessionSteerRegistry,
     ToolContext,
-    stated_lengths,
+    heard_lengths,
 )
 from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
@@ -259,7 +259,7 @@ def _blind_role(provider) -> str | None:
 
 async def _current_model(
     store: ScopedStore, project_id: int
-) -> tuple[str | None, dict, bool, tuple[float, float, float] | None]:
+) -> tuple[str | None, dict, bool, tuple[float, float, float] | None, str | None]:
     """Resolve the current code, params, assembly-ness and size for the agent's edit context.
 
     The third value comes from the version rather than from this turn's request on
@@ -271,13 +271,16 @@ async def _current_model(
     The fourth is the version's measured size, and only where its scripts are
     written in millimetres: a turn's builds measure a script in its own unit, so a
     size in any other would contradict the code and every check the turn runs.
+
+    The fifth is when the version was built, which bounds the earlier messages a
+    requested size is read from (:func:`_earlier_lengths`).
     """
     project = await store.get_project(project_id)
     if not project or project.current_version_id is None:
-        return None, {}, False, None
+        return None, {}, False, None, None
     version = await store.get_version(project.current_version_id)
     if not version or not version.code:
-        return None, {}, False, None
+        return None, {}, False, None, None
     size = None
     if version.bbox and await authoring_units(store, project) == "mm":
         size = version.bbox
@@ -286,6 +289,7 @@ async def _current_model(
         version.parameters or extract_params(version.code),
         version.built_as_assembly,
         size,
+        version.created_at,
     )
 
 
@@ -357,10 +361,15 @@ async def _replay_history(store: ScopedStore, session_id: int) -> list:
     replay only the conversational text. Consecutive same-role messages are merged
     so a dropped tool-only/clarification turn can't leave an invalid role sequence.
     """
+    return _replay_rows(await store.list_messages(session_id))
+
+
+def _replay_rows(rows: list) -> list:
+    """The replay :func:`_replay_history` describes, of rows already loaded."""
     from cadless.llm.types import Message
 
     messages: list[Message] = []
-    for m in await store.list_messages(session_id):
+    for m in rows:
         parts = [_replayed_block(b, m.role) for b in m.blocks]
         text = "\n\n".join(p for p in parts if p) or (m.content or "").strip()
         if not text:
@@ -372,21 +381,34 @@ async def _replay_history(store: ScopedStore, session_id: int) -> list:
     return messages
 
 
-async def _earlier_lengths(store: ScopedStore, session_id: int) -> list[float]:
-    """The lengths the user's own earlier messages in the session state, in mm.
+#: The most recent of the user's earlier messages a requested size is read from.
+_EARLIER_MOST = 20
 
-    Read from what the user typed, each user row's ``content``, rather than from
-    the replayed history: that carries an image's reading and, once compacted, a
-    synopsis, both written by a model, and a figure from either would back a
-    side the orchestrator chose. Called before this turn's message is stored, so
-    its lengths are not read twice.
+
+def _earlier_lengths(rows: list, built_at: str | None) -> list[float]:
+    """The lengths the user's earlier messages state, in mm, since the current
+    model was built at ``built_at``.
+
+    Read from each user row's ``content`` -- what the user typed, or what a
+    copied project's transcript carried over -- rather than from the replayed
+    history: that carries an image's reading and, once compacted, a synopsis,
+    both written by a model, and a figure from either would back a side the
+    orchestrator chose. Only rows since the current model was built, since
+    before it the user was asking for that model, and a figure from then
+    ("make the wheels 70 mm") would back a side of whatever comes next; and
+    only the most recent few, so a turn's cost does not grow with the session.
+    Merged as :func:`cadless.agent.heard_lengths` merges them, so a retry that
+    repeats a size does not back a second side.
     """
-    return [
-        length
-        for message in await store.list_messages(session_id)
-        if message.role == "user"
-        for length in stated_lengths(message.content or "")
+    said = [
+        row.content or ""
+        for row in rows
+        if row.role == "user" and (built_at is None or row.created_at > built_at)
     ]
+    lengths: list[float] = []
+    for text in said[-_EARLIER_MOST:]:
+        lengths = heard_lengths(lengths, text)
+    return lengths
 
 
 async def _persist_tool_version(
@@ -477,9 +499,13 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         ]
 
     session = await store.get_or_create_session(project_id)
-    history = await _replay_history(store, session.id)
-    said_before = await _earlier_lengths(store, session.id)
-    code, params, current_is_assembly, current_size = await _current_model(store, project_id)
+    # Read before this turn's message is stored: the turn reads its own words.
+    earlier = await store.list_messages(session.id)
+    history = _replay_rows(earlier)
+    code, params, current_is_assembly, current_size, built_at = await _current_model(
+        store, project_id
+    )
+    said_before = await asyncio.to_thread(_earlier_lengths, earlier, built_at)
 
     # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
     # ``content``, so once there is a picture the words have to be carried beside it

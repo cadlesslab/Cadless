@@ -1489,6 +1489,79 @@ def test_a_size_given_before_a_clarifying_question_holds_the_build_after_it(
     assert pipeline.assemblies[-1].requested_mm == (300.0, 200.0, 100.0)
 
 
+def _assembly_turns(monkeypatch, requested, *, before=1):
+    """Turns through the route that each build once, the last stating ``requested``."""
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    plain = [_tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a"})]
+    provider = ScriptedProvider(
+        [
+            *[turn for _ in range(before) for turn in (*plain, _text_turn("Done."))],
+            _tool_turn(
+                tool_use_id="tu-2",
+                name="generate_model",
+                tool_input={"spec": "b", "requested_mm": requested},
+            ),
+            _text_turn("Done."),
+        ]
+    )
+    return provider
+
+
+def test_a_size_given_for_the_model_already_built_backs_no_side_of_the_next(
+    client, store, monkeypatch
+):
+    # The wheels were 70 mm on the model the first turn kept; a truck asked for
+    # after it is not held to a 70 mm side the orchestrator happened to choose.
+    provider = _assembly_turns(monkeypatch, [500, 200, 70])
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True, text="make the wheels 70 mm")
+    _stream_assembly(client, pid, assembly=True, text="now an RC truck, 500 mm long")
+
+    assert pipeline.assemblies[-1].requested_mm == (500.0,)
+
+
+def test_retries_of_turns_that_kept_nothing_back_each_side_once(client, store, monkeypatch):
+    # The first turns kept no model, so their words are still the request; sent
+    # again and again by Retry, "400 mm long" is still one side.
+    provider = _assembly_turns(monkeypatch, [400, 400, 70], before=2)
+    pipeline = StubPipeline(ok=False, error="the build failed")
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    for _ in range(3):
+        _stream_assembly(client, pid, assembly=True, text="an RC car, 400 mm long")
+
+    assert pipeline.assemblies[-1].requested_mm == (400.0,)
+
+
+def test_a_figure_only_the_assistant_wrote_backs_no_side(client, store, monkeypatch):
+    # The replayed history carries the assistant's words, and a figure there is
+    # the orchestrator's own suggestion, not the user's request.
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    provider = ScriptedProvider(
+        [
+            _text_turn("A width of 250 mm would suit it."),
+            _tool_turn(
+                tool_use_id="tu-1",
+                name="generate_model",
+                tool_input={"spec": "a shelf", "requested_mm": [250]},
+            ),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True, text="what width would suit a shelf?")
+    _stream_assembly(client, pid, assembly=True, text="go ahead and make it")
+
+    assert pipeline.assemblies[-1].requested_mm is None
+
+
 def test_assembly_opt_in_with_switch_on_reaches_the_pipeline(client, store, monkeypatch):
     """Both gates true: the turn carries a spec sized to the printer that is saved."""
     monkeypatch.setattr(chat.settings, "assembly_enabled", True)
