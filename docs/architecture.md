@@ -188,16 +188,20 @@ candidate judging, the identity seam and the image decisions are recorded under
    must satisfy rather than pinning it to the one it was first built for. Where
    the user gave an overall size — one side or all three — that reaches every call
    too and every build is held to it: the orchestrator states it with the build
-   call, and the engine keeps only the sides the user's own words in the turn
-   give, since the orchestrator otherwise fills in sides of its own and a build
-   would be refused for a number nobody asked for. The first
+   call, and the engine keeps only the sides the user's own words give — the
+   turn's messages and the user's earlier ones in the conversation, read from
+   what the user typed rather than from the replayed history, which carries
+   model-written readings and synopses — since the orchestrator otherwise fills
+   in sides of its own and a build would be refused for a number nobody asked
+   for. The first
    statement in a turn holds for the rest of it — until the user sends another
    message into the running turn — so a call that restates the request smaller
    after a refusal, or a parameter change made to the same end, is still judged
    against the request. A later turn starts with nothing pinned, so a resize the
    user asks for then is free. A resize that keeps the current model's
    proportions is stated the same way, its three sides the model's measured size
-   times one factor, and all three are kept although the user gave one: the
+   times one factor, and all three are kept although the user gave one — for an
+   edit of that model or a regeneration of it, never for a new model: the
    context the orchestrator edits from states the size the
    model was measured at when the turn began, and a build later in the turn
    reports its own, because a constant in the script measures one feature rather
