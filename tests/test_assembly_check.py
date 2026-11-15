@@ -268,7 +268,41 @@ def test_the_requested_size_at_a_scale_that_is_no_length_is_unchecked():
     assert ["the scale to millimetres" in reason for reason in report.unchecked] == [True]
 
 
-@pytest.mark.parametrize("requested", [(300.0, 0.0, 18.0), (300.0, 250.0)])
+def _asked_for(*sides: float) -> AssemblySpec:
+    return AssemblySpec(volume=SPEC.volume, clearance_mm=0.2, requested_mm=sides)
+
+
+def test_one_requested_side_is_kept_by_any_side_of_the_build():
+    # "An RC car, 400 mm long": the request gives one side, and which way the car
+    # lies on the bed is still the split's business.
+    assert evaluate_requested_size((192.0, 70.0, 400.0), _asked_for(400.0)).ok
+
+
+def test_a_build_with_no_side_at_the_one_requested_length_is_refused():
+    report = evaluate_requested_size((300.0, 192.0, 70.0), _asked_for(400.0))
+    assert not report.ok
+    why = report.failures[0]
+    assert "300 x 192 x 70" in why
+    assert "400 mm along one side" in why
+
+
+def test_the_sides_a_request_leaves_open_hold_nothing():
+    # The width and height nobody asked for: a car of any width keeps "400 long".
+    report = evaluate_requested_size((400.0, 251.0, 98.0), _asked_for(400.0))
+    assert (report.failures, report.unchecked) == ([], [])
+
+
+@pytest.mark.parametrize(
+    "bbox, kept",
+    [((400.0, 400.0, 70.0), True), ((400.0, 200.0, 70.0), False)],
+    ids=["two sides at the length", "one side at the length"],
+)
+def test_two_requested_sides_are_two_different_sides_of_the_build(bbox, kept):
+    # A square base 400 mm on each side is not kept by one 400 mm side used twice.
+    assert evaluate_requested_size(bbox, _asked_for(400.0, 400.0)).ok is kept
+
+
+@pytest.mark.parametrize("requested", [(300.0, 0.0, 18.0), (300.0, 250.0, 18.0, 5.0), ()])
 def test_a_requested_size_that_cannot_be_read_is_unchecked_rather_than_passed(requested):
     spec = AssemblySpec(volume=SPEC.volume, clearance_mm=0.2, requested_mm=requested)
     report = evaluate_requested_size((300.0, 250.0, 18.0), spec)

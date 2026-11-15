@@ -210,16 +210,44 @@ class AssemblySpec:
     another's tolerance.
 
     ``requested_mm`` is the one fact here about the model rather than the
-    machine: the overall size the request gave, where it gave one.
-    :func:`assembly_spec` never sets it, since the machine is the same for every
-    build of a turn and the size is stated with a build. It rides on this spec
-    because everything that must know it already receives the spec: the brief,
-    the repair the check forces, and the check itself.
+    machine: the overall sides the request gave, where it gave any -- one to
+    three lengths, in no particular order, because a request may give only a
+    length ("400 mm long") and leave the rest to the design. A side it did not
+    give is not here at all, rather than filled in, since a filled-in side would
+    hold the build to a number nobody asked for. :func:`assembly_spec` never sets
+    it, since the machine is the same for every build of a turn and the size is
+    stated with a build. It rides on this spec because everything that must know
+    it already receives the spec: the brief, the repair the check forces, and the
+    check itself.
     """
 
     volume: BuildVolume
     clearance_mm: float
-    requested_mm: tuple[float, float, float] | None = None
+    requested_mm: tuple[float, ...] | None = None
+
+
+def requested_lengths(value: object) -> tuple[float, ...] | None:
+    """``value`` as one to three positive finite lengths, or ``None``.
+
+    The one reading of a requested size, for taking one and for judging a build
+    against it: two readings could let a size be taken that cannot be judged,
+    which holds a build to nothing while saying it holds it to something. A flag,
+    text, an integer too large to be a float, or a fourth length is no size.
+    """
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 3:
+        return None
+    lengths = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return None
+        try:
+            length = float(item)
+        except OverflowError:
+            return None
+        if not math.isfinite(length) or length <= 0:
+            return None
+        lengths.append(length)
+    return tuple(lengths)
 
 
 def assembly_spec(saved: Mapping[str, Any] | None = None) -> AssemblySpec:
