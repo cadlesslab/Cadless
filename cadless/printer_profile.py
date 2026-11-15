@@ -232,7 +232,9 @@ def requested_lengths(value: object) -> tuple[float, ...] | None:
     The one reading of a requested size, for taking one and for judging a build
     against it: two readings could let a size be taken that cannot be judged,
     which holds a build to nothing while saying it holds it to something. A flag,
-    text, an integer too large to be a float, or a fourth length is no size.
+    text, an integer too large to be a float, or a fourth length is no size, and
+    no error either: a size is an extra a build call may leave out, and a
+    malformed one must neither hold the build to a wrong size nor stop it.
     """
     if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 3:
         return None

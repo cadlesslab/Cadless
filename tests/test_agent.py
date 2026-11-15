@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -1692,6 +1693,19 @@ def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
 )
 def test_the_lengths_a_message_states_are_read_in_millimetres(text, lengths):
     assert stated_lengths(text) == pytest.approx(lengths)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["1" + " " * 20_000 + "-" + " " * 20_000 + "q", "1 x " * 25_000 + "2 cm"],
+    ids=["a long gap", "a long box"],
+)
+def test_a_long_message_is_read_in_time_in_proportion_to_its_length(text):
+    # A message has no length limit, and a reading whose time grows with the
+    # square of a run's length held a turn for minutes on one long enough.
+    started = time.perf_counter()
+    stated_lengths(text)
+    assert time.perf_counter() - started < 1.0
 
 
 _RC_CAR = "Make an RC car, 400 mm long, with four wheels on two axles, to print in parts."

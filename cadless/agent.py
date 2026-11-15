@@ -145,12 +145,16 @@ _MM_PER_UNIT = {
 # Longest first, so "mm" is read before "m" and "inches" before "in".
 _UNIT = "|".join(re.escape(unit) for unit in sorted(_MM_PER_UNIT, key=len, reverse=True))
 _NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+"
-_TERM = re.compile(rf"({_NUMBER})(?:\s*-?\s*({_UNIT}))?", re.IGNORECASE)
+# Every gap is bounded: a message is the user's to make as long as they like, and
+# unbounded gaps either side of an optional mark let a long run of spaces cost
+# time in the square of its length.
+_GAP = r"\s{0,3}"
+_TERM = re.compile(rf"({_NUMBER})(?:{_GAP}-?{_GAP}({_UNIT}))?", re.IGNORECASE)
 # A run of lengths joined as a box is ("10 x 5 x 2 cm"), where one unit can
 # serve them all. Never preceded or followed by a letter, so "M3" and "3D" are
 # no lengths; the edges look at ASCII only, so "400mm짜리" still reads.
 _LENGTHS = re.compile(
-    rf"(?<![A-Za-z0-9.,])(?:{_TERM.pattern})(?:\s*(?:[x×*]|by)\s*(?:{_TERM.pattern}))*"
+    rf"(?<![A-Za-z0-9.,])(?:{_TERM.pattern})(?:{_GAP}(?:[x×*]|by){_GAP}(?:{_TERM.pattern}))*"
     r"(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
@@ -161,9 +165,10 @@ def stated_lengths(text: str) -> tuple[float, ...]:
 
     What holds a build is what the user said, so this reads the user's words
     rather than taking the model's word for them. Every number counts, a bare
-    one as millimetres, because reading too many costs nothing here: a length is
-    only ever used to back a size a build call states, never to invent one. In a
-    box the unit given once serves the lengths around it.
+    one as millimetres, because reading too many costs little: a length only
+    ever backs a size a build call states, never invents one, so an extra one
+    matters only where the call states that same figure. In a box the unit
+    given once serves the lengths around it.
     """
     lengths: list[float] = []
     for run in _LENGTHS.finditer(text):
@@ -171,13 +176,18 @@ def stated_lengths(text: str) -> tuple[float, ...]:
             (float(number.replace(",", "")), unit.lower() if unit else None)
             for number, unit in _TERM.findall(run.group(0))
         ]
-        units = [unit for _, unit in terms]
-        for index, (value, unit) in enumerate(terms):
-            if unit is None:
-                after = next((u for u in units[index + 1 :] if u), None)
-                before = next((u for u in reversed(units[:index]) if u), None)
-                unit = after or before or "mm"
-            length = value * _MM_PER_UNIT[unit]
+        # A length's own unit, else the next one the run gives, else the last:
+        # one pass each way, since a run is as long as the message.
+        ahead: list[str | None] = []
+        nearest = None
+        for _, unit in reversed(terms):
+            nearest = unit or nearest
+            ahead.append(nearest)
+        ahead.reverse()
+        behind = None
+        for (value, _), unit in zip(terms, ahead, strict=True):
+            behind = unit or behind or "mm"
+            length = value * _MM_PER_UNIT[behind]
             if math.isfinite(length) and length > 0:
                 lengths.append(length)
     return tuple(lengths)
