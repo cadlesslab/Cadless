@@ -1678,7 +1678,7 @@ def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
         ("a 1,200 millimetre rail", (1200.0,)),
         ("make it 400 long", (400.0,)),
         ("a bracket for M3 screws, 3D printed", ()),
-        ("길이 40센티짜리 RC카", (400.0,)),
+        ("a 400mm\u306e car", (400.0,)),
     ],
     ids=[
         "mm",
@@ -1688,7 +1688,7 @@ def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
         "thousands",
         "bare",
         "none",
-        "korean",
+        "a unit run into a word of another script",
     ],
 )
 def test_the_lengths_a_message_states_are_read_in_millimetres(text, lengths):

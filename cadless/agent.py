@@ -111,35 +111,27 @@ _MM_PER_UNIT = {
     "millimeters": 1.0,
     "millimetre": 1.0,
     "millimetres": 1.0,
-    "밀리": 1.0,
-    "밀리미터": 1.0,
     "cm": 10.0,
     "centimeter": 10.0,
     "centimeters": 10.0,
     "centimetre": 10.0,
     "centimetres": 10.0,
-    "센티": 10.0,
-    "센치": 10.0,
-    "센티미터": 10.0,
     "m": 1000.0,
     "meter": 1000.0,
     "meters": 1000.0,
     "metre": 1000.0,
     "metres": 1000.0,
-    "미터": 1000.0,
     "in": 25.4,
     "inch": 25.4,
     "inches": 25.4,
     "''": 25.4,
     '"': 25.4,
     "″": 25.4,
-    "인치": 25.4,
     "ft": 304.8,
     "foot": 304.8,
     "feet": 304.8,
     "'": 304.8,
     "′": 304.8,
-    "피트": 304.8,
 }
 
 # Longest first, so "mm" is read before "m" and "inches" before "in".
@@ -152,7 +144,8 @@ _GAP = r"\s{0,3}"
 _TERM = re.compile(rf"({_NUMBER})(?:{_GAP}-?{_GAP}({_UNIT}))?", re.IGNORECASE)
 # A run of lengths joined as a box is ("10 x 5 x 2 cm"), where one unit can
 # serve them all. Never preceded or followed by a letter, so "M3" and "3D" are
-# no lengths; the edges look at ASCII only, so "400mm짜리" still reads.
+# no lengths; the edges look at ASCII only, so a length run straight into a
+# word of a script written without spaces still reads.
 _LENGTHS = re.compile(
     rf"(?<![A-Za-z0-9.,])(?:{_TERM.pattern})(?:{_GAP}(?:[x×*]|by){_GAP}(?:{_TERM.pattern}))*"
     r"(?![A-Za-z0-9])",
