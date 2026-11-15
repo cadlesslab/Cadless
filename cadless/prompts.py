@@ -305,10 +305,28 @@ def _fits(spec: AssemblySpec) -> str:
 
 
 def _requested(spec: AssemblySpec) -> str:
-    """The overall size the request gave, as both rules state it, or ``""``."""
-    if spec.requested_mm is None:
+    """The overall size the request gave, as both rules state it, or ``""``.
+
+    One or two sides are named as sides, with the rest left to the design by
+    :data:`_OPEN_SIDES`: read as a whole size, one length left the model to
+    invent the others, and the build was then held to what it had invented.
+    """
+    sides = spec.requested_mm
+    if not sides:
         return ""
-    return " x ".join(fmt(value) for value in spec.requested_mm) + " mm"
+    if len(sides) == 3:
+        return " x ".join(fmt(value) for value in sides) + " mm"
+    lengths = " and ".join(f"{fmt(value)} mm" for value in sides)
+    return f"{lengths} along {'one side' if len(sides) == 1 else 'two sides'}"
+
+
+#: What both rules add where the request left sides open.
+_OPEN_SIDES = "; the sides it leaves open are the design's own"
+
+
+def _open(spec: AssemblySpec) -> str:
+    """:data:`_OPEN_SIDES` where the request gave fewer than three sides, else ``""``."""
+    return _OPEN_SIDES if spec.requested_mm and len(spec.requested_mm) < 3 else ""
 
 
 def _assembly_rules(spec: AssemblySpec) -> str:
@@ -358,7 +376,13 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         "its width and 3 along its height, however thin it is.\n"
         "  * Keep every dimension the request gives"
         + (
-            f": it asks for {size} overall, so the assembled parts must measure exactly that"
+            (
+                f": it asks for the whole to measure {size}, so the assembled parts must "
+                f"measure exactly that{_open(spec)}"
+                if _open(spec)
+                else f": it asks for {size} overall, so the assembled parts must measure "
+                "exactly that"
+            )
             if size
             else ""
         )
@@ -368,7 +392,9 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         "each side stays one piece.\n"
         "  * Make every seam with split_and_join(part, plane, insert_along, "
         f"clearance={fmt(spec.clearance_mm)}), which every script is given: call it "
-        "without importing anything. It cuts the part at the plane -- for example "
+        "without importing anything. Hand it one solid: overlap the pieces a part is "
+        "built from so they fuse into one, since pieces that stand apart stay separate "
+        "solids and it refuses them. It cuts the part at the plane -- for example "
         "Plane(origin=(x, 0, 0), z_dir=(1, 0, 0)) cuts at that x -- and returns "
         "(behind, ahead), the halves behind and ahead of the plane's normal, joined "
         "by dovetails swept along insert_along when that axis lies in the plane, or "
@@ -444,7 +470,7 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
         "only where the change request asks. "
         + (
             f"The request gives the model's overall size as {size}, so the assembled "
-            "parts must measure exactly that. "
+            f"parts must measure exactly that{_open(spec)}. "
             if size
             else ""
         )
@@ -455,8 +481,8 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
         "without importing anything -- insert_along being the axis the whole part goes "
         "into the assembly along, the same as every other fit that holds that part "
         "(the plane's normal only when that is how the part goes in, as for a rod cut "
-        "across its length), and never write the seam's dovetail, tab or socket "
-        "yourself."
+        "across its length), handing it one solid, the part's pieces overlapping so "
+        "they fuse, and never write the seam's dovetail, tab or socket yourself."
     )
 
 

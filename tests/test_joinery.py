@@ -361,13 +361,43 @@ def test_a_direction_that_is_not_an_axis_is_refused(direction):
         ("a box", "build123d shape"),
         (
             Compound([Box(300, 100, 10), Pos(0, 200, 0) * Box(300, 100, 10)]),
-            "one solid at a time: got 2; pass each solid to it on its own",
+            "this part is 2 separate solids",
         ),
     ],
 )
 def test_what_is_cut_must_be_one_solid(part, says):
     with pytest.raises(JoineryError, match=says):
         split_and_join(part, SEAM, Axis.Z, CLEARANCE)
+
+
+def test_a_part_of_pieces_that_do_not_touch_is_told_to_overlap_them():
+    # Seen live: a pedestal built to stand just above its base, unioned into two
+    # solids. Cutting each solid on its own, as the refusal once said, leaves the
+    # pedestal floating in the assembly.
+    body = Box(300, 100, 10) + Pos(0, 0, 30) * Box(40, 40, 10)
+
+    with pytest.raises(JoineryError) as refused:
+        split_and_join(body, SEAM, Axis.Z, CLEARANCE)
+
+    message = str(refused.value)
+    assert "overlap them so they fuse into one solid" in message
+    assert "a part of its own" in message
+
+
+@pytest.mark.parametrize(
+    "call, says",
+    [
+        (lambda part: split_and_join(part, SEAM, Axis.Z), "clearance is missing"),
+        (lambda part: split_and_join(part, SEAM, clearance=CLEARANCE), "insert_along must be"),
+        (lambda part: split_and_join(part, insert_along=Axis.Z, clearance=CLEARANCE), "a Plane"),
+    ],
+    ids=["clearance", "insert_along", "plane"],
+)
+def test_a_call_that_leaves_out_an_argument_is_refused_with_what_to_pass(call, says):
+    # The brief sends the script to a JoineryError's message; Python's own
+    # complaint about a missing argument said nothing of what to pass.
+    with pytest.raises(JoineryError, match=says):
+        call(_plate())
 
 
 def test_a_plane_given_as_anything_but_a_plane_is_refused():

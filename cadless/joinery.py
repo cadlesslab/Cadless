@@ -99,9 +99,9 @@ def script_namespace() -> dict[str, object]:
 
 def split_and_join(
     part,
-    plane: Plane,
-    insert_along,
-    clearance: float,
+    plane: Plane | None = None,
+    insert_along=None,
+    clearance: float | None = None,
     *,
     names: tuple[str, str] | None = None,
 ) -> tuple[Solid, Solid]:
@@ -120,12 +120,19 @@ def split_and_join(
     the tabs or pegs, and the half the normal points into, which carries the
     sockets. They are labelled from ``names``, or from the part's own label.
 
+    ``plane``, ``insert_along`` and ``clearance`` are all required. They default
+    to ``None`` only so that a call leaving one out is refused like any other
+    mistake, with a :class:`JoineryError` naming what to pass: the brief sends a
+    script to that message, and Python's own complaint names the argument and
+    nothing about what it should be.
+
     Raises :class:`JoineryError`, saying what to change, when
 
-    - ``part`` is not one solid, or ``plane`` is not a Plane or misses the part;
-    - ``clearance`` is outside what a printer holds;
-    - ``insert_along`` is not one of the six axis directions, or neither lies in
-      the plane nor runs along its normal;
+    - ``part`` is not one solid, or ``plane`` is missing, is not a Plane or
+      misses the part;
+    - ``clearance`` is missing or outside what a printer holds;
+    - ``insert_along`` is missing, is not one of the six axis directions, or
+      neither lies in the plane nor runs along its normal;
     - a side of the cut comes out in several pieces;
     - no place on the cut face holds a joint, or every socket that would fit
       would cut through the part beyond the cut face;
@@ -206,6 +213,11 @@ def _pegs_instead(across, section, plane, ahead, clearance, margin) -> str:
 
 
 def _check_clearance(clearance) -> None:
+    if clearance is None:
+        raise JoineryError(
+            "clearance is missing: pass clearance= with the joint clearance the brief "
+            "gives for this printer, in millimetres"
+        )
     # A bool is an int to isinstance, and True would pass as a millimetre.
     number = isinstance(clearance, int | float) and not isinstance(clearance, bool)
     if not number or not _CLEARANCE_LEAST <= clearance <= _CLEARANCE_MOST:
@@ -255,9 +267,14 @@ def _one_solid(part) -> Solid:
         )
     solids = part.solids()
     if len(solids) != 1:
+        # Pieces a part was built from that stand apart -- a pedestal just above
+        # its base -- are the usual reason, so the remedy named first is fusing
+        # them. Cutting each solid on its own leaves such a piece floating.
         raise JoineryError(
-            f"split_and_join cuts one solid at a time: got {len(solids)}; pass each solid "
-            "to it on its own"
+            f"split_and_join cuts one solid at a time, and this part is {len(solids)} "
+            "separate solids: pieces it was built from do not touch, so a union leaves "
+            "them apart. Where they belong together, overlap them so they fuse into one "
+            "solid; make a piece meant to stay apart a part of its own"
         )
     return solids[0]
 
