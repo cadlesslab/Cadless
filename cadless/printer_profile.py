@@ -226,6 +226,17 @@ class AssemblySpec:
     requested_mm: tuple[float, ...] | None = None
 
 
+def requested_phrase(sides: tuple[float, ...]) -> str:
+    """A requested size for a sentence: a box where it gives all three sides, else
+    the sides it gives, so a brief and a refusal never word one size two ways.
+    """
+    shown = [fmt(round(side, 1)) for side in sides]
+    if len(shown) == 3:
+        return " x ".join(shown) + " mm"
+    lengths = " and ".join(f"{length} mm" for length in shown)
+    return f"{lengths} along {'one side' if len(shown) == 1 else 'two sides'}"
+
+
 def requested_lengths(value: object) -> tuple[float, ...] | None:
     """``value`` as one to three positive finite lengths, or ``None``.
 

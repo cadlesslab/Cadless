@@ -267,16 +267,41 @@ def _one_solid(part) -> Solid:
         )
     solids = part.solids()
     if len(solids) != 1:
-        # Pieces a part was built from that stand apart -- a pedestal just above
-        # its base -- are the usual reason, so the remedy named first is fusing
-        # them. Cutting each solid on its own leaves such a piece floating.
+        # Both ways a part comes apart were seen in generated scripts: a pedestal
+        # built to stand just above its base, and axle holes wider than the plate
+        # they cross. Cutting each solid on its own, as this once advised, leaves
+        # such a piece floating, and only the solids' sizes and places say which
+        # piece is the one cut off.
         raise JoineryError(
             f"split_and_join cuts one solid at a time, and this part is {len(solids)} "
-            "separate solids: pieces it was built from do not touch, so a union leaves "
-            "them apart. Where they belong together, overlap them so they fuse into one "
-            "solid; make a piece meant to stay apart a part of its own"
+            f"separate solids: {_solids(solids)}. Either pieces it was built from do not "
+            "touch, so a union leaves them apart, or a cut -- a hole, a pocket, a window "
+            "-- goes right through it and severs it. Make pieces that belong together "
+            "overlap so they fuse into one solid, keep every cut short of severing the "
+            "part, and make a piece meant to stay apart a part of its own"
         )
     return solids[0]
+
+
+#: Solids a refusal describes one by one, the largest first; the rest are counted.
+_SOLIDS_NAMED = 4
+
+
+def _solids(solids) -> str:
+    """Each solid's size and centre, for a sentence."""
+
+    def number(value: float) -> str:
+        return f"{round(value, 1) + 0.0:g}"
+
+    ranked = sorted(solids, key=lambda solid: solid.volume, reverse=True)
+    named = []
+    for solid in ranked[:_SOLIDS_NAMED]:
+        box = solid.bounding_box()
+        size = " x ".join(number(v) for v in (box.size.X, box.size.Y, box.size.Z))
+        centre = ", ".join(number(v) for v in (box.center().X, box.center().Y, box.center().Z))
+        named.append(f"{size} mm at ({centre})")
+    more = len(ranked) - len(named)
+    return "; ".join(named) + (f"; and {more} more" if more else "")
 
 
 def _halves(solid: Solid, plane: Plane, where: str) -> tuple[Solid, Solid]:

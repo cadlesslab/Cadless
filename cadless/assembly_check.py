@@ -58,7 +58,12 @@ from dataclasses import dataclass, field
 
 from cadless.assembly_tree import readable, unnamed
 from cadless.print_fit import _dimensions, _number, too_big_for
-from cadless.printer_profile import AssemblySpec, BuildVolume, requested_lengths
+from cadless.printer_profile import (
+    AssemblySpec,
+    BuildVolume,
+    requested_lengths,
+    requested_phrase,
+)
 
 #: How far apart two parts may sit and still count as mating, as a multiple of the
 #: joint clearance.
@@ -427,7 +432,7 @@ def evaluate_requested_size(
     ):
         report.failures.append(
             f"the whole build is {_size(size)} mm, but the request asked for "
-            f"{_asked(requested)}: keep every dimension the request gives and meet "
+            f"{requested_phrase(requested)}: keep every dimension the request gives and meet "
             "the bed by splitting the model into parts that each fit it, never by "
             "shrinking or enlarging the model"
         )
@@ -437,14 +442,6 @@ def evaluate_requested_size(
 def requested_slack(length: float) -> float:
     """How far a side may stand from a requested ``length`` and still keep it, in mm."""
     return max(REQUESTED_SIZE_SLACK_MM, length * REQUESTED_SIZE_SLACK_FRACTION)
-
-
-def _asked(requested: tuple[float, ...]) -> str:
-    """The sides a request gave, for a sentence: a box where it gave all three."""
-    if len(requested) == 3:
-        return f"{_size((requested[0], requested[1], requested[2]))} mm"
-    lengths = " and ".join(f"{_size1(length)} mm" for length in requested)
-    return f"{lengths} along {'one side' if len(requested) == 1 else 'two sides'}"
 
 
 def _check_fit(

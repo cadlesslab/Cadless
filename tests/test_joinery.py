@@ -380,8 +380,21 @@ def test_a_part_of_pieces_that_do_not_touch_is_told_to_overlap_them():
         split_and_join(body, SEAM, Axis.Z, CLEARANCE)
 
     message = str(refused.value)
-    assert "overlap them so they fuse into one solid" in message
+    assert "overlap so they fuse into one solid" in message
     assert "a part of its own" in message
+
+
+def test_a_part_a_cut_severed_is_told_which_solids_it_came_apart_into():
+    # Seen live: axle holes wider than the plate they cross cut a chassis into
+    # three, and only the pieces' sizes and places say which one came off.
+    plate = Box(300, 100, 10) - Pos(100, 0, 0) * Box(4, 120, 20)
+
+    with pytest.raises(JoineryError) as refused:
+        split_and_join(plate, SEAM, Axis.Z, CLEARANCE)
+
+    message = str(refused.value)
+    assert "248 x 100 x 10 mm at (-26, 0, 0); 48 x 100 x 10 mm at (126, 0, 0)" in message
+    assert "a cut -- a hole, a pocket, a window -- goes right through it" in message
 
 
 @pytest.mark.parametrize(

@@ -26,7 +26,7 @@ from cadless.llm.types import (
     TurnParams,
 )
 from cadless.params import extract_params
-from cadless.printer_profile import AssemblySpec, fmt
+from cadless.printer_profile import AssemblySpec, fmt, requested_phrase
 from cadless.system_prompt import SYSTEM_PROMPT
 
 if TYPE_CHECKING:
@@ -311,13 +311,7 @@ def _requested(spec: AssemblySpec) -> str:
     :data:`_OPEN_SIDES`: read as a whole size, one length left the model to
     invent the others, and the build was then held to what it had invented.
     """
-    sides = spec.requested_mm
-    if not sides:
-        return ""
-    if len(sides) == 3:
-        return " x ".join(fmt(value) for value in sides) + " mm"
-    lengths = " and ".join(f"{fmt(value)} mm" for value in sides)
-    return f"{lengths} along {'one side' if len(sides) == 1 else 'two sides'}"
+    return requested_phrase(spec.requested_mm) if spec.requested_mm else ""
 
 
 #: What both rules add where the request left sides open.
