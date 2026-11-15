@@ -1462,6 +1462,33 @@ def _assembly_turn(monkeypatch):
     return pipeline
 
 
+def test_a_size_given_before_a_clarifying_question_holds_the_build_after_it(
+    client, store, monkeypatch
+):
+    # Through the route and the loop both: the answer gives no size, and the
+    # size the user gave a message earlier is still what the build is held to.
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    provider = ScriptedProvider(
+        [
+            _clarify_turn(tool_use_id="tu-1", questions=[{"text": "PLA or PETG?"}]),
+            _tool_turn(
+                tool_use_id="tu-2",
+                name="generate_model",
+                tool_input={"spec": "a box", "requested_mm": [300, 200, 100]},
+            ),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    _stream_assembly(client, pid, assembly=True, text="a box 300 x 200 x 100 mm, in parts")
+    _stream_assembly(client, pid, assembly=True, text="PLA, please")
+
+    assert pipeline.assemblies[-1].requested_mm == (300.0, 200.0, 100.0)
+
+
 def test_assembly_opt_in_with_switch_on_reaches_the_pipeline(client, store, monkeypatch):
     """Both gates true: the turn carries a spec sized to the printer that is saved."""
     monkeypatch.setattr(chat.settings, "assembly_enabled", True)

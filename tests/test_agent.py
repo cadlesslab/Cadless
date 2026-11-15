@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import tracemalloc
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -1679,6 +1680,9 @@ def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
         ("make it 400 long", (400.0,)),
         ("a bracket for M3 screws, 3D printed", ()),
         ("a 400mm\u306e car", (400.0,)),
+        ("a box 10cm x 5 x 2", (100.0, 50.0, 20.0)),
+        ("a car 400 in length", (10160.0, 400.0)),
+        ("5 \u0131nches, 7 inche\u017f", (5.0, 7.0)),
     ],
     ids=[
         "mm",
@@ -1689,6 +1693,9 @@ def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
         "bare",
         "none",
         "a unit run into a word of another script",
+        "the last unit serves the lengths after it",
+        "in before a word read both ways",
+        "a look-alike letter is no unit",
     ],
 )
 def test_the_lengths_a_message_states_are_read_in_millimetres(text, lengths):
@@ -1708,17 +1715,36 @@ def test_a_long_message_is_read_in_time_in_proportion_to_its_length(text):
     assert time.perf_counter() - started < 1.0
 
 
+@pytest.mark.parametrize(
+    "text", ["1x" * 200_000, "1 " * 1_000_000], ids=["a long box", "many lengths"]
+)
+def test_a_long_message_costs_little_memory_to_read(text):
+    # A repetition with no bound held regex memory for every character of a
+    # long box, and every length read is kept for the turn.
+    tracemalloc.start()
+    try:
+        stated_lengths(text)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 10_000_000
+
+
 _RC_CAR = "Make an RC car, 400 mm long, with four wheels on two axles, to print in parts."
 
 
-def _held_to(loop, user_text, call, *, start_size_mm=None):
-    """What a turn's one build was held to, given the user's words and the call's size."""
+def _held_to(loop, user_text, call, *, start_size_mm=None, said_before=None):
+    """What a turn's one build was held to, given the user's words and the call's size.
+
+    ``said_before`` is what the chat route reads from the user's earlier messages.
+    """
     pipeline = _SizeSpy()
     provider = ScriptedProvider(
         [_tool_turn(tool_use_id="tu-1", name=call[0], tool_input=call[1]), _text_turn("done")]
     )
     context = _context(pipeline=pipeline, assembly=_spec())
     context.start_size_mm = start_size_mm
+    context.stated_mm = said_before
     agent = Agent(provider=provider, model="fake-model")
     if loop == "run_turn":
         agent.run_turn(user_text=user_text, context=context)
@@ -1744,6 +1770,22 @@ def test_one_stated_length_backs_one_side_only(loop):
 
 
 @pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_size_the_user_gave_in_an_earlier_message_still_backs_the_build(loop):
+    # Asked a clarifying question, the user answered with no size: the size given
+    # a message before is still the request.
+    call = ("generate_model", {"spec": "a box", "requested_mm": [300, 200, 100]})
+    held = _held_to(loop, "PLA, please", call, said_before=[300.0, 200.0, 100.0])
+    assert held == [(300.0, 200.0, 100.0)]
+
+
+@pytest.mark.parametrize("requested", [[101, 102.5], [102.5, 101]], ids=["one order", "the other"])
+def test_which_sides_the_user_backs_does_not_depend_on_their_order(requested):
+    call = ("generate_model", {"spec": "a frame", "requested_mm": requested})
+    [held] = _held_to("run_turn", "sides of 100 mm and 101.5 mm", call)
+    assert sorted(held) == [100.0, 101.5]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
 def test_a_turn_whose_user_gave_no_size_holds_none(loop):
     call = ("generate_model", {"spec": "an RC car", "requested_mm": [400, 180, 70]})
     assert _held_to(loop, "Make an RC car to print in parts.", call) == [None]
@@ -1761,6 +1803,15 @@ def test_a_proportional_resize_of_the_measured_model_holds_all_three(loop):
     call = ("edit_model", {"change": "500 mm long", "requested_mm": [500, 300, 112.5]})
     held = _held_to(loop, "make it 500 mm long", call, start_size_mm=(400.0, 240.0, 90.0))
     assert held == [(500.0, 300.0, 112.5)]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_new_model_in_the_measured_one_s_proportions_is_no_resize(loop):
+    # A box twice a measured cube is still a new model, and its sides the
+    # orchestrator's own but for the one the user gave.
+    call = ("generate_model", {"spec": "a box", "requested_mm": [100, 100, 100]})
+    held = _held_to(loop, "now a box 100 mm long", call, start_size_mm=(50.0, 50.0, 50.0))
+    assert held == [(100.0,)]
 
 
 @pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])

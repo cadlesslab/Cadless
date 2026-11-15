@@ -44,7 +44,13 @@ from backend.catalog_state import authoring_units, reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
 from cadless import user_settings
-from cadless.agent import GENERATE_MODEL, Agent, SessionSteerRegistry, ToolContext
+from cadless.agent import (
+    GENERATE_MODEL,
+    Agent,
+    SessionSteerRegistry,
+    ToolContext,
+    stated_lengths,
+)
 from cadless.catalog.thumbnail import render_views
 from cadless.compaction import compact_history
 from cadless.config import settings
@@ -366,6 +372,23 @@ async def _replay_history(store: ScopedStore, session_id: int) -> list:
     return messages
 
 
+async def _earlier_lengths(store: ScopedStore, session_id: int) -> list[float]:
+    """The lengths the user's own earlier messages in the session state, in mm.
+
+    Read from what the user typed, each user row's ``content``, rather than from
+    the replayed history: that carries an image's reading and, once compacted, a
+    synopsis, both written by a model, and a figure from either would back a
+    side the orchestrator chose. Called before this turn's message is stored, so
+    its lengths are not read twice.
+    """
+    return [
+        length
+        for message in await store.list_messages(session_id)
+        if message.role == "user"
+        for length in stated_lengths(message.content or "")
+    ]
+
+
 async def _persist_tool_version(
     store: ScopedStore,
     project_id: int,
@@ -455,6 +478,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
 
     session = await store.get_or_create_session(project_id)
     history = await _replay_history(store, session.id)
+    said_before = await _earlier_lengths(store, session.id)
     code, params, current_is_assembly, current_size = await _current_model(store, project_id)
 
     # A non-empty ``blocks`` stops ``MessageOut.of`` synthesizing a text block from
@@ -552,6 +576,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         current_code=code,
         current_params=params,
         start_size_mm=current_size,
+        stated_mm=said_before,
         export_dir=str(staging),
         images=image_blocks,
         on_reading=_keep_first_reading if image_blocks else None,

@@ -44,6 +44,7 @@ primitive, reused unchanged:
 
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import re
@@ -141,16 +142,29 @@ _NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+"
 # unbounded gaps either side of an optional mark let a long run of spaces cost
 # time in the square of its length.
 _GAP = r"\s{0,3}"
-_TERM = re.compile(rf"({_NUMBER})(?:{_GAP}-?{_GAP}({_UNIT}))?", re.IGNORECASE)
+# The unit is matched as ASCII: folded the Unicode way, a dotless "ı" reads as
+# "i" and the word matched is then no unit this table names.
+_TERM = re.compile(rf"({_NUMBER})(?:{_GAP}-?{_GAP}((?a:{_UNIT})))?", re.IGNORECASE)
 # A run of lengths joined as a box is ("10 x 5 x 2 cm"), where one unit can
-# serve them all. Never preceded or followed by a letter, so "M3" and "3D" are
-# no lengths; the edges look at ASCII only, so a length run straight into a
-# word of a script written without spaces still reads.
+# serve them all: three at most, as a box has, since a repetition with no bound
+# holds memory for every character of a long one while the match is tried.
+# Never preceded or followed by a letter, so "M3" and "3D" are no lengths; the
+# edges look at ASCII only, so a length run straight into a word of a script
+# written without spaces still reads.
 _LENGTHS = re.compile(
-    rf"(?<![A-Za-z0-9.,])(?:{_TERM.pattern})(?:{_GAP}(?:[x×*]|by){_GAP}(?:{_TERM.pattern}))*"
+    rf"(?<![A-Za-z0-9.,])(?:{_TERM.pattern})"
+    rf"(?:{_GAP}(?:[x×*]|by){_GAP}(?:{_TERM.pattern})){{0,2}}"
     r"(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
+#: How much of one message is read for lengths, in characters. A message has no
+#: length limit, and every length read is kept for the rest of the turn; past
+#: this a stated size is simply not read, which holds a build to less, never to
+#: more.
+_READ_MOST = 100_000
+# "in" followed by a word may be the preposition ("400 in length") rather than
+# inches ("16 in wide"), so such a length is read both ways.
+_WORD_AFTER = re.compile(r"\s+[A-Za-z]")
 
 
 def stated_lengths(text: str) -> tuple[float, ...]:
@@ -163,6 +177,7 @@ def stated_lengths(text: str) -> tuple[float, ...]:
     matters only where the call states that same figure. In a box the unit
     given once serves the lengths around it.
     """
+    text = text[:_READ_MOST]
     lengths: list[float] = []
     for run in _LENGTHS.finditer(text):
         terms = [
@@ -183,6 +198,9 @@ def stated_lengths(text: str) -> tuple[float, ...]:
             length = value * _MM_PER_UNIT[behind]
             if math.isfinite(length) and length > 0:
                 lengths.append(length)
+        value, own = terms[-1]
+        if own == "in" and _WORD_AFTER.match(text, run.end()) and 0 < value < math.inf:
+            lengths.append(value)
     return tuple(lengths)
 
 
@@ -203,31 +221,45 @@ def _resizes(requested: tuple[float, ...], measured: tuple[float, ...]) -> bool:
 
 
 def _held_size(
-    requested: tuple[float, ...] | None, context: ToolContext
+    requested: tuple[float, ...] | None, context: ToolContext, *, resizing: bool
 ) -> tuple[float, ...] | None:
     """The part of a build call's ``requested`` size the turn holds its builds to.
 
-    All of it where it is a proportional resize of the model the turn starts on,
-    since two of its sides are that model's times the factor and no words of the
-    user's give them. Otherwise only the sides the user's words state, each
-    stated length backing one side, held at the user's own figure: a side the
-    orchestrator chose itself would refuse a build for a number nobody asked
-    for. Where the words are not known, the size is taken as stated.
+    All of it where the call is ``resizing`` the model the turn starts on and
+    the size is that model's times one factor, since two of its sides are the
+    model's and no words of the user's give them; a new model is never such a
+    resize, whatever its proportions. Otherwise only the sides the user's words
+    back (:func:`_backed`): a side the orchestrator chose itself would refuse a
+    build for a number nobody asked for. Where the words are not known, the size
+    is taken as stated.
     """
     if requested is None or context.stated_mm is None:
         return requested
     measured = _three_lengths(context.start_size_mm)
-    if measured is not None and len(requested) == 3 and _resizes(requested, measured):
-        return requested
-    left = list(context.stated_mm)
-    kept: list[float] = []
-    for want in requested:
-        near = [have for have in left if abs(have - want) <= requested_slack(want)]
-        if near:
-            have = min(near, key=lambda length: abs(length - want))
-            left.remove(have)
-            kept.append(have)
-    return tuple(kept) or None
+    if resizing and measured is not None and len(requested) == 3:
+        if _resizes(requested, measured):
+            return requested
+    return _backed(requested, context.stated_mm) or None
+
+
+def _backed(requested: tuple[float, ...], stated: Sequence[float]) -> tuple[float, ...]:
+    """The sides of ``requested`` the ``stated`` lengths back, at the stated figures.
+
+    Each stated length backs one side, so a width that happens to equal the one
+    length the user gave is still the orchestrator's own. As many sides as can
+    be are backed: taken in the order their reach ends, each takes the least
+    stated length within its slack, which no other order beats, so the answer
+    does not depend on the order the sides came in. Kept in that order.
+    """
+    left = sorted(stated)
+    kept: dict[int, float] = {}
+    ends = {index: want + requested_slack(want) for index, want in enumerate(requested)}
+    for index in sorted(ends, key=ends.__getitem__):
+        want = requested[index]
+        at = bisect.bisect_left(left, want - requested_slack(want))
+        if at < len(left) and left[at] <= ends[index]:
+            kept[index] = left.pop(at)
+    return tuple(kept[index] for index in sorted(kept))
 
 
 def _sized(spec: AssemblySpec | None, requested: tuple[float, ...] | None) -> AssemblySpec | None:
@@ -468,14 +500,17 @@ class ToolContext:
     # user asks for then is free. Kept off ``assembly`` and ``inherited_assembly``
     # so the turn's own specs never change.
     requested_mm: tuple[float, ...] | None = None
-    # The lengths the user's own words state this turn, in millimetres: the
-    # message, and every one sent into the running turn. A size a build call
-    # states is pinned only as far as these back it, or as a proportional resize
-    # of the measured model, because the orchestrator filled in sides of its own
-    # however it was told not to, and builds were refused for missing them. Set
-    # by the loop; ``None`` where the words are not known -- a caller driving the
-    # tools without a turn -- and a stated size is then taken as it stands.
-    stated_mm: tuple[float, ...] | None = None
+    # The lengths the user's own words state, in millimetres: whatever the caller
+    # read from the user's earlier messages in the conversation -- a size given
+    # before a clarifying question, or before "try again", is still the request
+    # -- then this turn's message and every one sent into the running turn, which
+    # the loop adds. A size a build call states is pinned only as far as these
+    # back it, or as a proportional resize of the measured model, because the
+    # orchestrator filled in sides of its own however it was told not to, and
+    # builds were refused for missing them. ``None`` where the words are not
+    # known -- a caller driving the tools without a turn -- and a stated size is
+    # then taken as it stands.
+    stated_mm: list[float] | None = None
     # Whether this turn has called ``edit_model`` or ``set_parameters``, set
     # before either builds so one that fails or raises counts too. A
     # ``generate_model`` after one is the orchestrator regenerating the model it
@@ -1164,7 +1199,7 @@ class Agent:
         if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
-        context.stated_mm = stated_lengths(user_text)
+        context.stated_mm = [*(context.stated_mm or ()), *stated_lengths(user_text)]
 
         produced: list[ContentBlock] = []  # new blocks for persistence
         result = AgentResult()
@@ -1184,7 +1219,7 @@ class Agent:
                 # generation after it is whatever the user now asks for, not a
                 # regeneration of the model edited before it.
                 context.requested_mm = None
-                context.stated_mm = (*(context.stated_mm or ()), *stated_lengths(block.text or ""))
+                context.stated_mm = [*(context.stated_mm or ()), *stated_lengths(block.text or "")]
                 context.edited_this_turn = False
 
             turn = _StreamedTurn()
@@ -1306,7 +1341,7 @@ class Agent:
         if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
-        context.stated_mm = stated_lengths(user_text)
+        context.stated_mm = [*(context.stated_mm or ()), *stated_lengths(user_text)]
 
         produced: list[ContentBlock] = []
         result = AgentResult()
@@ -1324,7 +1359,7 @@ class Agent:
                 messages.append(Message(role="user", content=[block]))
                 produced.append(block)
                 context.requested_mm = None  # as in run_turn: the user spoke again
-                context.stated_mm = (*(context.stated_mm or ()), *stated_lengths(block.text or ""))
+                context.stated_mm = [*(context.stated_mm or ()), *stated_lengths(block.text or "")]
                 context.edited_this_turn = False
                 yield StreamEventOut("steer", {"text": block.text or ""})
 
@@ -1618,7 +1653,9 @@ class Agent:
         try:
             if name in (GENERATE_MODEL, EDIT_MODEL) and context.requested_mm is None:
                 context.requested_mm = _held_size(
-                    requested_lengths(args.get("requested_mm")), context
+                    requested_lengths(args.get("requested_mm")),
+                    context,
+                    resizing=name == EDIT_MODEL or context.edited_this_turn,
                 )
             if name == GENERATE_MODEL:
                 regenerating = context.edited_this_turn
