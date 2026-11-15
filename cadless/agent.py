@@ -35,7 +35,7 @@ Tools (lean, high-impact) — wrappers over the EXISTING pipeline / reparametriz
 primitive, reused unchanged:
   * ``generate_model(spec, requested_mm)`` — fresh build123d model via the pipeline.
   * ``edit_model(change, requested_mm)``   — refine the current code via the pipeline.
-    ``requested_mm``, optional on both, is the overall size the user gave.
+    ``requested_mm``, optional on both, is the overall sides the user gave.
   * ``set_parameters(params)`` — deterministic re-run via ``reparametrize`` (no
     LLM; rebuilt and judged by the pipeline's ``rebuild``, never ``Pipeline.run``).
 
@@ -46,12 +46,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from cadless.assembly_check import requested_slack
 from cadless.config import Settings, settings
 from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.types import (
@@ -63,7 +65,7 @@ from cadless.llm.types import (
 )
 from cadless.params import apply_param_overrides, extract_params
 from cadless.pipeline import GenerationResult, Pipeline
-from cadless.printer_profile import AssemblySpec, fmt
+from cadless.printer_profile import AssemblySpec, fmt, requested_lengths
 from cadless.system_prompt import SYSTEM_PROMPT
 
 # --- tool registry ----------------------------------------------------------
@@ -85,48 +87,147 @@ MAX_PLAN_STEPS = 8
 
 #: The overall size the user asked for, offered on both build tools. Optional
 #: because most requests give no such thing, and a statement the model cannot
-#: copy is worse than none. No length bounds in the schema: the parser below
-#: holds it to three, and a keyword some provider rejects would fail every turn.
+#: copy is worse than none. No length bounds in the schema: the reader holds it
+#: to one to three, and a keyword some provider rejects would fail every turn.
 _REQUESTED_MM = {
     "type": "array",
     "items": {"type": "number"},
     "description": (
-        "The overall width, depth and height the user asked for, as three numbers "
-        "in millimetres: converted if the user used another unit, otherwise "
-        "exactly as given. Omit unless the user gave all three, or asked for a "
-        "proportional resize of the current model: then all three are the model's "
-        "measured size times one factor, worked out as the operating instructions "
-        "say. Never adjust them to fit a printer."
+        "The overall sides the user asked for -- its length, width or height -- in "
+        "millimetres: converted if the user used another unit, otherwise exactly as "
+        "given. Give only the sides the user gave, one, two or all three, in any "
+        "order, and never a side of your own choosing: the sides the user left open "
+        "are the design's. For a proportional resize of the current model give all "
+        "three, the model's measured size times one factor, worked out as the "
+        "operating instructions say. Omit it when the user gave no overall size. "
+        "Never adjust them to fit a printer."
     ),
 }
 
+#: Millimetres in one of each unit a message may give a length in.
+_MM_PER_UNIT = {
+    "mm": 1.0,
+    "millimeter": 1.0,
+    "millimeters": 1.0,
+    "millimetre": 1.0,
+    "millimetres": 1.0,
+    "밀리": 1.0,
+    "밀리미터": 1.0,
+    "cm": 10.0,
+    "centimeter": 10.0,
+    "centimeters": 10.0,
+    "centimetre": 10.0,
+    "centimetres": 10.0,
+    "센티": 10.0,
+    "센치": 10.0,
+    "센티미터": 10.0,
+    "m": 1000.0,
+    "meter": 1000.0,
+    "meters": 1000.0,
+    "metre": 1000.0,
+    "metres": 1000.0,
+    "미터": 1000.0,
+    "in": 25.4,
+    "inch": 25.4,
+    "inches": 25.4,
+    "''": 25.4,
+    '"': 25.4,
+    "″": 25.4,
+    "인치": 25.4,
+    "ft": 304.8,
+    "foot": 304.8,
+    "feet": 304.8,
+    "'": 304.8,
+    "′": 304.8,
+    "피트": 304.8,
+}
 
-def _requested_size(value: Any) -> tuple[float, float, float] | None:
-    """A stated overall size as three positive lengths, or ``None``.
+# Longest first, so "mm" is read before "m" and "inches" before "in".
+_UNIT = "|".join(re.escape(unit) for unit in sorted(_MM_PER_UNIT, key=len, reverse=True))
+_NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+"
+_TERM = re.compile(rf"({_NUMBER})(?:\s*-?\s*({_UNIT}))?", re.IGNORECASE)
+# A run of lengths joined as a box is ("10 x 5 x 2 cm"), where one unit can
+# serve them all. Never preceded or followed by a letter, so "M3" and "3D" are
+# no lengths; the edges look at ASCII only, so "400mm짜리" still reads.
+_LENGTHS = re.compile(
+    rf"(?<![A-Za-z0-9.,])(?:{_TERM.pattern})(?:\s*(?:[x×*]|by)\s*(?:{_TERM.pattern}))*"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 
-    Anything else counts as no statement rather than an error: the size is an
-    extra the orchestrator may leave out, and a malformed one must neither hold
-    the build to a wrong size nor stop the build it came with.
+
+def stated_lengths(text: str) -> tuple[float, ...]:
+    """The lengths ``text`` states, in millimetres, in the order it states them.
+
+    What holds a build is what the user said, so this reads the user's words
+    rather than taking the model's word for them. Every number counts, a bare
+    one as millimetres, because reading too many costs nothing here: a length is
+    only ever used to back a size a build call states, never to invent one. In a
+    box the unit given once serves the lengths around it.
     """
-    if not isinstance(value, (list, tuple)) or len(value) != 3:
-        return None
-    lengths = []
-    for item in value:
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            return None
-        try:
-            length = float(item)
-        except OverflowError:
-            return None
-        if not math.isfinite(length) or length <= 0:
-            return None
-        lengths.append(length)
-    return (lengths[0], lengths[1], lengths[2])
+    lengths: list[float] = []
+    for run in _LENGTHS.finditer(text):
+        terms = [
+            (float(number.replace(",", "")), unit.lower() if unit else None)
+            for number, unit in _TERM.findall(run.group(0))
+        ]
+        units = [unit for _, unit in terms]
+        for index, (value, unit) in enumerate(terms):
+            if unit is None:
+                after = next((u for u in units[index + 1 :] if u), None)
+                before = next((u for u in reversed(units[:index]) if u), None)
+                unit = after or before or "mm"
+            length = value * _MM_PER_UNIT[unit]
+            if math.isfinite(length) and length > 0:
+                lengths.append(length)
+    return tuple(lengths)
 
 
-def _sized(
-    spec: AssemblySpec | None, requested: tuple[float, float, float] | None
-) -> AssemblySpec | None:
+def _three_lengths(value: object) -> tuple[float, ...] | None:
+    """``value`` where it is three positive finite lengths, else ``None``."""
+    lengths = requested_lengths(value)
+    return lengths if lengths is not None and len(lengths) == 3 else None
+
+
+def _resizes(requested: tuple[float, ...], measured: tuple[float, ...]) -> bool:
+    """Whether ``requested`` is ``measured`` times one factor, side for side."""
+    wants, sides = sorted(requested), sorted(measured)
+    factor = wants[-1] / sides[-1]
+    return all(
+        abs(want - side * factor) <= requested_slack(want)
+        for want, side in zip(wants, sides, strict=True)
+    )
+
+
+def _held_size(
+    requested: tuple[float, ...] | None, context: ToolContext
+) -> tuple[float, ...] | None:
+    """The part of a build call's ``requested`` size the turn holds its builds to.
+
+    All of it where it is a proportional resize of the model the turn starts on,
+    since two of its sides are that model's times the factor and no words of the
+    user's give them. Otherwise only the sides the user's words state, each
+    stated length backing one side, held at the user's own figure: a side the
+    orchestrator chose itself would refuse a build for a number nobody asked
+    for. Where the words are not known, the size is taken as stated.
+    """
+    if requested is None or context.stated_mm is None:
+        return requested
+    measured = _three_lengths(context.start_size_mm)
+    if measured is not None and len(requested) == 3 and _resizes(requested, measured):
+        return requested
+    left = list(context.stated_mm)
+    kept: list[float] = []
+    for want in requested:
+        near = [have for have in left if abs(have - want) <= requested_slack(want)]
+        if near:
+            have = min(near, key=lambda length: abs(length - want))
+            left.remove(have)
+            kept.append(have)
+    return tuple(kept) or None
+
+
+def _sized(spec: AssemblySpec | None, requested: tuple[float, ...] | None) -> AssemblySpec | None:
     """``spec`` holding a build to ``requested``, the turn's own copy untouched."""
     if spec is None or requested is None:
         return spec
@@ -352,17 +453,26 @@ class ToolContext:
     # already exists, so it takes either, and so does a generation that
     # regenerates the model this turn was editing (``edited_this_turn``).
     inherited_assembly: AssemblySpec | None = None
-    # The overall size the user asked for, pinned by the first build call of the
-    # turn that stated one. On a turn that asks for an assembly every build is
-    # held to it from then on -- the one that pinned it, and a parameter change
-    # too -- until the user sends another message into the running turn. Pinned
+    # The overall sides the user asked for, as far as ``stated_mm`` backs them,
+    # pinned by the first build call of the turn that stated any. On a turn that
+    # asks for an assembly every build is held to them from then on -- the one
+    # that pinned them, and a parameter change too -- until the user sends
+    # another message into the running turn. Pinned
     # rather than read afresh from each call because an orchestrator refused for
     # size can restate the request smaller, or reach for a parameter change, and
     # holding that to its own statement would pass the very build the check
     # exists to refuse. A later turn starts with nothing pinned, so a resize the
     # user asks for then is free. Kept off ``assembly`` and ``inherited_assembly``
     # so the turn's own specs never change.
-    requested_mm: tuple[float, float, float] | None = None
+    requested_mm: tuple[float, ...] | None = None
+    # The lengths the user's own words state this turn, in millimetres: the
+    # message, and every one sent into the running turn. A size a build call
+    # states is pinned only as far as these back it, or as a proportional resize
+    # of the measured model, because the orchestrator filled in sides of its own
+    # however it was told not to, and builds were refused for missing them. Set
+    # by the loop; ``None`` where the words are not known -- a caller driving the
+    # tools without a turn -- and a stated size is then taken as it stands.
+    stated_mm: tuple[float, ...] | None = None
     # Whether this turn has called ``edit_model`` or ``set_parameters``, set
     # before either builds so one that fails or raises counts too. A
     # ``generate_model`` after one is the orchestrator regenerating the model it
@@ -744,10 +854,13 @@ You have five tools. Choose the most precise one:
     tool next to carry the plan out. Skip the plan for trivial requests (a simple
     cube, a single dimensional tweak) — it is optional, never required.
 
-When the user gives the overall width, depth and height of what they want, pass
-the three as `requested_mm` on every `{GENERATE_MODEL}` and `{EDIT_MODEL}` call of
-the turn, in millimetres: converted if the user used another unit, otherwise
-exactly as given. A proportional resize of the current model, one overall side
+When the user gives an overall size of what they want -- its length, width or
+height, or all three -- pass the sides they gave as `requested_mm` on every
+`{GENERATE_MODEL}` and `{EDIT_MODEL}` call of the turn, in millimetres: converted
+if the user used another unit, otherwise exactly as given. Pass only those: never
+add a side the user did not give, even one your design has settled on, because
+every build is held to what you pass, and a side the user left open is yours to
+vary. A proportional resize of the current model, one overall side
 given or a factor with its proportions kept, gives all three: multiply the
 model's measured size by one factor, the length asked for over the measured
 length of what the user named or the factor given, pass the products, and state
@@ -756,9 +869,9 @@ once a build this turn has changed the model, the `bbox` under `metrics` in the
 latest build's result. A constant in the code measures one feature, not the
 whole model, so never take the factor from one unless the user named that
 feature (its chassis, a wheel); the sides are still the whole model's measured
-size times that factor. With no measured size in the context block, leave
-`requested_mm` out of such a resize. Otherwise leave it out when they did not
-give all three. Never change them to fit a printer: on an assembly turn a model
+size times that factor. With no measured size in the context block, pass only
+the side the user gave. Leave `requested_mm` out when the user gave no overall
+size. Never change them to fit a printer: on an assembly turn a model
 larger than the bed is split into parts that each fit, never resized, and every
 build is held to that size.
 
@@ -790,7 +903,7 @@ def _model_context_block(context: ToolContext) -> ContentBlock | None:
         f"```python\n{context.current_code.strip()}\n```\n\n"
         f"Declared parameters: {json.dumps(params)}"
     )
-    size = _requested_size(context.start_size_mm)
+    size = _three_lengths(context.start_size_mm)
     if size is not None:
         sides = " x ".join(fmt(round(side, 2)) for side in size)
         summary += (
@@ -1048,6 +1161,7 @@ class Agent:
         if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
+        context.stated_mm = stated_lengths(user_text)
 
         produced: list[ContentBlock] = []  # new blocks for persistence
         result = AgentResult()
@@ -1067,6 +1181,7 @@ class Agent:
                 # generation after it is whatever the user now asks for, not a
                 # regeneration of the model edited before it.
                 context.requested_mm = None
+                context.stated_mm = (*(context.stated_mm or ()), *stated_lengths(block.text or ""))
                 context.edited_this_turn = False
 
             turn = _StreamedTurn()
@@ -1188,6 +1303,7 @@ class Agent:
         if user_text.strip() or not context.images:
             user_content.append(ContentBlock.of_text(user_text))
         messages.append(Message(role="user", content=user_content))
+        context.stated_mm = stated_lengths(user_text)
 
         produced: list[ContentBlock] = []
         result = AgentResult()
@@ -1205,6 +1321,7 @@ class Agent:
                 messages.append(Message(role="user", content=[block]))
                 produced.append(block)
                 context.requested_mm = None  # as in run_turn: the user spoke again
+                context.stated_mm = (*(context.stated_mm or ()), *stated_lengths(block.text or ""))
                 context.edited_this_turn = False
                 yield StreamEventOut("steer", {"text": block.text or ""})
 
@@ -1497,7 +1614,9 @@ class Agent:
         args = tu.input or {}
         try:
             if name in (GENERATE_MODEL, EDIT_MODEL) and context.requested_mm is None:
-                context.requested_mm = _requested_size(args.get("requested_mm"))
+                context.requested_mm = _held_size(
+                    requested_lengths(args.get("requested_mm")), context
+                )
             if name == GENERATE_MODEL:
                 regenerating = context.edited_this_turn
                 # fresh generation gets the turn's RAG grounding; the

@@ -399,7 +399,7 @@ def test_a_size_on_a_turn_that_is_no_assembly_holds_nothing():
 @pytest.mark.parametrize(
     "size",
     [
-        [300, 250],
+        [],
         [300, 0, 18],
         [300, -1, 18],
         ["wide", 250, 18],
@@ -411,7 +411,7 @@ def test_a_size_on_a_turn_that_is_no_assembly_holds_nothing():
         None,
     ],
 )
-def test_a_size_that_is_not_three_positive_lengths_is_not_held_to(size):
+def test_a_size_that_is_not_one_to_three_positive_lengths_is_not_held_to(size):
     pipe = _one_build()
     ctx = ToolContext(pipeline=pipe, assembly=_SPEC)
     call = ContentBlock.of_tool_use(
