@@ -67,6 +67,9 @@ _SAMPLES = 240
 _SAME_RUN = 1e-3
 #: Steps along each side of a cut face when looking for room for a peg.
 _GRID = 24
+#: The roomiest grid points moved on to the most room near them: enough for two
+#: pegs apart from each other along a wall, without walking every point.
+_SPOTS_REFINED = 8
 #: Places tried along one band of the cut face, at most, half a joint's reach
 #: apart: enough to find room between features near either end without trying
 #: every sample.
@@ -706,24 +709,63 @@ def _pegs(section, plane, ahead, clearance, margin):
 
 
 def _roomy_spots(section, frame):
-    """Points on the cut face with how far each lies from the face's edge, farthest first."""
+    """Points on the cut face with how far each lies from the face's edge, farthest first.
+
+    The face is sampled on a grid, and the roomiest points found are then moved
+    to where the face gives them the most room: a wall thinner than a grid step
+    has no point on its middle, and was refused at the very thickness the brief
+    and the refusal state for a peg.
+    """
     if not section:
         return []
     corners = [frame.to_local_coords(face).bounding_box() for face in section]
     x0, x1 = min(c.min.X for c in corners), max(c.max.X for c in corners)
     y0, y1 = min(c.min.Y for c in corners), max(c.max.Y for c in corners)
-    spots = []
+    found = []
     for i in range(_GRID + 1):
         for j in range(_GRID + 1):
             local = Vector(x0 + (x1 - x0) * i / _GRID, y0 + (y1 - y0) * j / _GRID, 0)
-            at = frame.from_local_coords(local)
-            point = Vertex(at.X, at.Y, at.Z)
             for face in section:
-                if point.distance_to(face) < _EPS:
-                    spots.append((local, min(point.distance_to(edge) for edge in face.edges())))
+                room = _room_at(face, frame, local)
+                if room is not None:
+                    found.append((local, room, face))
                     break
-    spots.sort(key=lambda found: -found[1])
+    found.sort(key=lambda spot: -spot[1])
+    step = max(x1 - x0, y1 - y0) / _GRID
+    spots = [
+        _roomiest(face, frame, local, room, step) for local, room, face in found[:_SPOTS_REFINED]
+    ] + [(local, room) for local, room, _face in found[_SPOTS_REFINED:]]
+    spots.sort(key=lambda spot: -spot[1])
     return spots
+
+
+def _room_at(face, frame, local) -> float | None:
+    """How far the point at ``local`` lies from ``face``'s edges, or None off the face."""
+    at = frame.from_local_coords(local)
+    point = Vertex(at.X, at.Y, at.Z)
+    if point.distance_to(face) >= _EPS:
+        return None
+    return min(point.distance_to(edge) for edge in face.edges())
+
+
+def _roomiest(face, frame, local, room, step):
+    """The point near ``local`` with the most room on ``face``, and that room.
+
+    Moved a step at a time to whichever neighbour has more room, the step halved
+    when none has, down to :data:`EDGE_PRECISION_MM`: on a wall it walks across to
+    the middle, and the room it reports is within that precision of the most the
+    wall gives.
+    """
+    while step > EDGE_PRECISION_MM:
+        for dx, dy in ((step, 0.0), (-step, 0.0), (0.0, step), (0.0, -step)):
+            near = Vector(local.X + dx, local.Y + dy, 0)
+            more = _room_at(face, frame, near)
+            if more is not None and more > room:
+                local, room = near, more
+                break
+        else:
+            step /= 2
+    return local, room
 
 
 def _peg(frame, ahead, spot, radius, clearance, margin):

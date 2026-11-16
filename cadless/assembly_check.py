@@ -528,7 +528,7 @@ def _cuts(size: tuple[float, float, float], volume: BuildVolume) -> str:
 def _pieces(
     size: tuple[float, float, float], limits: tuple[float, float, float]
 ) -> tuple[int, int, int]:
-    """Pieces per axis that straight cuts leave, each within its limit with its joint."""
+    """Pieces per axis that straight cuts leave: :func:`pieces_along` for each extent and limit."""
     width, depth, height = (
         pieces_along(extent, limit) for extent, limit in zip(size, limits, strict=True)
     )
@@ -1218,9 +1218,10 @@ def measure_assembly(
                 )
             elif shared > 0.0:
                 overlaps.append([first, second, shared])
-                place = _shared_box(parts[first], parts[second], scale, budget)
-                if place is not None:
-                    overlap_boxes.append([first, second, *place])
+                if shared > OVERLAP_EPSILON_MM3:
+                    place = _shared_box(parts[first], parts[second], scale, budget)
+                    if place is not None:
+                        overlap_boxes.append([first, second, *place])
 
             done += 1
             distance = _distance(parts[first], parts[second])
@@ -1326,8 +1327,9 @@ def _shared_box(first, second, scale: float, budget: _Budget) -> list[float] | N
     """The box around the volume two overlapping parts share, ``[x0, y0, z0, x1, y1,
     z1]`` in the script's own coordinates, or ``None`` where it cannot be had.
 
-    Asked only of a pair already measured to overlap, so parts that only touch
-    pay nothing for it, and charged to the budget like any other kernel work.
+    Asked only of a pair measured to overlap past the noise the overlap check
+    passes, so parts that only touch pay nothing for it, and charged to the
+    budget like any other kernel work.
     The intersection is made again rather than kept from the volume probe, which
     every pair makes and the order search reads; a build that overlaps is
     refused whatever, so the repeat costs only a build already failing. A

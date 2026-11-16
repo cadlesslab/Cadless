@@ -5,7 +5,7 @@ number drifting from the helper would tell the model one size and build another.
 """
 
 import pytest
-from build123d import Axis, Box, Cylinder, Plane, Rot
+from build123d import Axis, Box, Cylinder, Plane, Pos, Rot
 
 from cadless.joinery import JoineryError, split_and_join
 from cadless.joint_sizes import (
@@ -15,6 +15,7 @@ from cadless.joint_sizes import (
     least_peg_spot_mm,
     pieces_along,
     stated_band_mm,
+    stated_spot_mm,
 )
 
 pytestmark = pytest.mark.build123d
@@ -84,6 +85,17 @@ def test_a_rib_of_the_stated_band_inside_a_wide_face_takes_a_dovetail(clearance)
     shell = Box(300, 160, 80) - Box(310, 156, 76) + Box(300, rib, 77)
 
     split_and_join(shell, SEAM, Axis.Z, clearance)
+
+
+@pytest.mark.parametrize("clearance", [0.2, 0.5])
+def test_a_wall_of_the_stated_spot_cut_through_its_height_takes_a_peg(clearance):
+    # A shell cut across its height and set down onto the piece below takes pegs
+    # in its walls: points sampled on a grid across the face fall off a thin
+    # wall's middle, so the spot the figure promises has to be found there too.
+    wall = stated_spot_mm(clearance)
+    shell = Box(300, 120, 80) - Pos(0, 0, -wall) * Box(300 - 2 * wall, 120 - 2 * wall, 80)
+
+    split_and_join(shell, Plane.XY, Axis.Z, clearance)
 
 
 def test_a_wall_as_thick_as_the_stated_band_takes_a_dovetail():

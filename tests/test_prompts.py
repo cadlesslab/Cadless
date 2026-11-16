@@ -325,7 +325,7 @@ def test_the_brief_counts_each_seam_s_joint_in_the_piece_that_carries_it():
     assert "6 mm off-centre, toward the half behind it" in brief
 
 
-@pytest.mark.parametrize(("clearance", "band", "spot"), [(0.2, "7.1", "5.4"), (0.5, "7.9", "6")])
+@pytest.mark.parametrize(("clearance", "band", "spot"), [(0.2, "7.1", "5.5"), (0.5, "7.9", "6.1")])
 def test_the_brief_states_the_solid_band_a_dovetail_needs_at_its_clearance(clearance, band, spot):
     # A shell cut through walls thinner than a joint's band leaves no axis a place.
     spec = AssemblySpec(

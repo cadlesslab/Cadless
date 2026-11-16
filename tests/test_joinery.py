@@ -471,7 +471,7 @@ def test_a_rod_too_thin_for_a_peg_is_told_the_spot_one_needs():
     with pytest.raises(JoineryError) as refused:
         split_and_join(_rod(2), SEAM, Axis.X, CLEARANCE)
 
-    assert "a solid spot of the cut face at least 5.4 mm across" in str(refused.value)
+    assert "a solid spot of the cut face at least 5.5 mm across" in str(refused.value)
 
 
 def test_a_rod_cut_across_but_given_an_axis_in_its_cut_is_told_to_take_the_normal():
