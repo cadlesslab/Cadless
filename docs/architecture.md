@@ -190,8 +190,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    every call too and every build is held to it: the orchestrator states it with
    the build call, and the engine keeps only the sides the user's own words give
    — the turn's messages and the user's earlier ones since the current model was
-   built, found by the transcript's own link to it (not one sent into an earlier
-   running turn), read from what the user
+   built, by when each was written, a copy keeping the times of what it copies
+   (not one sent into an earlier running turn), read from what the user
    typed rather than from the replayed history, which carries model-written
    readings and synopses — since the orchestrator otherwise fills in sides of
    its own and a build would be refused for a number nobody asked for. The first
@@ -369,6 +369,10 @@ catalog content read-only.
 
 ## Gotchas & Non-Obvious Context
 
+- A copy of a catalog item counts its last authored step's prompt among the
+  user's words since the current model was built: the catalog writes a step's
+  messages after that step's model. Its figures can only back sides a build
+  call states.
 - A requested size is backed only by lengths written in English units (mm,
   cm, m, in, ft) or as bare figures, read as millimetres; a size written in
   another language's unit words backs no side, which holds the build to less
