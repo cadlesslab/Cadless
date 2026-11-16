@@ -711,30 +711,36 @@ def _pegs(section, plane, ahead, clearance, margin):
 def _roomy_spots(section, frame):
     """Points on the cut face with how far each lies from the face's edge, farthest first.
 
-    The face is sampled on a grid, and the roomiest points found are then moved
-    to where the face gives them the most room: a wall thinner than a grid step
-    has no point on its middle, and was refused at the very thickness the brief
-    and the refusal state for a peg.
+    Each face of the cut is sampled on a grid of its own, so a post too small
+    for one grid across the whole cut still has points on it. The roomiest
+    points, and the roomiest of every face, are then also moved to where the face
+    gives them the most room: a wall thinner than a grid step has no point on its
+    middle, and was refused at the very thickness the brief and the refusal
+    state for a peg. The points stay candidates beside the moved ones, since
+    several moved to one boss's middle would otherwise leave a second peg there
+    no place to go.
     """
-    if not section:
-        return []
-    corners = [frame.to_local_coords(face).bounding_box() for face in section]
-    x0, x1 = min(c.min.X for c in corners), max(c.max.X for c in corners)
-    y0, y1 = min(c.min.Y for c in corners), max(c.max.Y for c in corners)
     found = []
-    for i in range(_GRID + 1):
-        for j in range(_GRID + 1):
-            local = Vector(x0 + (x1 - x0) * i / _GRID, y0 + (y1 - y0) * j / _GRID, 0)
-            for face in section:
+    steps = {}
+    for face in section:
+        box = frame.to_local_coords(face).bounding_box()
+        x0, x1, y0, y1 = box.min.X, box.max.X, box.min.Y, box.max.Y
+        steps[id(face)] = max(x1 - x0, y1 - y0) / _GRID
+        for i in range(_GRID + 1):
+            for j in range(_GRID + 1):
+                local = Vector(x0 + (x1 - x0) * i / _GRID, y0 + (y1 - y0) * j / _GRID, 0)
                 room = _room_at(face, frame, local)
                 if room is not None:
                     found.append((local, room, face))
-                    break
     found.sort(key=lambda spot: -spot[1])
-    step = max(x1 - x0, y1 - y0) / _GRID
+    seeds = found[:_SPOTS_REFINED]
+    for face in section:
+        best = next((spot for spot in found if spot[2] is face), None)
+        if best is not None and all(best is not seed for seed in seeds):
+            seeds.append(best)
     spots = [
-        _roomiest(face, frame, local, room, step) for local, room, face in found[:_SPOTS_REFINED]
-    ] + [(local, room) for local, room, _face in found[_SPOTS_REFINED:]]
+        _roomiest(face, frame, local, room, steps[id(face)]) for local, room, face in seeds
+    ] + [(local, room) for local, room, _face in found]
     spots.sort(key=lambda spot: -spot[1])
     return spots
 

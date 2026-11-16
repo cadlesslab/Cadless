@@ -104,8 +104,8 @@ def stated_band_mm(clearance: float) -> float:
 def stated_spot_mm(clearance: float) -> float:
     """The spot a peg needs at ``clearance``, as the brief and the refusal say it.
 
-    The joinery finds the roomiest spot to within :data:`EDGE_PRECISION_MM`, so
-    the figure covers that across the spot's width before it is rounded up, as
-    :func:`stated_band_mm` covers a band's edges.
+    The joinery moves a spot it finds to within :data:`EDGE_PRECISION_MM` of the
+    most room near it, so the figure covers that across the spot's width before
+    it is rounded up, as :func:`stated_band_mm` covers a band's edges.
     """
     return stated_mm(least_peg_spot_mm(clearance) + 2 * EDGE_PRECISION_MM)

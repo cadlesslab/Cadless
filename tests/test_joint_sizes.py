@@ -98,6 +98,31 @@ def test_a_wall_of_the_stated_spot_cut_through_its_height_takes_a_peg(clearance)
     split_and_join(shell, Plane.XY, Axis.Z, clearance)
 
 
+def _pegs_on(behind):
+    """The pegs standing past a cut on Plane.XY, out of the half behind it."""
+    return (behind & Pos(0, 0, 50) * Box(400, 400, 100)).solids()
+
+
+def test_a_boss_keeps_room_for_its_second_peg():
+    # The roomiest points on a post walk to its middle; the points themselves
+    # stay candidates, so a second peg still finds room beside the first.
+    shell = Box(300, 120, 80) - Box(296, 116, 76) + Cylinder(13, 78)
+
+    behind, _ahead = split_and_join(shell, Plane.XY, Axis.Z, 0.2)
+
+    assert len(_pegs_on(behind)) == 2
+
+
+def test_a_post_no_point_of_the_whole_face_lands_on_takes_a_peg():
+    # Each part of the cut face is sampled on its own, so a post too small for
+    # the face's grid to land on is still found.
+    shell = Box(300, 120, 80) - Box(296, 116, 76) + Pos(6.25, 2.5, 0) * Cylinder(4.5, 78)
+
+    behind, _ahead = split_and_join(shell, Plane.XY, Axis.Z, 0.2)
+
+    assert len(_pegs_on(behind)) >= 1
+
+
 def test_a_wall_as_thick_as_the_stated_band_takes_a_dovetail():
     # At 0.1 mm the band is 6.83 mm: stated to the nearest tenth, 6.8, the one
     # wall the brief would then ask for is the one the joint does not fit.
