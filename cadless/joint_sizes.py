@@ -56,3 +56,13 @@ def least_peg_spot_mm(clearance: float) -> float:
     """How wide a solid spot of the cut face the narrowest peg needs at ``clearance``:
     its least diameter, with the clearance and the margin all round."""
     return PEG_LEAST + 2 * (clearance + margin_mm(clearance))
+
+
+def stated_mm(least: float) -> float:
+    """A least size as it is told to the model: rounded up to a tenth of a millimetre.
+
+    Up rather than to the nearest, because the figure is a floor the model builds
+    to: a wall made exactly as thick as a figure rounded down is the one size the
+    joint does not fit.
+    """
+    return math.ceil(least * 10) / 10

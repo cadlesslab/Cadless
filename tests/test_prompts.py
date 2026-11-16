@@ -305,6 +305,38 @@ def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
     assert "never shrink" in user.lower()
 
 
+def test_the_brief_counts_each_seam_s_joint_in_the_piece_that_carries_it():
+    # Sized by the cut alone, a 400 mm chassis was cut in the middle on a 210 mm
+    # bed, and the half carrying the tabs came back 212 mm long.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "the half behind a seam's plane carries split_and_join's tabs or pegs" in brief
+    assert "stand up to 12 mm past the cut" in brief
+    assert "6 mm off-centre, toward the half behind it" in brief
+
+
+@pytest.mark.parametrize(("clearance", "band"), [(0.2, "7.1"), (0.5, "7.9")])
+def test_the_brief_states_the_solid_band_a_dovetail_needs_at_its_clearance(clearance, band):
+    # Shells with walls of 2 to 3.75 mm were cut, and no axis found a place.
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=clearance
+    )
+    brief = " ".join(_assembly_rules(spec).split())
+    assert f"a band of the cut face at least {band} mm wide" in brief
+    assert f"keeps a wall at least {band} mm thick where a seam crosses it" in brief
+
+
+def test_the_brief_keeps_a_hollow_part_s_top_or_floor_whole_across_a_seam():
+    # A shell's own cavity box cut away the top that would have held the joint.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "or its top or floor at least 3 mm thick whole across the seam" in brief
+
+
+def test_the_edit_rules_count_the_joint_where_a_seam_is_made():
+    rules = " ".join(_assembly_edit_rules(_SPEC).split())
+    assert "the half behind its plane carries the tabs or pegs" in rules
+    assert "12 mm past the cut" in rules
+
+
 def test_an_edit_on_an_assembly_is_told_all_three_axes_and_not_to_shrink():
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35

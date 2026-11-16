@@ -8,7 +8,13 @@ import pytest
 from build123d import Axis, Box, Cylinder, Plane, Rot
 
 from cadless.joinery import JoineryError, split_and_join
-from cadless.joint_sizes import PEG_MOST, REACH_MOST_MM, least_band_mm, least_peg_spot_mm
+from cadless.joint_sizes import (
+    PEG_MOST,
+    REACH_MOST_MM,
+    least_band_mm,
+    least_peg_spot_mm,
+    stated_mm,
+)
 
 pytestmark = pytest.mark.build123d
 
@@ -47,6 +53,15 @@ def test_a_dovetail_takes_the_least_band_stated_and_nothing_narrower(clearance):
     split_and_join(Box(300, band + 0.02, 30), SEAM, Axis.Z, clearance)
     with pytest.raises(JoineryError, match="no place on the cut face"):
         split_and_join(Box(300, band - 0.02, 30), SEAM, Axis.Z, clearance)
+
+
+def test_a_wall_as_thick_as_the_stated_band_takes_a_dovetail():
+    # At 0.1 mm the band is 6.83 mm: stated to the nearest tenth, 6.8, the one
+    # wall the brief would then ask for is the one the joint does not fit.
+    stated = stated_mm(least_band_mm(0.1))
+
+    assert stated == 6.9
+    split_and_join(Box(300, stated, 30), SEAM, Axis.Z, 0.1)
 
 
 @pytest.mark.parametrize("clearance", CLEARANCES)
