@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+import tracemalloc
 from collections.abc import Iterator, Sequence
 
 import pytest
@@ -21,6 +23,7 @@ from cadless.agent import (
     ListSteerSource,
     ToolContext,
     build_tools,
+    stated_lengths,
 )
 from cadless.config import settings
 from cadless.llm.providers import StreamChunk
@@ -1494,6 +1497,7 @@ def test_the_build_tools_take_the_overall_size_the_user_asked_for(name):
     assert size["type"] == "array"
     assert size["items"] == {"type": "number"}
     assert "converted if the user used another unit" in size["description"]
+    assert "never a side of your own choosing" in " ".join(size["description"].split())
     assert "requested_mm" not in tool.input_schema["required"]
 
 
@@ -1501,7 +1505,8 @@ def test_the_operating_instructions_say_to_pass_the_stated_size_unchanged():
     from cadless.agent import build_agent_system_prompt
 
     prompt = " ".join(build_agent_system_prompt().lower().split())
-    assert "pass the three as `requested_mm`" in prompt
+    assert "pass the sides they gave as `requested_mm`" in prompt
+    assert "never add a side the user did not give" in prompt
     assert "never change them to fit a printer" in prompt
     assert "converted if the user used another unit" in prompt
     assert "on an assembly turn a model larger than the bed is split" in prompt
@@ -1521,7 +1526,7 @@ def test_the_operating_instructions_take_a_proportional_resize_from_the_measured
     assert "a proportional resize of the current model" in prompt
     assert "multiply the model's measured size by one factor" in prompt
     assert "never take the factor from one unless the user named that feature" in prompt
-    assert "with no measured size in the context block, leave `requested_mm` out" in prompt
+    assert "with no measured size in the context block, pass only the side the user gave" in prompt
 
 
 def test_the_operating_instructions_take_the_size_from_a_build_that_changed_the_model():
@@ -1561,18 +1566,20 @@ def test_the_context_block_states_no_size_when_none_was_measured():
 
 
 @pytest.mark.parametrize(
-    "size", [(float("nan"), 40.0, 10.0), (float("inf"), 40.0, 10.0), (0.0, 40.0, 10.0)]
+    "size",
+    [(float("nan"), 40.0, 10.0), (float("inf"), 40.0, 10.0), (0.0, 40.0, 10.0), (84.0, 66.0)],
 )
 def test_the_context_block_leaves_out_a_size_that_is_not_three_lengths(size):
-    provider = ScriptedProvider([_text_turn("ok")])
-    ctx = _context()
-    ctx.start_size_mm = size
-    Agent(provider=provider, model="fake-model").run_turn(user_text="hi", context=ctx)
+    # Compared with the block no size was given for, so a size printed in any
+    # wording, as "nan", "inf" or two sides, is caught as well.
+    def block_for(start_size_mm):
+        provider = ScriptedProvider([_text_turn("ok")])
+        ctx = _context()
+        ctx.start_size_mm = start_size_mm
+        Agent(provider=provider, model="fake-model").run_turn(user_text="hi", context=ctx)
+        return provider.calls[0]["messages"][-1].content[0].text
 
-    block = provider.calls[0]["messages"][-1].content[0].text
-    assert block.startswith("Current model in this project")
-    # Any three tokens, so a size printed as "nan" or "inf" is caught as well.
-    assert re.search(r"\S+ x \S+ x \S+ mm", block) is None
+    assert block_for(size) == block_for(None)
 
 
 @pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
@@ -1601,10 +1608,11 @@ def test_a_parameter_edit_in_the_turn_is_held_to_the_size_a_build_was_asked_for(
     ctx.export_dir = "/tmp/turn-staging"
 
     agent = Agent(provider=provider, model="fake-model")
+    asked = "a board 300 x 250 x 18 mm, as an assembly"
     if loop == "run_turn":
-        agent.run_turn(user_text="a board, as an assembly", context=ctx)
+        agent.run_turn(user_text=asked, context=ctx)
     else:
-        list(agent.stream_turn(user_text="a board, as an assembly", context=ctx))
+        list(agent.stream_turn(user_text=asked, context=ctx))
 
     assert calls == [("/tmp/turn-staging", replace(spec, requested_mm=(300.0, 250.0, 18.0)))]
 
@@ -1649,15 +1657,273 @@ def test_a_user_who_steers_the_turn_to_a_new_size_is_held_to_the_new_one(loop):
 
     agent = Agent(provider=provider, model="fake-model")
     context = _context(pipeline=pipeline, assembly=_spec())
+    asked = "a shelf 500 x 250 x 400 mm, as an assembly"
     if loop == "run_turn":
-        agent.run_turn(user_text="a shelf, as an assembly", context=context, steer=steer)
+        agent.run_turn(user_text=asked, context=context, steer=steer)
     else:
-        list(agent.stream_turn(user_text="a shelf, as an assembly", context=context, steer=steer))
+        list(agent.stream_turn(user_text=asked, context=context, steer=steer))
 
     assert [spec.requested_mm for spec in pipeline.assemblies] == [
         (500.0, 250.0, 400.0),
         (600.0, 250.0, 400.0),
     ]
+
+
+@pytest.mark.parametrize(
+    "text, lengths",
+    [
+        ("Make an RC car, 400 mm long, with four wheels on two axles", (400.0,)),
+        ("a box 10 x 5 x 2.5 cm", (100.0, 50.0, 25.0)),
+        ("a shelf 0.6 m wide and 18mm thick", (600.0, 18.0)),
+        ('a 16" frame, 2 ft tall', (406.4, 609.6)),
+        ("a 1,200 millimetre rail", (1200.0,)),
+        ("make it 400 long", (400.0,)),
+        ("a bracket for M3 screws, 3D printed", ()),
+        ("a 400mm\u306e car", (400.0,)),
+        ("a box 10cm x 5 x 2", (100.0, 50.0, 20.0)),
+        ("a car 400 in length", (10160.0, 400.0)),
+        ("5 \u0131nches, 7 inche\u017f", (5.0, 7.0)),
+    ],
+    ids=[
+        "mm",
+        "a box in cm",
+        "metres and mm",
+        "inches and feet",
+        "thousands",
+        "bare",
+        "none",
+        "a unit run into a word of another script",
+        "the last unit serves the lengths after it",
+        "in before a word read both ways",
+        "a look-alike letter is no unit",
+    ],
+)
+def test_the_lengths_a_message_states_are_read_in_millimetres(text, lengths):
+    assert stated_lengths(text) == pytest.approx(lengths)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["1" + " " * 20_000 + "-" + " " * 20_000 + "q"],
+    ids=["a long gap"],
+)
+def test_a_long_message_is_read_in_time_in_proportion_to_its_length(text):
+    # A message has no length limit, and a reading whose time grows with the
+    # square of a run's length held a turn for minutes on one long enough.
+    started = time.perf_counter()
+    stated_lengths(text)
+    assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.parametrize(
+    "text", ["1x" * 200_000, "1 " * 1_000_000], ids=["a long box", "many lengths"]
+)
+def test_a_long_message_costs_little_memory_to_read(text):
+    # A repetition with no bound held regex memory for every character of a
+    # long box, and every length read is kept for the turn.
+    tracemalloc.start()
+    try:
+        stated_lengths(text)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 10_000_000
+
+
+_RC_CAR = "Make an RC car, 400 mm long, with four wheels on two axles, to print in parts."
+
+
+def _held_to(loop, user_text, call, *, start_size_mm=None, said_before=None):
+    """What a turn's one build was held to, given the user's words and the call's size.
+
+    ``said_before`` is what the chat route reads from the user's earlier messages.
+    """
+    pipeline = _SizeSpy()
+    provider = ScriptedProvider(
+        [_tool_turn(tool_use_id="tu-1", name=call[0], tool_input=call[1]), _text_turn("done")]
+    )
+    context = _context(pipeline=pipeline, assembly=_spec())
+    context.start_size_mm = start_size_mm
+    context.stated_mm = said_before
+    agent = Agent(provider=provider, model="fake-model")
+    if loop == "run_turn":
+        agent.run_turn(user_text=user_text, context=context)
+    else:
+        list(agent.stream_turn(user_text=user_text, context=context))
+    return [spec.requested_mm for spec in pipeline.assemblies]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_side_the_user_never_gave_is_not_held_to(loop):
+    # Measured: asked for "400 mm long", the orchestrator passed a width and a
+    # height of its own on every call, and builds were refused for missing them.
+    call = ("generate_model", {"spec": "an RC car", "requested_mm": [400, 180, 70]})
+    assert _held_to(loop, _RC_CAR, call) == [(400.0,)]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_one_stated_length_backs_one_side_only(loop):
+    # A width the orchestrator chose that happens to equal the stated length is
+    # still its own choice: "400 mm long" says nothing about the width.
+    call = ("generate_model", {"spec": "an RC car", "requested_mm": [400, 400, 70]})
+    assert _held_to(loop, _RC_CAR, call) == [(400.0,)]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_size_the_user_gave_in_an_earlier_message_still_backs_the_build(loop):
+    # Asked a clarifying question, the user answered with no size: the size given
+    # a message before is still the request.
+    call = ("generate_model", {"spec": "a box", "requested_mm": [300, 200, 100]})
+    held = _held_to(loop, "PLA, please", call, said_before=[300.0, 200.0, 100.0])
+    assert held == [(300.0, 200.0, 100.0)]
+
+
+@pytest.mark.parametrize(
+    "said, requested, backed",
+    [
+        ("sides of 100.6 mm and 101.2 mm", [101.5, 100], [100.6, 101.2]),
+        ("sides of 100.6 mm and 101.2 mm", [100, 101.5], [100.6, 101.2]),
+        ("sides of 100 mm and 101.5 mm", [101, 102.5], [100.0, 101.5]),
+    ],
+    ids=["one order", "the other", "the nearest is not the one to take"],
+)
+def test_which_sides_the_user_backs_does_not_depend_on_their_order(said, requested, backed):
+    # Taken in the order given, or each side taking its nearest length, a side
+    # can take the one length another side needed and leave it nothing.
+    call = ("generate_model", {"spec": "a frame", "requested_mm": requested})
+    [held] = _held_to("run_turn", said, call)
+    assert sorted(held) == backed
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_figure_said_again_in_a_later_message_backs_one_side(loop):
+    # A retry sends the same words again; "400 mm long" twice is still one side.
+    call = ("generate_model", {"spec": "an RC car", "requested_mm": [400, 400, 70]})
+    held = _held_to(loop, "try again, it has to be 400 mm long", call, said_before=[400.0])
+    assert held == [(400.0,)]
+
+
+def test_a_turn_keeps_the_latest_two_thousand_lengths_it_hears():
+    # Every message sent into a turn adds what it says to what the turn keeps.
+    from cadless.agent import heard_lengths
+
+    heard: list[float] = []
+    for message in range(20):
+        heard = heard_lengths(heard, " ".join(f"{message}{side:03d} mm" for side in range(200)))
+    assert len(heard) == 2000
+    assert heard[-1] == 19199.0
+
+
+def test_a_message_keeps_the_first_two_hundred_lengths_it_states():
+    # Every length read is kept for the rest of the turn.
+    assert len(stated_lengths("1 mm, " * 1000)) == 200
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_turn_whose_user_gave_no_size_holds_none(loop):
+    call = ("generate_model", {"spec": "an RC car", "requested_mm": [400, 180, 70]})
+    assert _held_to(loop, "Make an RC car to print in parts.", call) == [None]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_one_side_the_user_gave_is_held_to_alone(loop):
+    call = ("generate_model", {"spec": "an RC car", "requested_mm": [400]})
+    assert _held_to(loop, _RC_CAR, call) == [(400.0,)]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_proportional_resize_of_the_measured_model_holds_all_three(loop):
+    # Two sides are the measured model's times the factor, not the user's words.
+    call = ("edit_model", {"change": "500 mm long", "requested_mm": [500, 300, 112.5]})
+    held = _held_to(loop, "make it 500 mm long", call, start_size_mm=(400.0, 240.0, 90.0))
+    assert held == [(500.0, 300.0, 112.5)]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_new_model_in_the_measured_one_s_proportions_is_no_resize(loop):
+    # A box twice a measured cube is still a new model, and its sides the
+    # orchestrator's own but for the one the user gave.
+    call = ("generate_model", {"spec": "a box", "requested_mm": [100, 100, 100]})
+    held = _held_to(loop, "now a box 100 mm long", call, start_size_mm=(50.0, 50.0, 50.0))
+    assert held == [(100.0,)]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_an_edit_that_is_no_proportional_resize_is_held_to_the_user_s_sides(loop):
+    # Narrower and taller is no resize of the car on screen, whatever it is.
+    call = ("edit_model", {"change": "500 mm long", "requested_mm": [500, 200, 150]})
+    held = _held_to(loop, "make it 500 mm long", call, start_size_mm=(400.0, 240.0, 90.0))
+    assert held == [(500.0,)]
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_build_measured_in_another_unit_is_no_size_to_resize_from(loop):
+    # With no size in millimetres at the start, a build's box is in the script's
+    # own unit; a resize taken from it would hold the build to inch figures.
+    pipeline = _MeasuredSpy((20.0, 12.0, 4.5))
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="edit_model", tool_input={"change": "a lid"}),
+            _tool_turn(
+                tool_use_id="tu-2",
+                name="edit_model",
+                tool_input={"change": "25 inches long", "requested_mm": [25, 15, 5.625]},
+            ),
+            _text_turn("done"),
+        ]
+    )
+    context = _context(pipeline=pipeline, assembly=_spec())
+    agent = Agent(provider=provider, model="fake-model")
+    asked = "add a lid, then make it 25 inches long"
+    if loop == "run_turn":
+        agent.run_turn(user_text=asked, context=context)
+    else:
+        list(agent.stream_turn(user_text=asked, context=context))
+
+    assert [spec.requested_mm for spec in pipeline.assemblies] == [None, None]
+
+
+class _MeasuredSpy(_SizeSpy):
+    """A pipeline stand-in whose every build measures ``bbox``."""
+
+    def __init__(self, bbox) -> None:
+        super().__init__()
+        self.bbox = bbox
+
+    def run(self, intent, *args, **kwargs):
+        from dataclasses import replace
+
+        return replace(super().run(intent, *args, **kwargs), bbox=self.bbox)
+
+
+@pytest.mark.parametrize("loop", ["run_turn", "stream_turn"])
+def test_a_resize_after_a_build_in_the_turn_is_taken_from_that_build(loop):
+    # Once an edit has changed the model, the instructions take the factor from
+    # that build's size; the size the turn started on is no longer the model's.
+    pipeline = _MeasuredSpy((400.0, 240.0, 130.0))
+    provider = ScriptedProvider(
+        [
+            _tool_turn(
+                tool_use_id="tu-1", name="edit_model", tool_input={"change": "add a spoiler"}
+            ),
+            _tool_turn(
+                tool_use_id="tu-2",
+                name="edit_model",
+                tool_input={"change": "500 mm long", "requested_mm": [500, 300, 162.5]},
+            ),
+            _text_turn("done"),
+        ]
+    )
+    context = _context(pipeline=pipeline, assembly=_spec())
+    context.start_size_mm = (400.0, 240.0, 90.0)
+    agent = Agent(provider=provider, model="fake-model")
+    asked = "add a rear spoiler, then make it 500 mm long"
+    if loop == "run_turn":
+        agent.run_turn(user_text=asked, context=context)
+    else:
+        list(agent.stream_turn(user_text=asked, context=context))
+
+    assert [spec.requested_mm for spec in pipeline.assemblies] == [None, (500.0, 300.0, 162.5)]
 
 
 def _edit_then_generate_turns():

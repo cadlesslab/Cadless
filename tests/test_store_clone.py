@@ -103,3 +103,27 @@ def test_clone_missing_project_returns_none(tmp_path):
         assert await s.clone_project(9999) is None
 
     run(go())
+
+
+def test_a_clone_keeps_the_times_of_the_versions_and_messages_it_copies(tmp_path):
+    # Which earlier messages back a requested size is read off these times: a copy
+    # stamped now would count every copied message as written after its model.
+    async def go():
+        s = _store(tmp_path)
+        await s.init()
+        p = await s.create_project("Box")
+        sess = await s.get_or_create_session(p.id)
+        await s.add_message(sess.id, "user", "a box 300 x 200 x 100 mm")
+        v = await s.add_version(p.id, "box", "result = 1", ok=True, volume=1.0, bbox=(1, 1, 1))
+        await s.add_message(sess.id, "assistant", "done", version_id=v.id)
+        await s.set_current_version(p.id, v.id)
+
+        clone = await s.clone_project(p.id)
+        copied = await s.list_messages((await s.get_or_create_session(clone.id)).id)
+
+        assert [x.created_at for x in await s.list_versions(clone.id)] == [v.created_at]
+        assert [m.created_at for m in copied] == [
+            m.created_at for m in await s.list_messages(sess.id)
+        ]
+
+    run(go())

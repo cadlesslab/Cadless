@@ -48,6 +48,7 @@ build came back as: one part, a measured split, or parts nothing could measure.
 
 from __future__ import annotations
 
+import itertools
 import math
 import reprlib
 import time
@@ -57,7 +58,12 @@ from dataclasses import dataclass, field
 
 from cadless.assembly_tree import readable, unnamed
 from cadless.print_fit import _dimensions, _number, too_big_for
-from cadless.printer_profile import AssemblySpec, BuildVolume
+from cadless.printer_profile import (
+    AssemblySpec,
+    BuildVolume,
+    requested_lengths,
+    requested_phrase,
+)
 
 #: How far apart two parts may sit and still count as mating, as a multiple of the
 #: joint clearance.
@@ -383,24 +389,26 @@ def evaluate_lone_part(
 def evaluate_requested_size(
     bbox: Sequence[float] | None, spec: AssemblySpec, *, export_scale: float = 1.0
 ) -> AssemblyReport:
-    """Check the whole build against the overall size the request gave.
+    """Check the whole build against the overall sides the request gave.
 
     Nothing where ``spec`` carries no requested size. Otherwise ``bbox`` -- the
     worker's box around every part as placed, in authoring units, brought to
-    millimetres by ``export_scale`` -- is compared with the requested size
-    dimension by dimension, both sorted, so which way the model lies on the bed
-    is left to the split. One sentence names both sizes when a dimension is off
-    by more than its slack; a box or a requested size that is not three usable
-    lengths is reported as unchecked rather than passed, as the fit is.
+    millimetres by ``export_scale`` -- must have a side within the slack of each
+    requested length, a different side for each, so which way the model lies on
+    the bed is left to the split and a side the request left open holds nothing.
+    One sentence names the build's size and what was asked for when its sides
+    cannot keep every requested length, a different side for each; a box or a
+    requested size that cannot be read is
+    reported as unchecked rather than passed, as the fit is.
     """
     report = AssemblyReport()
     if spec.requested_mm is None:
         return report
-    requested = _dimensions(spec.requested_mm)
-    if requested is None or min(requested) <= 0:
+    requested = requested_lengths(spec.requested_mm)
+    if requested is None:
         report.unchecked.append(
-            "overall size against the request: the requested size is not three "
-            "positive finite lengths"
+            "overall size against the request: the requested size is not one to "
+            "three positive finite lengths"
         )
         return report
     scale = _length_scale(export_scale)
@@ -416,17 +424,25 @@ def evaluate_requested_size(
             "overall size against the request: the build's bounding box is not three finite lengths"
         )
         return report
-    if any(
-        abs(have - want) > max(REQUESTED_SIZE_SLACK_MM, want * REQUESTED_SIZE_SLACK_FRACTION)
-        for have, want in zip(sorted(size), sorted(requested), strict=True)
+    if not any(
+        all(
+            abs(have - want) <= requested_slack(want)
+            for have, want in zip(sides, requested, strict=True)
+        )
+        for sides in itertools.permutations(size, len(requested))
     ):
         report.failures.append(
             f"the whole build is {_size(size)} mm, but the request asked for "
-            f"{_size(requested)} mm: keep every dimension the request gives and meet "
+            f"{requested_phrase(requested)}: keep every dimension the request gives and meet "
             "the bed by splitting the model into parts that each fit it, never by "
             "shrinking or enlarging the model"
         )
     return report
+
+
+def requested_slack(length: float) -> float:
+    """How far a side may stand from a requested ``length`` and still keep it, in mm."""
+    return max(REQUESTED_SIZE_SLACK_MM, length * REQUESTED_SIZE_SLACK_FRACTION)
 
 
 def _check_fit(

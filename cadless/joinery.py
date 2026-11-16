@@ -99,9 +99,9 @@ def script_namespace() -> dict[str, object]:
 
 def split_and_join(
     part,
-    plane: Plane,
-    insert_along,
-    clearance: float,
+    plane: Plane | None = None,
+    insert_along=None,
+    clearance: float | None = None,
     *,
     names: tuple[str, str] | None = None,
 ) -> tuple[Solid, Solid]:
@@ -120,12 +120,19 @@ def split_and_join(
     the tabs or pegs, and the half the normal points into, which carries the
     sockets. They are labelled from ``names``, or from the part's own label.
 
+    ``plane``, ``insert_along`` and ``clearance`` are all required. They default
+    to ``None`` only so that a call leaving one out is refused like any other
+    mistake, with a :class:`JoineryError` naming what to pass: the brief sends a
+    script to that message, and Python's own complaint names the argument and
+    nothing about what it should be.
+
     Raises :class:`JoineryError`, saying what to change, when
 
-    - ``part`` is not one solid, or ``plane`` is not a Plane or misses the part;
-    - ``clearance`` is outside what a printer holds;
-    - ``insert_along`` is not one of the six axis directions, or neither lies in
-      the plane nor runs along its normal;
+    - ``part`` is not one solid, or ``plane`` is missing, is not a Plane or
+      misses the part;
+    - ``clearance`` is missing or outside what a printer holds;
+    - ``insert_along`` is missing, is not one of the six axis directions, or
+      neither lies in the plane nor runs along its normal;
     - a side of the cut comes out in several pieces;
     - no place on the cut face holds a joint, or every socket that would fit
       would cut through the part beyond the cut face;
@@ -206,6 +213,11 @@ def _pegs_instead(across, section, plane, ahead, clearance, margin) -> str:
 
 
 def _check_clearance(clearance) -> None:
+    if clearance is None:
+        raise JoineryError(
+            "clearance is missing: pass clearance= with the joint clearance the brief "
+            "gives for this printer, in millimetres"
+        )
     # A bool is an int to isinstance, and True would pass as a millimetre.
     number = isinstance(clearance, int | float) and not isinstance(clearance, bool)
     if not number or not _CLEARANCE_LEAST <= clearance <= _CLEARANCE_MOST:
@@ -238,13 +250,15 @@ def _name(axis: Vector) -> str:
     return sign + letter
 
 
-def _describe(plane: Plane) -> str:
-    def number(value: float) -> str:
-        return f"{round(value, 2) + 0.0:g}"
+def _figure(value: float, places: int) -> str:
+    """A coordinate or a length for a sentence: rounded, and never ``-0``."""
+    return f"{round(value, places) + 0.0:g}"
 
+
+def _describe(plane: Plane) -> str:
     origin, normal = Vector(plane.origin), Vector(plane.z_dir).normalized()
-    at = ", ".join(number(v) for v in (origin.X, origin.Y, origin.Z))
-    facing = ", ".join(number(v) for v in (normal.X, normal.Y, normal.Z))
+    at = ", ".join(_figure(v, 2) for v in (origin.X, origin.Y, origin.Z))
+    facing = ", ".join(_figure(v, 2) for v in (normal.X, normal.Y, normal.Z))
     return f"the plane through ({at}) facing ({facing})"
 
 
@@ -255,11 +269,38 @@ def _one_solid(part) -> Solid:
         )
     solids = part.solids()
     if len(solids) != 1:
+        # Both ways a part comes apart were seen in generated scripts: a pedestal
+        # built to stand just above its base, and axle holes wider than the plate
+        # they cross. Cutting each solid on its own, as this once advised, leaves
+        # such a piece floating, and only the solids' sizes and places say which
+        # piece is the one cut off.
         raise JoineryError(
-            f"split_and_join cuts one solid at a time: got {len(solids)}; pass each solid "
-            "to it on its own"
+            f"split_and_join cuts one solid at a time, and this part is {len(solids)} "
+            f"separate solids: {_solids(solids)}. Either pieces it was built from do not "
+            "touch, so a union leaves them apart, or a cut -- a hole, a pocket, a window "
+            "-- goes right through it and severs it. Make pieces that belong together "
+            "overlap so they fuse into one solid, keep every cut short of severing the "
+            "part, and make a piece meant to stay apart a part of its own"
         )
     return solids[0]
+
+
+#: Solids a refusal describes one by one, the largest first; the rest are counted.
+_SOLIDS_NAMED = 4
+
+
+def _solids(solids) -> str:
+    """The largest solids' sizes and centres, for a sentence, and how many more."""
+    ranked = sorted(solids, key=lambda solid: solid.volume, reverse=True)
+    named = []
+    for solid in ranked[:_SOLIDS_NAMED]:
+        box = solid.bounding_box()
+        size = " x ".join(_figure(v, 1) for v in (box.size.X, box.size.Y, box.size.Z))
+        middle = box.center()
+        centre = ", ".join(_figure(v, 1) for v in (middle.X, middle.Y, middle.Z))
+        named.append(f"{size} mm at ({centre})")
+    more = len(ranked) - len(named)
+    return "; ".join(named) + (f"; and {more} more" if more else "")
 
 
 def _halves(solid: Solid, plane: Plane, where: str) -> tuple[Solid, Solid]:

@@ -7,6 +7,7 @@ from cadless.llm.providers import StreamChunk
 from cadless.llm.types import StopReason, StreamEvent
 from cadless.printer_profile import AssemblySpec, BuildVolume
 from cadless.prompts import (
+    _OPEN_SIDES,
     REFERENCE_IMAGE_INSTRUCTION,
     CodeGenerator,
     CutOffScript,
@@ -225,6 +226,18 @@ def test_the_brief_refuses_a_seam_made_any_other_way():
     # A plain cut passes every check there is, since nothing measures the joint.
     brief = " ".join(_assembly_rules(_SPEC).split())
     assert "A seam made any other way -- a plain cut, a flat butt face" in brief
+
+
+def test_the_brief_hands_the_helper_one_fused_solid():
+    # A body with a spoiler or a pedestal built to stand just off it unions into
+    # several solids, and the helper refuses every one of them.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "Hand it one solid: overlap the pieces a part is built from" in brief
+
+
+def test_the_edit_rules_hand_the_helper_one_fused_solid():
+    rules = " ".join(_assembly_edit_rules(_SPEC).split())
+    assert "handing it one solid, the part's pieces overlapping" in rules
 
 
 def test_the_brief_says_what_to_change_when_the_helper_refuses():
@@ -1066,6 +1079,32 @@ def test_the_edit_rules_state_the_overall_size_the_request_gave():
         requested_mm=(500.0, 250.0, 400.0),
     )
     assert "overall size as 500 x 250 x 400 mm" in _assembly_edit_rules(spec)
+
+
+def _asking_for(*sides: float) -> AssemblySpec:
+    return AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0),
+        clearance_mm=0.35,
+        requested_mm=sides,
+    )
+
+
+def test_the_brief_names_one_requested_side_and_leaves_the_rest_to_the_design():
+    # Read as a whole size, one length left the model to invent the others.
+    brief = " ".join(_assembly_rules(_asking_for(400.0)).split())
+    assert "it asks for the whole to measure 400 mm along one side" in brief
+    assert "the sides it leaves open are the design's own" in brief
+
+
+def test_the_edit_rules_name_two_requested_sides_and_leave_the_third_open():
+    rules = " ".join(_assembly_edit_rules(_asking_for(400.0, 180.0)).split())
+    assert "overall size as 400 mm and 180 mm along two sides" in rules
+    assert "the sides it leaves open are the design's own" in rules
+
+
+def test_a_whole_requested_size_leaves_no_side_open():
+    assert _OPEN_SIDES not in _assembly_rules(_asking_for(500.0, 250.0, 400.0))
+    assert _OPEN_SIDES not in _assembly_edit_rules(_asking_for(500.0, 250.0, 400.0))
 
 
 def test_a_brief_without_a_size_names_none():

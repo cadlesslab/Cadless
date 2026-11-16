@@ -186,15 +186,24 @@ candidate judging, the identity seam and the image decisions are recorded under
    the record does *not* hold is the machine: which bed and which clearance apply
    are read from the settings saved now, so changing printer changes what an edit
    must satisfy rather than pinning it to the one it was first built for. Where
-   the user gave the overall size, that reaches every call too and every build is
-   held to it: the orchestrator states it with the build call, and the first
-   statement in a turn holds for the rest of it — until the user sends another
+   the user gave an overall size — one, two or all three sides — that reaches
+   every call too and every build is held to it: the orchestrator states it with
+   the build call, and the engine keeps only the sides the user's own words give
+   — the turn's messages and the user's earlier ones since the current model was
+   built, by when each was written, a copy keeping the times of what it copies
+   (not one sent into an earlier running turn), read from what the user
+   typed rather than from the replayed history, which carries model-written
+   readings and synopses — since the orchestrator otherwise fills in sides of
+   its own and a build would be refused for a number nobody asked for. The first
+   size kept in a turn holds for the rest of it — until the user sends another
    message into the running turn — so a call that restates the request smaller
    after a refusal, or a parameter change made to the same end, is still judged
    against the request. A later turn starts with nothing pinned, so a resize the
    user asks for then is free. A resize that keeps the current model's
    proportions is stated the same way, its three sides the model's measured size
-   times one factor: the context the orchestrator edits from states the size the
+   times one factor, and all three are kept although the user gave one — for an
+   edit of that model or a regeneration of it, never for a new model: the
+   context the orchestrator edits from states the size the
    model was measured at when the turn began, and a build later in the turn
    reports its own, because a constant in the script measures one feature rather
    than the whole model. That size is stated only where the project's scripts
@@ -293,8 +302,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    them. A parameter change, from the chat or the parameter panel, is a new
    version rather than a re-run: rebuilt once with no model and judged as a
    build's last attempt is — held to every check when the turn asked for an
-   assembly or the model was built as one, and to an overall size a build call
-   stated earlier in the same turn, and refused when its parts fail or
+   assembly or the model was built as one, and to an overall size pinned
+   earlier in the same turn, and refused when its parts fail or
    cannot be checked; any other is kept with the verdict on it — and its
    findings go back to where the edit was made.
 7. After the checks accept a multi-part build, and only then, the turn describes
@@ -360,6 +369,14 @@ catalog content read-only.
 
 ## Gotchas & Non-Obvious Context
 
+- A copy of a catalog item counts its last authored step's prompt among the
+  user's words since the current model was built: the catalog writes a step's
+  messages after that step's model. Its figures can only back sides a build
+  call states.
+- A requested size is backed only by lengths written in English units (mm,
+  cm, m, in, ft) or as bare figures, read as millimetres; a size written in
+  another language's unit words backs no side, which holds the build to less
+  and never refuses it.
 - The API and worker share the data volume because the worker writes artifacts
   that the API serves. The catalog mount is separate and read-only at runtime.
 - `CADLESS_WORKER_URL` changes the process boundary, not the pipeline contract.
