@@ -108,9 +108,22 @@ def test_interpenetrating_parts_record_where_they_share_volume():
     assert box == pytest.approx([9.0, -10.0, -5.0, 10.0, 10.0, 5.0], abs=1e-6)
 
 
-def test_touching_parts_record_nowhere_shared():
+def test_parts_that_only_touch_are_not_asked_where_they_overlap(monkeypatch):
+    # Where two parts share volume costs another intersection, so a pair that
+    # shares none never pays for one.
+    import cadless.assembly_check as module
+
+    asked = []
+    real = module._shared_box
+
+    def counted(*args):
+        asked.append(1)
+        return real(*args)
+
+    monkeypatch.setattr(module, "_shared_box", counted)
     m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)])
     assert m.overlap_boxes == []
+    assert asked == []
 
 
 def test_where_parts_overlap_is_said_in_the_script_s_own_units():

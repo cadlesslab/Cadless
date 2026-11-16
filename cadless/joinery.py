@@ -176,7 +176,7 @@ def split_and_join(
         raise JoineryError(
             f"{where}: no place on the cut face is solid enough for a joint: "
             + _room_needed(across, axis, clearance)
-            + ", move the seam, or insert along another axis"
+            + "; otherwise move the seam, or insert along another axis"
             + ("" if placed else _pegs_instead(across, section, plane, ahead, clearance, margin))
         )
     for tab, socket in joints:
@@ -203,15 +203,15 @@ def _room_needed(across: float, axis: Vector, clearance: float) -> str:
         return (
             f"a dovetail along {along} needs a band of the cut face at least {band} mm "
             f"wide that a line along {along} crosses in one unbroken run of at least "
-            f"{RUN_LEAST:g} mm; make the part thicker there -- a wall at least {band} mm "
+            f"{RUN_LEAST:g} mm, so make the part thicker there: a wall at least {band} mm "
             "thick where the seam crosses it, or a top or floor at least "
             f"{RUN_LEAST:g} mm thick kept whole across it"
         )
     spot = f"{stated_mm(least_peg_spot_mm(clearance)):g}"
     return (
         f"a peg along {along} needs a solid spot of the cut face at least {spot} mm "
-        f"across, clear of every edge and hole; make the part at least {spot} mm thick "
-        "there"
+        f"across, clear of every edge and hole, so make the part at least {spot} mm "
+        "thick there"
     )
 
 

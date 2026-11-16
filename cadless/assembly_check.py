@@ -57,7 +57,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from cadless.assembly_tree import readable, unnamed
-from cadless.joint_sizes import REACH_MOST_MM
+from cadless.joint_sizes import REACH_MOST_MM, pieces_along
 from cadless.print_fit import _dimensions, _number, too_big_for
 from cadless.printer_profile import (
     AssemblySpec,
@@ -166,10 +166,11 @@ class AssemblyMeasurements:
     volume the two share, ``[i, j, x0, y0, z0, x1, y1, z1]`` in the script's own
     coordinates, so a refusal can say where to look. ``freed_without_overlaps``
     is whether an order is found once each overlapping pair is let pass through
-    the other: ``None`` where nothing ruled it -- an order was found, nothing
-    overlaps, or that second search could not finish. Both are kept apart from
-    the tables a verdict is read from, so a reader of another release loses a
-    sentence's detail, never a verdict.
+    the other, after a search that trapped parts while parts overlap; ``None``
+    wherever no such second search ruled -- it was never needed or never
+    reached, or it could not finish. Both are kept apart from the tables a
+    verdict is read from, so a reader of another release loses a sentence's
+    detail, never a verdict.
     """
 
     part_bboxes: list[list[float]] = field(default_factory=list)
@@ -195,8 +196,8 @@ class AssemblyMeasurements:
         A table that is there but is no list is read as empty and said to be,
         where read as it came a number raised and text was read a letter to an
         entry. It is said in the words of the check it measured for, so a check
-        that is not faced is not refused over it; the headings are judged by
-        nothing, so theirs is dropped unsaid.
+        that is not faced is not refused over it; a table no check judges -- the
+        headings, where overlaps sit -- is dropped unsaid.
         """
         if not isinstance(data, dict):
             return None
@@ -527,56 +528,57 @@ def _cuts(size: tuple[float, float, float], volume: BuildVolume) -> str:
 def _pieces(
     size: tuple[float, float, float], limits: tuple[float, float, float]
 ) -> tuple[int, int, int]:
-    """Pieces per axis that straight cuts leave, each within its limit with its joint.
-
-    Every seam adds its joint's reach to the piece behind it, so ``n`` pieces
-    span at most ``n * limit - (n - 1) * reach``: counted by the ratio alone, a
-    part just under twice the bed was told two pieces, and the piece carrying the
-    joint came back over the bed. Where a limit is no longer than the reach, no
-    piece can carry a joint at all, and the ratio is the only count left to say.
-    """
+    """Pieces per axis that straight cuts leave, each within its limit with its joint."""
     width, depth, height = (
-        _pieces_along(extent, limit) for extent, limit in zip(size, limits, strict=True)
+        pieces_along(extent, limit) for extent, limit in zip(size, limits, strict=True)
     )
     return width, depth, height
 
 
-def _pieces_along(extent: float, limit: float) -> int:
-    """Pieces one axis needs: :func:`_pieces` for a single extent and limit."""
-    if extent <= limit:
-        return 1
-    if limit <= REACH_MOST_MM:
-        return math.ceil(extent / limit)
-    return math.ceil((extent - REACH_MOST_MM) / (limit - REACH_MOST_MM))
+def _read_overlaps(
+    m: AssemblyMeasurements, labels: Sequence[str]
+) -> tuple[list[tuple[int, int, float]], list[str]]:
+    """The overlap entries a check can rule on, and why each of the others cannot be.
+
+    One reading with two readers: the overlap check refuses what it reads, and
+    the order check believes "only because parts share volume" only beside it.
+    Read twice, the two could disagree about which entries count, and the order
+    sentence would then blame an overlap the overlap check itself could not read.
+    """
+    readable: list[tuple[int, int, float]] = []
+    problems: list[str] = []
+    for entry in m.overlaps:
+        pair = _pair(entry)
+        if pair is None:
+            problems.append(f"overlap between two parts: unreadable entry {_quoted(entry)}")
+            continue
+        first, second, shared = pair
+        if not (0 <= first < len(m.part_bboxes) and 0 <= second < len(m.part_bboxes)):
+            problems.append(f"overlap entry {_quoted(entry)} names a part that does not exist")
+            continue
+        if first == second:
+            # Unlike a gap entry, one that names no pair cannot be passed over:
+            # nothing checks this table for the pairs it leaves out, so it may be
+            # what is left of one that did.
+            problems.append(f"overlap entry {_quoted(entry)} names one part twice")
+            continue
+        if _measurement(shared) is None:
+            problems.append(
+                f"{_SHARED_UNCHECKED_PREFIX} {_at(labels, first)} and {_at(labels, second)}: "
+                f"{shared!r} is not a volume that can be measured"
+            )
+            continue
+        readable.append((first, second, shared))
+    return readable, problems
 
 
 def _check_overlap(
     m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str], *, joined: bool
 ) -> None:
     places = _overlap_places(m.overlap_boxes)
-    for entry in m.overlaps:
-        pair = _pair(entry)
-        if pair is None:
-            report.unchecked.append(f"overlap between two parts: unreadable entry {_quoted(entry)}")
-            continue
-        first, second, shared = pair
-        if not (0 <= first < len(m.part_bboxes) and 0 <= second < len(m.part_bboxes)):
-            report.unchecked.append(
-                f"overlap entry {_quoted(entry)} names a part that does not exist"
-            )
-            continue
-        if first == second:
-            # Unlike a gap entry, one that names no pair cannot be passed over:
-            # nothing checks this table for the pairs it leaves out, so it may be
-            # what is left of one that did.
-            report.unchecked.append(f"overlap entry {_quoted(entry)} names one part twice")
-            continue
-        if _measurement(shared) is None:
-            report.unchecked.append(
-                f"{_SHARED_UNCHECKED_PREFIX} {_at(labels, first)} and {_at(labels, second)}: "
-                f"{shared!r} is not a volume that can be measured"
-            )
-            continue
+    readable, problems = _read_overlaps(m, labels)
+    report.unchecked.extend(problems)
+    for first, second, shared in readable:
         if shared > OVERLAP_EPSILON_MM3:
             # A build nobody asked to join was never told of seams, tabs or a
             # clearance, so its sentence names none of them.
@@ -724,24 +726,15 @@ def _is_permutation(order, count: int) -> bool:
     )
 
 
-def _overlapping(m: AssemblyMeasurements) -> bool:
+def _overlapping(m: AssemblyMeasurements, labels: Sequence[str]) -> bool:
     """Whether a readable entry of ``m.overlaps`` says two of its parts share volume.
 
     The ruling that overlaps alone left no order is believed only beside an
     overlap the same payload shows, since the payload is whatever the script
     printed and the ruling sends the repair to geometry it names.
     """
-    count = len(m.part_bboxes)
-    for entry in m.overlaps:
-        pair = _pair(entry)
-        if pair is None:
-            continue
-        first, second, shared = pair
-        if not (0 <= first < count and 0 <= second < count) or first == second:
-            continue
-        if _measurement(shared) is not None and shared > OVERLAP_EPSILON_MM3:
-            return True
-    return False
+    readable, _problems = _read_overlaps(m, labels)
+    return any(shared > OVERLAP_EPSILON_MM3 for _first, _second, shared in readable)
 
 
 def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str]) -> None:
@@ -776,7 +769,7 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequen
             )
             return
         trapped = ", ".join(_at(labels, index) for index in sorted(m.trapped))
-        if m.freed_without_overlaps is True and _overlapping(m):
+        if m.freed_without_overlaps is True and _overlapping(m, labels):
             # A part sharing volume with another is blocked every way it could
             # move, so the overlaps alone can leave no order; told to reorient a
             # joint there, the repair changed what was never wrong.

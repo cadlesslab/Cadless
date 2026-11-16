@@ -305,24 +305,36 @@ def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
     assert "never shrink" in user.lower()
 
 
+def test_the_brief_s_worked_example_counts_pieces_as_the_check_does():
+    # On a small bed the joint's reach is a large share of a piece, so a panel the
+    # ratio alone cuts in 2 and 3 needs 3 and 4 -- the counts the size refusal
+    # would then give.
+    spec = AssemblySpec(volume=BuildVolume(width=14.0, depth=14.0, height=40.0), clearance_mm=0.2)
+    brief = " ".join(_assembly_rules(spec).split())
+    assert (
+        "17.5 mm wide and 100 mm tall is cut into 3 along its width and 4 along its height" in brief
+    )
+
+
 def test_the_brief_counts_each_seam_s_joint_in_the_piece_that_carries_it():
-    # Sized by the cut alone, a 400 mm chassis was cut in the middle on a 210 mm
-    # bed, and the half carrying the tabs came back 212 mm long.
+    # Sized by the cut alone, a part cut in the middle leaves the half carrying the
+    # tabs over the bed by the joint's reach.
     brief = " ".join(_assembly_rules(_SPEC).split())
     assert "the half behind a seam's plane carries split_and_join's tabs or pegs" in brief
     assert "stand up to 12 mm past the cut" in brief
     assert "6 mm off-centre, toward the half behind it" in brief
 
 
-@pytest.mark.parametrize(("clearance", "band"), [(0.2, "7.1"), (0.5, "7.9")])
-def test_the_brief_states_the_solid_band_a_dovetail_needs_at_its_clearance(clearance, band):
-    # Shells with walls of 2 to 3.75 mm were cut, and no axis found a place.
+@pytest.mark.parametrize(("clearance", "band", "spot"), [(0.2, "7.1", "5.4"), (0.5, "7.9", "6")])
+def test_the_brief_states_the_solid_band_a_dovetail_needs_at_its_clearance(clearance, band, spot):
+    # A shell cut through walls thinner than a joint's band leaves no axis a place.
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=clearance
     )
     brief = " ".join(_assembly_rules(spec).split())
     assert f"a band of the cut face at least {band} mm wide" in brief
     assert f"keeps a wall at least {band} mm thick where a seam crosses it" in brief
+    assert f"for a peg, a solid spot at least {spot} mm across" in brief
 
 
 def test_the_brief_keeps_a_hollow_part_s_top_or_floor_whole_across_a_seam():

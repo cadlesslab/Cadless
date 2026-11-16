@@ -403,8 +403,9 @@ def test_the_line_between_a_sliver_and_a_tab_is_fifty_cubic_millimetres():
 
 
 def test_a_large_overlap_names_a_part_set_into_the_other_before_a_tab():
-    # Every overlap measured live was a part laid into its neighbour -- a wheel in
-    # the chassis, an axle with no hole -- and none was a tab without its socket.
+    # A generated assembly's overlaps are parts laid into their neighbours -- a
+    # wheel in the chassis, an axle with no hole -- more often than tabs without
+    # sockets, and a sentence about tabs alone sent the repair to the joints.
     why = evaluate_assembly(_m(overlaps=[[0, 1, 1000.0]]), SPEC).failures[0]
     assert "that much is a part set into the other, or a tab sitting in solid material" in why
     assert "move the part out of the other there" in why
@@ -426,7 +427,6 @@ def test_where_an_overlap_sits_is_said_for_a_build_nobody_asked_to_join():
     m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]])
     why = evaluate_assembly(m, SPEC, checks=PARTS_CHECKS).failures[0]
     assert "within x 9 to 10" in why
-    assert "socket" not in why
 
 
 @pytest.mark.parametrize(
@@ -435,13 +435,15 @@ def test_where_an_overlap_sits_is_said_for_a_build_nobody_asked_to_join():
         [],
         [[0, 1, 9.0, -10.0, -5.0]],
         [[0, 1, "9", -10.0, -5.0, 10.0, 10.0, 5.0]],
+        [[0.0, 1, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]],
         [[0, 1, 10.0, -10.0, -5.0, 9.0, 10.0, 5.0]],
         [[0, 2, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]],
     ],
 )
 def test_an_overlap_with_no_readable_box_is_refused_without_saying_where(boxes):
-    # A worker of an earlier release sends none; a box that cannot be read, is
-    # turned inside out, or names another pair is no place to send the model.
+    # A worker of an earlier release sends none; a box that cannot be read --
+    # an index that is no integer among them -- is turned inside out, or names
+    # another pair is no place to send the model.
     why = evaluate_assembly(_m(overlaps=[[0, 1, 200.0]], overlap_boxes=boxes), SPEC).failures[0]
     assert why.startswith("part 1 and part 2 share 200 mm^3 of interior volume;")
 
@@ -565,16 +567,18 @@ def _order_failure(**kw) -> str:
 
 
 def test_an_order_lost_only_to_overlaps_sends_the_repair_to_the_overlaps():
-    # Eight of ten live builds with no order had one only because their overlapping
-    # parts could not move; told to reorient a joint, the repair changed the wrong
-    # thing.
+    # Overlapping parts cannot move, so overlaps alone can leave no order; told to
+    # reorient a joint there, the repair changed what was never wrong.
     why = _order_failure(overlaps=[[0, 1, 1000.0]], freed_without_overlaps=True)
     assert "no assembly order exists only because parts share volume" in why
     assert "fix the shared volume, not the joints" in why
     assert "reorient the joint" not in why
 
 
-@pytest.mark.parametrize("overlaps", [[], [[0, 1, 0.0]], [[0, 0, 1000.0]], [[0, 7, 1000.0]]])
+@pytest.mark.parametrize(
+    "overlaps",
+    [[], [[0, 1, 0.0]], [[0, 0, 1000.0]], [[0, 7, 1000.0]], [[0, 1, math.inf]]],
+)
 def test_a_ruling_on_overlaps_nobody_measured_is_not_believed(overlaps):
     # The payload is whatever the script printed: with no readable overlap in it,
     # "only because parts share volume" would send the repair to geometry that

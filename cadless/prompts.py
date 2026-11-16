@@ -21,6 +21,7 @@ from cadless.joint_sizes import (
     RUN_LEAST,
     least_band_mm,
     least_peg_spot_mm,
+    pieces_along,
     stated_mm,
 )
 from cadless.llm.provider import ChatProvider, ImagesUnsupported
@@ -367,6 +368,12 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     size = _requested(spec)
     band = stated_mm(least_band_mm(spec.clearance_mm))
     spot = stated_mm(least_peg_spot_mm(spec.clearance_mm))
+    # The worked example's panel, counted as the size refusal counts it, so the
+    # two never tell the model different numbers for the same part.
+    panel_wide = round(max(volume.width, volume.depth) * 1.25, 1)
+    panel_tall = round(volume.height * 2.5, 1)
+    across = pieces_along(panel_wide, max(volume.width, volume.depth))
+    up = pieces_along(panel_tall, volume.height)
     return (
         f"This part is for a 3D printer whose build volume is {fits}, and it is "
         "too large to print in one piece. Build it as an ASSEMBLY of separate "
@@ -383,9 +390,9 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         f"n times the bed less {fmt(REACH_MOST_MM)} mm for every seam between them, "
         f"and a seam between two halves goes {fmt(REACH_MOST_MM / 2)} mm off-centre, "
         "toward the half behind it, so both come out the same length. On this "
-        f"printer a panel {fmt(round(max(volume.width, volume.depth) * 1.25, 1))} mm "
-        f"wide and {fmt(round(volume.height * 2.5, 1))} mm tall is cut into 2 along "
-        "its width and 3 along its height, however thin it is.\n"
+        f"printer a panel {fmt(panel_wide)} mm wide and {fmt(panel_tall)} mm tall is "
+        f"cut into {across} along its width and {up} along its height, however thin "
+        "it is.\n"
         "  * Keep every dimension the request gives"
         + (
             (
@@ -426,7 +433,7 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         "  * split_and_join needs solid material where it cuts: for a dovetail, a band "
         f"of the cut face at least {fmt(band)} mm wide that a line along insert_along "
         f"crosses in one unbroken run of at least {fmt(RUN_LEAST)} mm; for a peg, a "
-        f"solid spot {fmt(spot)} mm across. A hollow part -- a shell, a body, a hull -- "
+        f"solid spot at least {fmt(spot)} mm across. A hollow part -- a shell, a body, a hull -- "
         f"keeps a wall at least {fmt(band)} mm thick where a seam crosses it, or its "
         f"top or floor at least {fmt(RUN_LEAST)} mm thick whole across the seam, never "
         "cut away there by its own cavity.\n"

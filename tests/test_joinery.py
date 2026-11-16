@@ -448,7 +448,10 @@ def test_a_shell_too_thin_for_a_dovetail_is_told_the_band_one_needs(clearance, b
     why = str(refused.value)
     assert f"a band of the cut face at least {band} mm wide" in why
     assert f"a wall at least {band} mm thick where the seam crosses it" in why
-    assert "a top or floor at least 3 mm thick kept whole across it" in why
+    assert why.endswith(
+        "or a top or floor at least 3 mm thick kept whole across it; otherwise move the "
+        "seam, or insert along another axis"
+    )
 
 
 def test_a_rod_too_thin_for_a_peg_is_told_the_spot_one_needs():
