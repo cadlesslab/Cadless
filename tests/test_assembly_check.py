@@ -423,6 +423,19 @@ def test_an_overlap_s_refusal_says_where_the_parts_share_volume():
     assert "within x 9 to 10, y -10 to 10, z -5 to 5 in the script's coordinates" in why
 
 
+def test_where_an_overlap_sits_is_said_to_the_scale_of_the_script():
+    # A script written in metres places a 52 x 45 mm overlap at fractions of a unit.
+    m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, 0.0, -0.026, 0.0, 0.052, 0.026, 0.045]])
+    why = evaluate_assembly(m, SPEC).failures[0]
+    assert "within x 0 to 0.052, y -0.026 to 0.026, z 0 to 0.045" in why
+
+
+def test_a_coordinate_rounded_to_nothing_is_never_said_as_minus_zero():
+    m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, -0.004, -10.0, -5.0, 10.0, 10.0, 5.0]])
+    why = evaluate_assembly(m, SPEC).failures[0]
+    assert "within x 0 to 10," in why
+
+
 def test_where_an_overlap_sits_is_said_for_a_build_nobody_asked_to_join():
     m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]])
     why = evaluate_assembly(m, SPEC, checks=PARTS_CHECKS).failures[0]
@@ -570,8 +583,8 @@ def test_an_order_lost_only_to_overlaps_sends_the_repair_to_the_overlaps():
     # Overlapping parts cannot move, so overlaps alone can leave no order; told to
     # reorient a joint there, the repair changed what was never wrong.
     why = _order_failure(overlaps=[[0, 1, 1000.0]], freed_without_overlaps=True)
-    assert "no assembly order exists only because parts share volume" in why
-    assert "fix the shared volume, not the joints" in why
+    assert "no assembly order exists while parts share volume" in why
+    assert "fix the shared volume first" in why
     assert "reorient the joint" not in why
 
 
@@ -581,7 +594,7 @@ def test_an_order_lost_only_to_overlaps_sends_the_repair_to_the_overlaps():
 )
 def test_a_ruling_on_overlaps_nobody_measured_is_not_believed(overlaps):
     # The payload is whatever the script printed: with no readable overlap in it,
-    # "only because parts share volume" would send the repair to geometry that
+    # "while parts share volume" would send the repair to geometry that
     # was never measured.
     why = _order_failure(overlaps=overlaps, freed_without_overlaps=True)
     assert "reorient the joint so it slides in along one axis" in why
@@ -591,7 +604,7 @@ def test_a_ruling_on_overlaps_nobody_measured_is_not_believed(overlaps):
 def test_an_order_the_overlaps_do_not_explain_keeps_its_own_sentence(freed):
     why = _order_failure(overlaps=[[0, 1, 1000.0]], freed_without_overlaps=freed)
     assert "reorient the joint so it slides in along one axis" in why
-    assert "only because parts share volume" not in why
+    assert "while parts share volume" not in why
 
 
 # --- fail closed ----------------------------------------------------------

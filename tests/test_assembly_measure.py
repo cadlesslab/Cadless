@@ -126,6 +126,40 @@ def test_parts_that_only_touch_are_not_asked_where_they_overlap(monkeypatch):
     assert asked == []
 
 
+def test_where_parts_overlap_is_charged_to_the_measurement_s_budget():
+    # Two probes for the pair, and none left for its box: the overlap is still
+    # recorded, and where it sits is not.
+    m = measure_assembly([Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10)], probe_budget=2)
+    assert len(m.overlaps) == 1
+    assert m.overlap_boxes == []
+
+
+def test_a_budget_spent_mid_pairs_keeps_where_the_measured_pairs_overlap():
+    # The first pair overlaps and is placed; the budget runs out on the next.
+    parts = [Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10), Pos(0, 0, 30) * Box(10, 10, 10)]
+    m = measure_assembly(parts, probe_budget=3)
+    assert any("ran out of budget" in reason for reason in m.unchecked)
+    assert [entry[:2] for entry in m.overlap_boxes] == [[0, 1]]
+
+
+def test_only_overlaps_past_the_kernel_s_noise_let_a_pair_pass_through(monkeypatch):
+    # A shared volume at rounding noise is no overlap and blocks nothing, so only
+    # the real one is let pass in the second search.
+    import cadless.assembly_check as module
+
+    seen = {}
+
+    def capture(parts, budget, scene=None, labels=None, ignoring=None):
+        seen["ignoring"] = ignoring
+        return None, [0, 1], [], []
+
+    monkeypatch.setattr(module, "_disassembly_order", capture)
+    module._freed_without_overlaps(
+        [Box(1, 1, 1)] * 3, None, None, None, [[0, 1, 200.0], [1, 2, 1e-12]]
+    )
+    assert seen["ignoring"] == {0: {1}, 1: {0}}
+
+
 def test_where_parts_overlap_is_said_in_the_script_s_own_units():
     # Measured in millimetres from a script written in centimetres: the script
     # places them, and reads where they meet, ten times smaller.

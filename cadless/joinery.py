@@ -198,8 +198,10 @@ def _room_needed(across: float, axis: Vector, clearance: float) -> str:
     socket's flanks, clearance and margin -- because the root alone with its
     margin read as a far narrower wall than any joint fits, and shells were made
     that thin. Rounded up, so a part made to the figure takes the joint. A hollow
-    part is told where its room usually is: a wall that thick, or a top or floor
-    its own cavity has not cut away.
+    part is told where its room can be: a wall that thick running along the axis,
+    or, only where the part is open on one side, the top or floor opposite the
+    opening -- a closed box's top and floor are two runs to a line along the
+    axis, and no band.
     """
     along = _name(axis)
     if across <= _EPS:
@@ -208,8 +210,9 @@ def _room_needed(across: float, axis: Vector, clearance: float) -> str:
             f"a dovetail along {along} needs a band of the cut face at least {band} mm "
             f"wide that a line along {along} crosses in one unbroken run of at least "
             f"{RUN_LEAST:g} mm, so make the part thicker there: a wall at least {band} mm "
-            "thick where the seam crosses it, or a top or floor at least "
-            f"{RUN_LEAST:g} mm thick kept whole across it"
+            f"thick running along {along} where the seam crosses it, or, in a part open "
+            "on one side, the top or floor opposite the opening at least "
+            f"{RUN_LEAST:g} mm thick and kept whole across it"
         )
     spot = f"{stated_mm(least_peg_spot_mm(clearance)):g}"
     return (

@@ -39,13 +39,14 @@ def pieces_along(extent: float, limit: float) -> int:
     Every seam adds its joint's reach to the piece behind it, so ``n`` pieces
     span at most ``n * limit - (n - 1) * REACH_MOST_MM``: counted by the ratio
     alone, a part just under twice the bed was told two pieces, and the piece
-    carrying the joint came back over the bed. Where the limit is no longer
-    than the reach, no piece can carry a joint at all, and the ratio is the only
-    count left to give.
+    carrying the joint came back over the bed. Where the limit leaves no more
+    than the reach past a joint -- twice the reach or less -- the count runs away
+    as the two close, to hundreds of thousands of pieces a hair over the reach,
+    so the ratio is given there instead: no bed that small takes a joint anyway.
     """
     if extent <= limit:
         return 1
-    if limit <= REACH_MOST_MM:
+    if limit <= 2 * REACH_MOST_MM:
         return math.ceil(extent / limit)
     return math.ceil((extent - REACH_MOST_MM) / (limit - REACH_MOST_MM))
 

@@ -447,11 +447,24 @@ def test_a_shell_too_thin_for_a_dovetail_is_told_the_band_one_needs(clearance, b
 
     why = str(refused.value)
     assert f"a band of the cut face at least {band} mm wide" in why
-    assert f"a wall at least {band} mm thick where the seam crosses it" in why
+    assert f"a wall at least {band} mm thick running along +Z where the seam crosses it" in why
+    # A top or floor holds the band only where a line along the axis crosses it
+    # alone: a closed box's top and floor are two runs, and refused.
     assert why.endswith(
-        "or a top or floor at least 3 mm thick kept whole across it; otherwise move the "
-        "seam, or insert along another axis"
+        "or, in a part open on one side, the top or floor opposite the opening at least "
+        "3 mm thick and kept whole across it; otherwise move the seam, or insert along "
+        "another axis"
     )
+
+
+def test_a_top_holds_a_dovetail_only_where_the_part_is_open_below_it():
+    # What the brief and the refusal tell a hollow part: a line along the axis
+    # crosses an open shell's top alone, and a closed box's top and floor as two
+    # runs, which is no band.
+    split_and_join(_shell(3), SEAM, Axis.Z, CLEARANCE)
+
+    with pytest.raises(JoineryError, match="no place on the cut face"):
+        split_and_join(Box(300, 120, 80) - Box(294, 114, 74), SEAM, Axis.Z, CLEARANCE)
 
 
 def test_a_rod_too_thin_for_a_peg_is_told_the_spot_one_needs():

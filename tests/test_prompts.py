@@ -306,13 +306,13 @@ def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
 
 
 def test_the_brief_s_worked_example_counts_pieces_as_the_check_does():
-    # On a small bed the joint's reach is a large share of a piece, so a panel the
-    # ratio alone cuts in 2 and 3 needs 3 and 4 -- the counts the size refusal
+    # On a short bed the joint's reach is a large share of a piece, so a panel the
+    # ratio alone cuts in 3 along its height needs 4 -- the count the size refusal
     # would then give.
     spec = AssemblySpec(volume=BuildVolume(width=14.0, depth=14.0, height=40.0), clearance_mm=0.2)
     brief = " ".join(_assembly_rules(spec).split())
     assert (
-        "17.5 mm wide and 100 mm tall is cut into 3 along its width and 4 along its height" in brief
+        "17.5 mm wide and 100 mm tall is cut into 2 along its width and 4 along its height" in brief
     )
 
 

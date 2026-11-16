@@ -541,7 +541,7 @@ def _read_overlaps(
     """The overlap entries a check can rule on, and why each of the others cannot be.
 
     One reading with two readers: the overlap check refuses what it reads, and
-    the order check believes "only because parts share volume" only beside it.
+    the order check believes "while parts share volume" only beside it.
     Read twice, the two could disagree about which entries count, and the order
     sentence would then blame an overlap the overlap check itself could not read.
     """
@@ -771,13 +771,16 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequen
         trapped = ", ".join(_at(labels, index) for index in sorted(m.trapped))
         if m.freed_without_overlaps is True and _overlapping(m, labels):
             # A part sharing volume with another is blocked every way it could
-            # move, so the overlaps alone can leave no order; told to reorient a
-            # joint there, the repair changed what was never wrong.
+            # move, so the overlaps can leave no order on their own; told to
+            # reorient a joint there, the repair changed what was never measured
+            # wrong. Letting a pair pass through each other ignores every way the
+            # two block each other, not only the volume they share, so this says
+            # what comes first and not that nothing else is wrong.
             report.failures.append(
-                f"no assembly order exists only because parts share volume: {trapped} "
-                "cannot be brought into place while a part that shares volume with another "
-                "cannot move at all, and with each overlapping pair let pass through each "
-                "other every part comes out; fix the shared volume, not the joints"
+                f"no assembly order exists while parts share volume: {trapped} cannot be "
+                "brought into place, a part that shares volume with another cannot move "
+                "at all, and with each overlapping pair let pass through each other every "
+                "part comes out; fix the shared volume first"
             )
             return
         report.failures.append(
@@ -966,8 +969,9 @@ def _overlap_places(boxes: list[list[float]]) -> dict[tuple[int, int], str]:
         low, high = numbers[:3], numbers[3:]
         if any(start > end for start, end in zip(low, high, strict=True)):
             continue
+        decimals = _decimals(numbers)
         spans = ", ".join(
-            f"{axis} {_coordinate(start)} to {_coordinate(end)}"
+            f"{axis} {_coordinate(start, decimals)} to {_coordinate(end, decimals)}"
             for axis, start, end in zip("xyz", low, high, strict=True)
         )
         places[(min(first, second), max(first, second))] = (
@@ -976,9 +980,23 @@ def _overlap_places(boxes: list[list[float]]) -> dict[tuple[int, int], str]:
     return places
 
 
-def _coordinate(value: float) -> str:
-    """A coordinate for a sentence: rounded past the kernel's noise, and never ``-0``."""
-    return f"{round(value, 1) + 0.0:g}"
+def _decimals(corners: list[float]) -> int:
+    """How many decimals a box's corners are said to: about four figures of its
+    largest, and never fewer than one.
+
+    A fixed tenth read a box in a script written in metres as "x 0 to 0"; four
+    figures say a millimetre box to a tenth and a metre box to a tenth of a
+    millimetre alike, and drop the kernel's noise in both.
+    """
+    largest = max(abs(corner) for corner in corners)
+    if largest == 0.0:
+        return 1
+    return max(1, 3 - math.floor(math.log10(largest)))
+
+
+def _coordinate(value: float, decimals: int) -> str:
+    """A coordinate for a sentence: rounded to ``decimals``, and never ``-0``."""
+    return f"{round(value, decimals) + 0.0:g}"
 
 
 #: How a value a payload sent is quoted in a sentence: enough of it to recognise,
@@ -1238,9 +1256,12 @@ def _freed_without_overlaps(parts, budget, scene, labels, overlaps) -> bool | No
     build whose parts overlap can be trapped by its overlaps alone, and saying
     then that a joint needs reorienting sends the repair to what was never
     wrong. Asked again on what is left of the same budget, so a build that
-    overlaps costs no more time than the measurement was given. ``None`` where
-    the second search could not rule: its reasons are about a build that does
-    not exist, so they are not reported either.
+    overlaps costs no more time than the measurement was given. It is asked of
+    any build trapped while it overlaps, whether or not its order will be
+    judged: the measurement is not told which checks a build faces, and the time
+    is its own share either way. ``None`` where the second search could not
+    rule: its reasons are about a build that does not exist, so they are not
+    reported either.
     """
     partners: dict[int, set[int]] = {}
     for first, second, shared in overlaps:
@@ -1305,7 +1326,10 @@ def _shared_box(first, second, scale: float, budget: _Budget) -> list[float] | N
     z1]`` in the script's own coordinates, or ``None`` where it cannot be had.
 
     Asked only of a pair already measured to overlap, so parts that only touch
-    pay nothing for it, and charged to the budget like any other kernel work. A
+    pay nothing for it, and charged to the budget like any other kernel work.
+    The intersection is made again rather than kept from the volume probe, which
+    every pair makes and the order search reads; a build that overlaps is
+    refused whatever, so the repeat costs only a build already failing. A
     pair overlapping in several places -- an axle through both walls of a
     bracket -- gets one box around all of them. ``None`` is not a fault: the
     overlap is still refused, only without saying where.

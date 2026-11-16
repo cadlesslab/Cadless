@@ -13,6 +13,7 @@ from cadless.joint_sizes import (
     REACH_MOST_MM,
     least_band_mm,
     least_peg_spot_mm,
+    pieces_along,
     stated_mm,
 )
 
@@ -53,6 +54,13 @@ def test_a_dovetail_takes_the_least_band_stated_and_nothing_narrower(clearance):
     split_and_join(Box(300, band + 0.02, 30), SEAM, Axis.Z, clearance)
     with pytest.raises(JoineryError, match="no place on the cut face"):
         split_and_join(Box(300, band - 0.02, 30), SEAM, Axis.Z, clearance)
+
+
+def test_a_bed_side_at_most_twice_the_reach_is_counted_by_the_ratio():
+    # Counted with the joint, a side a hair past the reach would need hundreds of
+    # thousands of pieces; at twice the reach and below, the ratio is said.
+    assert pieces_along(40.0, 2 * REACH_MOST_MM) == 2
+    assert pieces_along(40.0, 2 * REACH_MOST_MM + 0.5) == 3
 
 
 @pytest.mark.parametrize(("width", "height"), [(60, 40), (160, 80)])
