@@ -438,6 +438,26 @@ def test_a_wall_too_thin_for_a_joint_is_refused():
         split_and_join(_shell(1), SEAM, Axis.Z, CLEARANCE)
 
 
+@pytest.mark.parametrize(("clearance", "band"), [(0.2, "7.1"), (0.5, "7.9")])
+def test_a_shell_too_thin_for_a_dovetail_is_told_the_band_one_needs(clearance, band):
+    # "A joint 3 mm across with 1 mm to spare" read as 5 mm; a dovetail needs its
+    # socket's flanks, clearance and margin too, which grow with the clearance.
+    with pytest.raises(JoineryError) as refused:
+        split_and_join(_shell(2), SEAM, Axis.Z, clearance)
+
+    why = str(refused.value)
+    assert f"a band of the cut face at least {band} mm wide" in why
+    assert f"a wall at least {band} mm thick where the seam crosses it" in why
+    assert "a top or floor at least 3 mm thick kept whole across it" in why
+
+
+def test_a_rod_too_thin_for_a_peg_is_told_the_spot_one_needs():
+    with pytest.raises(JoineryError) as refused:
+        split_and_join(_rod(2), SEAM, Axis.X, CLEARANCE)
+
+    assert "a solid spot of the cut face at least 5.4 mm across" in str(refused.value)
+
+
 def test_a_rod_cut_across_but_given_an_axis_in_its_cut_is_told_to_take_the_normal():
     # The commonest refusal live: an axle cut across its length, given an axis in
     # the cut. Pegs fit its face, so the refusal names the axis that takes them.

@@ -46,7 +46,10 @@ from cadless.joint_sizes import (
     ROOT_MOST,
     RUN_LEAST,
     dovetail_reach,
+    least_band_mm,
+    least_peg_spot_mm,
     margin_mm,
+    stated_mm,
 )
 from cadless.printer_profile import PRINTER_PROFILE_LIMITS
 
@@ -170,11 +173,10 @@ def split_and_join(
             "it; insert along another axis, or move the seam"
         )
     if not joints:
-        least = ROOT_LEAST if across <= _EPS else PEG_LEAST
         raise JoineryError(
-            f"{where}: no place on the cut face is solid enough for a joint {least:g} mm "
-            f"across with {margin:g} mm to spare along {_name(axis)}; make the wall thicker "
-            "there, move the seam, or insert along another axis"
+            f"{where}: no place on the cut face is solid enough for a joint: "
+            + _room_needed(across, axis, clearance)
+            + ", move the seam, or insert along another axis"
             + ("" if placed else _pegs_instead(across, section, plane, ahead, clearance, margin))
         )
     for tab, socket in joints:
@@ -183,6 +185,34 @@ def split_and_join(
     first, second = names or (f"{part.label or 'part'} 1", f"{part.label or 'part'} 2")
     behind.label, ahead.label = first, second
     return behind, ahead
+
+
+def _room_needed(across: float, axis: Vector, clearance: float) -> str:
+    """What a joint needs of the cut face, and how a part is made to give it.
+
+    Stated as the whole joint's room -- its least root or diameter with the
+    socket's flanks, clearance and margin -- because the root alone with its
+    margin read as a far narrower wall than any joint fits, and shells were made
+    that thin. Rounded up, so a part made to the figure takes the joint. A hollow
+    part is told where its room usually is: a wall that thick, or a top or floor
+    its own cavity has not cut away.
+    """
+    along = _name(axis)
+    if across <= _EPS:
+        band = f"{stated_mm(least_band_mm(clearance)):g}"
+        return (
+            f"a dovetail along {along} needs a band of the cut face at least {band} mm "
+            f"wide that a line along {along} crosses in one unbroken run of at least "
+            f"{RUN_LEAST:g} mm; make the part thicker there -- a wall at least {band} mm "
+            "thick where the seam crosses it, or a top or floor at least "
+            f"{RUN_LEAST:g} mm thick kept whole across it"
+        )
+    spot = f"{stated_mm(least_peg_spot_mm(clearance)):g}"
+    return (
+        f"a peg along {along} needs a solid spot of the cut face at least {spot} mm "
+        f"across, clear of every edge and hole; make the part at least {spot} mm thick "
+        "there"
+    )
 
 
 def _pegs_instead(across, section, plane, ahead, clearance, margin) -> str:
