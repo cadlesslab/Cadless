@@ -99,6 +99,38 @@ def test_interpenetrating_parts_record_the_shared_volume():
     assert shared == pytest.approx(200.0, rel=1e-3)
 
 
+def test_interpenetrating_parts_record_where_they_share_volume():
+    # One spans x -10..10, the other 9..29: they share x 9..10 across y and z.
+    m = measure_assembly([Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10)])
+    assert len(m.overlap_boxes) == 1
+    first, second, *box = m.overlap_boxes[0]
+    assert {first, second} == {0, 1}
+    assert box == pytest.approx([9.0, -10.0, -5.0, 10.0, 10.0, 5.0], abs=1e-6)
+
+
+def test_touching_parts_record_nowhere_shared():
+    m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)])
+    assert m.overlap_boxes == []
+
+
+def test_where_parts_overlap_is_said_in_the_script_s_own_units():
+    # Measured in millimetres from a script written in centimetres: the script
+    # places them, and reads where they meet, ten times smaller.
+    m = measure_assembly([Box(200, 200, 100), Pos(190, 0, 0) * Box(200, 200, 100)], scale=10.0)
+    _first, _second, *box = m.overlap_boxes[0]
+    assert box == pytest.approx([9.0, -10.0, -5.0, 10.0, 10.0, 5.0], abs=1e-6)
+
+
+def test_an_axle_through_two_walls_overlaps_in_one_box_spanning_both():
+    # A bracket's two walls, joined by its floor, and an axle through both with no
+    # hole: the volume shared is two pieces, and where it sits is around both.
+    bracket = Box(30, 44, 30) - Pos(0, 0, 4) * Box(40, 36, 30)
+    axle = Rot(90, 0, 0) * Cylinder(3, 60)
+    m = measure_assembly([bracket, axle])
+    _first, _second, *box = m.overlap_boxes[0]
+    assert box == pytest.approx([-3.0, -22.0, -3.0, 3.0, 22.0, 3.0], abs=1e-6)
+
+
 # --- gaps -----------------------------------------------------------------
 
 
@@ -149,6 +181,54 @@ def test_a_caged_part_has_no_order_and_is_named():
     m = measure_assembly(_caged())
     assert m.order is None
     assert 0 in m.trapped
+
+
+def _set_into_each_other():
+    """Two blocks sharing 1 mm of their length, and a third standing free above."""
+    return [Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10), Pos(0, 0, 30) * Box(10, 10, 10)]
+
+
+def test_an_order_lost_only_to_an_overlap_is_found_once_the_pair_ignores_itself():
+    # A part sharing volume with another cannot move at all, so the pair is
+    # trapped; let pass through each other, every part comes out.
+    m = measure_assembly(_set_into_each_other())
+    assert m.order is None
+    assert sorted(m.trapped) == [0, 1]
+    assert m.freed_without_overlaps is True
+
+
+def test_an_order_the_overlaps_do_not_explain_is_not_put_down_to_them():
+    # The cage holds its block whatever the overlapping pair beside it does.
+    parts = [*_caged(), Pos(60, 0, 0) * Box(20, 20, 10), Pos(79, 0, 0) * Box(20, 20, 10)]
+    m = measure_assembly(parts)
+    assert m.order is None
+    assert m.freed_without_overlaps is False
+
+
+def test_no_overlap_means_no_second_search():
+    assert measure_assembly(_caged()).freed_without_overlaps is None
+
+
+def test_a_second_search_that_cannot_rule_makes_no_claim(monkeypatch):
+    # Its reason is about a build that does not exist, so it is not reported either.
+    import cadless.assembly_check as module
+
+    real = module._disassembly_order
+
+    def spent_when_ignoring(parts, budget, scene=None, labels=None, ignoring=None):
+        if ignoring:
+            return (
+                None,
+                [],
+                ["assembly order: the search ran out of budget before it could rule"],
+                [],
+            )
+        return real(parts, budget, scene, labels)
+
+    monkeypatch.setattr(module, "_disassembly_order", spent_when_ignoring)
+    m = measure_assembly(_set_into_each_other())
+    assert m.freed_without_overlaps is None
+    assert not any("ran out of budget" in reason for reason in m.unchecked)
 
 
 def test_a_blocker_thinner_than_a_coarse_step_is_not_jumped():
