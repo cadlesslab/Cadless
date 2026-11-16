@@ -126,13 +126,18 @@ def test_the_scoped_view_does_not_ask_a_route_for_an_owner(name):
     )
 
 
-# Two methods deliberately narrow what they forward rather than mirroring the
-# store, and each is a capability a request must not have.
+# Some methods deliberately narrow what they forward rather than mirroring the
+# store, and each narrowing is a capability a request must not have.
 NARROWED_ON_PURPOSE = {
     # `catalog_item_id` would mint a row that refuses every mutation, cannot be
     # deleted through the project route, and cannot be reached through the
     # catalogue route either. Only the build's view creates catalogue items.
     "create_project": {"catalog_item_id"},
+    # `created_at` would let a request choose when a row was written. Only the
+    # store's own copy of a project keeps a source's times; a backdated message
+    # would count, or stop counting, toward the size a build is held to.
+    "add_message": {"created_at"},
+    "add_version": {"created_at"},
 }
 
 
