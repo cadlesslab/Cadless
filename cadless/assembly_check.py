@@ -57,6 +57,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from cadless.assembly_tree import readable, unnamed
+from cadless.joint_sizes import REACH_MOST_MM
 from cadless.print_fit import _dimensions, _number, too_big_for
 from cadless.printer_profile import (
     AssemblySpec,
@@ -104,6 +105,14 @@ _SOCKET_FIX = (
     "cuts the socket itself; for any other fit, subtract the socket, the tab's shape "
     "enlarged by the clearance on every side, from the receiving part at the place "
     "the tab occupies when assembled"
+)
+
+#: What both size refusals say of a seam's joint. A split sized by the cut alone
+#: put the seam in the middle and got back a half too long by the joint's reach,
+#: so the refusal says where that length goes and that the half must fit with it.
+_JOINT_ROOM = (
+    "the half behind a seam's plane carries its tabs or pegs, which stand up to "
+    f"{REACH_MOST_MM:g} mm past the cut, so that half must fit the bed with them"
 )
 
 #: How far a side of the whole build may stand from the size the request gave,
@@ -380,8 +389,8 @@ def evaluate_lone_part(
         report.failures.append(
             f"the build is one part, {_size(size)} mm, and does not fit the printer's "
             f"{_size((volume.width, volume.depth, volume.height))} mm build volume; "
-            f"cut it into {_cuts(size, volume)}, joined as the brief asks, and keep "
-            "the model's size: do not shrink it"
+            f"cut it into {_cuts(size, volume)}, joined as the brief asks -- "
+            f"{_JOINT_ROOM} -- and keep the model's size: do not shrink it"
         )
     return report
 
@@ -469,7 +478,7 @@ def _check_fit(
                 f"{label} is {_size(size)} mm and does not fit the printer's "
                 f"{_size((volume.width, volume.depth, volume.height))} mm build volume; "
                 f"cut it into {_cuts(size, volume)}, or move its seams so each piece "
-                "fits, and keep the model's size: do not shrink it"
+                f"fits -- {_JOINT_ROOM} -- and keep the model's size: do not shrink it"
             )
 
 
@@ -501,11 +510,27 @@ def _cuts(size: tuple[float, float, float], volume: BuildVolume) -> str:
 def _pieces(
     size: tuple[float, float, float], limits: tuple[float, float, float]
 ) -> tuple[int, int, int]:
-    """Pieces per axis that straight cuts leave, each extent within its limit."""
+    """Pieces per axis that straight cuts leave, each within its limit with its joint.
+
+    Every seam adds its joint's reach to the piece behind it, so ``n`` pieces
+    span at most ``n * limit - (n - 1) * reach``: counted by the ratio alone, a
+    part just under twice the bed was told two pieces, and the piece carrying the
+    joint came back over the bed. Where a limit is no longer than the reach, no
+    piece can carry a joint at all, and the ratio is the only count left to say.
+    """
     width, depth, height = (
-        max(1, math.ceil(extent / limit)) for extent, limit in zip(size, limits, strict=True)
+        _pieces_along(extent, limit) for extent, limit in zip(size, limits, strict=True)
     )
     return width, depth, height
+
+
+def _pieces_along(extent: float, limit: float) -> int:
+    """Pieces one axis needs: :func:`_pieces` for a single extent and limit."""
+    if extent <= limit:
+        return 1
+    if limit <= REACH_MOST_MM:
+        return math.ceil(extent / limit)
+    return math.ceil((extent - REACH_MOST_MM) / (limit - REACH_MOST_MM))
 
 
 def _check_overlap(

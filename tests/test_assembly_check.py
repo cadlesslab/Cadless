@@ -132,6 +132,30 @@ def test_a_side_exactly_the_bed_needs_no_cut_and_no_turn():
     assert "turned" not in why
 
 
+def test_the_cuts_count_the_joint_every_seam_adds_to_a_piece():
+    # Each seam's tabs stand 12 mm past the cut on the piece behind it, so two
+    # pieces on a 210 mm side make at most 2 x 210 - 12 = 408 mm, not 420.
+    two = evaluate_lone_part((408.0, 100.0, 10.0), SPEC).failures[0]
+    three = evaluate_lone_part((409.0, 100.0, 10.0), SPEC).failures[0]
+    assert "2 along its width" in two
+    assert "3 along its width" in three
+
+
+def test_a_side_no_longer_than_the_joint_is_counted_by_the_ratio_alone():
+    # No piece on a 10 mm side can carry a 12 mm joint; the count stays the plain
+    # ratio rather than one divided by a negative room.
+    narrow = AssemblySpec(volume=BuildVolume(10.0, 200.0, 195.0), clearance_mm=0.2)
+    assert "3 along its width" in evaluate_lone_part((25.0, 100.0, 10.0), narrow).failures[0]
+
+
+def test_a_refusal_for_size_says_the_joint_counts_in_the_half_that_carries_it():
+    # A 400 mm plate cut in the middle comes back as a 212 mm half: its tabs.
+    report = evaluate_assembly(_m(part_bboxes=[[100.0, 100.0, 50.0], [212.0, 160.0, 10.0]]), SPEC)
+    why = report.failures[0]
+    assert "the half behind a seam's plane carries its tabs or pegs" in why
+    assert "12 mm past the cut" in why
+
+
 # --- a build that came back as one solid ------------------------------------
 
 
@@ -145,6 +169,12 @@ def test_a_lone_part_larger_than_the_bed_is_refused_with_its_cuts():
     assert "300 x 250 x 18" in why
     assert "2 along its width and 2 along its depth" in why
     assert "do not shrink" in why
+
+
+def test_a_lone_part_s_refusal_says_where_its_seams_joints_go():
+    why = evaluate_lone_part((300.0, 250.0, 18.0), SPEC).failures[0]
+    assert "the half behind a seam's plane carries its tabs or pegs" in why
+    assert "12 mm past the cut" in why
 
 
 def test_a_lone_part_that_fits_passes():
