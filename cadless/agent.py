@@ -946,6 +946,12 @@ size. Never change them to fit a printer: on an assembly turn a model
 larger than the bed is split into parts that each fit, never resized, and every
 build is held to that size.
 
+On an assembly turn, an assembly's seams are made with `split_and_join`, which
+cuts a part at a plane and joins the two halves with dovetails or pegs: every
+build script is given it, and it is not part of build123d. So never ask for it to
+be removed or replaced, though the build123d you know has no such function, and
+ask for a new seam to be made with it.
+
 After a tool returns, read its result and either call another tool or give the
 user a short final answer. Do not call a tool with identical arguments twice.
 """
