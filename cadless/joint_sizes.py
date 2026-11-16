@@ -24,6 +24,9 @@ DEPTH_PER_ROOT = 0.6
 PEG_MOST, PEG_LEAST = 8.0, 3.0
 #: The shortest a joint may run along the axis the half goes in (mm).
 RUN_LEAST = 3.0
+#: How close, in mm, the joinery finds a band's edge: far inside the tenth of a
+#: millimetre the least band is stated to.
+EDGE_PRECISION_MM = 1e-4
 
 #: How far past the cut a joint stands, at most, out of the half behind the
 #: plane and into the half ahead (mm): a dovetail at its widest root reaches its
@@ -42,7 +45,8 @@ def pieces_along(extent: float, limit: float) -> int:
     carrying the joint came back over the bed. Where the limit leaves no more
     than the reach past a joint -- twice the reach or less -- the count runs away
     as the two close, to hundreds of thousands of pieces a hair over the reach,
-    so the ratio is given there instead: no bed that small takes a joint anyway.
+    so the ratio is given there instead: a smaller count than the joints need,
+    on beds far smaller than any printer's, rather than one nobody could follow.
     """
     if extent <= limit:
         return 1
@@ -84,3 +88,19 @@ def stated_mm(least: float) -> float:
     joint does not fit.
     """
     return math.ceil(least * 10) / 10
+
+
+def stated_band_mm(clearance: float) -> float:
+    """The band a dovetail needs at ``clearance``, as the brief and the refusal say it.
+
+    The joinery finds a band's edges to within :data:`EDGE_PRECISION_MM` on each
+    side, so it can read a wall that much short twice over; the figure covers
+    that before it is rounded up, or at a clearance whose band rounds up by less,
+    a wall made exactly to it would be refused.
+    """
+    return stated_mm(least_band_mm(clearance) + 2 * EDGE_PRECISION_MM)
+
+
+def stated_spot_mm(clearance: float) -> float:
+    """The spot a peg needs at ``clearance``, as the brief and the refusal say it."""
+    return stated_mm(least_peg_spot_mm(clearance))

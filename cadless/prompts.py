@@ -19,10 +19,9 @@ from cadless.few_shot import render_few_shot
 from cadless.joint_sizes import (
     REACH_MOST_MM,
     RUN_LEAST,
-    least_band_mm,
-    least_peg_spot_mm,
     pieces_along,
-    stated_mm,
+    stated_band_mm,
+    stated_spot_mm,
 )
 from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.registry import build_provider
@@ -366,8 +365,8 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     fits = _fits(spec)
     volume = spec.volume
     size = _requested(spec)
-    band = stated_mm(least_band_mm(spec.clearance_mm))
-    spot = stated_mm(least_peg_spot_mm(spec.clearance_mm))
+    band = stated_band_mm(spec.clearance_mm)
+    spot = stated_spot_mm(spec.clearance_mm)
     # The worked example's panel, counted as the size refusal counts it, so the
     # two never tell the model different numbers for the same part.
     panel_wide = round(max(volume.width, volume.depth) * 1.25, 1)
@@ -436,9 +435,10 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         f"solid spot at least {fmt(spot)} mm across. A hollow part -- a shell, a body, a "
         f"hull -- gives a dovetail that band in a wall at least {fmt(band)} mm thick "
         "running along insert_along where the seam crosses it, or, open on one side, in "
-        f"the top or floor opposite the opening, at least {fmt(RUN_LEAST)} mm thick and "
-        "whole across the seam, which a line along insert_along then crosses alone; "
-        "closed on every side, it gives it in its walls only.\n"
+        "the top or floor opposite the opening where a line along insert_along crosses "
+        f"it through its thickness and nothing else, at least {fmt(RUN_LEAST)} mm thick "
+        "and whole across the seam; closed on every side, it gives it in its walls "
+        "only.\n"
         "  * If split_and_join refuses with a JoineryError, its message says what to "
         "change: move the "
         "plane to where each side stays one piece and the cut face is thicker, or "

@@ -39,6 +39,7 @@ from build123d import (
 
 from cadless.joint_sizes import (
     DEPTH_PER_ROOT,
+    EDGE_PRECISION_MM,
     FLANK_DEGREES,
     PEG_LEAST,
     PEG_MOST,
@@ -46,10 +47,9 @@ from cadless.joint_sizes import (
     ROOT_MOST,
     RUN_LEAST,
     dovetail_reach,
-    least_band_mm,
-    least_peg_spot_mm,
     margin_mm,
-    stated_mm,
+    stated_band_mm,
+    stated_spot_mm,
 )
 from cadless.printer_profile import PRINTER_PROFILE_LIMITS
 
@@ -65,10 +65,6 @@ _CLEARANCE_LEAST, _CLEARANCE_MOST = PRINTER_PROFILE_LIMITS["printer_joint_cleara
 _SAMPLES = 240
 #: How far apart, in mm, two sampled runs' ends may be and still be the same run.
 _SAME_RUN = 1e-3
-#: How close, in mm, a band's edge is found: well inside the tenth of a
-#: millimetre the least band is stated to, so a wall made to the stated figure
-#: is measured at no less than the joint needs.
-_EDGE_PRECISION = 1e-4
 #: Steps along each side of a cut face when looking for room for a peg.
 _GRID = 24
 #: Places tried along one band of the cut face, at most, half a joint's reach
@@ -205,16 +201,17 @@ def _room_needed(across: float, axis: Vector, clearance: float) -> str:
     """
     along = _name(axis)
     if across <= _EPS:
-        band = f"{stated_mm(least_band_mm(clearance)):g}"
+        band = f"{stated_band_mm(clearance):g}"
         return (
             f"a dovetail along {along} needs a band of the cut face at least {band} mm "
             f"wide that a line along {along} crosses in one unbroken run of at least "
             f"{RUN_LEAST:g} mm, so make the part thicker there: a wall at least {band} mm "
             f"thick running along {along} where the seam crosses it, or, in a part open "
-            "on one side, the top or floor opposite the opening at least "
-            f"{RUN_LEAST:g} mm thick and kept whole across it"
+            "on one side, the top or floor opposite the opening, where a line along "
+            f"{along} crosses it through its thickness, at least {RUN_LEAST:g} mm thick "
+            "and kept whole across it"
         )
-    spot = f"{stated_mm(least_peg_spot_mm(clearance)):g}"
+    spot = f"{stated_spot_mm(clearance):g}"
     return (
         f"a peg along {along} needs a solid spot of the cut face at least {spot} mm "
         f"across, clear of every edge and hole, so make the part at least {spot} mm "
@@ -475,7 +472,9 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     at the very width the brief and the refusal state. Between its edges only the
     sampled positions are looked at, so a hole narrower than the step between
     them can lie inside a band: the room check still finds one that reaches into
-    the half ahead, and a tab over one that does not bridges it.
+    the half ahead, and a tab over one that does not bridges it. An edge is
+    bisected from the band's last sample, so a gap narrower than a step lying
+    between that sample and the edge is stepped over in the same way.
     """
     if not section:
         return []
@@ -512,7 +511,7 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     def edge(band, inside: float, outside: float) -> float:
         """The last position from ``inside``, a sample in ``band``, toward
         ``outside``, the next sample past it, where the run is still the band's."""
-        while abs(outside - inside) > _EDGE_PRECISION:
+        while abs(outside - inside) > EDGE_PRECISION_MM:
             middle = (inside + outside) / 2
             if same(run_at(middle), band):
                 inside = middle

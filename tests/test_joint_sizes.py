@@ -14,7 +14,7 @@ from cadless.joint_sizes import (
     least_band_mm,
     least_peg_spot_mm,
     pieces_along,
-    stated_mm,
+    stated_band_mm,
 )
 
 pytestmark = pytest.mark.build123d
@@ -68,16 +68,28 @@ def test_a_wall_of_the_stated_band_inside_a_wide_face_takes_a_dovetail(width, he
     # A tube's side wall is a band within a wider cut face, where the positions
     # sampled across the face can straddle its edges. The figure the brief and the
     # refusal state has to hold there, not only where the band is the whole face.
-    wall = stated_mm(least_band_mm(0.2))
+    wall = stated_band_mm(0.2)
     tube = Box(300, width, height) - Box(310, width - 2 * wall, height - 2 * wall)
 
     split_and_join(tube, SEAM, Axis.Z, 0.2)
 
 
+@pytest.mark.parametrize("clearance", [0.2, 0.823])
+def test_a_rib_of_the_stated_band_inside_a_wide_face_takes_a_dovetail(clearance):
+    # Walls too thin for a joint around a rib that is not: the rib's two edges
+    # both fall between the samples, so each has to be found -- and at 0.823 mm,
+    # where rounding up leaves less room than the two edges are found to, the
+    # figure has to cover that as well.
+    rib = stated_band_mm(clearance)
+    shell = Box(300, 160, 80) - Box(310, 156, 76) + Box(300, rib, 77)
+
+    split_and_join(shell, SEAM, Axis.Z, clearance)
+
+
 def test_a_wall_as_thick_as_the_stated_band_takes_a_dovetail():
     # At 0.1 mm the band is 6.83 mm: stated to the nearest tenth, 6.8, the one
     # wall the brief would then ask for is the one the joint does not fit.
-    stated = stated_mm(least_band_mm(0.1))
+    stated = stated_band_mm(0.1)
 
     assert stated == 6.9
     split_and_join(Box(300, stated, 30), SEAM, Axis.Z, 0.1)

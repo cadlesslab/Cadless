@@ -729,9 +729,10 @@ def _is_permutation(order, count: int) -> bool:
 def _overlapping(m: AssemblyMeasurements, labels: Sequence[str]) -> bool:
     """Whether a readable entry of ``m.overlaps`` says two of its parts share volume.
 
-    The ruling that overlaps alone left no order is believed only beside an
-    overlap the same payload shows, since the payload is whatever the script
-    printed and the ruling sends the repair to geometry it names.
+    The ruling that every part comes out once each overlapping pair passes
+    through each other is believed only beside an overlap the same payload
+    shows, since the payload is whatever the script printed and the ruling sends
+    the repair to geometry it names.
     """
     readable, _problems = _read_overlaps(m, labels)
     return any(shared > OVERLAP_EPSILON_MM3 for _first, _second, shared in readable)

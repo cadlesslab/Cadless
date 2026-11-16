@@ -340,7 +340,10 @@ def test_the_brief_states_the_solid_band_a_dovetail_needs_at_its_clearance(clear
 def test_the_brief_keeps_a_hollow_part_s_top_or_floor_whole_across_a_seam():
     # A shell's own cavity box cut away the top that would have held the joint.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "open on one side, in the top or floor opposite the opening, at least 3 mm" in brief
+    assert (
+        "open on one side, in the top or floor opposite the opening where a line along "
+        "insert_along crosses it through its thickness and nothing else, at least 3 mm"
+    ) in brief
     assert "closed on every side, it gives it in its walls only" in brief
 
 

@@ -451,9 +451,9 @@ def test_a_shell_too_thin_for_a_dovetail_is_told_the_band_one_needs(clearance, b
     # A top or floor holds the band only where a line along the axis crosses it
     # alone: a closed box's top and floor are two runs, and refused.
     assert why.endswith(
-        "or, in a part open on one side, the top or floor opposite the opening at least "
-        "3 mm thick and kept whole across it; otherwise move the seam, or insert along "
-        "another axis"
+        "or, in a part open on one side, the top or floor opposite the opening, where a "
+        "line along +Z crosses it through its thickness, at least 3 mm thick and kept "
+        "whole across it; otherwise move the seam, or insert along another axis"
     )
 
 
