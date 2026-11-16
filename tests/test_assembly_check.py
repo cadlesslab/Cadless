@@ -574,6 +574,15 @@ def test_an_order_lost_only_to_overlaps_sends_the_repair_to_the_overlaps():
     assert "reorient the joint" not in why
 
 
+@pytest.mark.parametrize("overlaps", [[], [[0, 1, 0.0]], [[0, 0, 1000.0]], [[0, 7, 1000.0]]])
+def test_a_ruling_on_overlaps_nobody_measured_is_not_believed(overlaps):
+    # The payload is whatever the script printed: with no readable overlap in it,
+    # "only because parts share volume" would send the repair to geometry that
+    # was never measured.
+    why = _order_failure(overlaps=overlaps, freed_without_overlaps=True)
+    assert "reorient the joint so it slides in along one axis" in why
+
+
 @pytest.mark.parametrize("freed", [False, None])
 def test_an_order_the_overlaps_do_not_explain_keeps_its_own_sentence(freed):
     why = _order_failure(overlaps=[[0, 1, 1000.0]], freed_without_overlaps=freed)

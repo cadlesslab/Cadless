@@ -724,6 +724,26 @@ def _is_permutation(order, count: int) -> bool:
     )
 
 
+def _overlapping(m: AssemblyMeasurements) -> bool:
+    """Whether a readable entry of ``m.overlaps`` says two of its parts share volume.
+
+    The ruling that overlaps alone left no order is believed only beside an
+    overlap the same payload shows, since the payload is whatever the script
+    printed and the ruling sends the repair to geometry it names.
+    """
+    count = len(m.part_bboxes)
+    for entry in m.overlaps:
+        pair = _pair(entry)
+        if pair is None:
+            continue
+        first, second, shared = pair
+        if not (0 <= first < count and 0 <= second < count) or first == second:
+            continue
+        if _measurement(shared) is not None and shared > OVERLAP_EPSILON_MM3:
+            return True
+    return False
+
+
 def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequence[str]) -> None:
     """Rule on the order search's three outcomes, keeping the last two apart.
 
@@ -756,7 +776,7 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequen
             )
             return
         trapped = ", ".join(_at(labels, index) for index in sorted(m.trapped))
-        if m.freed_without_overlaps is True:
+        if m.freed_without_overlaps is True and _overlapping(m):
             # A part sharing volume with another is blocked every way it could
             # move, so the overlaps alone can leave no order; told to reorient a
             # joint there, the repair changed what was never wrong.
