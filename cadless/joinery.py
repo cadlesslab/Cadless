@@ -12,8 +12,8 @@ the printer holds.
 Scripts are handed :func:`split_and_join` in the globals :func:`script_namespace`
 gives them rather than importing this module, so the import allow-list stays as
 it is. That is no wall around the module: whatever it holds, a script can reach,
-so it imports nothing beyond build123d, the standard library and the printer
-profile's limits.
+so it imports nothing beyond build123d, the standard library, the printer
+profile's limits and the joint sizes it builds to.
 """
 
 from __future__ import annotations
@@ -37,24 +37,22 @@ from build123d import (
     extrude,
 )
 
+from cadless.joint_sizes import (
+    DEPTH_PER_ROOT,
+    FLANK_DEGREES,
+    PEG_LEAST,
+    PEG_MOST,
+    ROOT_LEAST,
+    ROOT_MOST,
+    RUN_LEAST,
+    dovetail_reach,
+    margin_mm,
+)
 from cadless.printer_profile import PRINTER_PROFILE_LIMITS
 
-#: Off square, each flank of a dovetail: enough to lock the halves across the
-#: seam. Swept along an upright axis, a dovetail prints without support; along a
-#: level one, how its flanks print depends on how the part lies on the bed.
-_FLANK_DEGREES = 15.0
-#: A dovetail's root, across the seam, at most and at least (mm). Below the least
-#: it is too weak to hold the halves together.
-_ROOT_MOST, _ROOT_LEAST = 20.0, 3.0
-#: How deep a dovetail reaches into the other half, per unit of its root.
-_DEPTH_PER_ROOT = 0.6
-#: A peg's diameter, at most and at least (mm).
-_PEG_MOST, _PEG_LEAST = 8.0, 3.0
 #: Where a peg's flat side stands from its axis, as a share of its radius: enough
 #: to stop the halves turning about the peg, little enough to keep most of it.
 _FLAT = 0.5
-#: The shortest a joint may run along the axis the half goes in (mm).
-_RUN_LEAST = 3.0
 #: Joints per seam, at most: a second, as far from the first as the face allows,
 #: shares the load and holds the seam closed at both ends.
 _JOINTS_MOST = 2
@@ -159,7 +157,7 @@ def split_and_join(
         )
     behind, ahead = _halves(_one_solid(part), plane, where)
     section = _section(behind, ahead, plane)
-    margin = max(1.0, 2 * clearance)
+    margin = margin_mm(clearance)
     blocked = placed = False
     if across <= _EPS:
         joints, blocked, placed = _dovetails(section, plane, axis, ahead, clearance, margin)
@@ -172,7 +170,7 @@ def split_and_join(
             "it; insert along another axis, or move the seam"
         )
     if not joints:
-        least = _ROOT_LEAST if across <= _EPS else _PEG_LEAST
+        least = ROOT_LEAST if across <= _EPS else PEG_LEAST
         raise JoineryError(
             f"{where}: no place on the cut face is solid enough for a joint {least:g} mm "
             f"across with {margin:g} mm to spare along {_name(axis)}; make the wall thicker "
@@ -407,9 +405,9 @@ def _dovetails(section, plane, axis, ahead, clearance, margin):
     sites = []
     for low, high, start, end in _bands(section, frame):
         root = _widest_root(end - start, clearance, margin)
-        if root < _ROOT_LEAST:
+        if root < ROOT_LEAST:
             continue
-        half = _reach(root, clearance + margin)
+        half = dovetail_reach(root, clearance + margin)
         for centre in _positions(start + half, end - half, half / 2):
             sites.append(_Site(centre, half, root, low, high))
     extent = _extent(ahead, frame)
@@ -425,16 +423,8 @@ def _dovetails(section, plane, axis, ahead, clearance, margin):
 
 def _widest_root(width: float, clearance: float, margin: float) -> float:
     """The widest dovetail root whose socket, grown by the margin, fits ``width``."""
-    root = (width - 2 * _reach(0.0, clearance + margin)) / (2 * _reach(1.0, 0.0))
-    return min(_ROOT_MOST, root)
-
-
-def _reach(root: float, grow: float) -> float:
-    """How far to either side of its centre a dovetail ``root`` wide, grown by
-    ``grow`` on its flanks and tip, reaches across the seam at its widest."""
-    slope = math.tan(math.radians(_FLANK_DEGREES))
-    depth = root * _DEPTH_PER_ROOT + grow
-    return root / 2 + grow / math.cos(math.radians(_FLANK_DEGREES)) + depth * slope
+    root = (width - 2 * dovetail_reach(0.0, clearance + margin)) / (2 * dovetail_reach(1.0, 0.0))
+    return min(ROOT_MOST, root)
 
 
 def _bands(section, frame) -> list[tuple[float, float, float, float]]:
@@ -456,7 +446,7 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     for k in range(_SAMPLES + 1):
         across = y0 + k * step
         runs = _runs(section, frame, across, x0 - _OVERCUT, x1 + _OVERCUT)
-        run = runs[0] if len(runs) == 1 and runs[0][1] - runs[0][0] >= _RUN_LEAST else None
+        run = runs[0] if len(runs) == 1 and runs[0][1] - runs[0][0] >= RUN_LEAST else None
         same = (
             current is not None
             and run is not None
@@ -558,12 +548,12 @@ def _dovetail(frame, ahead, site, extent, clearance, margin, shrunk):
     if shrunk:
         roots = []
         root = site.root * _SHRINK
-        while root >= _ROOT_LEAST:
+        while root >= ROOT_LEAST:
             roots.append(root)
             root *= _SHRINK
     blocked = False
     for root in roots:
-        depth = root * _DEPTH_PER_ROOT
+        depth = root * DEPTH_PER_ROOT
         outline = _trapezoid(site.centre, root, depth, clearance, _OVERCUT)
         grown = _trapezoid(site.centre, root, depth, clearance + margin, 0.0)
         if not _fills(ahead, _prism(frame, grown, site.low, site.high)):
@@ -600,8 +590,8 @@ def _trapezoid(centre: float, root: float, depth: float, grow: float, below: flo
     straight line, ``below`` the seam as much as past it, so a socket's flanks run
     parallel to its tab's and the gap between them is the same at every depth.
     """
-    slope = math.tan(math.radians(_FLANK_DEGREES))
-    side = grow / math.cos(math.radians(_FLANK_DEGREES))
+    slope = math.tan(math.radians(FLANK_DEGREES))
+    side = grow / math.cos(math.radians(FLANK_DEGREES))
     bottom, top = -below, depth + grow
     return [
         (centre - root / 2 - side - bottom * slope, bottom),
@@ -633,8 +623,8 @@ def _pegs(section, plane, ahead, clearance, margin):
     frame = Plane(origin=plane.origin, x_dir=plane.x_dir, z_dir=normal)
     joints, taken = [], []
     for spot, edge in _roomy_spots(section, frame):
-        radius = min(_PEG_MOST / 2, edge - clearance - margin)
-        if radius < _PEG_LEAST / 2:
+        radius = min(PEG_MOST / 2, edge - clearance - margin)
+        if radius < PEG_LEAST / 2:
             break
         if any(
             (spot - other).length < radius + other_radius + 2 * clearance + margin
