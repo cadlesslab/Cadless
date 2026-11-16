@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/cadlesslab/Cadless/compare/backend-v1.5.0...backend-v1.5.1) (2026-11-16)
+
+
+### Fixes
+
+* hold an assembly build only to the sides the user gave ([#94](https://github.com/cadlesslab/Cadless/issues/94)) ([c141464](https://github.com/cadlesslab/Cadless/commit/c141464ed497608c81eba0674b2c3e10ac7a7500))
+
 ## [1.5.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.4.0...backend-v1.5.0) (2026-11-12)
 
 
