@@ -20,7 +20,7 @@ from cadless.store import Store
 from tests.catalog_helpers import load_catalog_item
 
 # Reuse the scripted-provider + stub-pipeline harness from the chat tests.
-from tests.test_chat_api import (
+from tests.chat_api_helpers import (
     ScriptedProvider,
     StubPipeline,
     _install,
