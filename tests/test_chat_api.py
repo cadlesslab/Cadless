@@ -1538,6 +1538,60 @@ def test_a_size_given_for_a_copied_model_backs_no_side_in_the_copy(client, store
     assert pipeline.assemblies[-1].requested_mm == (500.0,)
 
 
+def _seeded(client, store):
+    """A project whose current model no chat turn built, as the parameter panel makes one."""
+    pid = client.post("/projects", json={"name": "P"}).json()["id"]
+
+    async def seed():
+        version = await store.add_version(
+            pid, "base", "result = 1\n", ok=True, volume=1.0, bbox=(84.0, 66.0, 36.05)
+        )
+        await store.set_current_version(pid, version.id)
+
+    asyncio.run(seed())
+    return pid
+
+
+def test_a_size_given_before_a_question_about_a_panel_made_model_still_holds(
+    client, store, monkeypatch
+):
+    # Every settled turn names the current version, the question too; the
+    # message before it came after that model, and is still the request.
+    monkeypatch.setattr(chat.settings, "assembly_enabled", True)
+    provider = ScriptedProvider(
+        [
+            _clarify_turn(tool_use_id="tu-1", questions=[{"text": "PLA or PETG?"}]),
+            _tool_turn(
+                tool_use_id="tu-2",
+                name="edit_model",
+                tool_input={"change": "a box", "requested_mm": [300, 200, 100]},
+            ),
+            _text_turn("Done."),
+        ]
+    )
+    pipeline = StubPipeline()
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = _seeded(client, store)
+
+    _stream_assembly(client, pid, assembly=True, text="make it a box 300 x 200 x 100 mm")
+    _stream_assembly(client, pid, assembly=True, text="PLA, please")
+
+    assert pipeline.assemblies[-1].requested_mm == (300.0, 200.0, 100.0)
+
+
+def test_a_retry_after_a_failed_build_on_a_panel_made_model_still_holds(client, store, monkeypatch):
+    # The failed turn is linked to the model it fell back to, the panel's.
+    provider = _assembly_turns(monkeypatch, [400])
+    pipeline = StubPipeline(ok=False, error="the build failed")
+    _install(monkeypatch, provider, pipeline=pipeline)
+    pid = _seeded(client, store)
+
+    _stream_assembly(client, pid, assembly=True, text="an RC car, 400 mm long")
+    _stream_assembly(client, pid, assembly=True, text="try again")
+
+    assert pipeline.assemblies[-1].requested_mm == (400.0,)
+
+
 def test_retries_of_turns_that_kept_nothing_back_each_side_once(client, store, monkeypatch):
     # The first turns kept no model, so their words are still the request; sent
     # again and again by Retry, "400 mm long" is still one side.

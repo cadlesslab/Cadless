@@ -1042,6 +1042,7 @@ class Store:
                 built_as_assembly=v.built_as_assembly,
                 parts=v.parts,
                 owner=mine,
+                created_at=v.created_at,
             )
             id_map[v.id] = new_v.id
             for a in await self.list_artifacts(v.id, owner=owner):
@@ -1068,6 +1069,7 @@ class Store:
                 version_id=id_map.get(m.version_id) if m.version_id else None,
                 blocks=m.blocks,
                 owner=mine,
+                created_at=m.created_at,
             )
         if source.current_version_id is not None and source.current_version_id in id_map:
             await self.set_current_version(clone.id, id_map[source.current_version_id], owner=mine)
@@ -1091,8 +1093,12 @@ class Store:
         parts: list[dict] | None = None,
         *,
         owner: Owner = UNSCOPED,
+        created_at: str | None = None,
     ) -> ScriptVersion:
         """Append a version to a project.
+
+        ``created_at`` is now unless given: a copy gives the time the version it
+        copies was built, so the copy's versions and messages keep their order.
 
         Raises :class:`LookupError` when this owner has no such project, rather
         than writing into somebody else's. It is a raise and not a ``None``
@@ -1100,7 +1106,7 @@ class Store:
         the project went away underneath, or that a caller reached past its own
         scope, and both are worth stopping for rather than absorbing.
         """
-        ts = _now()
+        ts = created_at or _now()
         bbox_json = json.dumps(list(bbox)) if bbox else None
         params = parameters or {}
         params_json = json.dumps(params) if params else None
@@ -1477,14 +1483,17 @@ class Store:
         blocks: list[ContentBlock] | None = None,
         *,
         owner: Owner = UNSCOPED,
+        created_at: str | None = None,
     ) -> ChatMessage:
         """Append a message to a session.
+
+        ``created_at`` is now unless given, as for :meth:`add_version`.
 
         Raises :class:`LookupError` when this owner has no such session — a
         session id addresses a transcript with no project in sight, so it is
         checked here rather than assumed to have come from a scoped lookup.
         """
-        ts = _now()
+        ts = created_at or _now()
         blocks = blocks or []
         blocks_json = _blocks_to_json(blocks)
         pred, owner_params = _owner_sql(owner, write=True)

@@ -387,19 +387,17 @@ _EARLIER_MOST = 20
 
 
 def _since_current_model(rows: list, version: ScriptVersion | None) -> list:
-    """The rows after the turn that built ``version``, the current model.
+    """The rows written after ``version``, the current model, was built.
 
-    Found by the transcript's own link to the version, the first row naming it,
-    rather than by the clock: a copied project is given its versions before its
-    transcript, so by time every copied message would come after the model it
-    asked for. A version no row names, made outside a chat turn, falls back to
-    the time it was built.
+    By when each was written, not by the transcript's links: every settled turn
+    names the current version, a clarifying question and a failed build too, so
+    the first row naming a version made outside a chat turn -- in the parameter
+    panel, or a branch's seed -- is the next turn's reply, and its message would
+    be lost. A turn's message is stored before the model it asks for is built,
+    and a copy keeps the times of what it copies.
     """
     if version is None:
         return rows
-    for index, row in enumerate(rows):
-        if row.version_id == version.id:
-            return rows[index + 1 :]
     return [row for row in rows if row.created_at > version.created_at]
 
 
