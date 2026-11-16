@@ -65,6 +65,10 @@ _CLEARANCE_LEAST, _CLEARANCE_MOST = PRINTER_PROFILE_LIMITS["printer_joint_cleara
 _SAMPLES = 240
 #: How far apart, in mm, two sampled runs' ends may be and still be the same run.
 _SAME_RUN = 1e-3
+#: How close, in mm, a band's edge is found: well inside the tenth of a
+#: millimetre the least band is stated to, so a wall made to the stated figure
+#: is measured at no less than the joint needs.
+_EDGE_PRECISION = 1e-4
 #: Steps along each side of a cut face when looking for room for a peg.
 _GRID = 24
 #: Places tried along one band of the cut face, at most, half a joint's reach
@@ -461,10 +465,14 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     """Runs of the cut face along the frame's x, as ``(low, high, start, end)``.
 
     ``low``-``high`` is the run along the axis, the same at every sampled
-    position from ``start`` to ``end`` across it. Only the sampled positions are
-    looked at, so a hole narrower than the step between them can lie inside a
-    band: the room check still finds one that reaches into the half ahead, and a
-    tab over one that does not bridges it.
+    position from ``start`` to ``end`` across it. A band's two edges are then
+    found by bisection between its last sample and the first one beyond it, so a
+    band is as wide as the face it stands on rather than as the samples that
+    landed in it: a wall inside a wide face lost up to two steps, and was refused
+    at the very width the brief and the refusal state. Between its edges only the
+    sampled positions are looked at, so a hole narrower than the step between
+    them can lie inside a band: the room check still finds one that reaches into
+    the half ahead, and a tab over one that does not bridges it.
     """
     if not section:
         return []
@@ -472,18 +480,24 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     x0, x1 = min(c.min.X for c in corners), max(c.max.X for c in corners)
     y0, y1 = min(c.min.Y for c in corners), max(c.max.Y for c in corners)
     step = (y1 - y0) / _SAMPLES
+
+    def run_at(across):
+        runs = _runs(section, frame, across, x0 - _OVERCUT, x1 + _OVERCUT)
+        return runs[0] if len(runs) == 1 and runs[0][1] - runs[0][0] >= RUN_LEAST else None
+
+    def same(run, band) -> bool:
+        return (
+            band is not None
+            and run is not None
+            and abs(run[0] - band[0]) < _SAME_RUN
+            and abs(run[1] - band[1]) < _SAME_RUN
+        )
+
     bands, current = [], None
     for k in range(_SAMPLES + 1):
         across = y0 + k * step
-        runs = _runs(section, frame, across, x0 - _OVERCUT, x1 + _OVERCUT)
-        run = runs[0] if len(runs) == 1 and runs[0][1] - runs[0][0] >= RUN_LEAST else None
-        same = (
-            current is not None
-            and run is not None
-            and abs(run[0] - current[0]) < _SAME_RUN
-            and abs(run[1] - current[1]) < _SAME_RUN
-        )
-        if same:
+        run = run_at(across)
+        if same(run, current):
             current[3] = across
         else:
             if current is not None:
@@ -491,7 +505,26 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
             current = [run[0], run[1], across, across] if run is not None else None
     if current is not None:
         bands.append(tuple(current))
-    return [band for band in bands if band[3] > band[2]]
+
+    def edge(band, inside: float, outside: float) -> float:
+        """The last position from ``inside``, a sample in ``band``, toward
+        ``outside``, the next sample past it, where the run is still the band's."""
+        while abs(outside - inside) > _EDGE_PRECISION:
+            middle = (inside + outside) / 2
+            if same(run_at(middle), band):
+                inside = middle
+            else:
+                outside = middle
+        return inside
+
+    edged = []
+    for low, high, start, end in bands:
+        if start > y0:
+            start = edge((low, high), start, start - step)
+        if end < y1:
+            end = edge((low, high), end, end + step)
+        edged.append((low, high, start, end))
+    return [band for band in edged if band[3] > band[2]]
 
 
 def _runs(section, frame, across, start, end) -> list[tuple[float, float]]:

@@ -333,14 +333,15 @@ def test_the_brief_states_the_solid_band_a_dovetail_needs_at_its_clearance(clear
     )
     brief = " ".join(_assembly_rules(spec).split())
     assert f"a band of the cut face at least {band} mm wide" in brief
-    assert f"keeps a wall at least {band} mm thick where a seam crosses it" in brief
+    assert f"in a wall at least {band} mm thick running along insert_along" in brief
     assert f"for a peg, a solid spot at least {spot} mm across" in brief
 
 
 def test_the_brief_keeps_a_hollow_part_s_top_or_floor_whole_across_a_seam():
     # A shell's own cavity box cut away the top that would have held the joint.
     brief = " ".join(_assembly_rules(_SPEC).split())
-    assert "or its top or floor at least 3 mm thick whole across the seam" in brief
+    assert "open on one side, in the top or floor opposite the opening, at least 3 mm" in brief
+    assert "closed on every side, it gives it in its walls only" in brief
 
 
 def test_the_edit_rules_count_the_joint_where_a_seam_is_made():

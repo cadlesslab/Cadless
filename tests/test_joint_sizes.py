@@ -55,6 +55,17 @@ def test_a_dovetail_takes_the_least_band_stated_and_nothing_narrower(clearance):
         split_and_join(Box(300, band - 0.02, 30), SEAM, Axis.Z, clearance)
 
 
+@pytest.mark.parametrize(("width", "height"), [(60, 40), (160, 80)])
+def test_a_wall_of_the_stated_band_inside_a_wide_face_takes_a_dovetail(width, height):
+    # A tube's side wall is a band within a wider cut face, where the positions
+    # sampled across the face can straddle its edges. The figure the brief and the
+    # refusal state has to hold there, not only where the band is the whole face.
+    wall = stated_mm(least_band_mm(0.2))
+    tube = Box(300, width, height) - Box(310, width - 2 * wall, height - 2 * wall)
+
+    split_and_join(tube, SEAM, Axis.Z, 0.2)
+
+
 def test_a_wall_as_thick_as_the_stated_band_takes_a_dovetail():
     # At 0.1 mm the band is 6.83 mm: stated to the nearest tenth, 6.8, the one
     # wall the brief would then ask for is the one the joint does not fit.
