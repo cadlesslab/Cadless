@@ -127,6 +127,14 @@ def test_parts_that_only_touch_are_not_asked_where_they_overlap(monkeypatch):
     assert asked == []
 
 
+def test_a_pair_sharing_only_rounding_noise_is_not_asked_where():
+    # A sub-micron cube inside a box shares a volume below the kernel's noise
+    # floor: it is measured, never reported, so it is not placed either.
+    m = measure_assembly([Box(20, 20, 10), Box(0.0005, 0.0005, 0.0005)])
+    assert [pair[:2] for pair in m.overlaps] == [[0, 1]]
+    assert m.overlap_boxes == []
+
+
 def test_where_parts_overlap_is_charged_to_the_measurement_s_budget():
     # Two probes for the pair, and none left for its box: the overlap is still
     # recorded, and where it sits is not.
