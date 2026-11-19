@@ -103,10 +103,16 @@ def _pegs_on(behind):
     return (behind & Pos(0, 0, 50) * Box(400, 400, 100)).solids()
 
 
-def test_a_boss_keeps_room_for_its_second_peg():
-    # The roomiest points on a post walk to its middle; the points themselves
-    # stay candidates, so a second peg still finds room beside the first.
-    shell = Box(300, 120, 80) - Box(296, 116, 76) + Cylinder(13, 78)
+@pytest.mark.parametrize(
+    ("radius", "at"),
+    [(13, (0, 0)), (14, (0, -45)), (13, (0, -46))],
+    ids=["post apart", "boss on the grid", "boss off the grid"],
+)
+def test_a_boss_keeps_room_for_its_second_peg(radius, at):
+    # The roomiest points on a boss walk to its middle, and a first peg there
+    # can crowd out a second the grid points alone had room for: walking never
+    # places fewer pegs than the grid did.
+    shell = Box(300, 120, 80) - Box(296, 116, 76) + Pos(*at, 0) * Cylinder(radius, 78)
 
     behind, _ahead = split_and_join(shell, Plane.XY, Axis.Z, 0.2)
 

@@ -686,11 +686,27 @@ def _pegs(section, plane, ahead, clearance, margin):
     Each peg is round with one flat side, so that one peg alone, all a small face
     may have room for, keeps the halves from turning about it, on no more room
     than a round peg of its size needs.
+
+    Placed from the walked spots first. A first peg walked to a boss's middle can
+    crowd out a second the grid points alone had room for, so where the walked
+    spots place fewer than two, the grid's own placement is kept if it places
+    more: walking never places fewer pegs than the grid did.
     """
     normal = Vector(plane.z_dir).normalized()
     frame = Plane(origin=plane.origin, x_dir=plane.x_dir, z_dir=normal)
+    walked, grid = _roomy_spots(section, frame)
+    joints = _placed_pegs(walked, frame, ahead, clearance, margin)
+    if len(joints) < _JOINTS_MOST:
+        from_grid = _placed_pegs(grid, frame, ahead, clearance, margin)
+        if len(from_grid) > len(joints):
+            joints = from_grid
+    return joints
+
+
+def _placed_pegs(spots, frame, ahead, clearance, margin):
+    """Up to two pegs at ``spots``, roomiest first, each apart from those placed."""
     joints, taken = [], []
-    for spot, edge in _roomy_spots(section, frame):
+    for spot, edge in spots:
         radius = min(PEG_MOST / 2, edge - clearance - margin)
         if radius < PEG_LEAST / 2:
             break
@@ -711,14 +727,12 @@ def _pegs(section, plane, ahead, clearance, margin):
 def _roomy_spots(section, frame):
     """Points on the cut face with how far each lies from the face's edge, farthest first.
 
-    Each face of the cut is sampled on a grid of its own, so a post too small
-    for one grid across the whole cut still has points on it. The roomiest
-    points, and the roomiest of every face, are then also moved to where the face
-    gives them the most room: a wall thinner than a grid step has no point on its
-    middle, and was refused at the very thickness the brief and the refusal
-    state for a peg. The points stay candidates beside the moved ones, since
-    several moved to one boss's middle would otherwise leave a second peg there
-    no place to go.
+    Returned twice: walked, and as the grid found them. Each face of the cut is
+    sampled on a grid of its own, so a post too small for one grid across the
+    whole cut still has points on it. In the walked list the roomiest points,
+    and the roomiest of every face, are moved to the most room near them: a wall
+    thinner than a grid step has no point on its middle, and was refused at the
+    very thickness the brief and the refusal state for a peg.
     """
     found = []
     steps = {}
@@ -738,11 +752,12 @@ def _roomy_spots(section, frame):
         best = next((spot for spot in found if spot[2] is face), None)
         if best is not None and all(best is not seed for seed in seeds):
             seeds.append(best)
-    spots = [
+    seeded = {id(seed) for seed in seeds}
+    walked = [
         _roomiest(face, frame, local, room, steps[id(face)]) for local, room, face in seeds
-    ] + [(local, room) for local, room, _face in found]
-    spots.sort(key=lambda spot: -spot[1])
-    return spots
+    ] + [(spot[0], spot[1]) for spot in found if id(spot) not in seeded]
+    walked.sort(key=lambda spot: -spot[1])
+    return walked, [(local, room) for local, room, _face in found]
 
 
 def _room_at(face, frame, local) -> float | None:
