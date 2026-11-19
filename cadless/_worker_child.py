@@ -39,11 +39,11 @@ def measurement_budget(wall_secs: float, elapsed: float) -> float:
     long would otherwise be pushed past it by the measurement and return nothing.
     With no clock to divide, the fixed budget.
     """
-    from cadless import assembly_check  # noqa: PLC0415 - lazy, as below
+    from cadless import assembly_measure  # noqa: PLC0415 - lazy, as below
 
     if wall_secs <= 0:
-        return assembly_check.MEASUREMENT_TIME_BUDGET_SECONDS
-    return max(0.0, wall_secs - elapsed) * assembly_check.MEASUREMENT_TIME_SHARE
+        return assembly_measure.MEASUREMENT_TIME_BUDGET_SECONDS
+    return max(0.0, wall_secs - elapsed) * assembly_measure.MEASUREMENT_TIME_SHARE
 
 
 def _error_payload(exc: BaseException, code: str, *, prefix: str = "") -> dict:
@@ -258,7 +258,7 @@ def main(argv: list[str]) -> int:
         if check_assembly and len(parts) > 1:
             from dataclasses import asdict  # noqa: PLC0415 - lazy, as the exporters are
 
-            from cadless.assembly_check import measure_assembly  # noqa: PLC0415
+            from cadless.assembly_measure import measure_assembly  # noqa: PLC0415
 
             budget = measurement_budget(wall_secs, time.monotonic() - _STARTED)
             # The names the tree gave, so what the measurement could not

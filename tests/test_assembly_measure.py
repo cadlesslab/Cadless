@@ -25,10 +25,11 @@ from build123d import (
     Vector,
 )
 
-from cadless.assembly_check import _BLOCKED as BLOCKED
-from cadless.assembly_check import _FREE as FREE
-from cadless.assembly_check import _UNDECIDED as UNDECIDED
-from cadless.assembly_check import evaluate_assembly, measure_assembly
+from cadless.assembly_check import evaluate_assembly
+from cadless.assembly_measure import _BLOCKED as BLOCKED
+from cadless.assembly_measure import _FREE as FREE
+from cadless.assembly_measure import _UNDECIDED as UNDECIDED
+from cadless.assembly_measure import measure_assembly
 from cadless.printer_profile import AssemblySpec, BuildVolume
 
 pytestmark = pytest.mark.build123d
@@ -111,7 +112,7 @@ def test_interpenetrating_parts_record_where_they_share_volume():
 def test_parts_that_only_touch_are_not_asked_where_they_overlap(monkeypatch):
     # Where two parts share volume costs another intersection, so a pair that
     # shares none never pays for one.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     asked = []
     real = module._shared_box
@@ -145,7 +146,7 @@ def test_a_budget_spent_mid_pairs_keeps_where_the_measured_pairs_overlap():
 def test_only_overlaps_past_the_kernel_s_noise_let_a_pair_pass_through(monkeypatch):
     # A shared volume at rounding noise is no overlap and blocks nothing, so only
     # the real one is let pass in the second search.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     seen = {}
 
@@ -258,7 +259,7 @@ def test_no_overlap_means_no_second_search():
 
 def test_a_second_search_that_cannot_rule_makes_no_claim(monkeypatch):
     # Its reason is about a build that does not exist, so it is not reported either.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     real = module._disassembly_order
 
@@ -343,7 +344,7 @@ def test_a_grazing_contact_is_not_stepped_over():
     """
     from build123d import Vector
 
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     first = Pos(5, 5, 5) * Box(10, 10, 10)
     second = Pos(25, 5.5, 5) * Box(10, 10, 10)
@@ -427,7 +428,7 @@ def test_a_negative_shared_volume_is_no_answer(monkeypatch):
     # The kernel's volume is signed, and no intersection holds less than nothing.
     from OCP.GProp import GProp_GProps
 
-    from cadless.assembly_check import _shared_volume
+    from cadless.assembly_measure import _shared_volume
 
     monkeypatch.setattr(GProp_GProps, "Mass", lambda self: -5.0)
     assert _shared_volume(Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10)) is None
@@ -463,7 +464,7 @@ def test_parts_the_budget_left_unmeasured_are_not_called_loose():
 
 
 def test_a_prism_volume_that_is_not_a_number_is_no_answer(volumes_are_not_numbers):
-    from cadless.assembly_check import _prism_overlap
+    from cadless.assembly_measure import _prism_overlap
 
     assert (
         _prism_overlap(Box(20, 20, 10).wrapped, (Pos(10, 0, 0) * Box(20, 20, 10)).wrapped) is None
@@ -471,7 +472,7 @@ def test_a_prism_volume_that_is_not_a_number_is_no_answer(volumes_are_not_number
 
 
 def test_a_cut_volume_that_is_not_a_number_is_no_answer(volumes_are_not_numbers):
-    from cadless.assembly_check import _cut_volume
+    from cadless.assembly_measure import _cut_volume
 
     assert _cut_volume(Box(20, 20, 10), Pos(10, 0, 0) * Box(20, 20, 10)) is None
 
@@ -481,7 +482,7 @@ def test_a_prism_whose_volume_is_not_a_number_is_no_sweep(volumes_are_not_number
     # nothing a finite sweep could enclose.
     from OCP.gp import gp_Vec
 
-    from cadless.assembly_check import _prism
+    from cadless.assembly_measure import _prism
 
     assert _prism(Box(10, 10, 10).faces()[0].wrapped, gp_Vec(0, 0, 5)) is None
 
@@ -505,7 +506,7 @@ def test_a_part_placed_at_no_number_is_measured_against_nothing(position):
     probe = (
         "import json, time\n"
         "from build123d import Box, Pos\n"
-        "from cadless.assembly_check import measure_assembly\n"
+        "from cadless.assembly_measure import measure_assembly\n"
         f"first = Pos(float({position!r}), 0, 0) * Box(20, 20, 10)\n"
         "start = time.monotonic()\n"
         "m = measure_assembly([first, Pos(30, 0, 0) * Box(20, 20, 10)], time_budget=5.0)\n"
@@ -558,7 +559,7 @@ def test_a_distance_probe_that_cannot_run_is_reported_rather_than_cleared(monkey
     # distance query is what it rests on. One the kernel could not answer must not
     # read as "nothing in the way" -- that frees a part on no evidence -- nor as a
     # trap nobody measured, which sends a repair after geometry that may be fine.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     monkeypatch.setattr(module, "_distance", lambda first, second: None)
     m = measure_assembly([_as_nurbs(part) for part in _mated_pair()])
@@ -571,7 +572,7 @@ def test_a_contact_the_walk_cannot_look_past_is_reported_rather_than_trapped(mon
     # Blocks touching face to face, walked because neither can be swept: the
     # pairwise phase measures them where they stand, and every look the walk then
     # takes at the contact is refused. Nothing clashed, so nothing is trapped.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     real = module._shared_volume
     calls = []
@@ -591,7 +592,7 @@ def test_a_contact_the_walk_cannot_look_past_is_reported_rather_than_trapped(mon
 def test_a_clash_probe_that_cannot_run_is_reported_rather_than_cleared(monkeypatch):
     # The other half: where two parts stand touching, the shared volume is what
     # says whether they clash, so a refused volume query is reported the same way.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     monkeypatch.setattr(module, "_shared_volume", lambda first, second: None)
     m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)])
@@ -679,7 +680,7 @@ def _pin_in_a_blind_hole():
 
 def _rule(parts, index, heading):
     """How the search rules one part sliding along ``heading``: free, blocked or undecided."""
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     spheres = [module._sphere(part) for part in parts]
     others = [other for other in range(len(parts)) if other != index]
@@ -756,7 +757,8 @@ def _vase_and_a_block_grazing_its_bulge(depth=0.03):
 def test_a_block_grazing_a_curved_bulge_is_stopped_by_it():
     from build123d import Location
 
-    from cadless.assembly_check import OVERLAP_EPSILON_MM3, _shared_volume
+    from cadless.assembly_check import OVERLAP_EPSILON_MM3
+    from cadless.assembly_measure import _shared_volume
 
     block, vase = _vase_and_a_block_grazing_its_bulge()
     crossing = block.moved(Location(Vector(0, 60, 0)))
@@ -804,7 +806,7 @@ def test_a_prism_boolean_the_kernel_refuses_has_the_pair_ruled_another_way(
     # A refused boolean is neither a clash nor a clear path, so the pair is ruled
     # another way: along the slot, by the bar swept back against the channel; up,
     # by walking the channel until its floor meets the bar.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     monkeypatch.setattr(module, "_prism_overlap", lambda prism, other: None)
     assert _rule(_channel_and_bar(), 0, heading) == verdict
@@ -813,14 +815,14 @@ def test_a_prism_boolean_the_kernel_refuses_has_the_pair_ruled_another_way(
 def test_a_sweep_the_kernel_will_not_build_leaves_the_pair_to_the_walk(monkeypatch):
     # A refused sweep is no clash, so blocking on it refuses a part that comes
     # out freely; the pair is walked instead, which measures it another way.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
     assert _rule(_channel_and_bar(), 0, (1, 0, 0)) == FREE
 
 
 def test_a_pair_that_can_be_neither_swept_nor_measured_is_left_undecided(monkeypatch):
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     monkeypatch.setattr(module, "_sweep_pieces", lambda part, direction, length: None)
     monkeypatch.setattr(module, "_distance", lambda first, second: None)
@@ -833,7 +835,7 @@ def _swept_volume(part, heading, length):
     from OCP.BRepGProp import BRepGProp
     from OCP.GProp import GProp_GProps
 
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     pieces = module._sweep_pieces(part, Vector(*heading).normalized(), length)
     assert pieces is not None
@@ -936,7 +938,7 @@ def _halves_built_inside_out(heading):
     from OCP.gp import gp_Vec
     from OCP.GProp import GProp_GProps
 
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     path = Vector(*heading).normalized()
     face = Sphere(5).faces()[0].wrapped
@@ -1061,7 +1063,8 @@ def _pin_bulging_past_its_bore():
 def test_a_pin_bulging_past_its_bore_is_not_settled_by_the_bore():
     from build123d import Location
 
-    from cadless.assembly_check import OVERLAP_EPSILON_MM3, _shared_volume
+    from cadless.assembly_check import OVERLAP_EPSILON_MM3
+    from cadless.assembly_measure import _shared_volume
 
     pin, block, down = _pin_bulging_past_its_bore()
     deepest = max(_shared_volume(pin.moved(Location(down * t)), block) for t in (21, 25, 31))
@@ -1076,7 +1079,7 @@ def test_a_bore_whose_floor_the_distance_misses_does_not_settle_its_pin(monkeypa
     # down into the floor is still stopped by it.
     from build123d import Edge
 
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     block, pin = _pin_in_a_blind_hole()
     real = module._distance
@@ -1093,7 +1096,7 @@ def test_a_bore_whose_floor_the_distance_misses_does_not_settle_its_pin(monkeypa
 def test_a_part_whose_box_cannot_be_taken_is_not_read_as_clear(monkeypatch):
     # The channel rising meets the bar. With no box for the bar, the channel's own
     # sweep cannot be checked against it, and that must not read as nothing met.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     channel, bar = _channel_and_bar()
     real = module._box_of
@@ -1125,7 +1128,7 @@ def test_parts_the_walk_cannot_see_past_are_named_rather_than_called_trapped():
 def test_a_heading_away_from_a_part_that_is_already_an_axis_is_tried_once():
     # The hinge's case: the leaf sits straight along -X from the pin, so leading
     # away from it is +X, which the axes already hold.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     spheres = [((0.0, 0.0, 0.0), 1.0), ((-5.0, 0.0, 0.0), 1.0)]
     headings = module._candidate_directions(spheres, 0, [1])
@@ -1135,7 +1138,7 @@ def test_a_heading_away_from_a_part_that_is_already_an_axis_is_tried_once():
 def test_the_order_search_does_not_ask_again_what_the_pairwise_phase_measured(monkeypatch):
     # Two blocks that sweep exactly: their shared volume where they stand is asked
     # once, by the pairwise phase, and not again for every heading tried.
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     asked = []
     real = module._shared_volume
@@ -1184,7 +1187,7 @@ def test_what_the_measurement_could_not_establish_names_the_parts():
 
 
 def test_a_clash_probe_that_cannot_run_names_the_parts(monkeypatch):
-    import cadless.assembly_check as module
+    import cadless.assembly_measure as module
 
     monkeypatch.setattr(module, "_shared_volume", lambda first, second: None)
     m = measure_assembly([Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)], names=["base", "lid"])

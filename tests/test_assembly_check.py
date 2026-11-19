@@ -1354,3 +1354,20 @@ def test_a_name_written_with_a_joiner_is_used():
 def test_a_name_with_nothing_visible_is_numbered():
     report = evaluate_assembly(_m(overlaps=[[0, 1, 40.0]]), SPEC, names=["\u200b\u200d", "lid"])
     assert any(f.startswith("part 1 and lid share") for f in report.failures)
+
+
+# --- the names the measurement took with it -------------------------------
+
+
+def test_the_names_that_moved_to_the_measurement_still_resolve_here():
+    """The public names that moved; code built against an earlier release may still import them from here."""
+    from cadless import assembly_check, assembly_measure
+
+    for name in (
+        "measure_assembly",
+        "ORDER_PROBE_BUDGET",
+        "MEASUREMENT_TIME_SHARE",
+        "MEASUREMENT_TIME_BUDGET_SECONDS",
+    ):
+        assert getattr(assembly_check, name) is getattr(assembly_measure, name)
+    assert not hasattr(assembly_check, "no_such_name")
