@@ -27,7 +27,8 @@ from build123d import (
     extrude,
 )
 
-from cadless.assembly_check import evaluate_assembly, measure_assembly
+from cadless.assembly_check import evaluate_assembly
+from cadless.assembly_measure import measure_assembly
 from cadless.joinery import JoineryError, script_namespace, split_and_join
 from cadless.printer_profile import AssemblySpec, BuildVolume
 
