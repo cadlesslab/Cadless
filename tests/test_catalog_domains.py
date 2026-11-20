@@ -221,23 +221,8 @@ def test_load_manifest_accepts_registered_synthetic_domain(tmp_path, garden):
 # worker child: scale applies to exports only, never the geometry summary
 # --------------------------------------------------------------------------- #
 
-_CHILD_STUB = """
-class _Size:
-    X, Y, Z = 1.0, 2.0, 3.0
-
-class _BBox:
-    size = _Size()
-
-class _Shape:
-    volume = 6.0
-    is_manifold = True
-    def bounding_box(self):
-        return _BBox()
-    def scale(self, factor, about=None):
-        return ("scaled", factor, about)
-
-result = _Shape()
-"""
+# Placed off the origin, so the exported shape shows what the scale is about.
+_CHILD_STUB = "from build123d import *\nresult = Pos(1, 0, 0) * Box(1, 2, 3)\n"
 
 
 def _run_child(tmp_path, monkeypatch, capsys, extra_argv):
@@ -249,7 +234,14 @@ def _run_child(tmp_path, monkeypatch, capsys, extra_argv):
         seen["shape"] = shape
         return str(Path(out_dir) / f"{name}.fake")
 
+    summarise = _worker_child._summarise
+
+    def summarise_and_record(result):
+        seen["result"] = result
+        return summarise(result)
+
     monkeypatch.setattr(exporters, "EXPORTERS", {"fake": fake_export})
+    monkeypatch.setattr(_worker_child, "_summarise", summarise_and_record)
     code_file = tmp_path / "m.py"
     code_file.write_text(_CHILD_STUB)
     rc = _worker_child.main(["prog", str(code_file), str(tmp_path), *extra_argv])
@@ -258,19 +250,22 @@ def _run_child(tmp_path, monkeypatch, capsys, extra_argv):
     return rc, payload, seen
 
 
+@pytest.mark.build123d
 def test_child_scales_exported_shape_only(tmp_path, monkeypatch, capsys):
     rc, payload, seen = _run_child(tmp_path, monkeypatch, capsys, ["1000"])
     assert rc == 0 and payload["ok"]
     # About the world origin, so a placed result's position is converted too.
-    assert seen["shape"] == ("scaled", 1000.0, (0, 0, 0))
-    assert payload["volume"] == 6.0  # geometry summary is unscaled
-    assert payload["bbox"] == [1.0, 2.0, 3.0]
+    box = seen["shape"].bounding_box()
+    assert (box.center().X, box.size.Y) == (pytest.approx(1000.0), pytest.approx(2000.0))
+    assert payload["volume"] == pytest.approx(6.0)  # geometry summary is unscaled
+    assert payload["bbox"] == pytest.approx([1.0, 2.0, 3.0])
 
 
+@pytest.mark.build123d
 def test_child_identity_scale_exports_original_shape(tmp_path, monkeypatch, capsys):
     rc, payload, seen = _run_child(tmp_path, monkeypatch, capsys, [])
     assert rc == 0 and payload["ok"]
-    assert not isinstance(seen["shape"], tuple)  # the shape itself, unscaled
+    assert seen["shape"] is seen["result"]  # the shape itself, not a scaled copy
 
 
 # --------------------------------------------------------------------------- #

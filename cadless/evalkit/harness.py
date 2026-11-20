@@ -148,20 +148,23 @@ def load_tier(name: str) -> list[BenchmarkPrompt]:
 
 
 def default_run(code: str) -> RunResult:
-    """Minimal in-process executor: compile, exec, and check `result` exists.
+    """Minimal in-process executor: gate and run the script, then check `result`.
 
-    Used for the harness skeleton + tests. NOT a sandbox — the production worker
-     replaces this with a resource-limited isolated runner.
+    The same gate and the same restricted namespace the worker child runs a
+    script under, but none of the child's reading of the result, and no
+    process of its own: no CPU limit, no wall clock, and scripts run one after
+    another share the engine's objects. The production worker replaces this
+    wherever that matters.
     """
+    # build123d only where code runs.
+    from cadless.script_runtime import ScriptRefused, run_script  # noqa: PLC0415
+
     try:
-        compiled = compile(code, "<eval>", "exec")
+        ns = run_script(code, "<eval>")
     except SyntaxError as exc:  # pragma: no cover - exercised via tests
         return RunResult(ok=False, error=f"compile: {exc}")
-    from cadless.joinery import script_namespace  # noqa: PLC0415 - build123d only where code runs
-
-    ns = script_namespace()
-    try:
-        exec(compiled, ns)  # noqa: S102 - trusted in tests; sandboxed in prod
+    except ScriptRefused as exc:
+        return RunResult(ok=False, error=f"refused: {exc}")
     except Exception as exc:
         return RunResult(ok=False, error=f"runtime: {type(exc).__name__}: {exc}")
     if RESULT_VARIABLE not in ns:

@@ -131,8 +131,9 @@ serve a file elsewhere on the machine: the loader copies what those paths name
 into the store, and the artifacts route serves the copies.
 
 Each step's script is ordinary build123d that assigns its output to `result` —
-the same contract generated code obeys, enforced by the validator and described
-in [core-modules.md](./core-modules.md#changing-the-validator).
+the same contract generated code obeys, enforced by the validator and by the
+namespace every script runs in, and described in
+[core-modules.md](./core-modules.md#changing-the-validator).
 
 ## A kit's assembly motion
 
