@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+import ast
 import math
 import struct
+from pathlib import Path
 
 import pytest
 
-from cadless.item_key import ItemKeyError, canonical_params, canonical_pose, jcs, typed_params
+from cadless import item_key
+from cadless.item_key import (
+    HELPER_SOURCES,
+    ItemKeyError,
+    canonical_params,
+    canonical_pose,
+    canonical_recipe,
+    helpers_called,
+    jcs,
+    typed_params,
+)
+from cadless.params import PARAMS_VARIABLE
 
 
 def _double(bits: str) -> float:
@@ -277,3 +290,246 @@ def test_a_pose_of_the_wrong_length_is_refused(pose: tuple) -> None:
 def test_a_pose_holding_a_non_number_is_refused(pose: tuple) -> None:
     with pytest.raises(ItemKeyError):
         canonical_pose(pose)
+
+
+# --- canonical recipe -------------------------------------------------------
+
+PLATE = (
+    '"""A plate with a hole."""\n'
+    "from build123d import *\n"
+    "\n"
+    'params = {"width": 40, "height": 20.5, "label": "A"}  # mm\n'
+    "\n"
+    "\n"
+    "def hole(d):\n"
+    '    """One hole."""\n'
+    "    return Cylinder(d / 2, 3)\n"
+    "\n"
+    "\n"
+    'part = Box(params["width"], params["height"], 3) - hole(6)\n'
+)
+
+
+def test_the_canonical_recipe_text_is_exact() -> None:
+    assert canonical_recipe(PLATE) == (
+        b"from build123d import *\n"
+        b"params = {'width': ..., 'height': ..., 'label': ...}\n"
+        b"\n"
+        b"def hole(d):\n"
+        b"    return Cylinder(d / 2, 3)\n"
+        b"part = Box(params['width'], params['height'], 3) - hole(6)"
+    )
+
+
+def test_comments_layout_and_docstrings_do_not_change_the_recipe_text() -> None:
+    rewritten = (
+        "from build123d import *  # every name\n"
+        "params = {'width': 40,\n"
+        "          'height': 20.5, 'label': 'A'}\n"
+        "def hole(d):\n"
+        "    return Cylinder(d/2, 3)  # radius, height\n"
+        "part = (Box(params['width'], params['height'], 3)\n"
+        "        - hole(6))\n"
+    )
+    assert canonical_recipe(rewritten) == canonical_recipe(PLATE)
+
+
+def test_params_values_do_not_change_the_recipe_text() -> None:
+    other = PLATE.replace(
+        '"width": 40, "height": 20.5, "label": "A"', '"width": 9, "height": 7, "label": "B"'
+    )
+    assert canonical_recipe(other) == canonical_recipe(PLATE)
+
+
+def test_the_params_names_stay_in_the_recipe_text_in_order() -> None:
+    # A recipe can loop over params, so the order of its names can change the shape.
+    reordered = PLATE.replace('"width": 40, "height": 20.5', '"height": 20.5, "width": 40')
+    assert canonical_recipe(reordered) != canonical_recipe(PLATE)
+
+
+def test_the_params_literal_keeps_its_place() -> None:
+    # A statement above the literal runs before params exists, so where the
+    # literal stands can change what runs.
+    above = "params = {'w': 1}\nx = 2\n"
+    below = "x = 2\nparams = {'w': 1}\n"
+    assert canonical_recipe(above) != canonical_recipe(below)
+
+
+def test_a_change_to_params_after_the_literal_stays_in_the_text() -> None:
+    plain = "params = {'w': 1}\n"
+    assert canonical_recipe(plain + "params['w'] = 2\n") != canonical_recipe(plain)
+
+
+def test_every_docstring_is_dropped_and_an_emptied_body_keeps_a_pass() -> None:
+    source = (
+        '"""Module."""\n'
+        'params = {"w": 1}\n'
+        "class Plate:\n"
+        '    """Class."""\n'
+        "def f():\n"
+        '    """Function."""\n'
+        "async def g():\n"
+        '    """Coroutine."""\n'
+        "    return 1\n"
+    )
+    assert canonical_recipe(source) == (
+        b"params = {'w': ...}\n"
+        b"\n"
+        b"class Plate:\n"
+        b"    pass\n"
+        b"\n"
+        b"def f():\n"
+        b"    pass\n"
+        b"\n"
+        b"async def g():\n"
+        b"    return 1"
+    )
+
+
+def test_a_string_that_is_not_a_docstring_is_kept() -> None:
+    plain = "params = {'w': 1}\nx = 2\n"
+    assert canonical_recipe(plain + "'a note'\n") != canonical_recipe(plain)
+
+
+@pytest.mark.parametrize("body", ["...", "return 'x'"])
+def test_a_first_statement_that_is_not_a_lone_string_is_kept(body: str) -> None:
+    source = f"params = {{}}\ndef f():\n    {body}\n"
+    assert canonical_recipe(source) == f"params = {{}}\n\ndef f():\n    {body}".encode()
+
+
+def test_the_params_literal_is_the_one_the_engine_reads() -> None:
+    source = f"{PARAMS_VARIABLE} = {{'w': 1}}\n"
+    assert canonical_recipe(source) == f"{PARAMS_VARIABLE} = {{'w': ...}}".encode()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("x = 1\n", id="none"),
+        pytest.param("params = {'w': 1}\nparams = {'w': 2}\n", id="two"),
+        pytest.param("if True:\n    params = {'w': 1}\n", id="inside-a-block"),
+        pytest.param("params = {'w': 1}\nparams: int = 3\n", id="annotated-and-plain"),
+        pytest.param("params = 5\n", id="not-a-dict"),
+        pytest.param("params = dict(w=1)\n", id="not-a-dict-literal"),
+        pytest.param("params = {'w': w0}\n", id="value-not-a-literal"),
+        pytest.param("params = {'w': 1}\nparams = dict(params)\n", id="bound-again"),
+        pytest.param("params, x = {'w': 1}, 2\n", id="unpacked"),
+        pytest.param("*params, = {'w': 1}\n", id="starred"),
+        pytest.param("params = q = {'w': 1}\n", id="chained"),
+        pytest.param("params = {1: 2}\n", id="name-not-a-string"),
+        pytest.param("params = {[1]: 2}\n", id="name-unhashable"),
+        pytest.param("params = {'w': (1, 2)}\n", id="value-a-tuple"),
+        pytest.param("params = {'w': None}\n", id="value-none"),
+    ],
+)
+def test_a_recipe_without_exactly_one_plain_params_literal_is_refused(source: str) -> None:
+    with pytest.raises(ItemKeyError, match="params"):
+        canonical_recipe(source)
+
+
+def test_an_annotated_params_is_refused_as_such() -> None:
+    with pytest.raises(ItemKeyError, match="annotates"):
+        canonical_recipe("params: dict = {'w': 1}\n")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("params = {'w': 1}\ndef (", id="syntax"),
+        pytest.param("params = {'w': 1}\x00", id="null-byte"),
+        pytest.param("params = {'w': '\ud800'}", id="lone-surrogate"),
+        pytest.param("params = {}\nx = " + "+".join(["1"] * 2_000), id="too-deep-to-write"),
+        pytest.param("params = {}\nx = " + "+".join(["1"] * 100_000), id="too-deep-to-parse"),
+    ],
+)
+def test_a_recipe_python_cannot_parse_or_write_back_is_refused(source: str) -> None:
+    with pytest.raises(ItemKeyError, match="recipe"):
+        canonical_recipe(source)
+
+
+def test_a_recipe_is_text() -> None:
+    with pytest.raises(ItemKeyError, match="text"):
+        canonical_recipe(b"params = {'w': 1}\n")
+
+
+# --- helpers called ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("a, b = split_and_join(part, plane, axis, 0.2)\n", id="called"),
+        pytest.param("join = split_and_join\n", id="named"),
+        pytest.param("h = [split_and_join(p, plane, axis, 0.2) for p in parts]\n", id="nested"),
+        pytest.param("def cut(p):\n    return split_and_join(p, plane, axis, 0.2)\n", id="in-def"),
+    ],
+)
+def test_a_helper_is_found_wherever_the_recipe_loads_its_name(source: str) -> None:
+    assert helpers_called(source) == frozenset({"split_and_join"})
+
+
+def test_a_helper_the_recipe_binds_itself_still_counts() -> None:
+    # Telling a recipe's own function from the engine's is not worth the risk of
+    # leaving the helper's source out of the key, so a load always counts.
+    source = "def split_and_join(*a):\n    return a\nsplit_and_join(1)\n"
+    assert helpers_called(source) == frozenset({"split_and_join"})
+
+
+def test_only_a_load_of_the_bare_name_counts() -> None:
+    source = (
+        "my_split_and_join = 1\n"
+        "y = my_split_and_join\n"
+        "x = obj.split_and_join\n"
+        "note = 'split_and_join'\n"
+        "split_and_join = 2\n"
+    )
+    assert helpers_called(source) == frozenset()
+
+
+def test_helpers_called_refuses_a_source_python_cannot_parse() -> None:
+    with pytest.raises(ItemKeyError, match="recipe"):
+        helpers_called("def (")
+
+
+def test_every_helper_a_script_is_handed_has_its_sources_listed() -> None:
+    # Imported here: joinery imports build123d, which the rest of this file does not need.
+    from cadless.joinery import script_namespace
+
+    assert set(HELPER_SOURCES) == set(script_namespace())
+
+
+def test_every_listed_helper_source_is_a_file_beside_the_module() -> None:
+    package = Path(item_key.__file__).parent
+    for files in HELPER_SOURCES.values():
+        for name in files:
+            assert (package / name).is_file(), name
+
+
+def test_a_helpers_listed_sources_hold_every_engine_module_they_import() -> None:
+    # A helper's output can change through any engine module it imports, so each
+    # listed file's engine imports must be listed too.
+    package = Path(item_key.__file__).parent
+    for helper, files in HELPER_SOURCES.items():
+        listed = {name.removesuffix(".py") for name in files}
+        for name in files:
+            imported = _engine_imports(ast.parse((package / name).read_text()))
+            assert imported <= listed, f"{helper}: {name} imports {sorted(imported - listed)}"
+
+
+def _engine_imports(tree: ast.Module) -> set[str]:
+    # The cadless modules a source imports, by their names within the package.
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found |= {a.name for a in node.names if a.name.startswith("cadless.")}
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level == 0 and module != "cadless" and not module.startswith("cadless."):
+                continue
+            if node.level == 0 and module.startswith("cadless."):
+                found.add(module)
+            else:  # from cadless import x, from . import x, from .x import y
+                base = module.removeprefix("cadless").lstrip(".")
+                found |= {base} if base else {a.name for a in node.names}
+    return {name.removeprefix("cadless.") for name in found}

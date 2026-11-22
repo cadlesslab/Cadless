@@ -17,14 +17,19 @@ changed with a third-party library's release would defeat the point of a key.
 
 from __future__ import annotations
 
+import ast
 import math
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 __all__ = [
+    "HELPER_SOURCES",
     "PARAM_TYPES",
     "ItemKeyError",
     "canonical_params",
     "canonical_pose",
+    "canonical_recipe",
+    "helpers_called",
     "jcs",
     "typed_params",
 ]
@@ -156,6 +161,150 @@ def canonical_pose(pose: Sequence[float]) -> tuple[float, ...]:
 def _rounded(value: float) -> float:
     # Adding 0.0 turns a negative zero, which round() keeps, into zero.
     return round(value, _POSE_DECIMALS) + 0.0
+
+
+# The module-level name a recipe's parameter literal is bound to, and the types
+# of value the literal may hold.
+_PARAMS_NAME = "params"
+_PARAM_VALUE_TYPES = (bool, int, float, str)
+
+# The nodes whose first statement, when it is a string, is a docstring.
+_DOCUMENTED = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+
+#: Each engine helper a recipe is handed, by name, and the files beside this
+#: module whose bytes a leaf calling that helper is keyed on: the helper's module
+#: and every engine module it imports.
+HELPER_SOURCES: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {"split_and_join": ("joinery.py", "printer_profile.py")}
+)
+
+
+def canonical_recipe(source: str) -> bytes:
+    """``source`` as the text a leaf key covers: what it does, short of its params values.
+
+    The module is parsed and written back with ``ast.unparse``, so comments and
+    layout drop out, and every docstring is dropped (a body it leaves empty keeps a
+    ``pass``). The one module-level ``params = {...}`` literal stays where it
+    stands, its names in their order and each value written as ``...``: the values
+    are keyed by ``canonical_params``, but where the literal stands and the order of
+    its names can change what the recipe does. Encoded as UTF-8.
+
+    Raises ``ItemKeyError`` unless ``source`` is text that Python can parse and
+    write back, binding ``params`` at module level exactly once, as a plain
+    (unannotated) dict literal from string names to numbers, strings or booleans.
+    """
+    text, _names = _canonical_recipe(source)
+    return text
+
+
+def helpers_called(source: str) -> frozenset[str]:
+    """The engine helpers in ``HELPER_SOURCES`` that ``source`` loads by name.
+
+    Every load of a helper's bare name counts, even where the recipe binds that
+    name itself: telling a recipe's own function from the engine's is not worth
+    the risk of leaving the helper's source out of the key.
+
+    Raises ``ItemKeyError`` for a source that Python cannot parse.
+    """
+    tree = _parse_recipe(source)
+    return frozenset(
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in HELPER_SOURCES
+    )
+
+
+def _canonical_recipe(source: object) -> tuple[bytes, tuple[str, ...]]:
+    # The canonical text, and the names of the params literal in their order.
+    tree = _parse_recipe(source)
+    _drop_docstrings(tree)
+    names = _blank_params_literal(tree)
+    try:
+        text = ast.unparse(tree)
+    except RecursionError as error:
+        raise ItemKeyError("the recipe is nested too deeply to write back") from error
+    return text.encode("utf-8"), names
+
+
+def _parse_recipe(source: object) -> ast.Module:
+    if not isinstance(source, str):
+        raise ItemKeyError(f"a recipe is text, not a {type(source).__name__}")
+    try:
+        return ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError) as error:
+        # A null byte raises SyntaxError, a lone surrogate UnicodeEncodeError (a
+        # ValueError), and nesting past the interpreter's limit RecursionError.
+        raise ItemKeyError(f"cannot parse the recipe: {error}") from error
+
+
+def _drop_docstrings(tree: ast.Module) -> None:
+    for node in ast.walk(tree):
+        if not isinstance(node, _DOCUMENTED) or not node.body:
+            continue
+        first = node.body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            del node.body[0]
+            if not node.body and not isinstance(node, ast.Module):
+                # ast.unparse reads a statement's line number.
+                node.body.append(ast.copy_location(ast.Pass(), first))
+
+
+def _blank_params_literal(tree: ast.Module) -> tuple[str, ...]:
+    # Writes the params literal's values as ..., in place; returns its names.
+    bindings = []
+    for index, node in enumerate(tree.body):
+        if isinstance(node, ast.AnnAssign) and _binds_params(node.target):
+            raise ItemKeyError("the recipe annotates params; write it as a plain params = {...}")
+        if isinstance(node, ast.Assign) and any(_binds_params(t) for t in node.targets):
+            bindings.append(index)
+    if len(bindings) != 1:
+        raise ItemKeyError(
+            "a recipe binds params once at module level, as one params = {...} literal; "
+            f"this one binds it {len(bindings)} times"
+        )
+    node = tree.body[bindings[0]]
+    if not (
+        len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Dict)
+    ):
+        raise ItemKeyError("params is bound as params = {...}, a plain dict literal")
+    try:
+        literal = ast.literal_eval(node.value)
+    except (ValueError, TypeError) as error:  # not a literal; an unhashable name
+        raise ItemKeyError(
+            f"the params literal holds something that is not a literal: {error}"
+        ) from error
+    for name, default in literal.items():
+        if not isinstance(name, str):
+            raise ItemKeyError(f"params name {name!r} is not a string")
+        if not isinstance(default, _PARAM_VALUE_TYPES):
+            raise ItemKeyError(
+                f"params value {default!r} of {name!r} is not a number, string or bool"
+            )
+    names = tuple(literal)
+    blank = ast.Assign(
+        targets=[ast.Name(id=_PARAMS_NAME, ctx=ast.Store())],
+        value=ast.Dict(
+            keys=[ast.Constant(name) for name in names],
+            values=[ast.Constant(...) for _ in names],
+        ),
+    )
+    tree.body[bindings[0]] = ast.copy_location(blank, node)
+    return names
+
+
+def _binds_params(target: ast.expr) -> bool:
+    return any(
+        isinstance(node, ast.Name) and node.id == _PARAMS_NAME and isinstance(node.ctx, ast.Store)
+        for node in ast.walk(target)
+    )
 
 
 def jcs(value: object) -> bytes:
