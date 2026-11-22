@@ -1,0 +1,935 @@
+{
+  "about": "Test vectors for the item key definitions in cadless/item_key.py, described in docs/extending/item-keys.md. Each case gives its input and either its outcome or refused: true. Numbers given as bits are IEEE 754 doubles in hex.",
+  "definitions": 1,
+  "jcs": [
+    {
+      "name": "rfc8785-number-0000000000000000",
+      "bits": "0000000000000000",
+      "output": "0"
+    },
+    {
+      "name": "rfc8785-number-8000000000000000",
+      "bits": "8000000000000000",
+      "output": "0"
+    },
+    {
+      "name": "rfc8785-number-0000000000000001",
+      "bits": "0000000000000001",
+      "output": "5e-324"
+    },
+    {
+      "name": "rfc8785-number-8000000000000001",
+      "bits": "8000000000000001",
+      "output": "-5e-324"
+    },
+    {
+      "name": "rfc8785-number-7fefffffffffffff",
+      "bits": "7fefffffffffffff",
+      "output": "1.7976931348623157e+308"
+    },
+    {
+      "name": "rfc8785-number-ffefffffffffffff",
+      "bits": "ffefffffffffffff",
+      "output": "-1.7976931348623157e+308"
+    },
+    {
+      "name": "rfc8785-number-4340000000000000",
+      "bits": "4340000000000000",
+      "output": "9007199254740992"
+    },
+    {
+      "name": "rfc8785-number-c340000000000000",
+      "bits": "c340000000000000",
+      "output": "-9007199254740992"
+    },
+    {
+      "name": "rfc8785-number-4430000000000000",
+      "bits": "4430000000000000",
+      "output": "295147905179352830000"
+    },
+    {
+      "name": "rfc8785-number-44b52d02c7e14af5",
+      "bits": "44b52d02c7e14af5",
+      "output": "9.999999999999997e+22"
+    },
+    {
+      "name": "rfc8785-number-44b52d02c7e14af6",
+      "bits": "44b52d02c7e14af6",
+      "output": "1e+23"
+    },
+    {
+      "name": "rfc8785-number-44b52d02c7e14af7",
+      "bits": "44b52d02c7e14af7",
+      "output": "1.0000000000000001e+23"
+    },
+    {
+      "name": "rfc8785-number-444b1ae4d6e2ef4e",
+      "bits": "444b1ae4d6e2ef4e",
+      "output": "999999999999999700000"
+    },
+    {
+      "name": "rfc8785-number-444b1ae4d6e2ef4f",
+      "bits": "444b1ae4d6e2ef4f",
+      "output": "999999999999999900000"
+    },
+    {
+      "name": "rfc8785-number-444b1ae4d6e2ef50",
+      "bits": "444b1ae4d6e2ef50",
+      "output": "1e+21"
+    },
+    {
+      "name": "rfc8785-number-3eb0c6f7a0b5ed8c",
+      "bits": "3eb0c6f7a0b5ed8c",
+      "output": "9.999999999999997e-7"
+    },
+    {
+      "name": "rfc8785-number-3eb0c6f7a0b5ed8d",
+      "bits": "3eb0c6f7a0b5ed8d",
+      "output": "0.000001"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555553",
+      "bits": "41b3de4355555553",
+      "output": "333333333.3333332"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555554",
+      "bits": "41b3de4355555554",
+      "output": "333333333.33333325"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555555",
+      "bits": "41b3de4355555555",
+      "output": "333333333.3333333"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555556",
+      "bits": "41b3de4355555556",
+      "output": "333333333.3333334"
+    },
+    {
+      "name": "rfc8785-number-41b3de4355555557",
+      "bits": "41b3de4355555557",
+      "output": "333333333.33333343"
+    },
+    {
+      "name": "rfc8785-number-becbf647612f3696",
+      "bits": "becbf647612f3696",
+      "output": "-0.0000033333333333333333"
+    },
+    {
+      "name": "rfc8785-number-43143ff3c1cb0959",
+      "bits": "43143ff3c1cb0959",
+      "output": "1424953923781206.2"
+    },
+    {
+      "name": "refused-nan",
+      "bits": "7ff8000000000000",
+      "refused": true
+    },
+    {
+      "name": "refused-infinity",
+      "bits": "7ff0000000000000",
+      "refused": true
+    },
+    {
+      "name": "refused-minus-infinity",
+      "bits": "fff0000000000000",
+      "refused": true
+    },
+    {
+      "name": "rfc8785-key-order",
+      "input": {
+        "\u20ac": "Euro Sign",
+        "\r": "Carriage Return",
+        "\ufb33": "Hebrew Letter Dalet With Dagesh",
+        "1": "One",
+        "\ud83d\ude00": "Emoji: Grinning Face",
+        "\u0080": "Control",
+        "\u00f6": "Latin Small Letter O With Diaeresis"
+      },
+      "output": "{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\u0080\":\"Control\",\"\u00f6\":\"Latin Small Letter O With Diaeresis\",\"\u20ac\":\"Euro Sign\",\"\ud83d\ude00\":\"Emoji: Grinning Face\",\"\ufb33\":\"Hebrew Letter Dalet With Dagesh\"}"
+    },
+    {
+      "name": "literals",
+      "input": [
+        true,
+        false,
+        null
+      ],
+      "output": "[true,false,null]"
+    },
+    {
+      "name": "integers",
+      "input": [
+        0,
+        -7,
+        9007199254740991,
+        -9007199254740991
+      ],
+      "output": "[0,-7,9007199254740991,-9007199254740991]"
+    },
+    {
+      "name": "floats",
+      "input": [
+        2.0,
+        4.5,
+        0.002,
+        1e-07,
+        1e+21,
+        -1.0,
+        -0.0
+      ],
+      "output": "[2,4.5,0.002,1e-7,1e+21,-1,0]"
+    },
+    {
+      "name": "escapes",
+      "input": "a\"b\\c\b\f\n\r\t\u0000\u001f\u00e9\u20ac/",
+      "output": "\"a\\\"b\\\\c\\b\\f\\n\\r\\t\\u0000\\u001f\u00e9\u20ac/\""
+    },
+    {
+      "name": "nested",
+      "input": {
+        "b": [
+          1,
+          2.5,
+          "x"
+        ],
+        "a": {
+          "z": null,
+          "y": true
+        },
+        "": []
+      },
+      "output": "{\"\":[],\"a\":{\"y\":true,\"z\":null},\"b\":[1,2.5,\"x\"]}"
+    },
+    {
+      "name": "refused-integer-past-2^53",
+      "input": 9007199254740992,
+      "refused": true
+    },
+    {
+      "name": "refused-lone-surrogate",
+      "input": "\ud800",
+      "refused": true
+    }
+  ],
+  "params": [
+    {
+      "name": "typed",
+      "params": {
+        "b": 2,
+        "a": 1.5
+      },
+      "types": {
+        "a": "float",
+        "b": "int"
+      },
+      "output": "{\"a\":{\"type\":\"float\",\"value\":1.5},\"b\":{\"type\":\"int\",\"value\":2}}"
+    },
+    {
+      "name": "int-declared",
+      "params": {
+        "n": 4
+      },
+      "types": {
+        "n": "int"
+      },
+      "output": "{\"n\":{\"type\":\"int\",\"value\":4}}"
+    },
+    {
+      "name": "float-declared-given-an-int",
+      "params": {
+        "n": 4
+      },
+      "types": {
+        "n": "float"
+      },
+      "output": "{\"n\":{\"type\":\"float\",\"value\":4}}"
+    },
+    {
+      "name": "float-declared-given-a-float",
+      "params": {
+        "n": 4.0
+      },
+      "types": {
+        "n": "float"
+      },
+      "output": "{\"n\":{\"type\":\"float\",\"value\":4}}"
+    },
+    {
+      "name": "int-declared-given-an-integral-float",
+      "params": {
+        "n": 2.0
+      },
+      "types": {
+        "n": "int"
+      },
+      "output": "{\"n\":{\"type\":\"int\",\"value\":2}}"
+    },
+    {
+      "name": "str-and-bool",
+      "params": {
+        "label": "A",
+        "flag": false
+      },
+      "types": {
+        "label": "str",
+        "flag": "bool"
+      },
+      "output": "{\"flag\":{\"type\":\"bool\",\"value\":false},\"label\":{\"type\":\"str\",\"value\":\"A\"}}"
+    },
+    {
+      "name": "str-precomposed",
+      "params": {
+        "s": "\u00e9"
+      },
+      "types": {
+        "s": "str"
+      },
+      "output": "{\"s\":{\"type\":\"str\",\"value\":\"\u00e9\"}}"
+    },
+    {
+      "name": "str-decomposed",
+      "params": {
+        "s": "e\u0301"
+      },
+      "types": {
+        "s": "str"
+      },
+      "output": "{\"s\":{\"type\":\"str\",\"value\":\"e\u0301\"}}"
+    },
+    {
+      "name": "none",
+      "params": {},
+      "types": {},
+      "output": "{}"
+    },
+    {
+      "name": "refused-non-integral-float-for-int",
+      "params": {
+        "n": 2.5
+      },
+      "types": {
+        "n": "int"
+      },
+      "refused": true
+    },
+    {
+      "name": "refused-bool-for-int",
+      "params": {
+        "n": true
+      },
+      "types": {
+        "n": "int"
+      },
+      "refused": true
+    },
+    {
+      "name": "refused-bool-for-float",
+      "params": {
+        "n": true
+      },
+      "types": {
+        "n": "float"
+      },
+      "refused": true
+    },
+    {
+      "name": "refused-number-for-bool",
+      "params": {
+        "flag": 1
+      },
+      "types": {
+        "flag": "bool"
+      },
+      "refused": true
+    },
+    {
+      "name": "refused-number-for-str",
+      "params": {
+        "label": 3
+      },
+      "types": {
+        "label": "str"
+      },
+      "refused": true
+    },
+    {
+      "name": "refused-undeclared-name",
+      "params": {
+        "a": 1.0,
+        "b": 2.0
+      },
+      "types": {
+        "a": "float"
+      },
+      "refused": true
+    },
+    {
+      "name": "refused-declared-name-without-value",
+      "params": {
+        "a": 1.0
+      },
+      "types": {
+        "a": "float",
+        "b": "float"
+      },
+      "refused": true
+    },
+    {
+      "name": "refused-unknown-type",
+      "params": {
+        "a": 1
+      },
+      "types": {
+        "a": "number"
+      },
+      "refused": true
+    }
+  ],
+  "pose": [
+    {
+      "name": "identity",
+      "pose": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "output": "[0,0,0,0,0,0,1]"
+    },
+    {
+      "name": "q",
+      "pose": [
+        10.0,
+        -5.0,
+        2.5,
+        0.0,
+        0.6,
+        0.0,
+        0.8
+      ],
+      "output": "[10,-5,2.5,0,0.6,0,0.8]"
+    },
+    {
+      "name": "minus-q",
+      "pose": [
+        10.0,
+        -5.0,
+        2.5,
+        -0.0,
+        -0.6,
+        -0.0,
+        -0.8
+      ],
+      "output": "[10,-5,2.5,0,0.6,0,0.8]"
+    },
+    {
+      "name": "qw-zero-first-component-negative",
+      "pose": [
+        0,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        0
+      ],
+      "output": "[0,0,0,1,0,0,0]"
+    },
+    {
+      "name": "qw-rounds-to-zero-leaning-negative",
+      "pose": [
+        0,
+        0,
+        0,
+        0.6,
+        0.8,
+        0.0,
+        -4e-07
+      ],
+      "output": "[0,0,0,0.6,0.8,0,0]"
+    },
+    {
+      "name": "qw-rounds-to-zero-leaning-positive",
+      "pose": [
+        0,
+        0,
+        0,
+        -0.6,
+        -0.8,
+        0.0,
+        4e-07
+      ],
+      "output": "[0,0,0,0.6,0.8,0,0]"
+    },
+    {
+      "name": "nearly-unit",
+      "pose": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1.0000005
+      ],
+      "output": "[0,0,0,0,0,0,1]"
+    },
+    {
+      "name": "rounded",
+      "pose": [
+        1.23456789,
+        -2.0000004,
+        3.0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "output": "[1.234568,-2,3,0,0,0,1]"
+    },
+    {
+      "name": "rounded-exact-half-to-even",
+      "pose": [
+        0.0078125,
+        -0.0078125,
+        0.0234375,
+        0,
+        0,
+        0,
+        1
+      ],
+      "output": "[0.007812,-0.007812,0.023438,0,0,0,1]"
+    },
+    {
+      "name": "negative-zero",
+      "pose": [
+        -0.0,
+        -1e-09,
+        0.0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "output": "[0,0,0,0,0,0,1]"
+    },
+    {
+      "name": "refused-off-unit",
+      "pose": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1.00001
+      ],
+      "refused": true
+    },
+    {
+      "name": "refused-six-numbers",
+      "pose": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "refused": true
+    },
+    {
+      "name": "refused-eight-numbers",
+      "pose": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "refused": true
+    },
+    {
+      "name": "refused-bool",
+      "pose": [
+        true,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "refused": true
+    }
+  ],
+  "recipe": [
+    {
+      "name": "plate",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "output": "from build123d import *\nparams = {'width': ..., 'height': ..., 'label': ...}\n\ndef hole(d):\n    return Cylinder(d / 2, 3)\npart = Box(params['width'], params['height'], 3) - hole(6)",
+      "helpers": []
+    },
+    {
+      "name": "plate-rewritten",
+      "source": "from build123d import *  # every name\nparams = {'width': 90,\n          'height': 7, 'label': 'B'}\ndef hole(d):\n    return Cylinder(d/2, 3)  # radius, height\npart = (Box(params['width'], params['height'], 3)\n        - hole(6))\n",
+      "output": "from build123d import *\nparams = {'width': ..., 'height': ..., 'label': ...}\n\ndef hole(d):\n    return Cylinder(d / 2, 3)\npart = Box(params['width'], params['height'], 3) - hole(6)",
+      "helpers": []
+    },
+    {
+      "name": "plate-names-reordered",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"height\": 20.5, \"width\": 40, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "output": "from build123d import *\nparams = {'height': ..., 'width': ..., 'label': ...}\n\ndef hole(d):\n    return Cylinder(d / 2, 3)\npart = Box(params['width'], params['height'], 3) - hole(6)",
+      "helpers": []
+    },
+    {
+      "name": "calls-a-helper",
+      "source": "from build123d import *\nparams = {'length': 300.0, 'clearance': 0.2}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])\n",
+      "output": "from build123d import *\nparams = {'length': ..., 'clearance': ...}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])",
+      "helpers": [
+        "split_and_join"
+      ]
+    },
+    {
+      "name": "count",
+      "source": "params = {'n': 3}\nholes = params['n']\n",
+      "output": "params = {'n': ...}\nholes = params['n']",
+      "helpers": []
+    },
+    {
+      "name": "non-ascii-text",
+      "source": "params = {'label': 'caf\u00e9'}\nsign = params['label'] + ' \u20ac'\n",
+      "output": "params = {'label': ...}\nsign = params['label'] + ' \u20ac'",
+      "helpers": []
+    },
+    {
+      "name": "docstrings-and-empty-bodies",
+      "source": "\"\"\"M.\"\"\"\nparams = {}\nclass C:\n    \"\"\"C.\"\"\"\ndef f():\n    \"\"\"F.\"\"\"\n",
+      "output": "params = {}\n\nclass C:\n    pass\n\ndef f():\n    pass",
+      "helpers": []
+    },
+    {
+      "name": "refused-no-params",
+      "source": "x = 1\n",
+      "refused": true
+    },
+    {
+      "name": "refused-two-params",
+      "source": "params = {'w': 1}\nparams = {'w': 2}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-annotated-params",
+      "source": "params: dict = {'w': 1}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-list-value",
+      "source": "params = {'offsets': [35, 50]}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-not-a-literal",
+      "source": "params = {'w': w0}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-syntax",
+      "source": "params = {}\ndef (\n",
+      "refused": true
+    }
+  ],
+  "leaf": [
+    {
+      "name": "plate",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63"
+    },
+    {
+      "name": "plate-rewritten-same-key",
+      "source": "from build123d import *  # every name\nparams = {'width': 90,\n          'height': 7, 'label': 'B'}\ndef hole(d):\n    return Cylinder(d/2, 3)  # radius, height\npart = (Box(params['width'], params['height'], 3)\n        - hole(6))\n",
+      "params": {
+        "width": 40.0,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63"
+    },
+    {
+      "name": "plate-other-width",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 41,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "4407724ede2f69f4468328569f138e6f4610863d8d3f6771d0e24587c37bc2f8"
+    },
+    {
+      "name": "plate-other-toolchain",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "f20e14f314bfb0e5db7a5fff5bdf701a8d7df331d4dc419d0d5e26ecd3fb5459"
+    },
+    {
+      "name": "count-as-int",
+      "source": "params = {'n': 3}\nholes = params['n']\n",
+      "params": {
+        "n": 3
+      },
+      "types": {
+        "n": "int"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "cae085f9a8080fabebd57c17d6886abd9c3ee90f74d0c023ed0bfafba81256be"
+    },
+    {
+      "name": "count-as-integral-float-same-key",
+      "source": "params = {'n': 3}\nholes = params['n']\n",
+      "params": {
+        "n": 3.0
+      },
+      "types": {
+        "n": "int"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "cae085f9a8080fabebd57c17d6886abd9c3ee90f74d0c023ed0bfafba81256be"
+    },
+    {
+      "name": "calls-a-helper",
+      "source": "from build123d import *\nparams = {'length': 300.0, 'clearance': 0.2}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])\n",
+      "params": {
+        "length": 300,
+        "clearance": 0.2
+      },
+      "types": {
+        "length": "float",
+        "clearance": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd;fonts=-",
+      "key": "f8824c59b12b80e664a580f7ad3197f649b2d4048e14b39e36fa44be47231027"
+    },
+    {
+      "name": "refused-helper-missing-from-toolchain",
+      "source": "from build123d import *\nparams = {'length': 300.0, 'clearance': 0.2}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])\n",
+      "params": {
+        "length": 300,
+        "clearance": 0.2
+      },
+      "types": {
+        "length": "float",
+        "clearance": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-helper-not-called",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-name-not-declared",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5
+      },
+      "types": {
+        "width": "float",
+        "height": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-declared-name-not-in-recipe",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A",
+        "depth": 3
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str",
+        "depth": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-wrong-type",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": 1
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    }
+  ],
+  "item": [
+    {
+      "name": "two-leaves",
+      "document": {
+        "members": [
+          {
+            "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63",
+            "pose": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "key": "f8824c59b12b80e664a580f7ad3197f649b2d4048e14b39e36fa44be47231027",
+            "pose": [
+              60.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.707107,
+              0.707107
+            ]
+          }
+        ]
+      },
+      "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8"
+    },
+    {
+      "name": "two-leaves-carrying-their-key",
+      "document": {
+        "members": [
+          {
+            "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63",
+            "pose": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          {
+            "key": "f8824c59b12b80e664a580f7ad3197f649b2d4048e14b39e36fa44be47231027",
+            "pose": [
+              60.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.707107,
+              0.707107
+            ]
+          }
+        ],
+        "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8"
+      },
+      "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8"
+    },
+    {
+      "name": "nested",
+      "document": {
+        "members": [
+          {
+            "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8",
+            "pose": [
+              0.0,
+              0.0,
+              25.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        ]
+      },
+      "key": "1d3e083794bf5bb74073cc12c27cac0b4c2f71a60f69322097a196ad66a7e1dd"
+    },
+    {
+      "name": "empty",
+      "document": {
+        "members": []
+      },
+      "key": "6375508cf89fca1184992a7df1925296aa53eca766c56d31f66bb87e3b778620"
+    },
+    {
+      "name": "refused-integer-past-2^53",
+      "document": {
+        "members": [],
+        "count": 9007199254740992
+      },
+      "refused": true
+    }
+  ]
+}

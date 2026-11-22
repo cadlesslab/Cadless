@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import math
 import platform
 import re
@@ -10,14 +12,16 @@ import shutil
 import struct
 import subprocess
 import sys
+from collections.abc import Callable
 from importlib import metadata
 from pathlib import Path
 
 import pytest
 
 import cadless
-from cadless import item_key
+from cadless import item_key as item_key_module
 from cadless.item_key import (
+    DEFINITIONS_VERSION,
     HELPER_SOURCES,
     RUN_AND_BAKE_FILES,
     ItemKeyError,
@@ -25,7 +29,9 @@ from cadless.item_key import (
     canonical_pose,
     canonical_recipe,
     helpers_called,
+    item_key,
     jcs,
+    leaf_key,
     toolchain_identity,
     typed_params,
 )
@@ -450,6 +456,7 @@ def test_an_annotated_params_is_refused_as_such() -> None:
         pytest.param("params = {'w': '\ud800'}", id="lone-surrogate"),
         pytest.param("params = {}\nx = " + "+".join(["1"] * 2_000), id="too-deep-to-write"),
         pytest.param("params = {}\nx = " + "+".join(["1"] * 100_000), id="too-deep-to-parse"),
+        pytest.param("params = {}\nx = f'{y!r:\\x00>3}'\n", id="nul-written-back"),
     ],
 )
 def test_a_recipe_python_cannot_parse_or_write_back_is_refused(source: str) -> None:
@@ -509,7 +516,7 @@ def test_every_helper_a_script_is_handed_has_its_sources_listed() -> None:
 
 
 def test_every_listed_helper_source_is_a_file_beside_the_module() -> None:
-    package = Path(item_key.__file__).parent
+    package = Path(item_key_module.__file__).parent
     for files in HELPER_SOURCES.values():
         for name in files:
             assert (package / name).is_file(), name
@@ -518,7 +525,7 @@ def test_every_listed_helper_source_is_a_file_beside_the_module() -> None:
 def test_a_helpers_listed_sources_hold_every_engine_module_they_import() -> None:
     # A helper's output can change through any engine module it imports, so each
     # listed file's engine imports must be listed too.
-    package = Path(item_key.__file__).parent
+    package = Path(item_key_module.__file__).parent
     for helper, files in HELPER_SOURCES.items():
         listed = {name.removesuffix(".py") for name in files}
         for name in files:
@@ -554,10 +561,10 @@ def _parts(toolchain: str) -> dict[str, str]:
 @pytest.fixture
 def engine_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # A copy of the files the toolchain reads, so a test can change their bytes.
-    package = Path(item_key.__file__).parent
+    package = Path(item_key_module.__file__).parent
     for name in {*RUN_AND_BAKE_FILES, *(f for files in HELPER_SOURCES.values() for f in files)}:
         shutil.copy(package / name, tmp_path / name)
-    monkeypatch.setattr(item_key, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(item_key_module, "_PACKAGE_DIR", tmp_path)
     return tmp_path
 
 
@@ -690,7 +697,8 @@ def test_a_hashed_file_that_cannot_be_read_is_refused(engine_copy: Path) -> None
 
 # Imports the module with build123d and OCP blocked, as a caller without the
 # geometry kernel would, and checks that it loaded nothing but the standard
-# library beside itself; argv[1] is the source tree to import it from.
+# library beside itself; argv[1] is the source tree to import it from, argv[2] a
+# toolchain to key a leaf with.
 _WITHOUT_KERNEL = """
 import sys
 from importlib.abc import MetaPathFinder
@@ -710,6 +718,7 @@ from cadless import item_key
 
 assert item_key.__file__.startswith(sys.argv[1]), item_key.__file__
 print(item_key.toolchain_identity({"split_and_join"}))
+print(item_key.leaf_key("params = {'w': 1.0}\\nx = params['w']\\n", {"w": 1}, {"w": "float"}, sys.argv[2]))
 loaded = set(sys.modules) - before
 outside = {name.partition(".")[0] for name in loaded} - set(sys.stdlib_module_names)
 assert outside == {"cadless"}, sorted(outside)
@@ -719,12 +728,206 @@ assert engine == ["cadless.item_key"], engine
 
 
 def test_the_module_works_without_importing_the_kernel() -> None:
-    root = Path(item_key.__file__).parents[1]
+    root = Path(item_key_module.__file__).parents[1]
     run = subprocess.run(
-        [sys.executable, "-I", "-c", _WITHOUT_KERNEL, str(root)],
+        [sys.executable, "-I", "-c", _WITHOUT_KERNEL, str(root), TOOLCHAIN],
         capture_output=True,
         text=True,
         timeout=120,
     )
     assert run.returncode == 0, run.stderr
-    assert run.stdout.startswith("build123d=build123d==")
+    toolchain, key = run.stdout.splitlines()
+    assert toolchain.startswith("build123d=build123d==")
+    source = "params = {'w': 1.0}\nx = params['w']\n"
+    assert key == leaf_key(source, {"w": 1}, {"w": "float"}, TOOLCHAIN)
+
+
+# --- leaf and item keys -----------------------------------------------------
+
+# A toolchain as toolchain_identity writes it, fixed so keys do not depend on the
+# machine the tests run on.
+TOOLCHAIN = (
+    "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;"
+    "platform=linux-x86_64;runtime=" + "ab" * 32 + ";helpers=-;fonts=-"
+)
+TOOLCHAIN_WITH_HELPER = TOOLCHAIN.replace("helpers=-", "helpers=" + "cd" * 32)
+PLATE_TYPES = {"width": "float", "height": "float", "label": "str"}
+PLATE_PARAMS = {"width": 40, "height": 20.5, "label": "A"}
+JOINED = "params = {'x': 50.0}\na, b = split_and_join(part, plane, axis, params['x'])\n"
+
+
+def test_a_leaf_key_is_the_sha256_of_recipe_params_and_toolchain() -> None:
+    preimage = b"\x00".join(
+        [
+            canonical_recipe(PLATE),
+            canonical_params(PLATE_PARAMS, PLATE_TYPES),
+            TOOLCHAIN.encode("utf-8"),
+        ]
+    )
+    key = leaf_key(PLATE, PLATE_PARAMS, PLATE_TYPES, TOOLCHAIN)
+    assert key == hashlib.sha256(preimage).hexdigest()
+
+
+def test_a_leaf_key_ignores_what_cannot_change_the_shape() -> None:
+    rewritten = "# a comment\n" + PLATE.replace('"""One hole."""', '"""A hole."""')
+    assert leaf_key(rewritten, PLATE_PARAMS, PLATE_TYPES, TOOLCHAIN) == leaf_key(
+        PLATE, PLATE_PARAMS, PLATE_TYPES, TOOLCHAIN
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"params": {**PLATE_PARAMS, "width": 41}}, id="a-param-value"),
+        pytest.param({"source": PLATE.replace("hole(6)", "hole(7)")}, id="the-recipe"),
+        pytest.param({"toolchain": TOOLCHAIN.replace("3.12", "3.13")}, id="the-toolchain"),
+    ],
+)
+def test_a_leaf_key_changes_with_each_part(change: dict) -> None:
+    base = {"source": PLATE, "params": PLATE_PARAMS, "types": PLATE_TYPES, "toolchain": TOOLCHAIN}
+    assert leaf_key(**{**base, **change}) != leaf_key(**base)
+
+
+def test_every_name_in_the_params_literal_must_be_declared() -> None:
+    # An undeclared name would run with the literal's value, which no part of the key holds.
+    types = {"width": "float", "height": "float"}
+    with pytest.raises(ItemKeyError, match="label"):
+        leaf_key(PLATE, {"width": 40, "height": 20.5}, types, TOOLCHAIN)
+
+
+def test_every_declared_name_must_be_in_the_params_literal() -> None:
+    with pytest.raises(ItemKeyError, match="depth"):
+        leaf_key(PLATE, {**PLATE_PARAMS, "depth": 3}, {**PLATE_TYPES, "depth": "float"}, TOOLCHAIN)
+
+
+def test_a_leaf_calling_a_helper_is_keyed_with_the_helpers_sources() -> None:
+    key = leaf_key(JOINED, {"x": 50}, {"x": "float"}, TOOLCHAIN_WITH_HELPER)
+    assert re.fullmatch("[0-9a-f]{64}", key)
+
+
+def test_the_toolchain_must_hold_the_helpers_a_recipe_calls() -> None:
+    with pytest.raises(ItemKeyError, match="helper"):
+        leaf_key(JOINED, {"x": 50}, {"x": "float"}, TOOLCHAIN)
+
+
+def test_the_toolchain_must_hold_no_helpers_a_recipe_does_not_call() -> None:
+    # One leaf, one key: a toolchain computed for another recipe is refused.
+    with pytest.raises(ItemKeyError, match="helper"):
+        leaf_key(PLATE, PLATE_PARAMS, PLATE_TYPES, TOOLCHAIN_WITH_HELPER)
+
+
+@pytest.mark.parametrize(
+    "toolchain",
+    [
+        pytest.param(TOOLCHAIN.encode(), id="bytes"),
+        pytest.param("build123d=build123d==0.11.1;fonts=-", id="no-helpers-part"),
+        pytest.param(TOOLCHAIN + "\ud800", id="lone-surrogate"),
+        pytest.param(TOOLCHAIN + "\x00", id="nul"),
+    ],
+)
+def test_a_toolchain_that_is_not_toolchain_text_is_refused(toolchain: object) -> None:
+    with pytest.raises(ItemKeyError, match="toolchain"):
+        leaf_key(PLATE, PLATE_PARAMS, PLATE_TYPES, toolchain)
+
+
+MEMBERS = {
+    "members": [
+        {"key": "1" * 64, "pose": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]},
+        {"key": "2" * 64, "pose": [10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]},
+    ]
+}
+
+
+def test_an_item_key_is_the_sha256_of_its_canonical_document() -> None:
+    assert item_key(MEMBERS) == hashlib.sha256(jcs(MEMBERS)).hexdigest()
+
+
+def test_an_item_key_leaves_out_the_documents_own_key() -> None:
+    assert item_key({**MEMBERS, "key": "f" * 64}) == item_key(MEMBERS)
+
+
+def test_an_item_key_changes_with_any_members_key() -> None:
+    first, second = MEMBERS["members"]
+    assert item_key({"members": [first, {**second, "key": "3" * 64}]}) != item_key(MEMBERS)
+
+
+@pytest.mark.parametrize("document", [[1, 2], "members", None])
+def test_a_document_that_is_not_a_mapping_is_refused(document: object) -> None:
+    with pytest.raises(ItemKeyError, match="document"):
+        item_key(document)
+
+
+# --- shared vectors ---------------------------------------------------------
+
+VECTORS = json.loads(
+    Path(item_key_module.__file__).with_name("item_key_vectors.json").read_text(encoding="utf-8")
+)
+
+# Each section, and the field that holds a case's expected outcome beside "refused".
+_OUTCOME = {
+    "jcs": "output",
+    "params": "output",
+    "pose": "output",
+    "recipe": "output",
+    "leaf": "key",
+    "item": "key",
+}
+
+
+def _vectors(section: str) -> list:
+    return [pytest.param(case, id=case["name"]) for case in VECTORS[section]]
+
+
+def _expect(case: dict, field: str, compute: Callable[[], object]) -> None:
+    if case.get("refused"):
+        with pytest.raises(ItemKeyError):
+            compute()
+    else:
+        assert compute() == case[field]
+
+
+def test_the_vectors_are_for_these_definitions() -> None:
+    assert VECTORS["definitions"] == DEFINITIONS_VERSION
+
+
+def test_every_vector_names_one_outcome() -> None:
+    assert set(VECTORS) == {"about", "definitions", *_OUTCOME}
+    for section, field in _OUTCOME.items():
+        names = [case["name"] for case in VECTORS[section]]
+        assert len(names) == len(set(names)), section
+        for case in VECTORS[section]:
+            assert (field in case) != bool(case.get("refused")), case["name"]
+
+
+@pytest.mark.parametrize("case", _vectors("jcs"))
+def test_jcs_vectors(case: dict) -> None:
+    value = _double(case["bits"]) if "bits" in case else case["input"]
+    _expect(case, "output", lambda: jcs(value).decode("utf-8"))
+
+
+@pytest.mark.parametrize("case", _vectors("params"))
+def test_params_vectors(case: dict) -> None:
+    _expect(case, "output", lambda: canonical_params(case["params"], case["types"]).decode())
+
+
+@pytest.mark.parametrize("case", _vectors("pose"))
+def test_pose_vectors(case: dict) -> None:
+    _expect(case, "output", lambda: jcs(canonical_pose(case["pose"])).decode("utf-8"))
+
+
+@pytest.mark.parametrize("case", _vectors("recipe"))
+def test_recipe_vectors(case: dict) -> None:
+    _expect(case, "output", lambda: canonical_recipe(case["source"]).decode("utf-8"))
+    if "helpers" in case:
+        assert sorted(helpers_called(case["source"])) == case["helpers"]
+
+
+@pytest.mark.parametrize("case", _vectors("leaf"))
+def test_leaf_vectors(case: dict) -> None:
+    args = (case["source"], case["params"], case["types"], case["toolchain"])
+    _expect(case, "key", lambda: leaf_key(*args))
+
+
+@pytest.mark.parametrize("case", _vectors("item"))
+def test_item_vectors(case: dict) -> None:
+    _expect(case, "key", lambda: item_key(case["document"]))

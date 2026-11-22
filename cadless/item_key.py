@@ -28,6 +28,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 __all__ = [
+    "DEFINITIONS_VERSION",
     "HELPER_SOURCES",
     "PARAM_TYPES",
     "RUN_AND_BAKE_FILES",
@@ -36,7 +37,9 @@ __all__ = [
     "canonical_pose",
     "canonical_recipe",
     "helpers_called",
+    "item_key",
     "jcs",
+    "leaf_key",
     "toolchain_identity",
     "typed_params",
 ]
@@ -44,6 +47,12 @@ __all__ = [
 
 class ItemKeyError(ValueError):
     """An input that has no canonical form under the item key definitions."""
+
+
+#: The version of the definitions this module implements, which the vector file
+#: beside it records too. A change to any canonical form or key ships as a new
+#: version with new vectors.
+DEFINITIONS_VERSION = 1
 
 
 # JSON numbers are IEEE 754 doubles: an integer past this magnitude cannot be
@@ -232,6 +241,10 @@ def _canonical_recipe(source: object) -> tuple[bytes, tuple[str, ...]]:
         text = ast.unparse(tree)
     except RecursionError as error:
         raise ItemKeyError("the recipe is nested too deeply to write back") from error
+    if "\x00" in text:
+        # ast.unparse writes a format spec's characters as they are; a 0x00 byte
+        # in the text would let a leaf key's parts run into each other.
+        raise ItemKeyError("the recipe's canonical text would hold a 0x00 byte")
     return text.encode("utf-8"), names
 
 
@@ -398,6 +411,72 @@ def _files_digest(names: Iterable[str]) -> str:
             raise ItemKeyError(f"cannot read {name} beside the item key module: {error}") from error
         digests[name] = hashlib.sha256(data).hexdigest()
     return hashlib.sha256(jcs(digests)).hexdigest()
+
+
+def leaf_key(
+    source: str, params: Mapping[str, object], types: Mapping[str, str], toolchain: str
+) -> str:
+    """The key of a leaf: the solid ``source`` builds with ``params`` under ``toolchain``.
+
+    The sha256, as lowercase hex, of the canonical recipe, a 0x00 byte, the
+    canonical params, a 0x00 byte and ``toolchain`` encoded as UTF-8. None of the
+    three holds a 0x00 byte, so no two inputs share those bytes. ``toolchain`` is
+    what ``toolchain_identity(helpers_called(source))`` returns where the leaf is
+    built.
+
+    Raises ``ItemKeyError`` as ``canonical_recipe`` and ``canonical_params`` do;
+    when the declared names are not the names in the recipe's params literal (an
+    undeclared name would run with the literal's value, which no part of the key
+    holds); and when ``toolchain`` is not UTF-8 text free of 0x00 bytes with a
+    ``helpers`` part, or that part disagrees with ``source`` about whether it
+    calls a helper (so one leaf has one key).
+    """
+    recipe, names = _canonical_recipe(source)
+    canonical = canonical_params(params, types)
+    undeclared, absent = sorted(set(names) - set(types)), sorted(set(types) - set(names))
+    if undeclared or absent:
+        raise ItemKeyError(
+            "the declared params must be the names in the recipe's params literal: "
+            f"undeclared {undeclared}, not in the literal {absent}"
+        )
+    return hashlib.sha256(
+        b"\x00".join([recipe, canonical, _toolchain(toolchain, source)])
+    ).hexdigest()
+
+
+def _toolchain(toolchain: object, source: str) -> bytes:
+    # ``toolchain`` as UTF-8, once it is checked against what ``source`` calls.
+    if not isinstance(toolchain, str) or "\x00" in toolchain:
+        raise ItemKeyError(f"a toolchain is text from toolchain_identity, not {toolchain!r}")
+    try:
+        encoded = toolchain.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ItemKeyError(f"the toolchain {toolchain!r} is not UTF-8 text") from error
+    parts = dict(part.partition("=")[::2] for part in toolchain.split(";"))
+    if "helpers" not in parts:
+        raise ItemKeyError(f"the toolchain {toolchain!r} has no helpers part")
+    if (parts["helpers"] != "-") != bool(helpers_called(source)):
+        raise ItemKeyError(
+            "the toolchain's helpers part disagrees with the recipe about whether it "
+            "calls a helper; pass toolchain_identity(helpers_called(source))"
+        )
+    return encoded
+
+
+def item_key(document: Mapping[str, object]) -> str:
+    """The key of an item with members: the sha256, as lowercase hex, of ``document``.
+
+    ``document`` is written as canonical JSON with its own top-level ``key`` field
+    left out, so a document can carry its key and still be keyed. List each member
+    with its key (and its pose in the form ``canonical_pose`` gives), so the item's
+    key changes whenever a member's does, to any depth.
+
+    Raises ``ItemKeyError`` when ``document`` is not a mapping, or as ``jcs`` does.
+    """
+    if not isinstance(document, Mapping):
+        raise ItemKeyError(f"an item document is a mapping, not {document!r}")
+    content = {name: value for name, value in document.items() if name != "key"}
+    return hashlib.sha256(jcs(content)).hexdigest()
 
 
 def jcs(value: object) -> bytes:
