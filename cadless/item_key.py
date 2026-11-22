@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
 import math
 import platform
 import sys
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
@@ -84,11 +86,16 @@ def typed_params(params: Mapping[str, object], types: Mapping[str, str]) -> dict
     Every parameter must be declared, and every declaration must have a value.
     An int becomes a float where a float is declared, and an integral float an int
     where an int is; a bool is never taken for a number, nor a number for a bool.
+    A float negative zero becomes zero, since canonical JSON writes both as 0 and a
+    recipe must run with the value its key holds. Each value comes back as a plain
+    ``float``, ``int``, ``str`` or ``bool``, whatever subclass it arrived as.
     Strings are kept as given, not normalised.
 
-    Raises ``ItemKeyError`` for a missing or undeclared name, an unknown type, or
-    a value that does not fit its type.
+    Raises ``ItemKeyError`` unless both arguments are mappings, for a missing or
+    undeclared name, an unknown type, or a value that does not fit its type.
     """
+    if not isinstance(params, Mapping) or not isinstance(types, Mapping):
+        raise ItemKeyError("params and types are each a mapping from parameter names")
     for name in params:
         if name not in types:
             raise ItemKeyError(f"parameter {name!r} has no declared type")
@@ -122,50 +129,77 @@ def _typed(name: str, value: object, declared: str) -> object:
     if declared == "str":
         if not isinstance(value, str):
             raise ItemKeyError(f"parameter {name!r} is declared str but holds {value!r}")
-        return value
+        return str.__str__(value)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ItemKeyError(
             f"parameter {name!r} is declared {declared} but holds a bool or non-number {value!r}"
         )
-    if not math.isfinite(value):
+    number = _plain_number(value)
+    if isinstance(number, float) and not math.isfinite(number):
         raise ItemKeyError(f"parameter {name!r} holds {value!r}, which is not a finite number")
     if declared == "float":
-        return float(value)
-    if isinstance(value, float):
-        if not value.is_integer():
+        if isinstance(number, int):
+            try:
+                number = float(number)
+            except OverflowError as error:
+                raise ItemKeyError(
+                    f"parameter {name!r} holds {value!r}, too large for a float"
+                ) from error
+        return number + 0.0
+    if isinstance(number, float):
+        if not number.is_integer():
             raise ItemKeyError(
                 f"parameter {name!r} is declared int but holds {value!r}, which is not an integer"
             )
-        return int(value)
-    return value
+        return int(number)
+    return number
+
+
+def _plain_number(value: int | float) -> int | float:
+    # The plain int or float a subclass instance (an IntEnum member, a numpy float)
+    # stands for, read through the base type so no override of its own is consulted.
+    return float.__float__(value) if isinstance(value, float) else int.__int__(value)
 
 
 def canonical_pose(pose: Sequence[float]) -> tuple[float, ...]:
     """``pose`` (x, y, z, qx, qy, qz, qw) in its one canonical form.
 
     The quaternion is normalised, then every number is rounded to six decimal
-    places; the sign is fixed on the rounded quaternion (qw positive, or the first
-    non-zero of qx, qy, qz when qw rounds to zero), so q and -q give one pose
-    however close qw lies to zero. Negative zero is written as zero.
+    places, half to even; the sign is fixed on the rounded quaternion (qw positive,
+    or the first non-zero of qx, qy, qz when qw rounds to zero), so q and -q give
+    one pose however close qw lies to zero. Negative zero is written as zero.
 
-    Raises ``ItemKeyError`` unless the pose is seven finite numbers whose quaternion
-    lies within 1e-6 of unit length.
+    A quaternion already on the six-decimal grid and within 2e-6 of unit length (as
+    near as rounding a unit quaternion leaves it) is kept as it is, apart from the
+    sign: normalising it again could move its last digit, and a canonical form must
+    not change when it is canonicalised again.
+
+    Raises ``ItemKeyError`` unless the pose is a sequence of seven finite numbers
+    whose quaternion lies within 1e-6 of unit length (or is kept as above).
     """
-    if isinstance(pose, (str, bytes)) or len(pose) != 7:
+    if not isinstance(pose, Sequence) or isinstance(pose, (str, bytes)) or len(pose) != 7:
         raise ItemKeyError(f"a pose is seven numbers (x, y, z, qx, qy, qz, qw), not {pose!r}")
+    numbers = []
     for number in pose:
-        if (
-            isinstance(number, bool)
-            or not isinstance(number, (int, float))
-            or not math.isfinite(number)
-        ):
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
             raise ItemKeyError(f"pose {pose!r} holds {number!r}, which is not a finite number")
-    translation = [float(v) for v in pose[:3]]
-    quaternion = [float(v) for v in pose[3:]]
-    length = math.sqrt(sum(v * v for v in quaternion))
-    if abs(length - 1.0) > _UNIT_TOLERANCE:
+        try:
+            value = float(_plain_number(number))
+        except OverflowError as error:
+            raise ItemKeyError(f"pose {pose!r} holds {number!r}, too large for a float") from error
+        if not math.isfinite(value):
+            raise ItemKeyError(f"pose {pose!r} holds {number!r}, which is not a finite number")
+        numbers.append(value)
+    translation, quaternion = numbers[:3], numbers[3:]
+    # fsum is exactly rounded, so the length is the same on every interpreter.
+    length = math.sqrt(math.fsum(v * v for v in quaternion))
+    on_grid = all(v == round(v, _POSE_DECIMALS) for v in quaternion)
+    if on_grid and abs(length - 1.0) <= 2 * _UNIT_TOLERANCE:
+        quaternion = [v + 0.0 for v in quaternion]
+    elif abs(length - 1.0) > _UNIT_TOLERANCE:
         raise ItemKeyError(f"pose {pose!r} has a quaternion of length {length!r}, not unit length")
-    quaternion = [_rounded(v / length) for v in quaternion]
+    else:
+        quaternion = [_rounded(v / length) for v in quaternion]
     translation = [_rounded(v) for v in translation]
     qx, qy, qz, qw = quaternion
     leading = qw if qw != 0 else next((v for v in (qx, qy, qz) if v != 0), 0.0)
@@ -187,6 +221,17 @@ _PARAM_VALUE_TYPES = (bool, int, float, str)
 # The nodes whose first statement, when it is a string, is a docstring.
 _DOCUMENTED = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
+# How deep a recipe's syntax tree, or a value given to jcs, may nest: far beyond
+# what a recipe or an item document needs, and far enough below the interpreter's
+# recursion limit that whether an input gets a key does not hang on how deep in
+# its own calls the caller is.
+_NESTING_LIMIT = 100
+
+# An integer literal this large has more decimal digits than the interpreter will
+# write by default, a limit a process can change; refusing it keeps a recipe's key
+# from depending on that setting.
+_HUGE_INTEGER = 10**4300
+
 #: Each engine helper a recipe is handed, by name, and the files beside this
 #: module whose bytes a leaf calling that helper is keyed on: the helper's module
 #: and every engine module it imports.
@@ -205,9 +250,13 @@ def canonical_recipe(source: str) -> bytes:
     are keyed by ``canonical_params``, but where the literal stands and the order of
     its names can change what the recipe does. Encoded as UTF-8.
 
-    Raises ``ItemKeyError`` unless ``source`` is text that Python can parse and
-    write back, binding ``params`` at module level exactly once, as a plain
-    (unannotated) dict literal from string names to numbers, strings or booleans.
+    Raises ``ItemKeyError`` unless ``source`` is text that Python can parse, and
+    that binds ``params`` exactly once and nowhere else: in one plain (unannotated)
+    module-level dict literal from distinct string names to numbers, strings or
+    booleans. Also refused: syntax nested deeper than 100 levels, an integer literal
+    of more than 4300 digits, and a recipe whose canonical text would hold a 0x00
+    byte or would not read back as the same program (``ast.unparse`` writes a few
+    constructs, such as a brace in a format spec, so that they read back as others).
     """
     text, _names = _canonical_recipe(source)
     return text
@@ -235,16 +284,24 @@ def helpers_called(source: str) -> frozenset[str]:
 def _canonical_recipe(source: object) -> tuple[bytes, tuple[str, ...]]:
     # The canonical text, and the names of the params literal in their order.
     tree = _parse_recipe(source)
+    _check_shape(tree)
     _drop_docstrings(tree)
     names = _blank_params_literal(tree)
     try:
         text = ast.unparse(tree)
-    except RecursionError as error:
-        raise ItemKeyError("the recipe is nested too deeply to write back") from error
+    except (RecursionError, ValueError) as error:
+        raise ItemKeyError(f"cannot write the recipe back: {error}") from error
     if "\x00" in text:
         # ast.unparse writes a format spec's characters as they are; a 0x00 byte
         # in the text would let a leaf key's parts run into each other.
         raise ItemKeyError("the recipe's canonical text would hold a 0x00 byte")
+    try:
+        same = ast.dump(_parse_recipe(text)) == ast.dump(tree)
+    except ItemKeyError:
+        same = False
+    if not same:
+        # Two recipes could otherwise share a text while doing different things.
+        raise ItemKeyError("the recipe's canonical text does not read back as the same program")
     return text.encode("utf-8"), names
 
 
@@ -252,11 +309,31 @@ def _parse_recipe(source: object) -> ast.Module:
     if not isinstance(source, str):
         raise ItemKeyError(f"a recipe is text, not a {type(source).__name__}")
     try:
-        return ast.parse(source)
+        with warnings.catch_warnings():
+            # A syntax warning changes nothing a recipe builds, so a filter that
+            # turns warnings into errors must not turn the recipe into a refusal.
+            warnings.simplefilter("ignore")
+            return ast.parse(source)
     except (SyntaxError, ValueError, RecursionError) as error:
         # A null byte raises SyntaxError, a lone surrogate UnicodeEncodeError (a
         # ValueError), and nesting past the interpreter's limit RecursionError.
         raise ItemKeyError(f"cannot parse the recipe: {error}") from error
+
+
+def _check_shape(tree: ast.Module) -> None:
+    # Walked with a stack rather than recursion, so any depth is measured.
+    stack = [(tree, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > _NESTING_LIMIT:
+            raise ItemKeyError(f"the recipe nests deeper than {_NESTING_LIMIT} levels")
+        if (
+            isinstance(node, ast.Constant)
+            and type(node.value) is int
+            and abs(node.value) >= _HUGE_INTEGER
+        ):
+            raise ItemKeyError("the recipe holds an integer literal of more than 4300 digits")
+        stack.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
 
 
 def _drop_docstrings(tree: ast.Module) -> None:
@@ -295,20 +372,22 @@ def _blank_params_literal(tree: ast.Module) -> tuple[str, ...]:
         and isinstance(node.value, ast.Dict)
     ):
         raise ItemKeyError("params is bound as params = {...}, a plain dict literal")
-    try:
-        literal = ast.literal_eval(node.value)
-    except (ValueError, TypeError) as error:  # not a literal; an unhashable name
-        raise ItemKeyError(
-            f"the params literal holds something that is not a literal: {error}"
-        ) from error
-    for name, default in literal.items():
+    if _binds_params_elsewhere(tree, node.targets[0]):
+        raise ItemKeyError("the recipe binds params outside its params literal; bind it only there")
+    names: list[str] = []
+    for key, value in zip(node.value.keys, node.value.values, strict=True):
+        if key is None:
+            raise ItemKeyError("the params literal unpacks another mapping; write each name out")
+        name, default = _literal(key, "name"), _literal(value, "value")
         if not isinstance(name, str):
-            raise ItemKeyError(f"params name {name!r} is not a string")
+            raise ItemKeyError(f"params name {ast.unparse(key)} is not a string")
+        if name in names:
+            raise ItemKeyError(f"params name {name!r} appears twice in the params literal")
         if not isinstance(default, _PARAM_VALUE_TYPES):
             raise ItemKeyError(
-                f"params value {default!r} of {name!r} is not a number, string or bool"
+                f"params value {ast.unparse(value)} of {name!r} is not a number, string or bool"
             )
-    names = tuple(literal)
+        names.append(name)
     blank = ast.Assign(
         targets=[ast.Name(id=_PARAMS_NAME, ctx=ast.Store())],
         value=ast.Dict(
@@ -317,7 +396,14 @@ def _blank_params_literal(tree: ast.Module) -> tuple[str, ...]:
         ),
     )
     tree.body[bindings[0]] = ast.copy_location(blank, node)
-    return names
+    return tuple(names)
+
+
+def _literal(node: ast.expr, what: str) -> object:
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, TypeError) as error:  # not a literal; an unhashable member
+        raise ItemKeyError(f"params {what} {ast.unparse(node)} is not a literal") from error
 
 
 def _binds_params(target: ast.expr) -> bool:
@@ -327,16 +413,66 @@ def _binds_params(target: ast.expr) -> bool:
     )
 
 
-#: The engine files beside this module that run a recipe and bake its solid. A
+def _binds_params_elsewhere(tree: ast.Module, literal_target: ast.Name) -> bool:
+    # Any binding of the name besides the literal's own, in any scope: a store or a
+    # del, an argument, a global or nonlocal declaration, a def or class, an import,
+    # an except or match capture, or a type parameter.
+    for node in ast.walk(tree):
+        if node is literal_target:
+            continue
+        if isinstance(node, ast.Name):
+            named = node.id if not isinstance(node.ctx, ast.Load) else None
+        elif isinstance(node, ast.arg):
+            named = node.arg
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            named = _PARAMS_NAME if _PARAMS_NAME in node.names else None
+        elif isinstance(node, ast.alias):
+            named = node.asname or node.name.partition(".")[0]
+        elif isinstance(node, ast.MatchMapping):
+            named = node.rest
+        elif isinstance(node, _NAMED_BINDINGS):
+            named = node.name
+        else:
+            named = None
+        if named == _PARAMS_NAME:
+            return True
+    return False
+
+
+# The nodes that bind the name they carry in a ``name`` field.
+_NAMED_BINDINGS = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.ExceptHandler,
+    ast.MatchAs,
+    ast.MatchStar,
+    ast.TypeVar,
+    ast.ParamSpec,
+    ast.TypeVarTuple,
+)
+
+
+#: The engine files beside this module that run a recipe and bake its solid: the
+#: runtime and its allow-list, the code that writes the declared values into the
+#: recipe, the worker that starts the run and the child that bakes the result. A
 #: leaf is keyed on their whole bytes rather than on chosen functions in them, so
 #: no change to them can slip past the key.
-RUN_AND_BAKE_FILES = ("script_runtime.py", "api_subset.py", "_worker_child.py", "assembly_tree.py")
+RUN_AND_BAKE_FILES = (
+    "script_runtime.py",
+    "api_subset.py",
+    "params.py",
+    "worker.py",
+    "_worker_child.py",
+    "assembly_tree.py",
+)
 
 # The geometry kernel, by the toolchain part and the top-level module each is.
 _KERNEL = (("build123d", "build123d"), ("ocp", "OCP"))
 
-# Where the hashed files are read from; a test points it at a copy.
-_PACKAGE_DIR = Path(__file__).resolve().parent
+# Where the hashed files are read from: beside this file as the package holds it,
+# not beside whatever a symbolic link to it points at. A test points it at a copy.
+_PACKAGE_DIR = Path(__file__).absolute().parent
 
 
 def toolchain_identity(helpers: Iterable[str] = ()) -> str:
@@ -356,11 +492,18 @@ def toolchain_identity(helpers: Iterable[str] = ()) -> str:
     shape changes a hashed file or a kernel version instead, and a release that
     changes neither keeps every key.
 
-    Raises ``ItemKeyError`` for a helper ``HELPER_SOURCES`` does not list, a kernel
-    module that no installed distribution provides or that more than one does, or a
-    hashed file that cannot be read.
+    Raises ``ItemKeyError`` when ``helpers`` is not a collection of names, for a
+    helper ``HELPER_SOURCES`` does not list, a kernel module that no installed
+    distribution provides, that more than one does, or that Python would import
+    from a file its distribution did not install, or a hashed file that cannot be
+    read.
     """
-    names = sorted(set(helpers))
+    if isinstance(helpers, (str, bytes)):
+        raise ItemKeyError(f"helpers is a collection of helper names, not the one {helpers!r}")
+    try:
+        names = sorted(set(helpers))
+    except TypeError as error:
+        raise ItemKeyError(f"helpers is a collection of helper names, not {helpers!r}") from error
     unknown = [name for name in names if name not in HELPER_SOURCES]
     if unknown:
         raise ItemKeyError(f"no engine helper is named {unknown[0]!r}")
@@ -397,14 +540,37 @@ def _kernel_parts() -> list[str]:
                 f"one installed distribution must provide the {module} module; found {found}"
             )
         (name,) = names
+        _check_installed_by(module, name)
         parts.append(f"{part}={name}=={metadata.version(name)}")
     return parts
 
 
+def _check_installed_by(module: str, name: str) -> None:
+    # The file Python imports the module from must be one the distribution installed;
+    # otherwise its metadata does not describe the kernel that builds. find_spec
+    # locates a top-level module without running it.
+    try:
+        spec = importlib.util.find_spec(module)
+    except (ImportError, ValueError) as error:
+        raise ItemKeyError(f"cannot locate the {module} module: {error}") from error
+    distribution = metadata.distribution(name)
+    files = distribution.files
+    if spec is None or spec.origin is None or files is None:
+        raise ItemKeyError(f"cannot tell whether {name} installed the {module} module")
+    origin = Path(spec.origin).resolve()
+    base = Path(distribution.locate_file("")).resolve()
+    installed = {Path(file).as_posix() for file in files}
+    if not origin.is_relative_to(base) or origin.relative_to(base).as_posix() not in installed:
+        raise ItemKeyError(
+            f"Python would import {module} from {spec.origin}, which {name} did not install"
+        )
+
+
 def _files_digest(names: Iterable[str]) -> str:
-    # The sha256 of the canonical JSON mapping each file name to its bytes' sha256.
+    # The sha256 of the canonical JSON mapping each file name to its bytes' sha256,
+    # the files read in name order so a refusal names the same file every time.
     digests = {}
-    for name in names:
+    for name in sorted(names):
         try:
             data = (_PACKAGE_DIR / name).read_bytes()
         except OSError as error:
@@ -427,9 +593,11 @@ def leaf_key(
     Raises ``ItemKeyError`` as ``canonical_recipe`` and ``canonical_params`` do;
     when the declared names are not the names in the recipe's params literal (an
     undeclared name would run with the literal's value, which no part of the key
-    holds); and when ``toolchain`` is not UTF-8 text free of 0x00 bytes with a
+    holds); when ``toolchain`` is not UTF-8 text free of 0x00 bytes with a
     ``helpers`` part, or that part disagrees with ``source`` about whether it
-    calls a helper (so one leaf has one key).
+    calls a helper (so one leaf has one key); and when its ``python`` part is not
+    the running interpreter's major.minor, since the canonical recipe is that
+    interpreter's ``ast.unparse``.
     """
     recipe, names = _canonical_recipe(source)
     canonical = canonical_params(params, types)
@@ -453,6 +621,12 @@ def _toolchain(toolchain: object, source: str) -> bytes:
     except UnicodeEncodeError as error:
         raise ItemKeyError(f"the toolchain {toolchain!r} is not UTF-8 text") from error
     parts = dict(part.partition("=")[::2] for part in toolchain.split(";"))
+    running = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if parts.get("python") != running:
+        raise ItemKeyError(
+            f"the toolchain names Python {parts.get('python')!r}, but this is Python {running}; "
+            "compute a leaf's key on the Python its toolchain names"
+        )
     if "helpers" not in parts:
         raise ItemKeyError(f"the toolchain {toolchain!r} has no helpers part")
     if (parts["helpers"] != "-") != bool(helpers_called(source)):
@@ -483,46 +657,75 @@ def jcs(value: object) -> bytes:
     """``value`` as RFC 8785 canonical JSON, encoded as UTF-8.
 
     Accepts mappings with string keys, lists and tuples, strings, integers,
-    floats, booleans and ``None``. Object members are sorted by the UTF-16 code
-    units of their keys, numbers take their shortest ECMAScript form, and nothing
-    is written between tokens.
+    floats, booleans and ``None``; an instance of a subclass is written as the plain
+    value it stands for. Object members are sorted by the UTF-16 code units of
+    their keys, numbers take their shortest ECMAScript form, and nothing is written
+    between tokens.
 
-    Raises ``ItemKeyError`` for a non-finite number, an integer past +/-(2**53 - 1),
-    a non-string key, a string holding a lone surrogate, or any other type.
+    Raises ``ItemKeyError`` for a non-finite number, an integer a double cannot
+    hold exactly, a non-string key, two keys that are the same string, a string
+    holding a lone surrogate, nesting deeper than 100 levels (a container that holds
+    itself among them), or any other type.
     """
-    return _write(value).encode("utf-8")
+    return _write(value, 0).encode("utf-8")
 
 
-def _write(value: object) -> str:
+def _write(value: object, depth: int) -> str:
+    if depth > _NESTING_LIMIT:
+        raise ItemKeyError(
+            f"a value nested deeper than {_NESTING_LIMIT} levels has no canonical form"
+        )
     if value is None:
         return "null"
     if value is True:
         return "true"
     if value is False:
         return "false"
-    if isinstance(value, int):
-        if abs(value) > _SAFE_INTEGER:
-            raise ItemKeyError(
-                f"integer {value} is past +/-(2**53 - 1), which a JSON number cannot hold exactly"
-            )
-        return str(value)
-    if isinstance(value, float):
-        return _number(value)
+    if isinstance(value, (int, float)):
+        return _json_number(_plain_number(value))
     if isinstance(value, str):
-        return _string(value)
+        return _string(str.__str__(value))
     if isinstance(value, (list, tuple)):
-        return "[" + ",".join(_write(item) for item in value) + "]"
+        return "[" + ",".join(_write(item, depth + 1) for item in value) + "]"
     if isinstance(value, Mapping):
-        return _object(value)
+        return _object(value, depth)
     raise ItemKeyError(f"cannot write a {type(value).__name__} as canonical JSON")
 
 
-def _object(value: Mapping) -> str:
+def _json_number(number: int | float) -> str:
+    if isinstance(number, float):
+        return _number(number)
+    if abs(number) <= _SAFE_INTEGER:
+        return str(number)
+    # Past 2**53 - 1 an integer is a JSON number only if a double holds it exactly;
+    # it is then written as that double is. Its digits are never printed here, since
+    # the interpreter may refuse to write a long one.
+    try:
+        double = float(number)
+    except OverflowError as error:
+        raise ItemKeyError(
+            f"an integer of {number.bit_length()} bits is past any double"
+        ) from error
+    if double != number:
+        raise ItemKeyError(f"an integer of {number.bit_length()} bits is not one a double holds")
+    return _number(double)
+
+
+def _object(value: Mapping, depth: int) -> str:
+    members: dict[str, object] = {}
     for key in value:
         if not isinstance(key, str):
             raise ItemKeyError(f"object key {key!r} is not a string")
-    members = sorted(value, key=_code_units)
-    return "{" + ",".join(_string(key) + ":" + _write(value[key]) for key in members) + "}"
+        name = str.__str__(key)
+        if name in members:
+            raise ItemKeyError(f"object key {name!r} appears twice")
+        members[name] = value[key]
+    ordered = sorted(members, key=_code_units)
+    return (
+        "{"
+        + ",".join(_string(name) + ":" + _write(members[name], depth + 1) for name in ordered)
+        + "}"
+    )
 
 
 def _code_units(key: str) -> bytes:

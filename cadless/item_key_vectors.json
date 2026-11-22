@@ -1,5 +1,5 @@
 {
-  "about": "Test vectors for the item key definitions in cadless/item_key.py, described in docs/extending/item-keys.md. Each case gives its input and either its outcome or refused: true. Numbers given as bits are IEEE 754 doubles in hex.",
+  "about": "Test vectors for the item key definitions in cadless/item_key.py, described in docs/extending/item-keys.md. Each case gives its input and either its outcome or refused: true. Numbers given as bits are IEEE 754 doubles in hex. A leaf case that names a python applies on that Python version only.",
   "definitions": 1,
   "jcs": [
     {
@@ -204,8 +204,28 @@
       "output": "{\"\":[],\"a\":{\"y\":true,\"z\":null},\"b\":[1,2.5,\"x\"]}"
     },
     {
-      "name": "refused-integer-past-2^53",
+      "name": "integer-2^53",
       "input": 9007199254740992,
+      "output": "9007199254740992"
+    },
+    {
+      "name": "integer-2^60",
+      "input": 1152921504606846976,
+      "output": "1152921504606847000"
+    },
+    {
+      "name": "integer-10^22",
+      "input": 10000000000000000000000,
+      "output": "1e+22"
+    },
+    {
+      "name": "refused-integer-2^53-plus-1",
+      "input": 9007199254740993,
+      "refused": true
+    },
+    {
+      "name": "refused-integer-10^30",
+      "input": 1000000000000000000000000000000,
       "refused": true
     },
     {
@@ -278,6 +298,16 @@
         "flag": "bool"
       },
       "output": "{\"flag\":{\"type\":\"bool\",\"value\":false},\"label\":{\"type\":\"str\",\"value\":\"A\"}}"
+    },
+    {
+      "name": "float-negative-zero",
+      "params": {
+        "d": -0.0
+      },
+      "types": {
+        "d": "float"
+      },
+      "output": "{\"d\":{\"type\":\"float\",\"value\":0}}"
     },
     {
       "name": "str-precomposed",
@@ -440,6 +470,45 @@
         0
       ],
       "output": "[0,0,0,1,0,0,0]"
+    },
+    {
+      "name": "qw-and-qx-zero-sign-follows-qy",
+      "pose": [
+        0,
+        0,
+        0,
+        0,
+        -1,
+        0,
+        0
+      ],
+      "output": "[0,0,0,0,1,0,0]"
+    },
+    {
+      "name": "canonical-kept",
+      "pose": [
+        77.102949,
+        -103.319525,
+        476.255106,
+        -0.570518,
+        -0.419718,
+        0.193257,
+        0.678967
+      ],
+      "output": "[77.102949,-103.319525,476.255106,-0.570518,-0.419718,0.193257,0.678967]"
+    },
+    {
+      "name": "canonical-kept-flipped",
+      "pose": [
+        77.102949,
+        -103.319525,
+        476.255106,
+        0.570518,
+        0.419718,
+        -0.193257,
+        -0.678967
+      ],
+      "output": "[77.102949,-103.319525,476.255106,-0.570518,-0.419718,0.193257,0.678967]"
     },
     {
       "name": "qw-rounds-to-zero-leaning-negative",
@@ -613,8 +682,22 @@
     },
     {
       "name": "docstrings-and-empty-bodies",
-      "source": "\"\"\"M.\"\"\"\nparams = {}\nclass C:\n    \"\"\"C.\"\"\"\ndef f():\n    \"\"\"F.\"\"\"\n",
-      "output": "params = {}\n\nclass C:\n    pass\n\ndef f():\n    pass",
+      "source": "\"\"\"M.\"\"\"\nparams = {}\nclass C:\n    \"\"\"C.\"\"\"\ndef f():\n    \"\"\"F.\"\"\"\nasync def g():\n    \"\"\"G.\"\"\"\n    return 1\n",
+      "output": "params = {}\n\nclass C:\n    pass\n\ndef f():\n    pass\n\nasync def g():\n    return 1",
+      "helpers": []
+    },
+    {
+      "name": "names-a-helper-without-calling-it",
+      "source": "params = {}\njoin = split_and_join\n",
+      "output": "params = {}\njoin = split_and_join",
+      "helpers": [
+        "split_and_join"
+      ]
+    },
+    {
+      "name": "brace-after-an-empty-spec",
+      "source": "params = {}\ntag = f'{v:}}}'\n",
+      "output": "params = {}\ntag = f'{v:}}}'",
       "helpers": []
     },
     {
@@ -628,8 +711,43 @@
       "refused": true
     },
     {
+      "name": "refused-params-inside-a-block",
+      "source": "if True:\n    params = {'w': 1}\n",
+      "refused": true
+    },
+    {
       "name": "refused-annotated-params",
       "source": "params: dict = {'w': 1}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-unpacked-params",
+      "source": "params, x = {'w': 1}, 2\n",
+      "refused": true
+    },
+    {
+      "name": "refused-starred-params",
+      "source": "*params, = {'w': 1}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-chained-params",
+      "source": "params = q = {'w': 1}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-params-merged-into",
+      "source": "params = {'w': 1}\nparams |= {'w': 2}\n",
+      "refused": true
+    },
+    {
+      "name": "refused-params-as-an-argument",
+      "source": "params = {'w': 1}\ndef f(params):\n    return params\n",
+      "refused": true
+    },
+    {
+      "name": "refused-name-twice",
+      "source": "params = {'w': 1, 'w': 2}\n",
       "refused": true
     },
     {
@@ -643,6 +761,16 @@
       "refused": true
     },
     {
+      "name": "refused-brace-in-a-format-spec",
+      "source": "params = {}\ntag = f'{v:\\x7d}'\n",
+      "refused": true
+    },
+    {
+      "name": "refused-nul-written-back",
+      "source": "params = {}\nx = f'{y!r:\\x00>3}'\n",
+      "refused": true
+    },
+    {
       "name": "refused-syntax",
       "source": "params = {}\ndef (\n",
       "refused": true
@@ -650,55 +778,8 @@
   ],
   "leaf": [
     {
-      "name": "plate",
-      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
-      "params": {
-        "width": 40,
-        "height": 20.5,
-        "label": "A"
-      },
-      "types": {
-        "width": "float",
-        "height": "float",
-        "label": "str"
-      },
-      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
-      "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63"
-    },
-    {
-      "name": "plate-rewritten-same-key",
-      "source": "from build123d import *  # every name\nparams = {'width': 90,\n          'height': 7, 'label': 'B'}\ndef hole(d):\n    return Cylinder(d/2, 3)  # radius, height\npart = (Box(params['width'], params['height'], 3)\n        - hole(6))\n",
-      "params": {
-        "width": 40.0,
-        "height": 20.5,
-        "label": "A"
-      },
-      "types": {
-        "width": "float",
-        "height": "float",
-        "label": "str"
-      },
-      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
-      "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63"
-    },
-    {
-      "name": "plate-other-width",
-      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
-      "params": {
-        "width": 41,
-        "height": 20.5,
-        "label": "A"
-      },
-      "types": {
-        "width": "float",
-        "height": "float",
-        "label": "str"
-      },
-      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
-      "key": "4407724ede2f69f4468328569f138e6f4610863d8d3f6771d0e24587c37bc2f8"
-    },
-    {
-      "name": "plate-other-toolchain",
+      "name": "plate-py3.13",
+      "python": "3.13",
       "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
       "params": {
         "width": 40,
@@ -714,7 +795,336 @@
       "key": "f20e14f314bfb0e5db7a5fff5bdf701a8d7df331d4dc419d0d5e26ecd3fb5459"
     },
     {
-      "name": "count-as-int",
+      "name": "plate-rewritten-same-key-py3.13",
+      "python": "3.13",
+      "source": "from build123d import *  # every name\nparams = {'width': 90,\n          'height': 7, 'label': 'B'}\ndef hole(d):\n    return Cylinder(d/2, 3)  # radius, height\npart = (Box(params['width'], params['height'], 3)\n        - hole(6))\n",
+      "params": {
+        "width": 40.0,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "f20e14f314bfb0e5db7a5fff5bdf701a8d7df331d4dc419d0d5e26ecd3fb5459"
+    },
+    {
+      "name": "plate-other-width-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 41,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "448e88fb107025981dc0ffe2f69bca69ca8a8ad411c44243af6c186b937bf6fc"
+    },
+    {
+      "name": "plate-other-toolchain-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-aarch64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "6b054457900b1e8cdf1b2f5bdf26584328f1a60ba070a3ed843690a92e20c7b4"
+    },
+    {
+      "name": "plate-negative-zero-same-key-as-zero-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": -0.0,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "42d0ba7f571d6a2fc25eaac659d5c5c64af4ffbde48f1bb0f78d072e908ac214"
+    },
+    {
+      "name": "plate-zero-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 0.0,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "42d0ba7f571d6a2fc25eaac659d5c5c64af4ffbde48f1bb0f78d072e908ac214"
+    },
+    {
+      "name": "count-as-int-py3.13",
+      "python": "3.13",
+      "source": "params = {'n': 3}\nholes = params['n']\n",
+      "params": {
+        "n": 3
+      },
+      "types": {
+        "n": "int"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "645436eca650d3a64fb6aea910223090b9d71521e523080ae534a38eced91734"
+    },
+    {
+      "name": "count-as-integral-float-same-key-py3.13",
+      "python": "3.13",
+      "source": "params = {'n': 3}\nholes = params['n']\n",
+      "params": {
+        "n": 3.0
+      },
+      "types": {
+        "n": "int"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "645436eca650d3a64fb6aea910223090b9d71521e523080ae534a38eced91734"
+    },
+    {
+      "name": "calls-a-helper-py3.13",
+      "python": "3.13",
+      "source": "from build123d import *\nparams = {'length': 300.0, 'clearance': 0.2}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])\n",
+      "params": {
+        "length": 300,
+        "clearance": 0.2
+      },
+      "types": {
+        "length": "float",
+        "clearance": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd;fonts=-",
+      "key": "fafc87b936634c287201e7adfd9b67535e8f6c79d5721163934b7072786374de"
+    },
+    {
+      "name": "refused-helper-missing-from-toolchain-py3.13",
+      "python": "3.13",
+      "source": "from build123d import *\nparams = {'length': 300.0, 'clearance': 0.2}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])\n",
+      "params": {
+        "length": 300,
+        "clearance": 0.2
+      },
+      "types": {
+        "length": "float",
+        "clearance": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-helper-not-called-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-name-not-declared-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5
+      },
+      "types": {
+        "width": "float",
+        "height": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-declared-name-not-in-recipe-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A",
+        "depth": 3
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str",
+        "depth": "float"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-wrong-type-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": 1
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-toolchain-without-helpers-part-py3.13",
+      "python": "3.13",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.13;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "plate-py3.12",
+      "python": "3.12",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63"
+    },
+    {
+      "name": "plate-rewritten-same-key-py3.12",
+      "python": "3.12",
+      "source": "from build123d import *  # every name\nparams = {'width': 90,\n          'height': 7, 'label': 'B'}\ndef hole(d):\n    return Cylinder(d/2, 3)  # radius, height\npart = (Box(params['width'], params['height'], 3)\n        - hole(6))\n",
+      "params": {
+        "width": 40.0,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63"
+    },
+    {
+      "name": "plate-other-width-py3.12",
+      "python": "3.12",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 41,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "4407724ede2f69f4468328569f138e6f4610863d8d3f6771d0e24587c37bc2f8"
+    },
+    {
+      "name": "plate-other-toolchain-py3.12",
+      "python": "3.12",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-aarch64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "18171dd50f349fc6eea8f24f358580b79174c52537d85bc4def40e0a3a237c3a"
+    },
+    {
+      "name": "plate-negative-zero-same-key-as-zero-py3.12",
+      "python": "3.12",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": -0.0,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "e1c7d34fb2436287f17ad187f2484334d0b65ea36f7977981be1d664159d98da"
+    },
+    {
+      "name": "plate-zero-py3.12",
+      "python": "3.12",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 0.0,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "key": "e1c7d34fb2436287f17ad187f2484334d0b65ea36f7977981be1d664159d98da"
+    },
+    {
+      "name": "count-as-int-py3.12",
+      "python": "3.12",
       "source": "params = {'n': 3}\nholes = params['n']\n",
       "params": {
         "n": 3
@@ -726,7 +1136,8 @@
       "key": "cae085f9a8080fabebd57c17d6886abd9c3ee90f74d0c023ed0bfafba81256be"
     },
     {
-      "name": "count-as-integral-float-same-key",
+      "name": "count-as-integral-float-same-key-py3.12",
+      "python": "3.12",
       "source": "params = {'n': 3}\nholes = params['n']\n",
       "params": {
         "n": 3.0
@@ -738,7 +1149,8 @@
       "key": "cae085f9a8080fabebd57c17d6886abd9c3ee90f74d0c023ed0bfafba81256be"
     },
     {
-      "name": "calls-a-helper",
+      "name": "calls-a-helper-py3.12",
+      "python": "3.12",
       "source": "from build123d import *\nparams = {'length': 300.0, 'clearance': 0.2}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])\n",
       "params": {
         "length": 300,
@@ -752,7 +1164,8 @@
       "key": "f8824c59b12b80e664a580f7ad3197f649b2d4048e14b39e36fa44be47231027"
     },
     {
-      "name": "refused-helper-missing-from-toolchain",
+      "name": "refused-helper-missing-from-toolchain-py3.12",
+      "python": "3.12",
       "source": "from build123d import *\nparams = {'length': 300.0, 'clearance': 0.2}\nbeam = Box(params['length'], 20, 10)\nplane = Plane(origin=(0, 0, 0), z_dir=(1, 0, 0))\nleft, right = split_and_join(beam, plane, (0, 0, 1), params['clearance'])\n",
       "params": {
         "length": 300,
@@ -766,7 +1179,8 @@
       "refused": true
     },
     {
-      "name": "refused-helper-not-called",
+      "name": "refused-helper-not-called-py3.12",
+      "python": "3.12",
       "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
       "params": {
         "width": 40,
@@ -782,7 +1196,8 @@
       "refused": true
     },
     {
-      "name": "refused-name-not-declared",
+      "name": "refused-name-not-declared-py3.12",
+      "python": "3.12",
       "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
       "params": {
         "width": 40,
@@ -796,7 +1211,8 @@
       "refused": true
     },
     {
-      "name": "refused-declared-name-not-in-recipe",
+      "name": "refused-declared-name-not-in-recipe-py3.12",
+      "python": "3.12",
       "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
       "params": {
         "width": 40,
@@ -814,7 +1230,8 @@
       "refused": true
     },
     {
-      "name": "refused-wrong-type",
+      "name": "refused-wrong-type-py3.12",
+      "python": "3.12",
       "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
       "params": {
         "width": 40,
@@ -828,6 +1245,39 @@
       },
       "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
       "refused": true
+    },
+    {
+      "name": "refused-toolchain-without-helpers-part-py3.12",
+      "python": "3.12",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;fonts=-",
+      "refused": true
+    },
+    {
+      "name": "refused-toolchain-names-another-python",
+      "source": "\"\"\"A plate with a hole.\"\"\"\nfrom build123d import *\n\nparams = {\"width\": 40, \"height\": 20.5, \"label\": \"A\"}  # mm\n\n\ndef hole(d):\n    \"\"\"One hole.\"\"\"\n    return Cylinder(d / 2, 3)\n\n\npart = Box(params[\"width\"], params[\"height\"], 3) - hole(6)\n",
+      "params": {
+        "width": 40,
+        "height": 20.5,
+        "label": "A"
+      },
+      "types": {
+        "width": "float",
+        "height": "float",
+        "label": "str"
+      },
+      "toolchain": "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=2.7;platform=linux-x86_64;runtime=abababababababababababababababababababababababababababababababab;helpers=-;fonts=-",
+      "refused": true
     }
   ],
   "item": [
@@ -836,7 +1286,7 @@
       "document": {
         "members": [
           {
-            "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63",
+            "key": "f20e14f314bfb0e5db7a5fff5bdf701a8d7df331d4dc419d0d5e26ecd3fb5459",
             "pose": [
               0.0,
               0.0,
@@ -848,7 +1298,7 @@
             ]
           },
           {
-            "key": "f8824c59b12b80e664a580f7ad3197f649b2d4048e14b39e36fa44be47231027",
+            "key": "fafc87b936634c287201e7adfd9b67535e8f6c79d5721163934b7072786374de",
             "pose": [
               60.0,
               0.0,
@@ -861,14 +1311,14 @@
           }
         ]
       },
-      "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8"
+      "key": "1de24d938291f05a17cbe6401a5b2a63d375280340a92dac3a9f930ffaa2f3b4"
     },
     {
       "name": "two-leaves-carrying-their-key",
       "document": {
         "members": [
           {
-            "key": "333a590467a5876a4d4581c8f821043e0ee99bb385c77926af2c61bd812d1a63",
+            "key": "f20e14f314bfb0e5db7a5fff5bdf701a8d7df331d4dc419d0d5e26ecd3fb5459",
             "pose": [
               0.0,
               0.0,
@@ -880,7 +1330,7 @@
             ]
           },
           {
-            "key": "f8824c59b12b80e664a580f7ad3197f649b2d4048e14b39e36fa44be47231027",
+            "key": "fafc87b936634c287201e7adfd9b67535e8f6c79d5721163934b7072786374de",
             "pose": [
               60.0,
               0.0,
@@ -892,16 +1342,16 @@
             ]
           }
         ],
-        "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8"
+        "key": "1de24d938291f05a17cbe6401a5b2a63d375280340a92dac3a9f930ffaa2f3b4"
       },
-      "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8"
+      "key": "1de24d938291f05a17cbe6401a5b2a63d375280340a92dac3a9f930ffaa2f3b4"
     },
     {
       "name": "nested",
       "document": {
         "members": [
           {
-            "key": "9ad04123301f45bf21530ef00b0b468ae42cdfaa5fbef3a0de88b202efc014c8",
+            "key": "1de24d938291f05a17cbe6401a5b2a63d375280340a92dac3a9f930ffaa2f3b4",
             "pose": [
               0.0,
               0.0,
@@ -914,7 +1364,7 @@
           }
         ]
       },
-      "key": "1d3e083794bf5bb74073cc12c27cac0b4c2f71a60f69322097a196ad66a7e1dd"
+      "key": "7d9299cbecc998b1b32bf27c49b30eaef03dd18c361399d0a75fd60de94a7c0a"
     },
     {
       "name": "empty",
@@ -924,10 +1374,10 @@
       "key": "6375508cf89fca1184992a7df1925296aa53eca766c56d31f66bb87e3b778620"
     },
     {
-      "name": "refused-integer-past-2^53",
+      "name": "refused-integer-2^53-plus-1",
       "document": {
         "members": [],
-        "count": 9007199254740992
+        "count": 9007199254740993
       },
       "refused": true
     }

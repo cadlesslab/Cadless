@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import ast
+import enum
 import hashlib
 import json
 import math
+import os
 import platform
+import random
 import re
 import shutil
 import struct
 import subprocess
 import sys
+import warnings
 from collections.abc import Callable
 from importlib import metadata
 from pathlib import Path
@@ -42,38 +46,7 @@ def _double(bits: str) -> float:
     return struct.unpack(">d", bytes.fromhex(bits))[0]
 
 
-# RFC 8785 appendix B: an IEEE 754 bit pattern and the JSON text it serialises to.
-RFC_NUMBERS = [
-    ("0000000000000000", "0"),
-    ("8000000000000000", "0"),
-    ("0000000000000001", "5e-324"),
-    ("8000000000000001", "-5e-324"),
-    ("7fefffffffffffff", "1.7976931348623157e+308"),
-    ("ffefffffffffffff", "-1.7976931348623157e+308"),
-    ("4340000000000000", "9007199254740992"),
-    ("c340000000000000", "-9007199254740992"),
-    ("4430000000000000", "295147905179352830000"),
-    ("44b52d02c7e14af5", "9.999999999999997e+22"),
-    ("44b52d02c7e14af6", "1e+23"),
-    ("44b52d02c7e14af7", "1.0000000000000001e+23"),
-    ("444b1ae4d6e2ef4e", "999999999999999700000"),
-    ("444b1ae4d6e2ef4f", "999999999999999900000"),
-    ("444b1ae4d6e2ef50", "1e+21"),
-    ("3eb0c6f7a0b5ed8c", "9.999999999999997e-7"),
-    ("3eb0c6f7a0b5ed8d", "0.000001"),
-    ("41b3de4355555553", "333333333.3333332"),
-    ("41b3de4355555554", "333333333.33333325"),
-    ("41b3de4355555555", "333333333.3333333"),
-    ("41b3de4355555556", "333333333.3333334"),
-    ("41b3de4355555557", "333333333.33333343"),
-    ("becbf647612f3696", "-0.0000033333333333333333"),
-    ("43143ff3c1cb0959", "1424953923781206.2"),
-]
-
-
-@pytest.mark.parametrize(("bits", "text"), RFC_NUMBERS)
-def test_numbers_follow_the_rfc_8785_examples(bits: str, text: str) -> None:
-    assert jcs(_double(bits)) == text.encode()
+# RFC 8785's own number examples are cases in the vector file, run below.
 
 
 @pytest.mark.parametrize(
@@ -91,10 +64,85 @@ def test_integers_are_written_as_integers_up_to_the_safe_limit() -> None:
     assert jcs(-(2**53 - 1)) == b"-9007199254740991"
 
 
-@pytest.mark.parametrize("value", [2**53, -(2**53), 10**30])
-def test_an_integer_past_the_safe_limit_is_refused(value: int) -> None:
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (2**53, "9007199254740992"),
+        (-(2**53), "-9007199254740992"),
+        (2**60, "1152921504606847000"),
+        (10**22, "1e+22"),
+    ],
+)
+def test_an_integer_a_double_holds_exactly_is_written_as_that_double(value: int, text: str) -> None:
+    # Written in the shortest form that reads back as the same double, as 2.0**60 is.
+    assert jcs(value) == text.encode() == jcs(float(value))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(2**53 + 1, id="2^53+1"),
+        pytest.param(-(2**53 + 1), id="-(2^53+1)"),
+        pytest.param(10**30, id="10^30"),
+        pytest.param(10**400, id="10^400"),
+        pytest.param(-(10**5000), id="-(10^5000)"),
+    ],
+)
+def test_an_integer_no_double_holds_exactly_is_refused(value: int) -> None:
     with pytest.raises(ItemKeyError, match="integer"):
         jcs(value)
+
+
+class _Loud(float):
+    def __repr__(self) -> str:
+        return "loud"
+
+
+class _Count(enum.IntEnum):
+    TWO = 2
+
+
+class _Shout(str):
+    def __str__(self) -> str:
+        return "SHOUT"
+
+    def __iter__(self):  # lies about its characters too
+        return iter("SHOUT")
+
+
+def test_a_subclass_is_written_as_the_plain_value_it_stands_for() -> None:
+    assert jcs([_Loud(1.5), _Count.TWO, _Shout("a")]) == b'[1.5,2,"a"]'
+
+
+class _Twin(str):
+    # Hashes apart from the plain string, so a dict holds both as keys.
+    def __hash__(self) -> int:
+        return 1
+
+
+def test_two_keys_that_are_the_same_string_are_refused() -> None:
+    with pytest.raises(ItemKeyError, match="twice"):
+        jcs({"a": 1, _Twin("a"): 2})
+
+
+def _nested(levels: int) -> object:
+    value: object = 0
+    for _ in range(levels):
+        value = [value]
+    return value
+
+
+def test_a_value_nested_deeper_than_the_limit_is_refused() -> None:
+    assert jcs(_nested(100)) == b"[" * 100 + b"0" + b"]" * 100
+    with pytest.raises(ItemKeyError, match="nested"):
+        jcs(_nested(101))
+
+
+def test_a_container_that_holds_itself_is_refused() -> None:
+    loop: list = []
+    loop.append(loop)
+    with pytest.raises(ItemKeyError, match="nested"):
+        jcs(loop)
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -235,6 +283,37 @@ def test_a_non_finite_float_is_refused() -> None:
         canonical_params({"d": float("nan")}, {"d": "float"})
 
 
+def test_a_negative_zero_param_runs_as_the_zero_its_key_holds() -> None:
+    # Canonical JSON writes -0.0 as 0, and atan2(-0.0, -1) is not atan2(0.0, -1).
+    typed = typed_params({"d": -0.0}, {"d": "float"})
+    assert math.copysign(1.0, typed["d"]) == 1.0
+
+
+def test_a_param_given_as_a_subclass_runs_as_a_plain_value() -> None:
+    typed = typed_params(
+        {"d": _Loud(1.5), "n": _Count.TWO, "s": _Shout("a")},
+        {"d": "float", "n": "int", "s": "str"},
+    )
+    assert typed == {"d": 1.5, "n": 2, "s": "a"}
+    assert [type(value) for value in typed.values()] == [float, int, str]
+
+
+@pytest.mark.parametrize(("params", "types"), [(None, {}), ({}, None), ([("a", 1)], {"a": "int"})])
+def test_params_and_types_must_be_mappings(params: object, types: object) -> None:
+    with pytest.raises(ItemKeyError, match="mapping"):
+        typed_params(params, types)
+
+
+def test_an_int_too_large_for_a_float_is_refused_where_a_float_is_declared() -> None:
+    with pytest.raises(ItemKeyError, match="too large"):
+        typed_params({"d": 10**400}, {"d": "float"})
+
+
+def test_an_int_no_double_holds_is_refused_as_a_param() -> None:
+    with pytest.raises(ItemKeyError, match="integer"):
+        canonical_params({"n": 10**400}, {"n": "int"})
+
+
 def test_strings_are_not_normalised() -> None:
     # Precomposed and decomposed forms of the same letter stay two inputs.
     nfc = canonical_params({"s": "é"}, {"s": "str"})
@@ -265,6 +344,29 @@ def test_with_qw_zero_the_first_non_zero_component_is_positive() -> None:
     assert canonical_pose((0, 0, 0, -1, 0, 0, 0))[3] == 1.0
 
 
+def test_with_qw_and_qx_zero_the_sign_follows_qy() -> None:
+    assert canonical_pose((0, 0, 0, 0, -1, 0, 0)) == (0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def test_a_canonical_pose_is_its_own_canonical_form() -> None:
+    # This one moved in its last digit when normalised a second time.
+    pose = (77.102949, -103.319525, 476.255106, -0.570518, -0.419718, 0.193257, 0.678967)
+    assert canonical_pose(pose) == pose
+
+
+def test_canonicalising_twice_changes_nothing() -> None:
+    rng = random.Random(7)
+    for _ in range(5000):
+        q = [rng.uniform(-1.0, 1.0) for _ in range(4)]
+        length = math.sqrt(math.fsum(v * v for v in q))
+        once = canonical_pose(
+            [rng.uniform(-500.0, 500.0) for _ in range(3)] + [v / length for v in q]
+        )
+        flipped = once[:3] + tuple(-v for v in once[3:])
+        assert canonical_pose(once) == once
+        assert canonical_pose(flipped) == once
+
+
 def test_the_sign_rule_reads_the_rounded_quaternion() -> None:
     # qw rounds to zero, so the sign follows qx whichever way qw leaned.
     leaning_negative = canonical_pose((0, 0, 0, 0.6, 0.8, 0.0, -4e-7))
@@ -292,18 +394,25 @@ def test_negative_zero_is_written_as_zero() -> None:
     assert math.copysign(1.0, pose[1]) == 1.0
 
 
-@pytest.mark.parametrize("pose", [(0, 0, 0, 0, 0, 1), (0, 0, 0, 0, 0, 0, 1, 0)])
-def test_a_pose_of_the_wrong_length_is_refused(pose: tuple) -> None:
+@pytest.mark.parametrize(
+    "pose", [(0, 0, 0, 0, 0, 1), (0, 0, 0, 0, 0, 0, 1, 0), 5, None, "1234567", b"1234567"]
+)
+def test_a_pose_that_is_not_seven_numbers_is_refused(pose: object) -> None:
     with pytest.raises(ItemKeyError, match="seven"):
         canonical_pose(pose)
 
 
 @pytest.mark.parametrize(
     "pose",
-    [(float("nan"), 0, 0, 0, 0, 0, 1), (0, 0, 0, 0, 0, 0, float("inf")), (True, 0, 0, 0, 0, 0, 1)],
+    [
+        (float("nan"), 0, 0, 0, 0, 0, 1),
+        (0, 0, 0, 0, 0, 0, float("inf")),
+        (True, 0, 0, 0, 0, 0, 1),
+        (10**400, 0, 0, 0, 0, 0, 1),
+    ],
 )
 def test_a_pose_holding_a_non_number_is_refused(pose: tuple) -> None:
-    with pytest.raises(ItemKeyError):
+    with pytest.raises(ItemKeyError, match="finite|too large"):
         canonical_pose(pose)
 
 
@@ -436,6 +545,35 @@ def test_the_params_literal_is_the_one_the_engine_reads() -> None:
         pytest.param("params = {[1]: 2}\n", id="name-unhashable"),
         pytest.param("params = {'w': (1, 2)}\n", id="value-a-tuple"),
         pytest.param("params = {'w': None}\n", id="value-none"),
+        pytest.param("params = {'w': 1, 'w': 2}\n", id="name-twice"),
+        pytest.param("base = {}\nparams = {**base}\n", id="unpacks-a-mapping"),
+        pytest.param("params = {'w': 1}\nparams |= {'w': 2}\n", id="merged-into"),
+        pytest.param("params = {'w': 1}\nfor params in []:\n    pass\n", id="loop-target"),
+        pytest.param("params = {'w': 1}\nif (params := {}):\n    pass\n", id="walrus"),
+        pytest.param("params = {'w': 1}\ndel params\n", id="deleted"),
+        pytest.param(
+            "params = {'w': 1}\ndef f():\n    global params\n    params['w'] = 2\n", id="global"
+        ),
+        pytest.param("params = {'w': 1}\ndef params():\n    pass\n", id="def"),
+        pytest.param("params = {'w': 1}\ndef f[params](x):\n    pass\n", id="type-parameter"),
+        pytest.param("params = {'w': 1}\ndef f[*params]():\n    pass\n", id="type-tuple"),
+        pytest.param("params = {'w': 1}\ndef f[**params]():\n    pass\n", id="param-spec"),
+        pytest.param(
+            "params = {'w': 1}\nmatch []:\n    case [*params]:\n        pass\n", id="match-star"
+        ),
+        pytest.param(
+            "params = {'w': 1}\nmatch {}:\n    case {**params}:\n        pass\n", id="match-rest"
+        ),
+        pytest.param("params = {'w': 1}\ndef f(params):\n    return params\n", id="argument"),
+        pytest.param("params = {'w': 1}\nimport math as params\n", id="import-as"),
+        pytest.param("params = {'w': 1}\nclass params:\n    pass\n", id="class"),
+        pytest.param(
+            "params = {'w': 1}\ntry:\n    pass\nexcept ValueError as params:\n    pass\n",
+            id="except-as",
+        ),
+        pytest.param(
+            "params = {'w': 1}\nmatch 1:\n    case params:\n        pass\n", id="match-capture"
+        ),
     ],
 )
 def test_a_recipe_without_exactly_one_plain_params_literal_is_refused(source: str) -> None:
@@ -457,11 +595,66 @@ def test_an_annotated_params_is_refused_as_such() -> None:
         pytest.param("params = {}\nx = " + "+".join(["1"] * 2_000), id="too-deep-to-write"),
         pytest.param("params = {}\nx = " + "+".join(["1"] * 100_000), id="too-deep-to-parse"),
         pytest.param("params = {}\nx = f'{y!r:\\x00>3}'\n", id="nul-written-back"),
+        pytest.param("params = {}\nx = f'{y!r:\\ud800>3}'\n", id="surrogate-written-back"),
     ],
 )
 def test_a_recipe_python_cannot_parse_or_write_back_is_refused(source: str) -> None:
     with pytest.raises(ItemKeyError, match="recipe"):
         canonical_recipe(source)
+
+
+def test_a_recipe_whose_text_reads_back_as_another_program_is_refused() -> None:
+    # ast.unparse writes the format spec "}" as "}}", which reads back as an empty
+    # spec followed by a literal brace: the spelling that means that is kept.
+    with pytest.raises(ItemKeyError, match="read back"):
+        canonical_recipe("params = {}\ntag = f'{v:\\x7d}'\n")
+    assert canonical_recipe("params = {}\ntag = f'{v:}}}'\n") == b"params = {}\ntag = f'{v:}}}'"
+
+
+def test_a_refusal_reads_the_same_on_every_call() -> None:
+    messages = set()
+    for _ in range(2):
+        with pytest.raises(ItemKeyError) as refused:
+            canonical_recipe("params = {'w': w0}\n")
+        messages.add(str(refused.value))
+    assert messages == {"params value w0 is not a literal"}
+
+
+def test_a_recipe_gets_the_same_text_whatever_the_warning_filters() -> None:
+    source = "params = {}\npattern = '\\d+'\n"  # an invalid escape: a SyntaxWarning
+    plain = canonical_recipe(source)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert canonical_recipe(source) == plain
+
+
+def test_an_integer_literal_past_4300_digits_is_refused_whatever_the_limit() -> None:
+    source = "params = {}\nx = 0x" + "f" * 4000 + "\n"  # parses under any limit
+    default = sys.get_int_max_str_digits()
+    for limit in (default, 0):
+        sys.set_int_max_str_digits(limit)
+        try:
+            with pytest.raises(ItemKeyError, match="4300"):
+                canonical_recipe(source)
+        finally:
+            sys.set_int_max_str_digits(default)
+
+
+def _chain(terms: int) -> str:
+    # An expression whose syntax tree nests terms + 2 levels below the module.
+    return "params = {}\nx = " + "+".join(["1"] * terms) + "\n"
+
+
+def test_how_deep_a_recipe_nests_is_refused_at_a_fixed_limit() -> None:
+    with pytest.raises(ItemKeyError, match="deeper than 100"):
+        canonical_recipe(_chain(99))
+
+
+def test_a_recipe_within_the_limit_gets_a_key_from_a_deep_caller() -> None:
+    def from_depth(frames: int) -> bytes:
+        return from_depth(frames - 1) if frames else canonical_recipe(_chain(98))
+
+    assert from_depth(400) == canonical_recipe(_chain(98))
 
 
 def test_a_recipe_is_text() -> None:
@@ -529,7 +722,7 @@ def test_a_helpers_listed_sources_hold_every_engine_module_they_import() -> None
     for helper, files in HELPER_SOURCES.items():
         listed = {name.removesuffix(".py") for name in files}
         for name in files:
-            imported = _engine_imports(ast.parse((package / name).read_text()))
+            imported = _engine_imports(ast.parse((package / name).read_bytes()))
             assert imported <= listed, f"{helper}: {name} imports {sorted(imported - listed)}"
 
 
@@ -592,7 +785,15 @@ def test_the_toolchain_names_the_kernel_and_interpreter_it_runs_on() -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["script_runtime.py", "api_subset.py", "_worker_child.py", "assembly_tree.py"]
+    "name",
+    [
+        "script_runtime.py",
+        "api_subset.py",
+        "params.py",
+        "worker.py",
+        "_worker_child.py",
+        "assembly_tree.py",
+    ],
 )
 def test_a_run_and_bake_file_changes_the_runtime_part_alone(engine_copy: Path, name: str) -> None:
     before = _parts(toolchain_identity())
@@ -689,26 +890,168 @@ def test_an_unknown_helper_is_refused() -> None:
         toolchain_identity({"no_such_helper"})
 
 
+@pytest.mark.parametrize("helpers", ["split_and_join", 5, [["split_and_join"]]])
+def test_helpers_must_be_a_collection_of_names(helpers: object) -> None:
+    with pytest.raises(ItemKeyError, match="collection"):
+        toolchain_identity(helpers)
+
+
 def test_a_hashed_file_that_cannot_be_read_is_refused(engine_copy: Path) -> None:
     (engine_copy / "assembly_tree.py").unlink()
     with pytest.raises(ItemKeyError, match="assembly_tree.py"):
         toolchain_identity()
 
 
-# Imports the module with build123d and OCP blocked, as a caller without the
+# Asks for a toolchain that calls split_and_join while both of its source files are
+# missing; argv[1] is the source tree, argv[2] a directory holding the other files.
+_HELPERS_MISSING = """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from cadless import item_key
+
+item_key._PACKAGE_DIR = Path(sys.argv[2])
+try:
+    item_key.toolchain_identity({"split_and_join"})
+except item_key.ItemKeyError as refused:
+    print(str(refused).split(" beside")[0])
+"""
+
+
+def test_an_unreadable_helper_source_is_named_the_same_under_any_hash_seed(
+    tmp_path: Path,
+) -> None:
+    package = Path(item_key_module.__file__).parent
+    for name in RUN_AND_BAKE_FILES:
+        shutil.copy(package / name, tmp_path / name)
+    named = set()
+    for seed in range(8):  # set order differs between some of these seeds
+        run = subprocess.run(
+            [sys.executable, "-c", _HELPERS_MISSING, str(package.parent), str(tmp_path)],
+            env={**os.environ, "PYTHONHASHSEED": str(seed)},
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert run.returncode == 0, run.stderr
+        named.add(run.stdout.strip())
+    assert named == {"cannot read joinery.py"}
+
+
+# The engine modules a run-and-bake file imports that are not hashed with it, and
+# why none of them can change a built solid.
+_NOT_HASHED = {
+    "validation": "the code gate: it refuses a recipe or lets it run, never shapes it",
+    "joinery": "a helper, hashed into the leaves that call it",
+    "exporters": "writes files from the solid; a key names the solid",
+    "assembly_measure": "measures the parts it is given",
+    "assembly_check": "the record of those measurements",
+    "config": "clocks, limits and addresses",
+    "print_fit": "reads the sizes a build reports",
+}
+
+
+def test_every_engine_module_a_run_and_bake_file_imports_is_hashed_or_known() -> None:
+    package = Path(item_key_module.__file__).parent
+    hashed = {name.removesuffix(".py") for name in RUN_AND_BAKE_FILES}
+    for name in RUN_AND_BAKE_FILES:
+        imported = _engine_imports(ast.parse((package / name).read_bytes()))
+        unknown = imported - hashed - set(_NOT_HASHED)
+        assert not unknown, f"{name} imports {sorted(unknown)}: hash it, or say why not"
+
+
+# Imports cadless.item_key through a symbolic link from a package directory whose
+# run-and-bake files differ from the ones beside the link's target, then prints the
+# toolchain's runtime part. argv[1] is that package's parent directory.
+_THROUGH_A_LINK = """
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from cadless import item_key
+
+assert item_key.__file__.startswith(sys.argv[1]), item_key.__file__
+print(dict(p.split("=", 1) for p in item_key.toolchain_identity().split(";"))["runtime"])
+"""
+
+
+def test_the_files_hashed_are_the_ones_beside_the_module_as_imported(tmp_path: Path) -> None:
+    package = Path(item_key_module.__file__).parent
+    copy = tmp_path / "cadless"
+    copy.mkdir()
+    (copy / "__init__.py").write_text("")
+    for name in RUN_AND_BAKE_FILES:
+        shutil.copy(package / name, copy / name)
+    _change_one_byte(copy / "params.py")
+    (copy / "item_key.py").symlink_to(package / "item_key.py")
+    run = subprocess.run(
+        [sys.executable, "-I", "-c", _THROUGH_A_LINK, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip() != _parts(toolchain_identity())["runtime"]
+
+
+# Puts a stand-in build123d package ahead of the installed one on the path, then
+# asks for the toolchain. argv[1] is the source tree, argv[2] the stand-in's parent.
+_SHADOWED_KERNEL = """
+import sys
+
+sys.path.insert(0, sys.argv[1])
+sys.path.insert(0, sys.argv[2])
+from cadless import item_key
+
+try:
+    item_key.toolchain_identity()
+except item_key.ItemKeyError as refused:
+    print(refused)
+"""
+
+
+def test_a_kernel_imported_from_files_its_distribution_did_not_install_is_refused(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "build123d").mkdir()
+    (tmp_path / "build123d" / "__init__.py").write_text("")
+    root = Path(item_key_module.__file__).parents[1]
+    run = subprocess.run(
+        [sys.executable, "-I", "-c", _SHADOWED_KERNEL, str(root), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    assert "did not install" in run.stdout
+
+
+# Imports the module with build123d and OCP unable to run, as a caller without the
 # geometry kernel would, and checks that it loaded nothing but the standard
 # library beside itself; argv[1] is the source tree to import it from, argv[2] a
-# toolchain to key a leaf with.
+# toolchain to key a leaf with. Locating the kernel is allowed: running it is not.
 _WITHOUT_KERNEL = """
 import sys
-from importlib.abc import MetaPathFinder
+from importlib.abc import Loader, MetaPathFinder
+from importlib.machinery import PathFinder
+
+
+class Refuse(Loader):
+    def create_module(self, spec):
+        raise ImportError("blocked: " + spec.name)
+
+    def exec_module(self, module):
+        raise ImportError("blocked: " + module.__name__)
 
 
 class Blocked(MetaPathFinder):
     def find_spec(self, name, path=None, target=None):
-        if name.partition(".")[0] in ("build123d", "OCP"):
-            raise ImportError("blocked: " + name)
-        return None
+        if name.partition(".")[0] not in ("build123d", "OCP"):
+            return None
+        spec = PathFinder.find_spec(name, path)
+        if spec is not None:
+            spec.loader = Refuse()
+        return spec
 
 
 sys.meta_path.insert(0, Blocked())
@@ -744,10 +1087,11 @@ def test_the_module_works_without_importing_the_kernel() -> None:
 
 # --- leaf and item keys -----------------------------------------------------
 
-# A toolchain as toolchain_identity writes it, fixed so keys do not depend on the
-# machine the tests run on.
+# A toolchain as toolchain_identity writes it, fixed but for the Python it names,
+# which must be the one running: keys do not depend on the rest of the machine.
+PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
 TOOLCHAIN = (
-    "build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python=3.12;"
+    f"build123d=build123d==0.11.1;ocp=cadquery-ocp-novtk==7.9.3.1.1;python={PYTHON};"
     "platform=linux-x86_64;runtime=" + "ab" * 32 + ";helpers=-;fonts=-"
 )
 TOOLCHAIN_WITH_HELPER = TOOLCHAIN.replace("helpers=-", "helpers=" + "cd" * 32)
@@ -780,7 +1124,7 @@ def test_a_leaf_key_ignores_what_cannot_change_the_shape() -> None:
     [
         pytest.param({"params": {**PLATE_PARAMS, "width": 41}}, id="a-param-value"),
         pytest.param({"source": PLATE.replace("hole(6)", "hole(7)")}, id="the-recipe"),
-        pytest.param({"toolchain": TOOLCHAIN.replace("3.12", "3.13")}, id="the-toolchain"),
+        pytest.param({"toolchain": TOOLCHAIN.replace("x86_64", "aarch64")}, id="the-toolchain"),
     ],
 )
 def test_a_leaf_key_changes_with_each_part(change: dict) -> None:
@@ -800,9 +1144,16 @@ def test_every_declared_name_must_be_in_the_params_literal() -> None:
         leaf_key(PLATE, {**PLATE_PARAMS, "depth": 3}, {**PLATE_TYPES, "depth": "float"}, TOOLCHAIN)
 
 
-def test_a_leaf_calling_a_helper_is_keyed_with_the_helpers_sources() -> None:
-    key = leaf_key(JOINED, {"x": 50}, {"x": "float"}, TOOLCHAIN_WITH_HELPER)
-    assert re.fullmatch("[0-9a-f]{64}", key)
+def test_a_leaf_calling_a_helper_is_keyed_on_the_helpers_digest() -> None:
+    other = TOOLCHAIN_WITH_HELPER.replace("cd" * 32, "ef" * 32)
+    args = (JOINED, {"x": 50}, {"x": "float"})
+    assert leaf_key(*args, TOOLCHAIN_WITH_HELPER) != leaf_key(*args, other)
+
+
+def test_a_leaf_key_is_computed_on_the_python_its_toolchain_names() -> None:
+    # The canonical recipe is ast.unparse of the running interpreter.
+    with pytest.raises(ItemKeyError, match="Python"):
+        leaf_key(PLATE, PLATE_PARAMS, PLATE_TYPES, TOOLCHAIN.replace(PYTHON, "2.7"))
 
 
 def test_the_toolchain_must_hold_the_helpers_a_recipe_calls() -> None:
@@ -922,8 +1273,16 @@ def test_recipe_vectors(case: dict) -> None:
         assert sorted(helpers_called(case["source"])) == case["helpers"]
 
 
+def test_the_leaf_vectors_cover_this_python() -> None:
+    # A leaf case naming a Python applies on that Python only: a new interpreter
+    # needs its own cases before its keys are pinned.
+    assert any(case.get("python") == PYTHON for case in VECTORS["leaf"])
+
+
 @pytest.mark.parametrize("case", _vectors("leaf"))
 def test_leaf_vectors(case: dict) -> None:
+    if case.get("python", PYTHON) != PYTHON:
+        pytest.skip(f"a case for Python {case['python']}")
     args = (case["source"], case["params"], case["types"], case["toolchain"])
     _expect(case, "key", lambda: leaf_key(*args))
 

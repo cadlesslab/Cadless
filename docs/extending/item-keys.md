@@ -37,12 +37,17 @@ Canonicalization Scheme), implemented in the module rather than taken from a
 dependency, so that no third-party release can change a key.
 
 - Numbers take their shortest ECMAScript form: `2.0` is written `2`, `1e21` is
-  `1e+21`, `1e-7` is `1e-7`, and `-0.0` is `0`.
+  `1e+21`, `1e-7` is `1e-7`, and `-0.0` is `0`. A JSON number is a double, so an
+  integer past +/-(2**53 - 1) is accepted only when a double holds it exactly, and
+  is written as that double is (`2**60` as `1152921504606847000`).
+- An instance of a subclass (an `IntEnum` member, a numpy float, a `str` subclass)
+  is written as the plain value it stands for, whatever its own `repr` says.
 - Object members are sorted by the UTF-16 code units of their keys, which differs
   from code point order above U+FFFF.
 - Strings escape only what JSON requires; nothing is written between tokens.
-- Refused: NaN and infinities, an integer past +/-(2**53 - 1) (a JSON reader cannot
-  get it back exactly), a non-string key, a string holding a lone surrogate, and
+- Refused: NaN and infinities, an integer no double holds exactly, a non-string
+  key, two keys that are the same string, a string holding a lone surrogate,
+  nesting deeper than 100 levels (a container that holds itself among them), and
   any other type.
 
 ## Params
@@ -55,7 +60,12 @@ is keyed and before the recipe runs with it (`typed_params` returns those values
 - An `int` is accepted where a `float` is declared. An integral float such as
   `2.0` is accepted where an `int` is declared; `2.5` is refused.
 - A `bool` is never taken for a number, and a number never for a `bool`.
-- NaN and infinities are refused.
+- NaN and infinities are refused, as is an `int` too large for a float where a
+  float is declared.
+- A float negative zero becomes zero. Canonical JSON writes both as `0`, and a
+  recipe must run with the value its key holds: `atan2(-0.0, -1)` is not
+  `atan2(0.0, -1)`.
+- Each value comes back as a plain `float`, `int`, `str` or `bool`.
 - Strings are keyed as given. They are not Unicode-normalised, so a precomposed
   and a decomposed letter give different keys.
 
@@ -70,7 +80,8 @@ A pose is seven numbers: a translation in millimetres and a quaternion,
 `(x, y, z, qx, qy, qz, qw)`. `canonical_pose` gives its one form:
 
 1. A quaternion further than 1e-6 from unit length is refused; one within it is
-   normalised.
+   normalised. Its length is taken with `math.fsum`, which is exactly rounded, so
+   it is the same on every interpreter.
 2. Every number is rounded to six decimal places, half to even on the exact
    double (Python's `round`). This matters only at exact ties: `0.0078125` rounds
    to `0.007812`, where a half-up rounding gives `0.007813`.
@@ -78,6 +89,13 @@ A pose is seven numbers: a translation in millimetres and a quaternion,
    rounds to zero, the first non-zero of `qx`, `qy`, `qz`. So `q` and `-q` give one
    pose however close `qw` lies to zero.
 4. Negative zero is written as zero.
+
+A quaternion already on the six-decimal grid and within 2e-6 of unit length is
+kept as it is, apart from the sign. Rounding a unit quaternion moves its length by
+at most 1e-6, and normalising the rounded one again could move its last digit, so
+without this rule about one canonical pose in a hundred would change when
+canonicalised a second time. With it, a canonical pose is its own canonical form,
+and so is its negation.
 
 ## Recipes
 
@@ -87,9 +105,14 @@ A pose is seven numbers: a translation in millimetres and a quaternion,
 docstring cannot change what a recipe builds, since the code gate refuses
 `__doc__` and every other dunder name.
 
-A recipe binds `params` exactly once at module level, as a plain dict literal from
-string names to numbers, strings or booleans. That literal stays where it stands,
-its names in their order and each value written as `...`:
+A recipe binds `params` exactly once, as a plain dict literal at module level
+from distinct string names to numbers, strings or booleans, and binds it nowhere
+else: no second assignment, `|=`, loop or `with` target, walrus, `del`, argument,
+`global` or `nonlocal` declaration, `def`, `class`, import, `except` or `match`
+capture, or type parameter of that name, in any scope. A later change through the
+literal, such as `params['w'] = 2`, is not a binding and stays in the text. That
+literal stays where it stands, its names in their order and each value written as
+`...`:
 
 ```python
 params = {'width': ..., 'height': ..., 'label': ...}
@@ -101,15 +124,25 @@ because they can change what a recipe does: a statement above the literal runs
 before `params` exists, and a recipe can loop over `params`.
 
 Refused: a recipe with no `params` literal, or with two; one inside a block; an
-annotated, unpacked, starred or chained `params`; a literal whose names are not
-strings, or whose values are not numbers, strings or booleans (a list or a tuple
-is refused, so write `hole_offset_1` and `hole_offset_2` rather than one list); a
-source Python cannot parse, or that is nested too deeply to write back; and a
-recipe whose canonical text would hold a 0x00 byte (which `ast.unparse` writes as
-it is inside an f-string format spec).
+annotated, unpacked, starred or chained `params`, or any other binding of it; a
+literal that unpacks another mapping, names one parameter twice, has a name that
+is not a string, or a value that is not a number, string or boolean (a list or a
+tuple is refused, so write `hole_offset_1` and `hole_offset_2` rather than one
+list); a source Python cannot parse; syntax nested deeper than 100 levels; an
+integer literal of more than 4300 digits (past what the interpreter writes by
+default, a limit a process can change); and a recipe whose canonical text would
+hold a 0x00 byte, or would not read back as the same program. `ast.unparse` writes
+a few constructs so that they read back as others (a `}` in an f-string format
+spec reads back as an empty spec and a literal brace), and two recipes must never
+share a text while doing different things, so the canonical text is parsed again
+and compared.
+
+A syntax warning (an unknown escape such as `'\d'`, for one) changes nothing: it is
+ignored, so a process that turns warnings into errors gets the same text.
 
 `ast.unparse` belongs to the interpreter, so the canonical text is defined per
-Python minor version, which is why that version is part of the toolchain.
+Python minor version, which is why that version is part of the toolchain and why
+a leaf key is computed on the Python its toolchain names.
 
 ### Helpers
 
@@ -134,34 +167,50 @@ platform=linux-x86_64;runtime=<sha256>;helpers=<sha256 or ->;fonts=-
 
 | Part | What it holds |
 | --- | --- |
-| `build123d`, `ocp` | the one installed distribution providing each kernel module, and its version, read from package metadata without importing the kernel |
+| `build123d`, `ocp` | the one installed distribution providing each kernel module, and its version, read from package metadata without importing the kernel; refused unless the file Python would import the module from is one that distribution installed |
 | `python` | major.minor |
 | `platform` | `sys.platform` and the machine |
-| `runtime` | the sha256 of the canonical JSON mapping each of `RUN_AND_BAKE_FILES` to the sha256 of its bytes: the whole engine files that run a recipe and bake its solid |
+| `runtime` | the sha256 of the canonical JSON mapping each of `RUN_AND_BAKE_FILES` to the sha256 of its bytes: the whole engine files that run a recipe and bake its solid (the runtime and its allow-list, the code that writes the declared values into the recipe, the worker that starts the run and the child that bakes it), read from beside the module as imported |
 | `helpers` | the same over the `HELPER_SOURCES` files of the helpers named, or `-` for none |
 | `fonts` | `-`: no fonts ship for recipes, so a recipe draws no text |
 
 There is no engine version number. A change that can alter a shape changes a
 hashed file or a kernel version instead, and a release that changes neither keeps
-every key. A kernel upgrade gives every leaf a new key.
+every key. A kernel upgrade gives every leaf a new key. A test fails when a hashed
+file starts importing an engine module that is neither hashed nor known to leave
+solids alone.
 
 Outside the toolchain, on purpose: the other packages build123d depends on, which
-an engine release pins in its constraints; and the exporters. A key names the
-solid, so a file exported from it in some format depends on that format's exporter
-as well, and is keyed with it by whatever stores it.
+an engine release pins in its constraints; the code gate, which refuses a recipe
+or lets it run but never shapes it; and the exporters. A key names the solid, so a
+file exported from it in some format depends on that format's exporter as well,
+and is keyed with it by whatever stores it.
 
 ## Leaf keys
 
 `leaf_key(source, params, types, toolchain)` takes the toolchain as text, so a key
-can be computed or checked away from the machine that built the leaf. Pass the
-string `toolchain_identity(helpers_called(source))` returned where the leaf was
-built. Beyond the refusals of its parts, it refuses:
+can be computed or checked on another machine with the same Python minor version
+as the one that built the leaf. Pass the string
+`toolchain_identity(helpers_called(source))` returned where the leaf was built.
+Beyond the refusals of its parts, it refuses:
 
 - declared names that are not the names in the recipe's `params` literal: an
   undeclared name would run with the literal's value, which no part of the key
   holds;
 - a toolchain whose `helpers` part disagrees with whether the recipe calls a
-  helper, so that one leaf has one key.
+  helper, so that one leaf has one key;
+- a toolchain naming another Python than the one running, whose `ast.unparse`
+  could write the recipe otherwise.
+
+### What a keyed build relies on
+
+A key holds the recipe, the declared values and the toolchain, so a build is
+sound only if nothing else reaches the solid. Whatever runs a leaf must:
+
+- run the recipe with the values `typed_params` returns written into its params
+  literal, exactly there and nowhere else;
+- run it with a fixed string hash seed and without `-O`: a recipe may iterate a
+  set of strings, whose order follows the seed, and may hold an `assert`.
 
 ## Item keys
 
@@ -202,20 +251,22 @@ Keys assume what the closed-recipe rules will require of a leaf:
 wheel. It records `definitions`, then cases in six sections (`jcs`, `params`,
 `pose`, `recipe`, `leaf`, `item`). Each case gives its input and either its
 outcome or `"refused": true`; numbers given as `bits` are IEEE 754 doubles in hex.
-Leaf cases name their toolchain as text, so their keys do not depend on the
-machine. `tests/test_item_key.py` runs every case; code that calls this module can
-run them too:
+Leaf cases name their toolchain as text, so their keys do not depend on the rest
+of the machine; a leaf case with a `python` field applies on that Python minor
+version only, and every supported version has its own. `tests/test_item_key.py`
+runs every case; code that calls this module can run them too:
 
 ```python
-import json
+import json, sys
 from importlib import resources
 
 from cadless import item_key
 
 vectors = json.loads(resources.files("cadless").joinpath("item_key_vectors.json").read_text())
 assert vectors["definitions"] == item_key.DEFINITIONS_VERSION
+running = f"{sys.version_info.major}.{sys.version_info.minor}"
 for case in vectors["leaf"]:
-    if not case.get("refused"):
+    if not case.get("refused") and case.get("python", running) == running:
         args = (case["source"], case["params"], case["types"], case["toolchain"])
         assert item_key.leaf_key(*args) == case["key"]
 ```
