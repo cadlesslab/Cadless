@@ -17,7 +17,7 @@ React client -> FastAPI API -> provider-neutral AI engine
 | --- | --- |
 | `frontend/` | Vite/React UI, REST and SSE client, three.js GLB viewport that also plays a checked assembly apart and back together |
 | `backend/` | HTTP, persistence coordination, generation streaming, and settings |
-| `cadless/` | Framework-independent generation, validation, execution, export, provider, and catalog logic |
+| `cadless/` | Framework-independent generation, validation, execution, export, provider, and catalog logic; `item_key.py`, the item key definitions (standard library only, with shared test vectors beside it) |
 | `worker/` | Thin service boundary around resource-limited generated-code execution |
 | `catalog/` | Versioned executable catalog content and baked artifacts |
 | `cadless/catalog/` | Catalog loading and the item manifest; reading a `.cls` package (`pack`). This build does not assemble one — core import depends only on reading, and a build that publishes takes its definitions from `pack` |

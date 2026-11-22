@@ -178,7 +178,7 @@ Every variable is optional. See `.env.example` for the full list.
 
 | Path | Purpose |
 |---|---|
-| `cadless/` | Core: provider seam, prompt assembly, validation, execution worker, exporters, repair loop |
+| `cadless/` | Core: provider seam, prompt assembly, validation, execution worker, exporters, repair loop, item keys |
 | `cadless/catalog/` | Catalog loading, packing and the item manifest |
 | `backend/` | FastAPI layer — persistence and the generation API |
 | `frontend/` | Vite + three.js client |
@@ -197,8 +197,9 @@ The layout table above is the surface; the deep dives live in [`docs/`](./docs/)
   execute → repair loop, its progress events, and every thread/process
   boundary
 - [Extending the engine](./docs/extending/) — step-by-step guides for adding a
-  model provider, an export format, a catalog item or a catalog domain, and for
-  changing validation, the worker or the exporters safely
+  model provider, an export format, a catalog item or a catalog domain, for
+  changing validation, the worker or the exporters safely, and the item key
+  definitions
 - [Decision records](./docs/adr/) — why the provider seam, the sandbox
   layers, additive embeddings, the local-first posture, the best-of-N judge and
   the identity seam are the way they are, and what this repository is and is not

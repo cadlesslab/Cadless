@@ -19,11 +19,12 @@ procedures for each.
 | Say an item can arrive a new way | `register_origin` | [below](#recording-what-your-build-knows) |
 | Remember something about a project | `Store.record_plugin_data` | [below](#recording-what-your-build-knows) |
 | Host this for more than one person | `register_principal_resolver` | [below](#saying-who-is-asking) |
+| Name a part or an assembly by what it is, from code of your own | `cadless.item_key` (standard library only) and its shared test vectors | [item-keys.md](./item-keys.md) |
 
 Eight of these are registries you extend with a single entry, one is a protocol
-you satisfy by writing a class, one is a place to keep your own record, and the
-rest are data or a directory on disk. None of them requires touching the
-pipeline.
+you satisfy by writing a class, one is a place to keep your own record, one is a
+library you call rather than extend, and the rest are data or a directory on
+disk. None of them requires touching the pipeline.
 
 ## Adding routes and panels from outside this tree
 
