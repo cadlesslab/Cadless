@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import struct
 
 import pytest
 
-from cadless.item_key import ItemKeyError, jcs
+from cadless.item_key import ItemKeyError, canonical_params, canonical_pose, jcs, typed_params
 
 
 def _double(bits: str) -> float:
@@ -129,3 +130,150 @@ def test_a_non_string_key_is_refused() -> None:
 def test_an_unsupported_type_is_refused(value: object) -> None:
     with pytest.raises(ItemKeyError, match="cannot"):
         jcs(value)
+
+
+# --- typed params -----------------------------------------------------------
+
+
+def test_params_are_written_with_their_declared_types() -> None:
+    assert canonical_params({"b": 2, "a": 1.5}, {"a": "float", "b": "int"}) == (
+        b'{"a":{"type":"float","value":1.5},"b":{"type":"int","value":2}}'
+    )
+
+
+def test_the_declared_type_is_part_of_the_bytes() -> None:
+    # JSON writes 4 and 4.0 alike, so the declaration is what tells them apart.
+    assert canonical_params({"n": 4}, {"n": "int"}) != canonical_params({"n": 4}, {"n": "float"})
+
+
+def test_an_undeclared_parameter_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="no declared type"):
+        canonical_params({"a": 1.0, "b": 2.0}, {"a": "float"})
+
+
+def test_a_declared_parameter_without_a_value_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="no value"):
+        canonical_params({"a": 1.0}, {"a": "float", "b": "float"})
+
+
+def test_an_unknown_type_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="type"):
+        canonical_params({"a": 1}, {"a": "number"})
+
+
+def test_an_integral_float_is_accepted_for_an_int() -> None:
+    assert canonical_params({"n": 2.0}, {"n": "int"}) == canonical_params({"n": 2}, {"n": "int"})
+
+
+def test_a_non_integral_float_is_refused_for_an_int() -> None:
+    with pytest.raises(ItemKeyError, match="integer"):
+        canonical_params({"n": 2.5}, {"n": "int"})
+
+
+def test_an_int_is_accepted_for_a_float() -> None:
+    assert canonical_params({"d": 2}, {"d": "float"}) == canonical_params(
+        {"d": 2.0}, {"d": "float"}
+    )
+
+
+def test_a_recipe_receives_each_value_as_its_declared_type() -> None:
+    typed = typed_params(
+        {"d": 2, "n": 3.0, "s": "x", "f": False},
+        {"d": "float", "n": "int", "s": "str", "f": "bool"},
+    )
+    assert typed == {"d": 2.0, "n": 3, "s": "x", "f": False}
+    assert type(typed["d"]) is float
+    assert type(typed["n"]) is int
+
+
+@pytest.mark.parametrize("declared", ["int", "float"])
+def test_a_bool_is_never_a_number(declared: str) -> None:
+    with pytest.raises(ItemKeyError, match="bool"):
+        canonical_params({"n": True}, {"n": declared})
+
+
+def test_a_number_is_never_a_bool() -> None:
+    with pytest.raises(ItemKeyError, match="bool"):
+        canonical_params({"flag": 1}, {"flag": "bool"})
+
+
+def test_a_non_string_is_refused_for_a_str() -> None:
+    with pytest.raises(ItemKeyError, match="str"):
+        canonical_params({"label": 3}, {"label": "str"})
+
+
+def test_a_non_finite_float_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="finite"):
+        canonical_params({"d": float("nan")}, {"d": "float"})
+
+
+def test_strings_are_not_normalised() -> None:
+    # Precomposed and decomposed forms of the same letter stay two inputs.
+    nfc = canonical_params({"s": "é"}, {"s": "str"})
+    nfd = canonical_params({"s": "é"}, {"s": "str"})
+    assert nfc != nfd
+
+
+# --- canonical pose ---------------------------------------------------------
+
+
+def test_the_identity_pose() -> None:
+    assert canonical_pose((0, 0, 0, 0, 0, 0, 1)) == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+
+
+def test_q_and_minus_q_give_one_pose() -> None:
+    q = (10.0, -5.0, 2.5, 0.0, 0.6, 0.0, 0.8)
+    minus_q = (10.0, -5.0, 2.5, -0.0, -0.6, -0.0, -0.8)
+    assert canonical_pose(q) == canonical_pose(minus_q) == (10.0, -5.0, 2.5, 0.0, 0.6, 0.0, 0.8)
+
+
+def test_no_number_of_a_flipped_pose_is_negative_zero() -> None:
+    pose = canonical_pose((0.0, 0.0, 0.0, 0.0, -0.6, 0.0, -0.8))
+    assert all(math.copysign(1.0, number) == 1.0 for number in pose if number == 0)
+
+
+def test_with_qw_zero_the_first_non_zero_component_is_positive() -> None:
+    assert canonical_pose((0, 0, 0, -1, 0, 0, 0)) == canonical_pose((0, 0, 0, 1, 0, 0, 0))
+    assert canonical_pose((0, 0, 0, -1, 0, 0, 0))[3] == 1.0
+
+
+def test_the_sign_rule_reads_the_rounded_quaternion() -> None:
+    # qw rounds to zero, so the sign follows qx whichever way qw leaned.
+    leaning_negative = canonical_pose((0, 0, 0, 0.6, 0.8, 0.0, -4e-7))
+    leaning_positive = canonical_pose((0, 0, 0, -0.6, -0.8, 0.0, 4e-7))
+    assert leaning_negative == leaning_positive == (0.0, 0.0, 0.0, 0.6, 0.8, 0.0, 0.0)
+
+
+def test_a_nearly_unit_quaternion_is_normalised() -> None:
+    assert canonical_pose((0, 0, 0, 0, 0, 0, 1.0000005)) == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+
+
+def test_a_quaternion_off_unit_length_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="unit"):
+        canonical_pose((0, 0, 0, 0, 0, 0, 1.00001))
+
+
+def test_every_number_is_rounded_to_one_millionth() -> None:
+    assert canonical_pose((1.23456789, -2.0000004, 3.0, 0, 0, 0, 1))[:3] == (1.234568, -2.0, 3.0)
+
+
+def test_negative_zero_is_written_as_zero() -> None:
+    pose = canonical_pose((-0.0, -1e-9, 0.0, 0, 0, 0, 1))
+    assert pose[:2] == (0.0, 0.0)
+    assert math.copysign(1.0, pose[0]) == 1.0
+    assert math.copysign(1.0, pose[1]) == 1.0
+
+
+@pytest.mark.parametrize("pose", [(0, 0, 0, 0, 0, 1), (0, 0, 0, 0, 0, 0, 1, 0)])
+def test_a_pose_of_the_wrong_length_is_refused(pose: tuple) -> None:
+    with pytest.raises(ItemKeyError, match="seven"):
+        canonical_pose(pose)
+
+
+@pytest.mark.parametrize(
+    "pose",
+    [(float("nan"), 0, 0, 0, 0, 0, 1), (0, 0, 0, 0, 0, 0, float("inf")), (True, 0, 0, 0, 0, 0, 1)],
+)
+def test_a_pose_holding_a_non_number_is_refused(pose: tuple) -> None:
+    with pytest.raises(ItemKeyError):
+        canonical_pose(pose)

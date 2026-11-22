@@ -18,9 +18,16 @@ changed with a third-party library's release would defeat the point of a key.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
-__all__ = ["ItemKeyError", "jcs"]
+__all__ = [
+    "PARAM_TYPES",
+    "ItemKeyError",
+    "canonical_params",
+    "canonical_pose",
+    "jcs",
+    "typed_params",
+]
 
 
 class ItemKeyError(ValueError):
@@ -40,6 +47,115 @@ _ESCAPES = {
     "\r": "\\r",
     "\t": "\\t",
 }
+
+
+PARAM_TYPES = ("float", "int", "str", "bool")
+
+# Poses are rounded to this many decimal places (a millionth of a millimetre for a
+# translation); a quaternion further than this from unit length is refused.
+_POSE_DECIMALS = 6
+_UNIT_TOLERANCE = 1e-6
+
+
+def typed_params(params: Mapping[str, object], types: Mapping[str, str]) -> dict[str, object]:
+    """``params`` converted to their declared ``types``: the values a recipe runs with.
+
+    Every parameter must be declared, and every declaration must have a value.
+    An int becomes a float where a float is declared, and an integral float an int
+    where an int is; a bool is never taken for a number, nor a number for a bool.
+    Strings are kept as given, not normalised.
+
+    Raises ``ItemKeyError`` for a missing or undeclared name, an unknown type, or
+    a value that does not fit its type.
+    """
+    for name in params:
+        if name not in types:
+            raise ItemKeyError(f"parameter {name!r} has no declared type")
+    typed = {}
+    for name, declared in types.items():
+        if declared not in PARAM_TYPES:
+            raise ItemKeyError(
+                f"parameter {name!r} declares type {declared!r}, not one of {PARAM_TYPES}"
+            )
+        if name not in params:
+            raise ItemKeyError(f"parameter {name!r} is declared but has no value")
+        typed[name] = _typed(name, params[name], declared)
+    return typed
+
+
+def canonical_params(params: Mapping[str, object], types: Mapping[str, str]) -> bytes:
+    """``params`` under their declared ``types``, as canonical JSON.
+
+    The values are those ``typed_params`` returns, each written beside its declared
+    type, since canonical JSON writes 4 and 4.0 alike. Raises as ``typed_params``.
+    """
+    typed = typed_params(params, types)
+    return jcs({name: {"type": types[name], "value": value} for name, value in typed.items()})
+
+
+def _typed(name: str, value: object, declared: str) -> object:
+    if declared == "bool":
+        if not isinstance(value, bool):
+            raise ItemKeyError(f"parameter {name!r} is declared bool but holds {value!r}")
+        return value
+    if declared == "str":
+        if not isinstance(value, str):
+            raise ItemKeyError(f"parameter {name!r} is declared str but holds {value!r}")
+        return value
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ItemKeyError(
+            f"parameter {name!r} is declared {declared} but holds a bool or non-number {value!r}"
+        )
+    if not math.isfinite(value):
+        raise ItemKeyError(f"parameter {name!r} holds {value!r}, which is not a finite number")
+    if declared == "float":
+        return float(value)
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ItemKeyError(
+                f"parameter {name!r} is declared int but holds {value!r}, which is not an integer"
+            )
+        return int(value)
+    return value
+
+
+def canonical_pose(pose: Sequence[float]) -> tuple[float, ...]:
+    """``pose`` (x, y, z, qx, qy, qz, qw) in its one canonical form.
+
+    The quaternion is normalised, then every number is rounded to six decimal
+    places; the sign is fixed on the rounded quaternion (qw positive, or the first
+    non-zero of qx, qy, qz when qw rounds to zero), so q and -q give one pose
+    however close qw lies to zero. Negative zero is written as zero.
+
+    Raises ``ItemKeyError`` unless the pose is seven finite numbers whose quaternion
+    lies within 1e-6 of unit length.
+    """
+    if isinstance(pose, (str, bytes)) or len(pose) != 7:
+        raise ItemKeyError(f"a pose is seven numbers (x, y, z, qx, qy, qz, qw), not {pose!r}")
+    for number in pose:
+        if (
+            isinstance(number, bool)
+            or not isinstance(number, (int, float))
+            or not math.isfinite(number)
+        ):
+            raise ItemKeyError(f"pose {pose!r} holds {number!r}, which is not a finite number")
+    translation = [float(v) for v in pose[:3]]
+    quaternion = [float(v) for v in pose[3:]]
+    length = math.sqrt(sum(v * v for v in quaternion))
+    if abs(length - 1.0) > _UNIT_TOLERANCE:
+        raise ItemKeyError(f"pose {pose!r} has a quaternion of length {length!r}, not unit length")
+    quaternion = [_rounded(v / length) for v in quaternion]
+    translation = [_rounded(v) for v in translation]
+    qx, qy, qz, qw = quaternion
+    leading = qw if qw != 0 else next((v for v in (qx, qy, qz) if v != 0), 0.0)
+    if leading < 0:
+        quaternion = [-v + 0.0 for v in quaternion]
+    return tuple(translation + quaternion)
+
+
+def _rounded(value: float) -> float:
+    # Adding 0.0 turns a negative zero, which round() keeps, into zero.
+    return round(value, _POSE_DECIMALS) + 0.0
 
 
 def jcs(value: object) -> bytes:
