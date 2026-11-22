@@ -18,19 +18,26 @@ changed with a third-party library's release would defeat the point of a key.
 from __future__ import annotations
 
 import ast
+import hashlib
 import math
-from collections.abc import Mapping, Sequence
+import platform
+import sys
+from collections.abc import Iterable, Mapping, Sequence
+from importlib import metadata
+from pathlib import Path
 from types import MappingProxyType
 
 __all__ = [
     "HELPER_SOURCES",
     "PARAM_TYPES",
+    "RUN_AND_BAKE_FILES",
     "ItemKeyError",
     "canonical_params",
     "canonical_pose",
     "canonical_recipe",
     "helpers_called",
     "jcs",
+    "toolchain_identity",
     "typed_params",
 ]
 
@@ -305,6 +312,92 @@ def _binds_params(target: ast.expr) -> bool:
         isinstance(node, ast.Name) and node.id == _PARAMS_NAME and isinstance(node.ctx, ast.Store)
         for node in ast.walk(target)
     )
+
+
+#: The engine files beside this module that run a recipe and bake its solid. A
+#: leaf is keyed on their whole bytes rather than on chosen functions in them, so
+#: no change to them can slip past the key.
+RUN_AND_BAKE_FILES = ("script_runtime.py", "api_subset.py", "_worker_child.py", "assembly_tree.py")
+
+# The geometry kernel, by the toolchain part and the top-level module each is.
+_KERNEL = (("build123d", "build123d"), ("ocp", "OCP"))
+
+# Where the hashed files are read from; a test points it at a copy.
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def toolchain_identity(helpers: Iterable[str] = ()) -> str:
+    """What builds a leaf on this machine, as the text a leaf key covers.
+
+    ``build123d=<distribution>==<version>;ocp=<distribution>==<version>;
+    python=<major>.<minor>;platform=<sys.platform>-<machine>;runtime=<sha256>;
+    helpers=<sha256 or ->;fonts=-``
+
+    Each kernel part names the installed distribution that provides the module and
+    its version, read from package metadata without importing the kernel.
+    ``runtime`` is the sha256 of the canonical JSON that maps each of
+    ``RUN_AND_BAKE_FILES`` to the sha256 of its bytes; ``helpers`` is the same over
+    the files ``HELPER_SOURCES`` lists for ``helpers`` (the names ``helpers_called``
+    returns), or ``-`` when there are none. No fonts ship for recipes, so ``fonts``
+    is ``-``. The engine's version number is left out: a change that can alter a
+    shape changes a hashed file or a kernel version instead, and a release that
+    changes neither keeps every key.
+
+    Raises ``ItemKeyError`` for a helper ``HELPER_SOURCES`` does not list, a kernel
+    module that no installed distribution provides or that more than one does, or a
+    hashed file that cannot be read.
+    """
+    names = sorted(set(helpers))
+    unknown = [name for name in names if name not in HELPER_SOURCES]
+    if unknown:
+        raise ItemKeyError(f"no engine helper is named {unknown[0]!r}")
+    parts = _kernel_parts()
+    parts.append(f"python={sys.version_info.major}.{sys.version_info.minor}")
+    parts.append(f"platform={sys.platform}-{platform.machine()}")
+    parts.append(f"runtime={_files_digest(RUN_AND_BAKE_FILES)}")
+    helper_files = {file for name in names for file in HELPER_SOURCES[name]}
+    parts.append(f"helpers={_files_digest(helper_files) if helper_files else '-'}")
+    parts.append("fonts=-")
+    return ";".join(parts)
+
+
+def _kernel_parts() -> list[str]:
+    # Each kernel part as part=name==version of the one distribution providing it.
+    # The distributions that declare a module in top_level.txt are quick to find;
+    # only a module none declares falls back to reading every distribution's file
+    # list, which takes far longer.
+    declared: dict[str, set[str]] = {module: set() for _, module in _KERNEL}
+    for dist in metadata.distributions():
+        tops = (dist.read_text("top_level.txt") or "").split()
+        for module in declared.keys() & set(tops):
+            declared[module].add(dist.metadata["Name"])
+    inferred: Mapping[str, list[str]] | None = None
+    parts = []
+    for part, module in _KERNEL:
+        names = declared[module]
+        if not names:
+            inferred = metadata.packages_distributions() if inferred is None else inferred
+            names = set(inferred.get(module, ()))
+        if len(names) != 1:
+            found = ", ".join(sorted(names)) or "none"
+            raise ItemKeyError(
+                f"one installed distribution must provide the {module} module; found {found}"
+            )
+        (name,) = names
+        parts.append(f"{part}={name}=={metadata.version(name)}")
+    return parts
+
+
+def _files_digest(names: Iterable[str]) -> str:
+    # The sha256 of the canonical JSON mapping each file name to its bytes' sha256.
+    digests = {}
+    for name in names:
+        try:
+            data = (_PACKAGE_DIR / name).read_bytes()
+        except OSError as error:
+            raise ItemKeyError(f"cannot read {name} beside the item key module: {error}") from error
+        digests[name] = hashlib.sha256(data).hexdigest()
+    return hashlib.sha256(jcs(digests)).hexdigest()
 
 
 def jcs(value: object) -> bytes:

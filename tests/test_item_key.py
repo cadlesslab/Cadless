@@ -4,20 +4,29 @@ from __future__ import annotations
 
 import ast
 import math
+import platform
+import re
+import shutil
 import struct
+import subprocess
+import sys
+from importlib import metadata
 from pathlib import Path
 
 import pytest
 
+import cadless
 from cadless import item_key
 from cadless.item_key import (
     HELPER_SOURCES,
+    RUN_AND_BAKE_FILES,
     ItemKeyError,
     canonical_params,
     canonical_pose,
     canonical_recipe,
     helpers_called,
     jcs,
+    toolchain_identity,
     typed_params,
 )
 from cadless.params import PARAMS_VARIABLE
@@ -533,3 +542,189 @@ def _engine_imports(tree: ast.Module) -> set[str]:
                 base = module.removeprefix("cadless").lstrip(".")
                 found |= {base} if base else {a.name for a in node.names}
     return {name.removeprefix("cadless.") for name in found}
+
+
+# --- toolchain identity -----------------------------------------------------
+
+
+def _parts(toolchain: str) -> dict[str, str]:
+    return dict(part.split("=", 1) for part in toolchain.split(";"))
+
+
+@pytest.fixture
+def engine_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    # A copy of the files the toolchain reads, so a test can change their bytes.
+    package = Path(item_key.__file__).parent
+    for name in {*RUN_AND_BAKE_FILES, *(f for files in HELPER_SOURCES.values() for f in files)}:
+        shutil.copy(package / name, tmp_path / name)
+    monkeypatch.setattr(item_key, "_PACKAGE_DIR", tmp_path)
+    return tmp_path
+
+
+def _change_one_byte(path: Path) -> None:
+    # Same length, other bytes: a digest of anything short of the bytes misses it.
+    data = bytearray(path.read_bytes())
+    data[0] ^= 1
+    path.write_bytes(bytes(data))
+
+
+def test_the_toolchain_has_these_parts_and_no_engine_version() -> None:
+    toolchain = toolchain_identity()
+    parts = [part.split("=", 1)[0] for part in toolchain.split(";")]
+    assert parts == ["build123d", "ocp", "python", "platform", "runtime", "helpers", "fonts"]
+    assert cadless.__version__ not in toolchain
+
+
+def test_the_toolchain_names_the_kernel_and_interpreter_it_runs_on() -> None:
+    parts = _parts(toolchain_identity())
+    (ocp,) = set(metadata.packages_distributions()["OCP"])
+    assert parts["build123d"] == f"build123d=={metadata.version('build123d')}"
+    assert parts["ocp"] == f"{ocp}=={metadata.version(ocp)}"
+    assert parts["python"] == f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert parts["platform"] == f"{sys.platform}-{platform.machine()}"
+
+
+@pytest.mark.parametrize(
+    "name", ["script_runtime.py", "api_subset.py", "_worker_child.py", "assembly_tree.py"]
+)
+def test_a_run_and_bake_file_changes_the_runtime_part_alone(engine_copy: Path, name: str) -> None:
+    before = _parts(toolchain_identity())
+    _change_one_byte(engine_copy / name)
+    after = _parts(toolchain_identity())
+    assert after.pop("runtime") != before.pop("runtime")
+    assert after == before
+
+
+def test_an_engine_file_that_is_not_hashed_changes_nothing(engine_copy: Path) -> None:
+    before = toolchain_identity({"split_and_join"})
+    (engine_copy / "validation.py").write_text("x = 1\n")
+    (engine_copy / "__init__.py").write_text('__version__ = "9.9.9"\n')
+    assert toolchain_identity({"split_and_join"}) == before
+
+
+@pytest.mark.parametrize("name", ["joinery.py", "printer_profile.py"])
+def test_a_helpers_source_changes_only_the_leaves_that_call_it(
+    engine_copy: Path, name: str
+) -> None:
+    calling, not_calling = toolchain_identity({"split_and_join"}), toolchain_identity()
+    _change_one_byte(engine_copy / name)
+    assert _parts(toolchain_identity({"split_and_join"}))["helpers"] != _parts(calling)["helpers"]
+    assert toolchain_identity() == not_calling
+
+
+def test_the_helpers_part_is_a_marker_until_a_helper_is_called() -> None:
+    assert _parts(toolchain_identity())["helpers"] == "-"
+    assert re.fullmatch("[0-9a-f]{64}", _parts(toolchain_identity({"split_and_join"}))["helpers"])
+
+
+def test_the_fonts_part_is_a_marker() -> None:
+    assert _parts(toolchain_identity())["fonts"] == "-"
+
+
+def test_a_kernel_version_change_changes_the_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
+    before = _parts(toolchain_identity())["build123d"]
+    real = metadata.version
+    monkeypatch.setattr(
+        metadata, "version", lambda name: "0.0.0" if name == "build123d" else real(name)
+    )
+    assert _parts(toolchain_identity())["build123d"] == "build123d==0.0.0" != before
+
+
+class _Declaring:
+    # A stand-in installed distribution that declares top-level modules.
+    def __init__(self, name: str, *modules: str) -> None:
+        self.metadata = {"Name": name}
+        self._top_level = "".join(f"{module}\n" for module in modules)
+
+    def read_text(self, filename: str) -> str | None:
+        return self._top_level if filename == "top_level.txt" else None
+
+
+def _without_declared(module: str) -> list:
+    # The installed distributions, less those that declare ``module``.
+    return [
+        dist
+        for dist in metadata.distributions()
+        if module not in (dist.read_text("top_level.txt") or "").split()
+    ]
+
+
+def test_a_kernel_module_no_distribution_provides_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    others = _without_declared("OCP")
+    monkeypatch.setattr(metadata, "distributions", lambda: iter(others))
+    monkeypatch.setattr(metadata, "packages_distributions", lambda: {})
+    with pytest.raises(ItemKeyError, match="OCP"):
+        toolchain_identity()
+
+
+def test_a_kernel_module_two_distributions_provide_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    both = [*metadata.distributions(), _Declaring("cadquery-ocp", "OCP")]
+    monkeypatch.setattr(metadata, "distributions", lambda: iter(both))
+    with pytest.raises(ItemKeyError, match="OCP"):
+        toolchain_identity()
+
+
+def test_a_kernel_module_no_distribution_declares_is_found_by_its_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = _parts(toolchain_identity())["ocp"]
+    distribution = expected.split("==")[0]
+    others = _without_declared("OCP")
+    monkeypatch.setattr(metadata, "distributions", lambda: iter(others))
+    monkeypatch.setattr(metadata, "packages_distributions", lambda: {"OCP": [distribution]})
+    assert _parts(toolchain_identity())["ocp"] == expected
+
+
+def test_an_unknown_helper_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="helper"):
+        toolchain_identity({"no_such_helper"})
+
+
+def test_a_hashed_file_that_cannot_be_read_is_refused(engine_copy: Path) -> None:
+    (engine_copy / "assembly_tree.py").unlink()
+    with pytest.raises(ItemKeyError, match="assembly_tree.py"):
+        toolchain_identity()
+
+
+# Imports the module with build123d and OCP blocked, as a caller without the
+# geometry kernel would, and checks that it loaded nothing but the standard
+# library beside itself; argv[1] is the source tree to import it from.
+_WITHOUT_KERNEL = """
+import sys
+from importlib.abc import MetaPathFinder
+
+
+class Blocked(MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name.partition(".")[0] in ("build123d", "OCP"):
+            raise ImportError("blocked: " + name)
+        return None
+
+
+sys.meta_path.insert(0, Blocked())
+sys.path.insert(0, sys.argv[1])
+before = set(sys.modules)
+from cadless import item_key
+
+assert item_key.__file__.startswith(sys.argv[1]), item_key.__file__
+print(item_key.toolchain_identity({"split_and_join"}))
+loaded = set(sys.modules) - before
+outside = {name.partition(".")[0] for name in loaded} - set(sys.stdlib_module_names)
+assert outside == {"cadless"}, sorted(outside)
+engine = sorted(name for name in loaded if name.startswith("cadless."))
+assert engine == ["cadless.item_key"], engine
+"""
+
+
+def test_the_module_works_without_importing_the_kernel() -> None:
+    root = Path(item_key.__file__).parents[1]
+    run = subprocess.run(
+        [sys.executable, "-I", "-c", _WITHOUT_KERNEL, str(root)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.startswith("build123d=build123d==")
