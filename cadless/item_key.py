@@ -149,8 +149,9 @@ def _typed_with_kinds(
     params: Mapping[str, object], types: Mapping[str, str]
 ) -> dict[str, tuple[str, object]]:
     # Each typed value beside the engine's own string for its type. A caller's
-    # declared object is compared once and never formatted or written, so a key
-    # names the conversion that was made.
+    # declared object is compared with the known types in one pass and, once it
+    # matches one, is neither formatted nor written, so a key names the conversion
+    # that was made.
     if not isinstance(params, Mapping) or not isinstance(types, Mapping):
         raise ItemKeyError("params and types are each a mapping from parameter names")
     for name in params:
