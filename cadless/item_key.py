@@ -66,6 +66,10 @@ def _refused_when_too_deep(function):
     return refusing
 
 
+# The most of a caller's value a refusal quotes.
+_SHOWN_LENGTH = 120
+
+
 def _shown(value: object) -> str:
     # A caller's value as a refusal shows it. repr() of an integer longer than the
     # interpreter will write raises, and so may a caller's own __repr__; whatever it
@@ -74,7 +78,7 @@ def _shown(value: object) -> str:
         text = repr(value)
     except Exception:
         return f"<a value of type {type(value).__name__} that cannot be shown>"
-    return text if len(text) <= 120 else text[:117] + "..."
+    return text if len(text) <= _SHOWN_LENGTH else text[: _SHOWN_LENGTH - 3] + "..."
 
 
 #: The version of the definitions this module implements, which the vector file

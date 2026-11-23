@@ -1258,6 +1258,12 @@ def test_a_refusal_survives_a_value_whose_repr_raises() -> None:
         typed_params({"flag": _Unshowable(1.0)}, {"flag": "bool"})
 
 
+def test_a_refusal_quotes_only_the_start_of_a_long_value() -> None:
+    with pytest.raises(ItemKeyError, match="surrogate") as refused:
+        jcs("\ud800" + "x" * 100_000)
+    assert len(str(refused.value)) < 1_000
+
+
 def test_every_public_function_is_refused_rather_than_left_too_deep() -> None:
     # Each is wrapped so that a RecursionError from a deep caller becomes a refusal.
     for name in item_key_module.__all__:
