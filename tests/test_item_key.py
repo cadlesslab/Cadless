@@ -1264,6 +1264,16 @@ class _UnshowableName(str):
         raise RuntimeError("no")
 
 
+class _UnprintableType(str):
+    def __str__(self) -> str:
+        raise RuntimeError("no")
+
+
+def test_a_refusal_survives_a_declared_type_that_cannot_be_printed() -> None:
+    with pytest.raises(ItemKeyError, match="declared float but holds"):
+        typed_params({"w": "text"}, {"w": _UnprintableType("float")})
+
+
 def test_a_refusal_of_declared_names_survives_a_name_whose_repr_raises() -> None:
     extra = _UnshowableName("extra")
     with pytest.raises(ItemKeyError, match="declared params"):
@@ -1349,10 +1359,10 @@ def _canonical_recipe_time(names: int) -> float:
 
 
 def test_a_recipe_with_many_params_is_read_in_time_linear_in_their_number() -> None:
-    # A ratio within one process, so a slower machine slows both sides alike: four
-    # times the names takes about four times as long, where a quadratic scan takes
-    # sixteen.
-    assert _canonical_recipe_time(40_000) < 8 * _canonical_recipe_time(10_000)
+    # A ratio within one process, so a slower machine slows both sides alike. With
+    # eight times the names, a linear scan takes about eight times as long and a
+    # quadratic one several times more; the bound sits between the two.
+    assert _canonical_recipe_time(40_000) < 17 * _canonical_recipe_time(5_000)
 
 
 def test_every_public_function_is_refused_rather_than_left_too_deep() -> None:

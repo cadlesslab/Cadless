@@ -141,9 +141,11 @@ def typed_params(params: Mapping[str, object], types: Mapping[str, str]) -> dict
             raise ItemKeyError(
                 f"parameter {_shown(name)} declares type {_shown(declared)}, not one of {PARAM_TYPES}"
             )
+        # The module's own string from here on, whatever equal object was declared.
+        kind = PARAM_TYPES[PARAM_TYPES.index(declared)]
         if name not in params:
             raise ItemKeyError(f"parameter {_shown(name)} is declared but has no value")
-        typed[name] = _typed(name, params[name], declared)
+        typed[name] = _typed(name, params[name], kind)
     jcs(typed)  # a non-string name, an integer no double holds, a lone surrogate
     return typed
 

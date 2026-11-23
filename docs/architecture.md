@@ -300,13 +300,13 @@ candidate judging, the identity seam and the image decisions are recorded under
    handed over with the verdict on it, and one whose check could not be
    established is not repaired at all. Everything else that succeeds is stored
    as a project version whose source remains available for parameter changes and
-   rebuilds, which are deterministic unless the script depends on object identity
-   (a function's `repr()`, the order of a set of shapes). The exception to a plain
-   re-run of a version's own code is a version in several pieces, or one that
-   turns out to rebuild into them: a single file per kind matches none of the
-   pieces recorded, and choosing between filing it as one more piece and leaving
-   every recorded piece stale would be inventing a contract rather than reading
-   one. The second case
+   rebuilds, which are deterministic unless the script depends on object
+   identity (a function's `repr()`, the order of a set of shapes). The
+   exception to a plain re-run of a version's own code is a version in
+   several pieces, or one that turns out to rebuild into them: a single file
+   per kind matches none of the pieces recorded, and choosing between filing
+   it as one more piece and leaving every recorded piece stale would be
+   inventing a contract rather than reading one. The second case
    is knowable only after rebuilding — a version recorded before a build could
    hold several files of a kind has one row per kind whatever its geometry — so
    a rebuild runs into a staging directory and is discarded there. A version's
