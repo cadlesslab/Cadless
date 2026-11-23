@@ -56,7 +56,8 @@ port, bound to loopback.
    so to have the reasons sooner. Upstream orchestration treats programs as text
    rather than importing and running them in the API process. The child runs
    with a fixed string hash seed, in UTF-8 mode, and with no other `PYTHON*`
-   setting from the environment beyond where Python and its packages live, so
+   setting from the environment beyond where Python, its packages and its bytecode
+   live, so
    none of those changes what a script builds (a loop over a set of strings, an
    `assert`, the integer digit limit, the warning filters, the locale).
 
@@ -300,8 +301,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    established is not repaired at all. Everything else that succeeds is stored
    as a project version whose source remains available for parameter changes and
    rebuilds, which are deterministic unless the script depends on object identity
-   (a function's `repr()`, the order of a set of shapes). The exception to a plain re-run of a version's own
-   code is a version in several pieces, or one that turns out to rebuild into
+   (a function's `repr()`, the order of a set of shapes). The exception to a plain
+   re-run of a version's own code is a version in several pieces, or one that turns out to rebuild into
    them: a single file per kind matches none of the pieces recorded, and
    choosing between filing it as one more piece and leaving every recorded piece
    stale would be inventing a contract rather than reading one. The second case

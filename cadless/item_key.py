@@ -68,11 +68,14 @@ def _refused_when_too_deep(function):
 
 def _shown(value: object) -> str:
     # A caller's value as a refusal shows it. repr() of an integer longer than the
-    # interpreter will write raises, so such a value is described instead.
+    # interpreter will write raises, and so may a caller's own __repr__; whatever it
+    # raises, the value is described instead, so the refusal stays an ItemKeyError.
     try:
         text = repr(value)
-    except ValueError:
-        return f"a {type(value).__name__} too long to show"
+    except Exception:
+        return f"<a {type(value).__name__} that cannot be shown>"
+    if not isinstance(text, str):
+        return f"<a {type(value).__name__} that cannot be shown>"
     return text if len(text) <= 120 else text[:117] + "..."
 
 
@@ -278,9 +281,11 @@ _HUGE_INTEGER = 10**640
 
 # The build123d names and attributes that draw text. Text needs a font, and no
 # font ships with the engine for recipes, so a leaf that draws text has nothing in
-# its key to say which font built it.
+# its key to say which font built it. make_triad and a joint's symbol draw their
+# letters in a font build123d bundles, which its version in the toolchain fixes,
+# but they are refused all the same, so that the rule is that a leaf draws none.
 _DRAWS_TEXT = frozenset({"Text", "DimensionLine", "ExtensionLine", "TechnicalDrawing"})
-_DRAWS_TEXT_ATTRIBUTES = frozenset({"make_text"})
+_DRAWS_TEXT_ATTRIBUTES = frozenset({"make_text", "make_triad", "symbol"})
 
 #: Each engine helper a recipe is handed, by name, and the files beside this
 #: module whose bytes a leaf calling that helper is keyed on: the helper's module
@@ -677,8 +682,8 @@ def leaf_key(
 
 
 def _draws_text(source: str) -> bool:
-    # Any use of a text-drawing name counts, a store included: the bare name, an
-    # attribute (build123d.Text) or an import under another name (from build123d
+    # A text-drawing name counts used as a name (a store included), as an attribute
+    # (build123d.Text) or through an import under another name (from build123d
     # import Text as T). Telling a recipe's own name from build123d's is not worth
     # the risk of keying a font-dependent solid.
     for node in ast.walk(_parse_recipe(source)):
@@ -824,7 +829,9 @@ def _string(text: str) -> str:
         elif char < " ":
             out.append(f"\\u{ord(char):04x}")
         elif "\ud800" <= char <= "\udfff":
-            raise ItemKeyError(f"string {text!r} holds a lone surrogate, which has no UTF-8 form")
+            raise ItemKeyError(
+                f"string {_shown(text)} holds a lone surrogate, which has no UTF-8 form"
+            )
         else:
             out.append(char)
     return '"' + "".join(out) + '"'

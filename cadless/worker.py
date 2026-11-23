@@ -236,6 +236,11 @@ def run_code(
         return _run_remote(code, export_dir, export_scale, check_assembly, cfg, wall)
     cpu = max(1, int(wall) + 1)  # CPU limit slightly above wall-clock
 
+    try:
+        code.encode("utf-8")
+    except UnicodeEncodeError as error:
+        # A lone surrogate has no UTF-8 form, so the script could not be written out.
+        return ExecResult(ok=False, error=f"the script is not UTF-8 text: {error}")
     with tempfile.TemporaryDirectory() as tmp:
         code_file = os.path.join(tmp, "model.py")
         with open(code_file, "w", encoding="utf-8") as fh:
@@ -257,6 +262,8 @@ def run_code(
                 cmd,
                 capture_output=True,
                 encoding="utf-8",
+                # The kernel's own C code writes to these pipes too, past Python's
+                # encoding, so a byte that is not UTF-8 is replaced rather than raised.
                 errors="replace",
                 timeout=wall,
                 preexec_fn=preexec,  # noqa: PLW1509 - intentional resource limiting

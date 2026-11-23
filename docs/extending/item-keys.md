@@ -180,9 +180,9 @@ platform=linux-x86_64;runtime=<sha256>;helpers=<sha256 or ->;fonts=-
 | `build123d`, `ocp` | the one installed distribution providing each kernel module, and its version, read from package metadata without importing the kernel; refused unless the file Python would import the module from is one that distribution installed |
 | `python` | major.minor |
 | `platform` | `sys.platform` and the machine |
-| `runtime` | the sha256 of the canonical JSON mapping each of `RUN_AND_BAKE_FILES` to the sha256 of its bytes: the whole engine files that run a recipe and bake its solid (the runtime and its allow-list, the code that writes the declared values into the recipe, the worker that starts the run and the child that bakes it), read from beside the module as imported |
+| `runtime` | the sha256 of the canonical JSON mapping each of `RUN_AND_BAKE_FILES` to the sha256 of its bytes: the whole engine files that run a recipe and bake its solid (the runtime and its allow-list, the code that writes the declared values into the recipe, the worker that starts the run, the child that bakes it, and the tree that places and scales a build's parts), read from beside the module as imported |
 | `helpers` | the same over the `HELPER_SOURCES` files of the helpers named, or `-` for none |
-| `fonts` | `-`: no fonts ship for recipes, so `leaf_key` refuses a recipe that uses `Text`, `DimensionLine`, `ExtensionLine` or `TechnicalDrawing` in any way (by name, as an attribute such as `build123d.Text`, or imported under another name), or a `make_text` attribute: its solid would depend on whichever font the machine finds |
+| `fonts` | `-`: no fonts ship for recipes, so `leaf_key` refuses a recipe that uses `Text`, `DimensionLine`, `ExtensionLine` or `TechnicalDrawing` (by name, as an attribute such as `build123d.Text`, or through an import under another name), or a `make_text`, `make_triad` or `symbol` attribute: its solid would depend on whichever font the machine finds. The last two draw in a font build123d bundles, which the `build123d` part fixes, and are refused so that the rule is simply that a leaf draws no text |
 
 There is no engine version number. A change to the engine's own code that can
 alter a shape changes a hashed file, and a kernel upgrade changes a kernel part,
@@ -232,14 +232,14 @@ The engine provides the means for both, and no engine code keys leaves yet:
 finding it by the lines and columns Python itself counts, so handing it the
 values `typed_params` returns is the caller's part; and the worker starts every
 build's child with `PYTHONHASHSEED=0`, in UTF-8 mode, and with no other
-`PYTHON*` setting from its environment beyond where Python and its packages live.
+`PYTHON*` setting from its environment beyond where Python, its packages and its
+bytecode live.
 Both files are among `RUN_AND_BAKE_FILES`, so a change to either changes every
 key.
 
 A recipe must also not depend on object identity, which differs from one run to
 the next whatever the hash seed: `repr()` of a function shows its address, and a
-set or a dict of shapes, which hash by identity, orders them differently each
-time. The closed-recipe rules are to refuse that; until they do, such a recipe is
+set of shapes, which hash by identity, orders them differently each time. The closed-recipe rules are to refuse that; until they do, such a recipe is
 a way for a leaf to build differently under one key.
 
 ## Item keys
@@ -252,14 +252,15 @@ whenever a member's does, to any depth, while a member's own `key` field stays i
 ## Closed recipes
 
 The closed-recipe rules are the allow-list a recipe will have to pass before it
-is keyed; they are not enforced yet. Keys assume what they will require:
+is keyed; apart from the text rule, which `leaf_key` applies now, they are not
+enforced yet. Keys assume what they will require:
 
 - leaves are in millimetres; an item from a metre domain is converted where it
   enters;
 - `math` is allowed beside build123d;
 - text is drawn only in fonts the engine ships, and none ship yet;
 - nothing depends on object identity (`repr()` of a function or an object, `id`,
-  the order of a set or a dict of shapes).
+  the order of a set of shapes).
 
 ## The API
 

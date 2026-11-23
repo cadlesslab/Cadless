@@ -1219,6 +1219,9 @@ def test_a_leaf_calling_a_helper_is_keyed_on_the_helpers_digest() -> None:
         "from build123d import Text as T\nresult = extrude(T('Hi', params['w']), 2)",
         "import build123d\nresult = extrude(build123d.Text('Hi', params['w']), 2)",
         "import build123d as b\nresult = extrude(b.Text('Hi', params['w']), 2)",
+        "result = Box(len(Compound.make_triad(params['w']).edges()), 1, 1)",
+        "part = Box(params['w'], 1, 1)\nj = RigidJoint('j', to_part=part)\nlabel = j.symbol",
+        "part = Box(params['w'], 1, 1)\nj = BallJoint('j', to_part=part)\nlabel = j.symbol",
     ],
 )
 def test_a_leaf_that_draws_text_gets_no_key(body: str) -> None:
@@ -1239,8 +1242,26 @@ def test_a_leaf_that_draws_text_gets_no_key(body: str) -> None:
 )
 def test_a_refusal_shows_an_integer_too_long_to_print_without_failing(call) -> None:
     # repr() of an integer past the interpreter's digit limit raises ValueError.
-    with pytest.raises(ItemKeyError, match="too long to show"):
+    with pytest.raises(ItemKeyError, match="cannot be shown"):
         call()
+
+
+class _Unshowable(float):
+    def __repr__(self) -> str:
+        raise RuntimeError("no")
+
+
+def test_a_refusal_survives_a_value_whose_repr_raises() -> None:
+    with pytest.raises(ItemKeyError, match="cannot be shown"):
+        typed_params({"flag": _Unshowable(1.0)}, {"flag": "bool"})
+
+
+def test_every_public_function_is_refused_rather_than_left_too_deep() -> None:
+    # Each is wrapped so that a RecursionError from a deep caller becomes a refusal.
+    for name in item_key_module.__all__:
+        value = getattr(item_key_module, name)
+        if callable(value) and not isinstance(value, type):
+            assert hasattr(value, "__wrapped__"), name
 
 
 def test_a_leaf_naming_text_only_inside_a_string_gets_a_key() -> None:

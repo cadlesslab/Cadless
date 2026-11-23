@@ -47,8 +47,9 @@ _SETTINGS_ATTR: dict[str, str] = {
 }
 # Engine tuning knobs. Same no-restart apply as the plain fields, but **never
 # exported to the environment**: `cadless/worker.py` runs generated code in a
-# subprocess spawned without an explicit env, so everything exported here is
-# inherited by the process that executes untrusted geometry. A vendor key earns
+# subprocess that inherits this process's environment, less its PYTHON* settings,
+# so everything else exported here reaches the process that executes untrusted
+# geometry. A vendor key earns
 # that export because the SDK has no other way to receive it; a tuning value
 # earns nothing by it, and the child has no use for one.
 #
