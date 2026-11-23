@@ -20,6 +20,7 @@ than guessed at.
 from __future__ import annotations
 
 import ast
+import io
 
 PARAMS_VARIABLE = "params"
 
@@ -93,12 +94,20 @@ def _find_params_assignment(tree: ast.Module) -> ast.Assign | None:
 
 def _splice(code: str, node: ast.AST, replacement: str) -> str:
     """Replace the source span of ``node`` with ``replacement``."""
-    lines = code.splitlines(keepends=True)
+    # The lines Python's tokenizer counts, ended by \n, \r\n or \r alone:
+    # str.splitlines also ends one at a form feed, U+2028 and others, which would
+    # land the replacement in whatever text holds them, a docstring or a comment.
+    lines = io.StringIO(code, newline="").readlines()
     start = _offset(lines, node.lineno, node.col_offset)
     end = _offset(lines, node.end_lineno, node.end_col_offset)
     return code[:start] + replacement + code[end:]
 
 
 def _offset(lines: list[str], lineno: int, col: int) -> int:
-    """Character offset into the source for a 1-based line / 0-based column."""
-    return sum(len(line) for line in lines[: lineno - 1]) + col
+    """Character offset into the source for a 1-based line and a 0-based column.
+
+    The column is counted in UTF-8 bytes, as the syntax tree gives it.
+    """
+    line = lines[lineno - 1]
+    within = len(line.encode("utf-8")[:col].decode("utf-8"))
+    return sum(len(text) for text in lines[: lineno - 1]) + within
