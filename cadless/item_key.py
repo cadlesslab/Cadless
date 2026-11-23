@@ -73,9 +73,7 @@ def _shown(value: object) -> str:
     try:
         text = repr(value)
     except Exception:
-        return f"<a {type(value).__name__} that cannot be shown>"
-    if not isinstance(text, str):
-        return f"<a {type(value).__name__} that cannot be shown>"
+        return f"<a value of type {type(value).__name__} that cannot be shown>"
     return text if len(text) <= 120 else text[:117] + "..."
 
 

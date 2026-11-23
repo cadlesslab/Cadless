@@ -1252,7 +1252,9 @@ class _Unshowable(float):
 
 
 def test_a_refusal_survives_a_value_whose_repr_raises() -> None:
-    with pytest.raises(ItemKeyError, match="cannot be shown"):
+    with pytest.raises(
+        ItemKeyError, match="holds <a value of type _Unshowable that cannot be shown>"
+    ):
         typed_params({"flag": _Unshowable(1.0)}, {"flag": "bool"})
 
 
