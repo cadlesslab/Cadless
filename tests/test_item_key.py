@@ -1259,9 +1259,22 @@ def test_a_refusal_survives_a_value_whose_repr_raises() -> None:
         typed_params({"flag": _Unshowable(1.0)}, {"flag": "bool"})
 
 
-def test_a_refusal_quotes_only_the_start_of_a_long_value() -> None:
-    with pytest.raises(ItemKeyError, match="surrogate") as refused:
-        jcs("\ud800" + "x" * 100_000)
+@pytest.mark.parametrize(
+    ("call", "says"),
+    [
+        pytest.param(lambda: jcs("\ud800" + "x" * 100_000), "surrogate", id="string"),
+        pytest.param(
+            lambda: leaf_key(
+                PLATE, PLATE_PARAMS, PLATE_TYPES, TOOLCHAIN.replace(PYTHON, "9" * 100_000)
+            ),
+            "Python",
+            id="toolchain-python",
+        ),
+    ],
+)
+def test_a_refusal_quotes_only_the_start_of_a_long_value(call, says: str) -> None:
+    with pytest.raises(ItemKeyError, match=says) as refused:
+        call()
     assert len(str(refused.value)) < 1_000
 
 

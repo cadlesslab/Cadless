@@ -718,7 +718,8 @@ def _toolchain(toolchain: object, source: str) -> bytes:
     running = f"{sys.version_info.major}.{sys.version_info.minor}"
     if parts.get("python") != running:
         raise ItemKeyError(
-            f"the toolchain names Python {parts.get('python')!r}, but this is Python {running}; "
+            f"the toolchain names Python {_shown(parts.get('python'))}, "
+            f"but this is Python {running}; "
             "compute a leaf's key on the Python its toolchain names"
         )
     if "helpers" not in parts:
