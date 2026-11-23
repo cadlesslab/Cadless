@@ -280,8 +280,8 @@ _HUGE_INTEGER = 10**640
 # The build123d names and attributes that draw text. Text needs a font, and no
 # font ships with the engine for recipes, so a leaf that draws text has nothing in
 # its key to say which font built it. make_triad and a joint's symbol draw their
-# letters in a font build123d bundles, which its version in the toolchain fixes,
-# but they are refused all the same, so that the rule is that a leaf draws none.
+# letters in a font build123d bundles, but build123d adds its copy only where the
+# machine has no font of that family, so what they draw depends on the machine too.
 _DRAWS_TEXT = frozenset({"Text", "DimensionLine", "ExtensionLine", "TechnicalDrawing"})
 _DRAWS_TEXT_ATTRIBUTES = frozenset({"make_text", "make_triad", "symbol"})
 
