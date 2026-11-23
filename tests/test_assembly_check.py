@@ -132,6 +132,30 @@ def test_a_side_exactly_the_bed_needs_no_cut_and_no_turn():
     assert "turned" not in why
 
 
+def test_the_cuts_count_the_joint_every_seam_adds_to_a_piece():
+    # Each seam's tabs stand 12 mm past the cut on the piece behind it, so two
+    # pieces on a 210 mm side make at most 2 x 210 - 12 = 408 mm, not 420.
+    two = evaluate_lone_part((408.0, 100.0, 10.0), SPEC).failures[0]
+    three = evaluate_lone_part((409.0, 100.0, 10.0), SPEC).failures[0]
+    assert "2 along its width" in two
+    assert "3 along its width" in three
+
+
+def test_a_side_no_longer_than_the_joint_is_counted_by_the_ratio_alone():
+    # No piece on a 10 mm side can carry a 12 mm joint; the count stays the plain
+    # ratio rather than one divided by a negative room.
+    narrow = AssemblySpec(volume=BuildVolume(10.0, 200.0, 195.0), clearance_mm=0.2)
+    assert "3 along its width" in evaluate_lone_part((25.0, 100.0, 10.0), narrow).failures[0]
+
+
+def test_a_refusal_for_size_says_the_joint_counts_in_the_half_that_carries_it():
+    # A 400 mm plate cut in the middle comes back as a 212 mm half: its tabs.
+    report = evaluate_assembly(_m(part_bboxes=[[100.0, 100.0, 50.0], [212.0, 160.0, 10.0]]), SPEC)
+    why = report.failures[0]
+    assert "the half behind a seam's plane carries its tabs or pegs" in why
+    assert "12 mm past the cut" in why
+
+
 # --- a build that came back as one solid ------------------------------------
 
 
@@ -145,6 +169,12 @@ def test_a_lone_part_larger_than_the_bed_is_refused_with_its_cuts():
     assert "300 x 250 x 18" in why
     assert "2 along its width and 2 along its depth" in why
     assert "do not shrink" in why
+
+
+def test_a_lone_part_s_refusal_says_where_its_seams_joints_go():
+    why = evaluate_lone_part((300.0, 250.0, 18.0), SPEC).failures[0]
+    assert "the half behind a seam's plane carries its tabs or pegs" in why
+    assert "12 mm past the cut" in why
 
 
 def test_a_lone_part_that_fits_passes():
@@ -372,6 +402,65 @@ def test_the_line_between_a_sliver_and_a_tab_is_fifty_cubic_millimetres():
     assert "narrower than its tab" in just_below
 
 
+def test_a_large_overlap_names_a_part_set_into_the_other_before_a_tab():
+    # A generated assembly's overlaps are parts laid into their neighbours -- a
+    # wheel in the chassis, an axle with no hole -- more often than tabs without
+    # sockets, and a sentence about tabs alone sent the repair to the joints.
+    why = evaluate_assembly(_m(overlaps=[[0, 1, 1000.0]]), SPEC).failures[0]
+    assert "that much is a part set into the other, or a tab sitting in solid material" in why
+    assert "move the part out of the other there" in why
+
+
+def test_a_sliver_of_overlap_names_a_part_grazing_the_other_before_a_socket():
+    why = evaluate_assembly(_m(overlaps=[[0, 1, 5.0]]), SPEC).failures[0]
+    assert "a part grazing the other, or a socket narrower than its tab" in why
+    assert "move the part clear of the other there" in why
+
+
+def test_an_overlap_s_refusal_says_where_the_parts_share_volume():
+    m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]])
+    why = evaluate_assembly(m, SPEC).failures[0]
+    assert "within x 9 to 10, y -10 to 10, z -5 to 5 in the script's coordinates" in why
+
+
+def test_where_an_overlap_sits_is_said_to_the_scale_of_the_script():
+    # A script written in metres places a 52 x 45 mm overlap at fractions of a unit.
+    m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, 0.0, -0.026, 0.0, 0.052, 0.026, 0.045]])
+    why = evaluate_assembly(m, SPEC).failures[0]
+    assert "within x 0 to 0.052, y -0.026 to 0.026, z 0 to 0.045" in why
+
+
+def test_a_coordinate_rounded_to_nothing_is_never_said_as_minus_zero():
+    m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, -0.004, -10.0, -5.0, 10.0, 10.0, 5.0]])
+    why = evaluate_assembly(m, SPEC).failures[0]
+    assert "within x 0 to 10," in why
+
+
+def test_where_an_overlap_sits_is_said_for_a_build_nobody_asked_to_join():
+    m = _m(overlaps=[[0, 1, 200.0]], overlap_boxes=[[0, 1, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]])
+    why = evaluate_assembly(m, SPEC, checks=PARTS_CHECKS).failures[0]
+    assert "within x 9 to 10" in why
+
+
+@pytest.mark.parametrize(
+    "boxes",
+    [
+        [],
+        [[0, 1, 9.0, -10.0, -5.0]],
+        [[0, 1, "9", -10.0, -5.0, 10.0, 10.0, 5.0]],
+        [[0.0, 1, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]],
+        [[0, 1, 10.0, -10.0, -5.0, 9.0, 10.0, 5.0]],
+        [[0, 2, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]],
+    ],
+)
+def test_an_overlap_with_no_readable_box_is_refused_without_saying_where(boxes):
+    # A worker of an earlier release sends none; a box that cannot be read --
+    # an index that is no integer among them -- is turned inside out, or names
+    # another pair is no place to send the model.
+    why = evaluate_assembly(_m(overlaps=[[0, 1, 200.0]], overlap_boxes=boxes), SPEC).failures[0]
+    assert why.startswith("part 1 and part 2 share 200 mm^3 of interior volume;")
+
+
 # --- the parts mate into one connected assembly ---------------------------
 
 
@@ -485,6 +574,39 @@ def test_no_order_and_no_named_trapped_part_still_refuses():
     assert not report.ok
 
 
+def _order_failure(**kw) -> str:
+    report = evaluate_assembly(_m(order=None, trapped=[0, 1], **kw), SPEC)
+    return next(failure for failure in report.failures if "no assembly order" in failure)
+
+
+def test_an_order_lost_only_to_overlaps_sends_the_repair_to_the_overlaps():
+    # Overlapping parts cannot move, so overlaps alone can leave no order; told to
+    # reorient a joint there, the repair changed what was never wrong.
+    why = _order_failure(overlaps=[[0, 1, 1000.0]], freed_without_overlaps=True)
+    assert "no assembly order exists while parts share volume" in why
+    assert "fix the shared volume first" in why
+    assert "reorient the joint" not in why
+
+
+@pytest.mark.parametrize(
+    "overlaps",
+    [[], [[0, 1, 0.0]], [[0, 0, 1000.0]], [[0, 7, 1000.0]], [[0, 1, math.inf]]],
+)
+def test_a_ruling_on_overlaps_nobody_measured_is_not_believed(overlaps):
+    # The payload is whatever the script printed: with no readable overlap in it,
+    # "while parts share volume" would send the repair to geometry that
+    # was never measured.
+    why = _order_failure(overlaps=overlaps, freed_without_overlaps=True)
+    assert "reorient the joint so it slides in along one axis" in why
+
+
+@pytest.mark.parametrize("freed", [False, None])
+def test_an_order_the_overlaps_do_not_explain_keeps_its_own_sentence(freed):
+    why = _order_failure(overlaps=[[0, 1, 1000.0]], freed_without_overlaps=freed)
+    assert "reorient the joint so it slides in along one axis" in why
+    assert "while parts share volume" not in why
+
+
 # --- fail closed ----------------------------------------------------------
 
 
@@ -551,6 +673,39 @@ def test_measurements_from_a_payload_missing_releases_degrades_to_empty():
     m = AssemblyMeasurements.from_payload({"order": [0, 1]})
     assert m is not None
     assert m.releases == []
+
+
+def test_measurements_from_a_payload_missing_the_overlap_readings_degrade_to_none():
+    # A worker of an earlier release records neither: read as nothing measured,
+    # and nothing said about it.
+    m = AssemblyMeasurements.from_payload({"order": [0, 1]})
+    assert m is not None
+    assert m.overlap_boxes == []
+    assert m.freed_without_overlaps is None
+    assert m.unchecked == []
+
+
+def test_measurements_carry_where_overlaps_sit_and_whether_they_alone_trap():
+    box = [0, 1, 9.0, -10.0, -5.0, 10.0, 10.0, 5.0]
+    m = AssemblyMeasurements.from_payload({"overlap_boxes": [box], "freed_without_overlaps": True})
+    assert m is not None
+    assert m.overlap_boxes == [box]
+    assert m.freed_without_overlaps is True
+
+
+@pytest.mark.parametrize("sent", [1, "yes", [True]])
+def test_a_ruling_on_the_overlaps_that_is_no_yes_or_no_is_read_as_none(sent):
+    m = AssemblyMeasurements.from_payload({"freed_without_overlaps": sent})
+    assert m is not None
+    assert m.freed_without_overlaps is None
+
+
+def test_overlap_boxes_that_are_no_list_are_dropped_unsaid():
+    # They decide no verdict, only a sentence, so they are judged by nothing.
+    m = AssemblyMeasurements.from_payload({"overlap_boxes": "a table"})
+    assert m is not None
+    assert m.overlap_boxes == []
+    assert m.unchecked == []
 
 
 def test_measurements_carry_one_release_direction_per_part():

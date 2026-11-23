@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING
 from cadless.api_subset import RESULT_SHAPE, RESULT_VARIABLE
 from cadless.config import settings
 from cadless.few_shot import render_few_shot
+from cadless.joint_sizes import (
+    REACH_MOST_MM,
+    RUN_LEAST,
+    pieces_along,
+    stated_band_mm,
+    stated_spot_mm,
+)
 from cadless.llm.provider import ChatProvider, ImagesUnsupported
 from cadless.llm.registry import build_provider
 from cadless.llm.types import (
@@ -340,7 +347,11 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     had; a feature left straddling the seam as a loose sliver; an extrude read as
     centred. What the model still decides is what only it can: where each seam
     falls and the axis each part goes in along. The rod line stays because a rod
-    shortened instead of cut was the other way a split missed the bed. The request
+    shortened instead of cut was the other way a split missed the bed. The joint's
+    reach and the solid material it needs are stated, in the sizes the helper
+    builds to, because a split counted by the ratio alone left the half carrying
+    the joint over the bed, and a shell cut through walls thinner than any joint
+    left the helper no place to put one. The request
     for a short script is there because a split rewrite is the longest reply a
     round writes, and one cut off at the output limit fails whole.
 
@@ -354,6 +365,14 @@ def _assembly_rules(spec: AssemblySpec) -> str:
     fits = _fits(spec)
     volume = spec.volume
     size = _requested(spec)
+    band = stated_band_mm(spec.clearance_mm)
+    spot = stated_spot_mm(spec.clearance_mm)
+    # The worked example's panel, counted as the size refusal counts it, so the
+    # two never tell the model different numbers for the same part.
+    panel_wide = round(max(volume.width, volume.depth) * 1.25, 1)
+    panel_tall = round(volume.height * 2.5, 1)
+    across = pieces_along(panel_wide, max(volume.width, volume.depth))
+    up = pieces_along(panel_tall, volume.height)
     return (
         f"This part is for a 3D printer whose build volume is {fits}, and it is "
         "too large to print in one piece. Build it as an ASSEMBLY of separate "
@@ -364,10 +383,15 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         "  * A part fits only when its width, depth and height each fit the bed at "
         "once; turning it a quarter on the bed swaps width and depth but never "
         "helps its height. Along every axis the model is longer than the bed, cut "
-        "it into at least as many pieces as the ratio demands, rounded up: on this "
-        f"printer a panel {fmt(round(max(volume.width, volume.depth) * 1.25, 1))} mm "
-        f"wide and {fmt(round(volume.height * 2.5, 1))} mm tall is cut into 2 along "
-        "its width and 3 along its height, however thin it is.\n"
+        "it into enough pieces that each fits with its joint: the half behind a "
+        "seam's plane carries split_and_join's tabs or pegs, which stand up to "
+        f"{fmt(REACH_MOST_MM)} mm past the cut, so n pieces along an axis span at most "
+        f"n times the bed less {fmt(REACH_MOST_MM)} mm for every seam between them, "
+        f"and a seam between two halves goes {fmt(REACH_MOST_MM / 2)} mm off-centre, "
+        "toward the half behind it, so both come out the same length. On this "
+        f"printer a panel {fmt(panel_wide)} mm wide and {fmt(panel_tall)} mm tall is "
+        f"cut into {across} along its width and {up} along its height, however thin "
+        "it is.\n"
         "  * Keep every dimension the request gives"
         + (
             (
@@ -405,6 +429,16 @@ def _assembly_rules(spec: AssemblySpec) -> str:
         "rod, an axle or a bar cut across its length, or a part cut through its height "
         "that sits down onto the piece below, joined by pegs. Cut a half still larger "
         "than the bed again the same way.\n"
+        "  * split_and_join needs solid material where it cuts: for a dovetail, a band "
+        f"of the cut face at least {fmt(band)} mm wide that a line along insert_along "
+        f"crosses in one unbroken run of at least {fmt(RUN_LEAST)} mm; for a peg, a "
+        f"solid spot at least {fmt(spot)} mm across. A hollow part -- a shell, a body, a "
+        f"hull -- gives a dovetail that band in a wall at least {fmt(band)} mm thick "
+        "running along insert_along where the seam crosses it, or, open on one side, in "
+        "the top or floor opposite the opening where a line along insert_along crosses "
+        f"it through its thickness and nothing else, at least {fmt(RUN_LEAST)} mm thick "
+        "and whole across the seam; closed on every side, it gives it in its walls "
+        "only.\n"
         "  * If split_and_join refuses with a JoineryError, its message says what to "
         "change: move the "
         "plane to where each side stays one piece and the cut face is thicker, or "
@@ -476,7 +510,9 @@ def _assembly_edit_rules(spec: AssemblySpec) -> str:
         "into the assembly along, the same as every other fit that holds that part "
         "(the plane's normal only when that is how the part goes in, as for a rod cut "
         "across its length), handing it one solid, the part's pieces overlapping so "
-        "they fuse, and never write the seam's dovetail, tab or socket yourself."
+        "they fuse, and never write the seam's dovetail, tab or socket yourself; the "
+        "half behind its plane carries the tabs or pegs, which stand up to "
+        f"{fmt(REACH_MOST_MM)} mm past the cut, and must fit the bed with them."
     )
 
 

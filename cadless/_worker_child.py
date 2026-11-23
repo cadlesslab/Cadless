@@ -328,7 +328,9 @@ def main(argv: list[str]) -> int:
             # The names the tree gave, so what the measurement could not
             # establish is worded as everything else a reader is shown.
             names = [part.name for part in tree.parts] if tree is not None else None
-            summary["assembly"] = asdict(measure_assembly(parts, time_budget=budget, names=names))
+            summary["assembly"] = asdict(
+                measure_assembly(parts, time_budget=budget, names=names, scale=export_scale)
+            )
         if export_dir:
             from pathlib import Path  # noqa: PLC0415 - lazy, as below
 
