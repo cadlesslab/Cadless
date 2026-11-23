@@ -10,17 +10,19 @@ drives them is in [pipeline.md](../pipeline.md).
 | Layer | Module | Guarantee it provides |
 | --- | --- | --- |
 | Static gate | `cadless/validation.py` | Rejects disallowed code **without executing anything** |
+| Script runtime | `cadless/script_runtime.py` | Runs a script only after the gate passes it, with allow-listed builtins and views of the allowed modules |
 | Execution | `cadless/worker.py` | Runs code in a separate process under a CPU rlimit and a wall-clock timeout |
 | Export | `cadless/exporters.py` | Turns a built shape into artifact files |
 
-One layering rule spans all three and is worth stating plainly: **build123d is
+One layering rule spans all of them and is worth stating plainly: **build123d is
 imported only inside the execution child and the exporters**, and even there
 only inside functions. Nothing else in the package may import it at module
-level, with one exception that lives on the child's side: `cadless/joinery.py`,
-the helpers a script is handed, imports it at the top, and is itself imported
-only inside functions, by the execution child and evalkit's in-process runner —
-importing the api loads neither it nor build123d. See the layering rules in
-[architecture.md](../architecture.md).
+level, with two exceptions that live on the child's side:
+`cadless/script_runtime.py`, which builds the view of build123d a script gets,
+and `cadless/joinery.py`, the helpers a script is handed, which it imports. Both
+import build123d at the top; the execution child and evalkit's in-process runner
+import `script_runtime` only inside functions, so importing the api loads none
+of them. See the layering rules in [architecture.md](../architecture.md).
 
 ## Changing the validator
 
@@ -28,22 +30,38 @@ importing the api loads neither it nor build123d. See the layering rules in
 validate_code(code: str) -> ValidationResult   # .ok, .reasons; truthy when ok
 ```
 
-It walks the AST and executes nothing: allow-listed imports only, no banned
-builtins, no dunder attribute access, and the script must assign `result`.
-[ADR-0003](../adr/0003-three-layer-sandbox.md) covers why those four checks and
-why this is the one layer that inspects code rather than containing it.
+It walks the AST and executes nothing: allow-listed imports only, by exact
+name, and only names reviewed for scripts taken from build123d or `copy`; no
+banned, dunder or withheld name anywhere a name is written; no builtin outside
+the allow-list the script does not define itself; no dunder or private
+attribute, none of the interpreter's frame, generator, coroutine, traceback or
+code attributes, and none of the methods that look attributes up from text; no
+attribute set but the few that name, colour and place a part; no class
+definitions and no `match`; and the script must assign `result`.
+[ADR-0003](../adr/0003-three-layer-sandbox.md) covers why, and why the gate and
+the namespace a script runs in are one layer.
 
 **The policy is data, and it does not live here.** It lives in
-`cadless/api_subset.py`. `ALLOWED_IMPORT_MODULES`, `BANNED_IMPORT_MODULES`,
-`BANNED_NAMES` and `RESULT_VARIABLE` drive the gate; `API_SUBSET_DOC` is the
-prose the system prompt embeds. (`ALLOWED_EXAMPLE` and `REJECTED_EXAMPLE` are
-test fixtures, not prompt content.) Allowing a new import is one entry in a
-frozenset — you should almost never need to touch the walker.
+`cadless/api_subset.py`. `ALLOWED_IMPORT_MODULES`, `BANNED_NAMES`,
+`INTERNALS_ATTRIBUTE_PREFIXES`, `STRING_LOOKUP_ATTRIBUTES`, `REFUSED_ATTRIBUTES`,
+`WRITABLE_ATTRIBUTES`, `BUILD123D_REVIEWED`, `BUILD123D_WITHHELD`, `COPY_NAMES`,
+`SCRIPT_BUILTINS` and `RESULT_VARIABLE` drive the gate, and `BUILD123D_REVIEWED`,
+`BUILD123D_WITHHELD`, `COPY_NAMES`, `SCRIPT_BUILTINS` and `WRITABLE_ATTRIBUTES`
+also decide what the namespace hands a script and what it checks after the
+script runs; `BANNED_IMPORT_MODULES` only names, for the policy snapshot, the
+modules that most need refusing. `API_SUBSET_DOC` is the prose the system prompt
+embeds. (`ALLOWED_EXAMPLE` and `REJECTED_EXAMPLE` are test fixtures, not prompt
+content.) Allowing a new import is one entry in a
+frozenset — you should almost never need to touch the walker. The file and
+`validation.py` are copied into the server as they are, so `validation.py`
+takes the policy in its one `from cadless.api_subset import (` statement and
+nothing else from the package.
 
 Two cautions. Every relaxation is a security decision rather than a convenience
 patch, for the reasons ADR-0003 gives.
 
-And **the gate and the prompt are not wired together.** `API_SUBSET_DOC` is
+And **the gate and the prompt are only partly wired together.** The builtins
+line of `API_SUBSET_DOC` is built from `SCRIPT_BUILTINS`, but the rest is
 hand-written prose. Adding `numpy` to `ALLOWED_IMPORT_MODULES` widens what the
 validator accepts while the prompt still tells the model that only build123d,
 `math` and `copy` are available — so the capability exists and nothing ever uses
@@ -53,24 +71,37 @@ it. Change both in the same commit.
 `cadless.joinery.script_namespace()` returns — today `split_and_join`, which cuts
 a part at a plane and joins the halves — and calls them without importing
 anything, so the allow-list stays as it is. That keeps the allow-list from
-widening; it puts no wall around what is handed over. Whatever the module behind
-a handed-over name holds, generated code can reach, so adding a name there is a
-security decision like widening the allow-list, and what that module imports, a
-script can reach as well. The worker child, evalkit's in-process runner
-and the few-shot tests all start a script from that function, so a name added
-there reaches each of them; the prompt still has to mention it, as with an
-import.
+widening; it puts no wall around what is handed over. Whatever a handed-over
+name holds, generated code can reach, so adding a name there is a security
+decision like widening the allow-list. The worker child, evalkit's in-process
+runner and the few-shot tests all start a script from
+`cadless.script_runtime.script_globals()`, which adds the allow-listed builtins
+and the module views to that function's names, so a name added there reaches
+each of them; the prompt still has to mention it, as with an import.
 
-`validate_code` is called from two production sites, and they guard different
-things. The repair loop in `Pipeline.run` checks code this tool is about to run
-from a model that just wrote it. `catalog.pack.verify_steps` checks code that
-arrived from somewhere else, inside a `.cls` package, before an import writes it
-where the catalog loader would find it — an upload gate elsewhere may have run
-the same check once, and a package delivered any other way was never seen by
-anyone. This build runs no such gate itself, which makes that site the only
-one there is. Both
-call it as the one-argument pure function it is; a change to that signature has
-to be carried into the server's vendored copy as well.
+**The views are the other half of the allow-list.** `import build123d` hands a
+script a fresh module object holding the names in `BUILD123D_REVIEWED` that the
+installed build123d has, less `BUILD123D_WITHHELD` and anything that is itself a
+module; `import math` gets math's public names, and `import copy` gets
+`COPY_NAMES` alone, with a `deepcopy` that takes no memo. A name a build123d
+upgrade adds is therefore not handed out until someone reviews it:
+`tests/test_script_reach.py` fails when the installed public names differ from
+the reviewed ones, and walks what the reviewed ones lead to by attribute reads,
+looking for a module, a frame or a real builtin. Review every new name, add it
+to `BUILD123D_REVIEWED`, and add it to `BUILD123D_WITHHELD` as well where
+scripts must not get it.
+
+`validate_code` is called from three production sites, and they guard different
+things. `script_runtime.run_script` checks every script just before it runs, in
+the worker child and in evalkit's runner, whoever asked for the run. The repair
+loop in `Pipeline.run` checks code this tool is about to run from a model that
+just wrote it, so the reasons reach the model's next attempt.
+`catalog.pack.verify_steps` checks code that arrived from somewhere else, inside
+a `.cls` package, before an import writes it where the catalog loader would find
+it — an upload gate elsewhere may have run the same check once, and a package
+delivered any other way was never seen by anyone. All three call it as the
+one-argument pure function it is; a change to that signature has to be carried
+into the server's vendored copy as well.
 
 ## Changing the worker
 
@@ -105,12 +136,16 @@ crosses a process boundary as JSON. Three constraints follow from that:
    good payload came earlier. And never write partial output without a trailing
    newline just before the sentinel, or the payload no longer starts its own
    line and is missed entirely. New fields go in that JSON payload and must be
-   JSON-serialisable. Both paths read the result back through one reader
-   (`_read_result` in `cadless/worker.py`) that checks every field against what
-   it holds, because the generated code shares that stdout and can print a line
-   of its own: a field it does not read is dropped, a value that is not what its
-   field holds reads as not measured, and a success without a volume and box it
-   can read is a failed build.
+   JSON-serialisable. The child keeps stdout for that line alone — a script's
+   `print` goes to stderr, and run as a program the child points everything else
+   written to stdout at stderr, kernel messages included — and writes it through
+   `_emit`; write nothing to stdout any other way. Both paths read the result
+   back through one reader (`_read_result` in `cadless/worker.py`) that checks
+   every field against what it holds, because a remote worker can be another
+   engine build: a field it does not read is dropped, a value that is not what
+   its field holds reads as not measured, and a success without a volume and box
+   it can read is a failed build — as is a success from a child that did not
+   exit cleanly.
 2. **Only `RLIMIT_CPU` is set, and the absent address-space cap is deliberate**
    — see [ADR-0003](../adr/0003-three-layer-sandbox.md). Do not "fix" it by
    adding `RLIMIT_AS`; memory is bounded at the container level instead.
@@ -254,8 +289,15 @@ than failing.
 ## Checklist
 
 - [ ] Policy changes made in `api_subset.py`, not in the AST walker
-- [ ] Any widened allow-list justified as a security decision, not convenience
+- [ ] Any widened allow-list, builtin or handed-over name justified as a
+      security decision, not convenience
 - [ ] `API_SUBSET_DOC` updated in the same commit as any allow-list change
+- [ ] Scripts run only through `script_runtime.run_script`, never another
+      `exec` (`tests/test_script_reach.py` holds `cadless/`, `backend/` and
+      `worker/` to that one)
+- [ ] A build123d upgrade's new public names reviewed and added to
+      `BUILD123D_REVIEWED`, and to `BUILD123D_WITHHELD` too where scripts must
+      not get them
 - [ ] Worker changes work on **both** the local subprocess and the remote path
 - [ ] New result fields are JSON-serialisable and inside the sentinel payload
 - [ ] Exactly one sentinel line, and it starts its own line

@@ -29,13 +29,16 @@ port, bound to loopback.
 ## Architectural Invariants (HARD CONSTRAINTS)
 
 1. The interactive `Pipeline` MUST pass freshly generated or refined model code
-   through `cadless.validation.validate_code` before `run_code`. The validation
-   tests enforce that path's import, name, and dunder-access policy. Engine code a
-   script may call is handed to it in the namespace it runs in
-   (`cadless/joinery.py`'s `script_namespace`), never imported, so the import
-   allow-list stays build123d, `math` and `copy`. Whatever that module holds,
-   generated code can reach, so handing a script another name is a security
-   decision like widening the allow-list.
+   through `cadless.validation.validate_code` before `run_code`, and every script
+   MUST run through `cadless.script_runtime.run_script`, which runs the same gate
+   again before it executes anything. The validation tests enforce the import,
+   name, attribute and statement policy. A script runs in the namespace
+   `script_runtime.script_globals` builds: the helpers `cadless/joinery.py`'s
+   `script_namespace` hands it, never imported, so the import allow-list stays
+   build123d, `math` and `copy`; the allow-listed builtins; and views of those
+   three modules in place of the modules. Whatever a handed-over name holds,
+   generated code can reach, so handing a script another name or builtin is a
+   security decision like widening the allow-list.
 2. The public stack MUST remain loopback-only unless an authenticated settings
    boundary and stronger hostile-code isolation are added. The current settings
    endpoint stores provider credentials without authentication, and containers
@@ -47,10 +50,11 @@ port, bound to loopback.
 4. Chat and embedding provider SDK integrations MUST stay behind
    `cadless/llm/providers/`. The code-generation pipeline and agent communicate
    through the neutral types and provider protocol under `cadless/llm/`.
-5. build123d execution MUST stay behind the worker/subprocess boundary. Static
-   validation is a separate caller responsibility: `run_code` does not enforce
-   it. Upstream orchestration treats programs as text rather than importing and
-   running them in the API process.
+5. build123d execution MUST stay behind the worker/subprocess boundary. The
+   execution child enforces static validation itself, so `run_code` refuses
+   what the gate refuses whoever called it; a caller that validates first does
+   so to have the reasons sooner. Upstream orchestration treats programs as text
+   rather than importing and running them in the API process.
 
    The slicer is the one place that reads a *product* of that execution outside
    the boundary. `cadless/slicing.py` hands the exported mesh to a large
@@ -236,7 +240,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    whatever parts it returns are held only to the check for a build nobody asked
    to split, never to the bed, so one oversized part passes every gate there:
    that is the case the option exists for.
-3. Static validation rejects disallowed syntax and imports before any execution.
+3. Static validation rejects disallowed syntax, names, attributes and imports
+   before any execution, and the worker child runs it again before the script.
 4. `cadless.worker.run_code` sends the program to the worker service when
    `CADLESS_WORKER_URL` is configured; local development and tests use a
    resource-limited subprocess fallback.
@@ -357,9 +362,11 @@ catalog content read-only.
 
 - **DO** add provider behavior behind the provider protocol and registry.
   **DON'T** import a vendor SDK into pipeline, agent, or prompt modules.
-- **DO** validate untrusted model or package source at its ingress before calling
-  the raw execution primitive. **DON'T** assume `run_code` validates its input or
-  call `exec`, build123d, or the worker child directly from an HTTP handler.
+- **DO** validate untrusted model or package source at its ingress, where the
+  reasons reach whoever can act on them, and run scripts through `run_code`,
+  whose child runs them with `script_runtime.run_script`. **DON'T** `exec` a
+  script anywhere else, or call build123d or the worker child directly from an
+  HTTP handler.
 - **DO** keep HTTP validation and transport in `backend/` and geometry logic in
   `cadless/`. **DON'T** move reusable engine behavior into a router.
 - **DO** persist source alongside geometry. **DON'T** treat a baked mesh as the
@@ -393,17 +400,37 @@ catalog content read-only.
 - Catalog items contain executable source. Third-party catalog content crosses
   the same trust boundary as generated source even though it can rebuild without
   an API key.
-- `run_code` is deliberately a raw execution primitive. The interactive
-  pipeline validates first, while the catalog loader executes committed step
-  code directly. Review those call sites before
-  changing who can invoke them or what inputs they accept; their current shape
-  is not evidence of a universal validation gate.
-- The worker child reports on stdout, which the generated code it runs shares,
-  so the result line is whatever that code chose to print. `run_code` reads
-  every field of it as untrusted, as it reads a remote worker's reply: a value
-  that is not what its field holds reads as not measured, and a line that is no
-  result object fails the build, as does a success with no volume and box that
-  can be read.
+- The gate runs where a script runs, not only where it enters: re-running a
+  version and rebuilding with new numbers run stored code without validating it
+  first, and the child holds each to the gate all the same. Stored code that a
+  later, stricter gate refuses fails there, with no repair round to fix it.
+- A restricted namespace is not a boundary on its own: a frame a script reaches
+  by attribute carries the real builtins. The gate's frame and private-attribute
+  rules are what keep frames out of reach, which is why `run_script` runs the
+  gate and the namespace in one call and leaves neither to its caller.
+- What a script reaches moves with build123d as well as with this repository.
+  The view hands over the names reviewed for scripts, never a name a later
+  release adds, and `tests/test_script_reach.py` fails when the installed
+  build123d's public names differ from the reviewed ones, and walks what the
+  reviewed ones lead to by attribute reads.
+- A build is reported from the objects it made, never from values a script
+  planted: everything that measures a build reads it through its objects' own
+  methods and attributes, some of them through lookup tables build123d's
+  classes hold. So a script sets no attribute but a part's name, colour and
+  placement; a script that changed one of build123d's classes -- a writable
+  name set on a class, or a table changed in place -- is refused after it runs,
+  with the change put back; and the child measures only a `result` that is a
+  build123d shape. `tests/test_script_reach.py` fails when a shared table a
+  script can reach sits where that check does not look.
+- The worker child keeps stdout for its result line alone: a script's `print`
+  writes to stderr, and run as a program the child points everything else
+  written to stdout at stderr, because the kernel writes its own messages there
+  and one can carry text a script chose. `run_code` still reads every field of
+  the line as untrusted, as it reads a remote worker's reply, which may come
+  from another engine build: a value that is not what its field holds reads as
+  not measured, a line that is no result object fails the build, as does a
+  success with no volume and box that can be read, and so does a success from a
+  child that did not exit cleanly.
 - Environment settings take precedence over settings persisted by the UI. A
   saved value may therefore be present without being the effective value.
 - The launch gate over the settings behind it is read from the launch

@@ -107,10 +107,13 @@ is also the risk.
 
 Generated code is defended in three layers:
 
-1. **Static validation** — an AST pass runs before anything executes. Only
-   `build123d`, `math` and `copy` may be imported; `eval`, `exec`, `open`,
-   `__import__`, `getattr` and friends are rejected, as is any `__dunder__`
-   attribute access.
+1. **Static validation** — an AST pass runs before anything executes, in the
+   execution child itself. Only `build123d`, `math` and `copy` may be imported;
+   `eval`, `exec`, `open`, `__import__`, `getattr` and friends are rejected, as
+   are `__dunder__` names, private attributes, the interpreter's frame and
+   code attributes, and setting any attribute but a part's name, colour and
+   placement. The script then runs with an allow-list of builtins and sees
+   only the reviewed public names of those three modules.
 2. **Process isolation** — execution happens in a fresh subprocess with CPU,
    memory and wall-clock limits.
 3. **Container** — network and filesystem isolation.

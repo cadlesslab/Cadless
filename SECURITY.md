@@ -53,8 +53,10 @@ limit we documented as absent is not.
 ### In scope
 
 - **Static gate bypass** — any input that gets past `validate_code` in
-  `cadless/validation.py` and the allow-list in `cadless/api_subset.py` to run
-  Python outside the permitted subset. The AST gate is a security boundary;
+  `cadless/validation.py`, the allow-list in `cadless/api_subset.py`, or the
+  builtins and module views a script runs with (`cadless/script_runtime.py`)
+  to run Python outside the permitted subset or reach a module, a frame or a
+  builtin a script is not handed. The AST gate is a security boundary;
   loosening it is a security decision.
 - **Execution escape** — breaking out of the worker subprocess or its
   container: reaching the network from the internal-only worker network,
@@ -63,7 +65,7 @@ limit we documented as absent is not.
   that reaches the host.
 - **Malicious catalog content** — a catalog item that achieves any of the
   above. Imported catalog step code is untrusted input and passes the same
-  gate as generated code.
+  gate as generated code, each time it runs.
 - **Secret exposure** — an API key from the settings store reaching logs,
   exported artifacts, the browser, or any destination other than the provider
   call it was entered for.

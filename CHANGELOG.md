@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2](https://github.com/cadlesslab/Cadless/compare/backend-v1.5.1...backend-v1.5.2) (2026-11-20)
+
+
+### Fixes
+
+* hold every script to the code gate where it runs, and narrow what scripts can reach ([#100](https://github.com/cadlesslab/Cadless/issues/100)) ([f2c1d11](https://github.com/cadlesslab/Cadless/commit/f2c1d11a28220ddcbdeb1c41a0599497916a1303))
+
 ## [1.5.1](https://github.com/cadlesslab/Cadless/compare/backend-v1.5.0...backend-v1.5.1) (2026-11-16)
 
 

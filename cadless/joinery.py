@@ -11,9 +11,10 @@ the printer holds.
 
 Scripts are handed :func:`split_and_join` in the globals :func:`script_namespace`
 gives them rather than importing this module, so the import allow-list stays as
-it is. That is no wall around the module: whatever it holds, a script can reach,
-so it imports nothing beyond build123d, the standard library, the printer
-profile's limits and the joint sizes it builds to.
+it is. Handing a name over is no wall around the module behind it, so this one
+is written as if a script could reach whatever it holds: it imports nothing
+beyond build123d, the standard library, the printer profile's limits and the
+joint sizes it builds to.
 """
 
 from __future__ import annotations

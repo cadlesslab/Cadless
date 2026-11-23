@@ -96,12 +96,11 @@ def _repair_context_from_payload(
 def _read_result(payload: dict, repair_context: RepairContext | None) -> ExecResult:
     """The result a child printed or the worker service sent, every field checked.
 
-    The generated script runs in the child and owns its stdout, so the line read
-    back is whatever the script chose to print; and a worker on another engine
-    build sends shapes this one never wrote. Handed on as it came, a field of the
-    wrong shape raised here, or passed downstream as a reading -- a box read a
-    letter to a side, a count or a flag in text -- so a value that is not what
-    its field holds is read as ``None``, not measured, instead.
+    A worker on another engine build sends shapes this one never wrote, and a
+    child is only as sound as the engine build it runs. Handed on as it came, a
+    field of the wrong shape raised here, or passed downstream as a reading -- a
+    box read a letter to a side, a count or a flag in text -- so a value that is
+    not what its field holds is read as ``None``, not measured, instead.
 
     Except the volume and the box, which every success the child reports
     carries: one without them is no success. Read as not measured, a lone part
@@ -239,6 +238,14 @@ def run_code(
             killed = proc.returncode and proc.returncode < 0
             msg = "killed (resource limit)" if killed else (stderr or "no result emitted")
             return ExecResult(ok=False, error=msg, timed_out=killed)
+        if payload.get("ok") is True and proc.returncode != 0:
+            # The child exits 0 after reporting a success. One that did not end
+            # cleanly after its line is no success, whatever the line says.
+            return ExecResult(
+                ok=False,
+                error=f"the build's process ended with code {proc.returncode} after reporting success",
+                timed_out=proc.returncode < 0,
+            )
         return _read_result(payload, _repair_context_from_payload(payload))
 
 
@@ -290,9 +297,10 @@ def _run_remote(
 def _parse_payload(stdout: str) -> dict | None:
     """The child's result line as an object, or ``None`` where there is none.
 
-    Anything the parser raises on is none either: the line is the generated
-    script's to write, and one nested past the parser's depth, or holding an
-    integer past its length, raised out of the call rather than failing it.
+    Anything the parser raises on is none either: a child that went wrong, or a
+    worker on another engine build, can send any line, and one nested past the
+    parser's depth, or holding an integer past its length, raised out of the
+    call rather than failing it.
     """
     for line in reversed(stdout.splitlines()):
         if line.startswith(SENTINEL):

@@ -3,10 +3,14 @@ import the OCCT kernel."""
 
 import json
 import math
+import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
 
+from cadless import worker
 from cadless._worker_child import SENTINEL
 from cadless.config import Settings
 from cadless.worker import run_code
@@ -590,15 +594,20 @@ def test_the_child_hands_the_tree_s_names_to_the_measurement(tmp_path, monkeypat
 
 # --- what the parent reads back from the child -------------------------------
 #
-# The generated script runs in the child and owns its stdout, so the result line
-# the parent reads is whatever the script chose to print: nothing in it can be
-# trusted to have the shape the child would have given it.
+# A worker on another engine build, or a child that went wrong, can send a line
+# of any shape: nothing in it can be trusted to have the shape this child would
+# have given it.
 
 
-def _forged(payload) -> str:
-    """A script that prints ``payload`` as the child's result and exits first."""
+def _forged(monkeypatch, payload, returncode: int = 0) -> None:
+    """Have the next child run print ``payload`` as its result line and exit with ``returncode``."""
     line = f"{SENTINEL} {payload if isinstance(payload, str) else json.dumps(payload)}"
-    return f"import os, sys\nsys.stdout.write({line!r} + '\\n')\nsys.stdout.flush()\nos._exit(0)\n"
+
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, returncode, stdout=line + "\n", stderr="")
+
+    stand_in = types.SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired)
+    monkeypatch.setattr(worker, "subprocess", stand_in)
 
 
 @pytest.mark.parametrize(
@@ -606,11 +615,26 @@ def _forged(payload) -> str:
     ["[1, 2]", "[" * 100_000 + "]" * 100_000, '{"ok": true, "volume": ' + "1" * 5_000 + "}"],
     ids=["a list", "nesting past the parser", "an integer past the parser"],
 )
-def test_a_result_that_is_not_an_object_is_a_failed_build(line):
+def test_a_result_that_is_not_an_object_is_a_failed_build(monkeypatch, line):
     # The last two raised out of the parser, and so out of run_code.
-    res = run_code(_forged(line))
+    _forged(monkeypatch, line)
+    res = run_code("result = 1\n")
     assert res.ok is False
     assert res.error
+
+
+@pytest.mark.parametrize("returncode", [1, -9], ids=["an error", "a signal"])
+def test_a_success_from_a_child_that_did_not_exit_cleanly_is_a_failed_build(
+    monkeypatch, returncode
+):
+    # A child that reported success exits 0. One that did not finish cleanly
+    # after its line is no success, whatever the line says; one a signal ended
+    # is reported as the no-line case reports it.
+    _forged(monkeypatch, {"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0]}, returncode)
+
+    res = run_code("result = 1\n")
+
+    assert (res.ok, res.timed_out) == (False, returncode < 0)
 
 
 @pytest.mark.parametrize(
@@ -634,10 +658,11 @@ def test_a_result_that_is_not_an_object_is_a_failed_build(line):
         "a number for a path",
     ],
 )
-def test_a_value_that_is_no_reading_comes_back_as_none(field, sent):
+def test_a_value_that_is_no_reading_comes_back_as_none(monkeypatch, field, sent):
     # Each was handed on as it came, and every reader downstream took it for a
     # count, a flag, a measurement or a path.
-    res = run_code(_forged({"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0], field: sent}))
+    _forged(monkeypatch, {"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0], field: sent})
+    res = run_code("result = 1\n")
     assert res.ok is True
     assert getattr(res, field) is None
 
@@ -663,23 +688,25 @@ def test_a_value_that_is_no_reading_comes_back_as_none(field, sent):
         "no volume",
     ],
 )
-def test_a_success_with_no_volume_or_box_it_can_read_is_a_failed_build(result):
+def test_a_success_with_no_volume_or_box_it_can_read_is_a_failed_build(monkeypatch, result):
     # Every success the child reports carries both. Handed on, the first raised
     # out of the reader, the second read a letter to a side, and the rest passed
     # as successes with a reading nobody took, or with none at all.
-    res = run_code(_forged({"ok": True, **result}))
+    _forged(monkeypatch, {"ok": True, **result})
+    res = run_code("result = 1\n")
     assert res.ok is False
 
 
-def test_a_lone_part_whose_box_cannot_be_read_is_refused_on_a_turn_held_to_the_bed():
+def test_a_lone_part_whose_box_cannot_be_read_is_refused_on_a_turn_held_to_the_bed(monkeypatch):
     # Read as a box not measured, a lone part would be handed over without being
     # held to the bed, so a success whose box cannot be read is no success.
     from cadless.pipeline import rebuild
     from cadless.printer_profile import AssemblySpec, BuildVolume
 
     spec = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=0.2)
-    code = _forged({"ok": True, "volume": 1.0, "bbox": [math.nan, 1.0, 1.0], "part_count": 1})
-    assert rebuild(code, assembly=spec).ok is False
+    sent = {"ok": True, "volume": 1.0, "bbox": [math.nan, 1.0, 1.0], "part_count": 1}
+    _forged(monkeypatch, sent)
+    assert rebuild("result = 1\n", assembly=spec).ok is False
 
 
 @pytest.mark.parametrize(
@@ -705,24 +732,27 @@ def test_a_lone_part_whose_box_cannot_be_read_is_refused_on_a_turn_held_to_the_b
         "text in a colour",
     ],
 )
-def test_parts_the_store_would_not_keep_come_back_as_none(parts):
+def test_parts_the_store_would_not_keep_come_back_as_none(monkeypatch, parts):
     # Read by the rule the store files them by, so what a run hands the turn is
     # the list its version will be filed with.
-    res = run_code(_forged({"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0], "parts": parts}))
+    _forged(monkeypatch, {"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0], "parts": parts})
+    res = run_code("result = 1\n")
     assert res.parts is None
 
 
-def test_a_traceback_that_is_not_text_is_left_out_of_the_repair_context():
+def test_a_traceback_that_is_not_text_is_left_out_of_the_repair_context(monkeypatch):
     # The repair prompt strips it as text, and anything else raised there.
-    res = run_code(
-        _forged({"ok": False, "error": "boom", "error_type": "ValueError", "traceback": [1]})
+    _forged(
+        monkeypatch, {"ok": False, "error": "boom", "error_type": "ValueError", "traceback": [1]}
     )
+    res = run_code("result = 1\n")
     assert res.repair_context.error_type == "ValueError"
     assert res.repair_context.last_traceback is None
 
 
-def test_an_error_type_that_is_not_text_is_no_repair_context():
-    res = run_code(_forged({"ok": False, "error": "boom", "error_type": 5}))
+def test_an_error_type_that_is_not_text_is_no_repair_context(monkeypatch):
+    _forged(monkeypatch, {"ok": False, "error": "boom", "error_type": 5})
+    res = run_code("result = 1\n")
     assert res.repair_context is None
 
 
@@ -785,3 +815,111 @@ def test_the_child_refuses_a_part_placed_where_no_coordinate_is_a_number(tmp_pat
     payload = _child(tmp_path, capsys, code)
     assert payload["ok"] is False
     assert payload["error"].startswith("degenerate solid")
+
+
+# --- what the child lets a script reach ----------------------------------------
+#
+# A caller need not have run the gate before it asks for a run, so the child
+# holds a script to the policy itself.
+
+
+def test_the_child_gates_code_its_caller_did_not():
+    res = run_code("g = (x for x in [1])\nresult = g.gi_frame\n")
+
+    assert (res.ok, res.repair_context.error_type) == (False, "ValidationError")
+    assert res.error.startswith("validation: interpreter-internals attribute access")
+    assert res.repair_context.message.startswith("interpreter-internals attribute access")
+
+
+def test_a_script_that_does_not_parse_fails_on_its_line_as_before():
+    res = run_code("result = Box(1, 1,\n")
+
+    assert res.repair_context.error_type == "SyntaxError"
+    assert res.repair_context.offending_line == "result = Box(1, 1,"
+
+
+def test_the_child_hands_a_script_views_not_modules():
+    res = run_code("import build123d\nm = build123d.os\nresult = build123d.Box(1, 1, 1)\n")
+
+    assert res.ok is False
+    assert "has no attribute 'os'" in res.error
+
+
+def test_a_result_that_is_no_shape_is_no_build(tmp_path, capsys, monkeypatch):
+    # Read by duck typing, an object that only looked like a shape reported
+    # whatever it carried: here a volume and a box for a build that made no
+    # geometry. Handed to the child directly, past the gate that keeps a script
+    # from building one, so this holds the child's own check.
+    from types import SimpleNamespace
+
+    from cadless import script_runtime
+
+    def no_solids():
+        raise ValueError("no geometry")
+
+    box = SimpleNamespace(size=SimpleNamespace(X=10.0, Y=10.0, Z=10.0))
+    made = SimpleNamespace(
+        volume=1000.0, bounding_box=lambda: box, solids=no_solids, is_manifold=True
+    )
+    monkeypatch.setattr(script_runtime, "run_script", lambda code, filename: {"result": made})
+
+    payload = _child(tmp_path, capsys, "result = 1\n")
+
+    assert payload["ok"] is False
+    assert "not a shape" in payload["error"]
+
+
+def test_a_builder_handed_over_as_the_result_is_named_with_what_it_built(tmp_path, capsys):
+    code = "from build123d import *\nwith BuildPart() as part:\n    Box(1, 1, 1)\nresult = part\n"
+
+    payload = _child(tmp_path, capsys, code)
+
+    assert (payload["ok"], payload["error_type"]) == (False, "TypeError")
+    assert "assign its .part to `result`" in payload["error"]
+
+
+def test_a_forged_result_line_and_an_exit_never_pass_for_a_build():
+    # Held by several layers at once -- the gate, the namespace, print on
+    # stderr, the child's own line last -- each pinned by its own test; this one
+    # stands for them together and goes red only when they all give way.
+    line = f"{SENTINEL} " + json.dumps({"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0]})
+
+    res = run_code(f"print({line!r})\nraise SystemExit(0)\nresult = 1\n")
+
+    assert res.ok is False
+
+
+def test_a_kernel_message_never_reaches_the_result_line(tmp_path):
+    # The kernel writes its messages to the process's stdout itself, and an
+    # unknown font's name comes back in one: run as run_code runs the child.
+    code_file = tmp_path / "model.py"
+    code_file.write_text(
+        "from build123d import *\nresult = extrude(Text('A', 10, font='MARK-no-such-font'), 1)\n"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "cadless._worker_child", str(code_file)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert "MARK-no-such-font" in proc.stderr
+    assert [line.split(" ", 1)[0] for line in proc.stdout.splitlines()] == [SENTINEL]
+
+
+@pytest.mark.parametrize("stage", ["build", "post-process"])
+def test_the_child_reports_what_ends_a_build_early(tmp_path, capsys, monkeypatch, stage):
+    from cadless import _worker_child, script_runtime
+
+    def leave(*args, **kwargs):
+        raise SystemExit(0)
+
+    if stage == "build":
+        monkeypatch.setattr(script_runtime, "run_script", leave)
+    else:
+        monkeypatch.setattr(_worker_child, "_summarise", leave)
+
+    payload = _child(tmp_path, capsys, "from build123d import *\nresult = Box(1, 1, 1)\n")
+
+    assert (payload["ok"], payload["error_type"]) == (False, "SystemExit")

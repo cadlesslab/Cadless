@@ -131,15 +131,23 @@ subprocess.run([sys.executable, "-m", "cadless._worker_child", ...],
   address range up front, so an address-space cap causes thrashing rather
   than safety. Real memory limits come from the container cgroup
   ([ADR-0003](./adr/0003-three-layer-sandbox.md)).
-- The child executes the (already validated) code, exports artifacts, and
-  reports back over a one-line protocol on stdout: `__VTRESULT__ {json}`.
-- That stdout is the generated code's as well, so the line read back is
-  whatever the code chose to print. The parent reads every field of it as
-  untrusted, as it reads the remote worker's reply: a value that is not what
-  its field holds reads as not measured, never as a reading, and a line that
-  is no result object fails the build, as does a success with no volume and
-  box that can be read. The child refuses an export scale that is no positive
-  finite number before the code runs, and a result whose volume is no positive
+- The child runs the code through `script_runtime.run_script` — the static
+  gate again, whoever validated it before, then the script with allow-listed
+  builtins and views of build123d, `math` and `copy` — exports artifacts, and
+  reports back over a one-line protocol on stdout: `__VTRESULT__ {json}`. A
+  script the gate refuses comes back as a `validation:` failure, as the loop's
+  own refusals do.
+- Stdout carries that line and nothing else: the script's `print` goes to
+  stderr, and the child points everything else written to stdout at stderr,
+  the kernel's own messages included. The parent still reads every field of
+  the line as untrusted, as it reads the remote worker's reply: a value that is
+  not what its field holds reads as not measured, never as a reading, and a
+  line that is no result object fails the build, as does a success with no
+  volume and box that can be read, or a success from a child that did not exit
+  cleanly. The child refuses an export scale that is no positive finite number
+  before the code runs; a script that changed one of build123d's classes, and a
+  `result` that is not a build123d shape, since everything after reads the
+  result through its own methods; and a result whose volume is no positive
   finite number or whose box is not finite before anything reads it: a part
   placed where a coordinate is NaN or infinite leaves the whole a finite
   volume.

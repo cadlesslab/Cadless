@@ -80,6 +80,24 @@ Exits non-zero on any failure.
 For a PoC, isolation is "good enough", not hardened: shared-kernel
 containers, no gVisor/Firecracker. Do not expose this to untrusted users as-is.
 
+## Upgrading
+
+### Past backend 1.5.1: every script runs inside the sandbox
+From the release after 1.5.1, every path that runs a script holds it to the
+code gate where it runs: a new build, re-running a saved version, a rebuild
+with new parameters, catalog step code and the worker service's `/run`.
+Scripts run with an allow-list of builtins and with views of the allowed
+modules rather than the modules themselves.
+
+Stored code that uses what the gate now refuses fails when it is run again or
+rebuilt with new parameters, with no repair round: a class definition, `match`,
+`.format()`, a builtin outside the allow-list, a build123d name outside its
+public list, or setting an attribute other than a part's name, colour or
+placement. Every bundled catalog step and few-shot example passes. Before
+upgrading, run the step scripts of catalog items imported from elsewhere
+through `cadless.validation.validate_code`; regenerate a saved version that
+fails through the chat rather than re-running it.
+
 ## Cutting a release
 The backend and the frontend are released separately, each by merging its own
 release pull request ([ADR-0010](docs/adr/0010-release-pull-request.md)). A

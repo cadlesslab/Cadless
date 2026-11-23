@@ -83,6 +83,24 @@ def test_default_run_hands_a_script_split_and_join():
     assert default_run(code).ok
 
 
+@pytest.mark.parametrize(
+    ("code", "error"),
+    [
+        ("g = (x for x in [1])\nresult = g.gi_frame\n", "refused: interpreter-internals"),
+        (
+            "import build123d\nm = build123d.os\nresult = build123d.Box(1, 1, 1)\n",
+            "runtime: AttributeError",
+        ),
+    ],
+    ids=["the gate", "the views"],
+)
+def test_default_run_runs_a_script_as_the_worker_child_does(code, error):
+    res = default_run(code)
+
+    assert res.ok is False
+    assert res.error.startswith(error)
+
+
 def test_pipeline_eval_is_reachable_from_the_package_root():
     # evalkit's __init__ re-exports run_pipeline_eval as the package's public
     # entry point, and docs/extending/catalog.md imports it from there, so the

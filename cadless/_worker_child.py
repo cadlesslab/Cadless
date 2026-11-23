@@ -1,12 +1,14 @@
 """Child process that executes one generated build123d script.
 
-Invoked as a subprocess by :mod:`cadless.worker`. Reads a code file, executes
-it, computes a geometry summary, optionally exports artifacts, and prints a single
-``__VTRESULT__ {json}`` line to stdout. Kept dependency-light, and side-effect
-free apart from the optional export — which writes one file per solid and first
-removes what an earlier build left of that kind in the same directory, plus one
-GLB and one STEP of the whole for a build of several parts, clearing an earlier
-build's pair by exact name.
+Invoked as a subprocess by :mod:`cadless.worker`. Reads a code file, runs it
+through the gate and the restricted namespace of :mod:`cadless.script_runtime`,
+computes a geometry summary, optionally exports artifacts, and prints a single
+``__VTRESULT__ {json}`` line to stdout -- the only thing it writes there: run as
+a program, it points everything else written to stdout at stderr. Kept
+dependency-light, and side-effect free apart from the optional export — which
+writes one file per solid and first removes what an earlier build left of that
+kind in the same directory, plus one GLB and one STEP of the whole for a build
+of several parts, clearing an earlier build's pair by exact name.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
      [<check_assembly>] [<wall_secs>]
@@ -16,11 +18,17 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 import time
 import traceback
+from typing import TextIO
 
 SENTINEL = "__VTRESULT__"
+
+# Where the result line goes: stdout, unless the program's entry point below has
+# kept stdout for it alone.
+_result_stream: TextIO | None = None
 
 # When this process started: the parent's wall clock runs from about here, so
 # the time left to it is measured from here too.
@@ -29,6 +37,52 @@ _STARTED = time.monotonic()
 # Filename used when compiling the generated script; lets us pick its frames out
 # of a traceback so we can anchor the error on a line of the user's code.
 _GENERATED_FILE = "<generated>"
+
+
+def _emit(payload: dict) -> None:
+    """Write the child's result line where the parent reads it."""
+    stream = _result_stream if _result_stream is not None else sys.stdout
+    stream.write(f"{SENTINEL} {json.dumps(payload)}\n")
+    stream.flush()
+
+
+def _keep_stdout_for_the_result() -> TextIO:
+    """Point fd 1 at stderr, and keep the real stdout for the result line alone.
+
+    The kernel writes its messages to fd 1 itself, and a message can carry text
+    a script chose. Left on stdout, such a line could stand where the parent
+    reads the result -- or after it, from a finalizer run at exit.
+    """
+    sys.stdout.flush()
+    result = os.fdopen(os.dup(1), "w", encoding="utf-8")
+    os.dup2(2, 1)
+    return result
+
+
+def _refusal_payload(reasons: list[str]) -> dict:
+    """A refused script, reported as the pipeline reports its own refusals."""
+    text = "; ".join(reasons)
+    return {
+        "ok": False,
+        "error": f"validation: {text}",
+        "error_type": "ValidationError",
+        "message": text,
+    }
+
+
+def _not_a_shape_payload(result) -> dict:
+    """A ``result`` the child will not measure, reported so a repair can fix it.
+
+    A builder assigned in place of what it built is the usual way to get here,
+    so it is named with the attribute that holds the shape.
+    """
+    kind = type(result).__name__
+    built = getattr(type(result), "_obj_name", None)
+    if isinstance(built, str) and kind.startswith("Build"):
+        message = f"`result` is the {kind} builder, not a shape: assign its .{built} to `result`"
+    else:
+        message = f"`result` is a {kind}, not a shape: assign the model to it"
+    return {"ok": False, "error": message, "error_type": "TypeError", "message": message}
 
 
 def measurement_budget(wall_secs: float, elapsed: float) -> float:
@@ -216,31 +270,41 @@ def main(argv: list[str]) -> int:
         # was exported, and zero or infinity failed in the kernel as if the model
         # were at fault.
         error = f"export scale {argv[3]!r} is not a positive finite number"
-        print(f"{SENTINEL} " + json.dumps({"ok": False, "error": error}))
+        _emit({"ok": False, "error": error})
         return 1
     code = open(code_file).read()  # noqa: S108,SIM115 - trusted path from parent
 
-    from cadless.joinery import script_namespace  # noqa: PLC0415 - lazy, as the exporters are
+    # Lazy, as the exporters are: the parent imports this module for SENTINEL.
+    from cadless.script_runtime import ScriptRefused, run_script  # noqa: PLC0415
 
-    ns = script_namespace()
+    # BaseException, here and below: whatever ends a build early is reported,
+    # rather than ending the process before it can say so.
     try:
-        exec(compile(code, _GENERATED_FILE, "exec"), ns)  # noqa: S102
-    except Exception as exc:  # noqa: BLE001
-        print(f"{SENTINEL} " + json.dumps(_error_payload(exc, code)))
+        ns = run_script(code, _GENERATED_FILE)
+    except ScriptRefused as refused:
+        _emit(_refusal_payload(refused.reasons))
+        return 1
+    except BaseException as exc:  # noqa: BLE001
+        _emit(_error_payload(exc, code))
         return 1
 
     if "result" not in ns:
-        print(f"{SENTINEL} " + json.dumps({"ok": False, "error": "missing `result`"}))
+        _emit({"ok": False, "error": "missing `result`"})
         return 1
 
     result = ns["result"]
+    from build123d.topology import Shape  # noqa: PLC0415 - lazy, as above
+
+    if not isinstance(result, Shape):
+        # Everything below reads the result by duck typing, so an object the
+        # script put together itself would report whatever it chose to.
+        _emit(_not_a_shape_payload(result))
+        return 1
     try:
         summary = _summarise(result)
         problem = _degenerate(summary)
         if problem is not None:
-            print(
-                f"{SENTINEL} " + json.dumps({"ok": False, "error": f"degenerate solid ({problem})"})
-            )
+            _emit({"ok": False, "error": f"degenerate solid ({problem})"})
             return 1
         # Scaled once, above both readers. The export writes millimetres and the
         # assembly checks are against a build volume in millimetres, so measuring
@@ -298,13 +362,14 @@ def main(argv: list[str]) -> int:
             if tree is not None and len(tree.parts) > 1:
                 for kind, path in exporters.export_assembly(tree, export_dir).items():
                     summary[f"{kind}_path"] = path
-    except Exception as exc:  # noqa: BLE001
-        print(f"{SENTINEL} " + json.dumps(_error_payload(exc, code, prefix="post-process: ")))
+    except BaseException as exc:  # noqa: BLE001
+        _emit(_error_payload(exc, code, prefix="post-process: "))
         return 1
 
-    print(f"{SENTINEL} " + json.dumps({"ok": True, **summary}))
+    _emit({"ok": True, **summary})
     return 0
 
 
 if __name__ == "__main__":
+    _result_stream = _keep_stdout_for_the_result()
     sys.exit(main(sys.argv))
