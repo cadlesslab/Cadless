@@ -212,6 +212,11 @@ sound only if nothing else reaches the solid. Whatever runs a leaf must:
 - run it with a fixed string hash seed and without `-O`: a recipe may iterate a
   set of strings, whose order follows the seed, and may hold an `assert`.
 
+The engine does both: `apply_param_overrides` finds the literal by the lines and
+columns Python itself counts, and the worker starts every build's child with
+`PYTHONHASHSEED=0` and without `PYTHONOPTIMIZE`. Both files are among
+`RUN_AND_BAKE_FILES`, so a change to either changes every key.
+
 ## Item keys
 
 `item_key(document)` keys an item document as canonical JSON, without its own

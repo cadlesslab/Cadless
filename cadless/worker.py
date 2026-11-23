@@ -173,6 +173,21 @@ def _limit_resources(cpu_secs: int):
     return _apply
 
 
+def _child_environment() -> dict[str, str]:
+    """The environment a build's child runs in: this process's, made repeatable.
+
+    A script may loop over a set of strings, whose order follows the string hash
+    seed, and may hold an ``assert``, which optimisation strips; with the seed left
+    random and the optimisation level inherited, one script could build a
+    different solid from one run to the next. So the seed is fixed and no
+    optimisation is asked for.
+    """
+    env = dict(os.environ)
+    env["PYTHONHASHSEED"] = "0"
+    env.pop("PYTHONOPTIMIZE", None)
+    return env
+
+
 def run_code(
     code: str,
     *,
@@ -226,6 +241,7 @@ def run_code(
                 text=True,
                 timeout=wall,
                 preexec_fn=preexec,  # noqa: PLW1509 - intentional resource limiting
+                env=_child_environment(),
             )
         except subprocess.TimeoutExpired:
             return ExecResult(

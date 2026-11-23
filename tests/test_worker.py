@@ -908,3 +908,30 @@ def test_the_child_reports_what_ends_a_build_early(tmp_path, capsys, monkeypatch
     payload = _child(tmp_path, capsys, "from build123d import *\nresult = Box(1, 1, 1)\n")
 
     assert (payload["ok"], payload["error_type"]) == (False, "SystemExit")
+
+
+# The first side a loop over a set of strings meets follows the string hash seed;
+# its length sets the box's size, so the volume shows which side came first.
+_SIZED_BY_SET_ORDER = (
+    "from build123d import *\n"
+    "for side in {'left', 'right', 'front', 'back', 'top', 'bottom'}:\n"
+    "    break\n"
+    "result = Box(10 + len(side), 10, 10)\n"
+)
+
+
+def test_a_build_does_not_hang_on_the_hash_seed_it_was_started_under(monkeypatch):
+    volumes = set()
+    for seed in ("1", "2", "3", "4", "5", "random"):
+        monkeypatch.setenv("PYTHONHASHSEED", seed)
+        res = run_code(_SIZED_BY_SET_ORDER)
+        assert res.ok, res.error
+        volumes.add(round(res.volume, 6))
+    assert len(volumes) == 1, volumes
+
+
+def test_a_build_keeps_its_asserts_whatever_the_environment_asks(monkeypatch):
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+    res = run_code("from build123d import *\nassert False, 'kept'\nresult = Box(1, 1, 1)\n")
+    assert not res.ok
+    assert "AssertionError" in res.error

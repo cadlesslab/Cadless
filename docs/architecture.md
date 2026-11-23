@@ -54,7 +54,9 @@ port, bound to loopback.
    execution child enforces static validation itself, so `run_code` refuses
    what the gate refuses whoever called it; a caller that validates first does
    so to have the reasons sooner. Upstream orchestration treats programs as text
-   rather than importing and running them in the API process.
+   rather than importing and running them in the API process. The child runs
+   with a fixed string hash seed and without optimisation, so one script builds
+   one solid from run to run (a loop over a set of strings, an `assert`).
 
    The slicer is the one place that reads a *product* of that execution outside
    the boundary. `cadless/slicing.py` hands the exported mesh to a large
