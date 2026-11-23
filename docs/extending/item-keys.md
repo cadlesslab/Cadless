@@ -57,7 +57,8 @@ dependency, so that no third-party release can change a key.
 
 Every parameter declares one of four types: `float` (lengths and angles), `int`
 (counts), `str` or `bool`. Each value is converted to its declared type before it
-is keyed and before the recipe runs with it (`typed_params` returns those values).
+is keyed, and `typed_params` returns the converted values: the ones a recipe must
+run with, which whatever runs a keyed leaf hands to the engine.
 
 - The names in `params` must be exactly the declared names.
 - An `int` is accepted where a `float` is declared. An integral float such as
@@ -143,7 +144,8 @@ text is parsed again and compared.
 
 How deep a recipe or a value may nest is a fixed limit rather than the
 interpreter's, so a caller a few hundred calls deep gets the same answer as one at
-the top; a caller deeper still meets the interpreter's own limit and is refused.
+the top. A caller deeper still is refused, and only one at the interpreter's very
+limit, with no call left to make, gets the interpreter's own RecursionError.
 
 A syntax warning (an unknown escape such as `'\d'`, for one) changes nothing: it is
 ignored, so a process that turns warnings into errors gets the same text.
@@ -180,7 +182,7 @@ platform=linux-x86_64;runtime=<sha256>;helpers=<sha256 or ->;fonts=-
 | `platform` | `sys.platform` and the machine |
 | `runtime` | the sha256 of the canonical JSON mapping each of `RUN_AND_BAKE_FILES` to the sha256 of its bytes: the whole engine files that run a recipe and bake its solid (the runtime and its allow-list, the code that writes the declared values into the recipe, the worker that starts the run and the child that bakes it), read from beside the module as imported |
 | `helpers` | the same over the `HELPER_SOURCES` files of the helpers named, or `-` for none |
-| `fonts` | `-`: no fonts ship for recipes, so `leaf_key` refuses a recipe that draws text (it loads `Text`, `DimensionLine`, `ExtensionLine`, `TechnicalDrawing`, or a `make_text` attribute): its solid would depend on whichever font the machine finds |
+| `fonts` | `-`: no fonts ship for recipes, so `leaf_key` refuses a recipe that uses `Text`, `DimensionLine`, `ExtensionLine` or `TechnicalDrawing` in any way (by name, as an attribute such as `build123d.Text`, or imported under another name), or a `make_text` attribute: its solid would depend on whichever font the machine finds |
 
 There is no engine version number. A change to the engine's own code that can
 alter a shape changes a hashed file, and a kernel upgrade changes a kernel part,
@@ -225,16 +227,20 @@ sound only if nothing else reaches the solid. Whatever runs a leaf must:
   large integer (the digit limit decides whether that raises), or hold a syntax
   warning (a warning filter can make it an error).
 
-The engine does both: `apply_param_overrides` finds the literal by the lines and
-columns Python itself counts, and the worker starts every build's child with
-`PYTHONHASHSEED=0` and no other `PYTHON*` setting from its environment beyond
-where Python and its packages live. Both files are among `RUN_AND_BAKE_FILES`, so
-a change to either changes every key.
+The engine provides the means for both, and no engine code keys leaves yet:
+`apply_param_overrides` writes the values it is handed exactly into the literal,
+finding it by the lines and columns Python itself counts, so handing it the
+values `typed_params` returns is the caller's part; and the worker starts every
+build's child with `PYTHONHASHSEED=0`, in UTF-8 mode, and with no other
+`PYTHON*` setting from its environment beyond where Python and its packages live.
+Both files are among `RUN_AND_BAKE_FILES`, so a change to either changes every
+key.
 
-A recipe must also not depend on object identity: `repr()` of a function shows
-its address, which differs from one run to the next. The closed-recipe rules are
-to refuse that; until they do, such a recipe is the one way left for a leaf to
-build differently under one key.
+A recipe must also not depend on object identity, which differs from one run to
+the next whatever the hash seed: `repr()` of a function shows its address, and a
+set or a dict of shapes, which hash by identity, orders them differently each
+time. The closed-recipe rules are to refuse that; until they do, such a recipe is
+a way for a leaf to build differently under one key.
 
 ## Item keys
 
@@ -245,13 +251,15 @@ whenever a member's does, to any depth, while a member's own `key` field stays i
 
 ## Closed recipes
 
-Keys assume what the closed-recipe rules will require of a leaf:
+The closed-recipe rules are the allow-list a recipe will have to pass before it
+is keyed; they are not enforced yet. Keys assume what they will require:
 
 - leaves are in millimetres; an item from a metre domain is converted where it
   enters;
 - `math` is allowed beside build123d;
 - text is drawn only in fonts the engine ships, and none ship yet;
-- nothing depends on object identity (`repr()` of a function or an object, `id`).
+- nothing depends on object identity (`repr()` of a function or an object, `id`,
+  the order of a set or a dict of shapes).
 
 ## The API
 
@@ -279,7 +287,8 @@ outcome or `"refused": true`; numbers given as `bits` are IEEE 754 doubles in he
 Leaf cases name their toolchain as text, so their keys do not depend on the rest
 of the machine; a leaf case with a `python` field applies on that Python minor
 version only, and every supported version has its own. `tests/test_item_key.py`
-runs every case; code that calls this module can run them too:
+runs every case for the Python running it; code that calls this module can run
+them too:
 
 ```python
 import json, sys

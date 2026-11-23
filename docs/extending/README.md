@@ -23,8 +23,8 @@ procedures for each.
 
 Eight of these are registries you extend with a single entry, one is a protocol
 you satisfy by writing a class, one is a place to keep your own record, one is a
-library you call rather than extend, and the rest are data or a directory on
-disk. None of them requires touching the pipeline.
+library you call rather than extend, one is the worker itself, and the rest are
+data or a directory on disk. None of them requires touching the pipeline.
 
 ## Adding routes and panels from outside this tree
 

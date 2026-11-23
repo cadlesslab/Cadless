@@ -55,11 +55,10 @@ port, bound to loopback.
    what the gate refuses whoever called it; a caller that validates first does
    so to have the reasons sooner. Upstream orchestration treats programs as text
    rather than importing and running them in the API process. The child runs
-   with a fixed string hash seed and with no other `PYTHON*` setting from the
-   environment beyond where Python and its packages live, so neither can change
-   what a script builds (a loop over a set of strings, an `assert`, the integer
-   digit limit, the warning filters). A script that reads an object's address,
-   through `repr()` of a function, still can.
+   with a fixed string hash seed, in UTF-8 mode, and with no other `PYTHON*`
+   setting from the environment beyond where Python and its packages live, so
+   none of those changes what a script builds (a loop over a set of strings, an
+   `assert`, the integer digit limit, the warning filters, the locale).
 
    The slicer is the one place that reads a *product* of that execution outside
    the boundary. `cadless/slicing.py` hands the exported mesh to a large
@@ -300,7 +299,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    handed over with the verdict on it, and one whose check could not be
    established is not repaired at all. Everything else that succeeds is stored
    as a project version whose source remains available for parameter changes and
-   deterministic rebuilds. The exception to a plain re-run of a version's own
+   rebuilds, which are deterministic unless the script depends on object identity
+   (a function's `repr()`, the order of a set of shapes). The exception to a plain re-run of a version's own
    code is a version in several pieces, or one that turns out to rebuild into
    them: a single file per kind matches none of the pieces recorded, and
    choosing between filing it as one more piece and leaving every recorded piece

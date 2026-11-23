@@ -47,9 +47,6 @@ def _double(bits: str) -> float:
     return struct.unpack(">d", bytes.fromhex(bits))[0]
 
 
-# RFC 8785's own number examples are cases in the vector file, run below.
-
-
 @pytest.mark.parametrize(
     ("value", "text"),
     [(2.0, "2"), (4.5, "4.5"), (0.002, "0.002"), (1e-7, "1e-7"), (1e21, "1e+21"), (-1.0, "-1")],
@@ -162,15 +159,15 @@ def test_keys_are_sorted_by_utf16_code_units_as_in_rfc_8785() -> None:
     # The RFC's own example: by code units the emoji (a surrogate pair starting
     # 0xD83D) sorts before U+FB33, the opposite of code point order.
     value = {
-        "€": "Euro Sign",
+        "\u20ac": "Euro Sign",
         "\r": "Carriage Return",
-        "דּ": "Hebrew Letter Dalet With Dagesh",
+        "\ufb33": "Hebrew Letter Dalet With Dagesh",
         "1": "One",
         "\U0001f600": "Emoji: Grinning Face",
         "\u0080": "Control",
-        "ö": "Latin Small Letter O With Diaeresis",
+        "\u00f6": "Latin Small Letter O With Diaeresis",
     }
-    order = ["\r", "1", "\u0080", "ö", "€", "\U0001f600", "דּ"]
+    order = ["\r", "1", "\u0080", "\u00f6", "\u20ac", "\U0001f600", "\ufb33"]
     expected = "{" + ",".join(f'"{_escaped(k)}":"{value[k]}"' for k in order) + "}"
     assert jcs(value) == expected.encode()
 
@@ -180,8 +177,8 @@ def _escaped(key: str) -> str:
 
 
 def test_strings_escape_only_what_json_requires() -> None:
-    text = 'a"b\\c\b\f\n\r\t\x00\x1fé€/'
-    assert jcs(text) == '"a\\"b\\\\c\\b\\f\\n\\r\\t\\u0000\\u001fé€/"'.encode()
+    text = 'a"b\\c\b\f\n\r\t\x00\x1f\u00e9\u20ac/'
+    assert jcs(text) == '"a\\"b\\\\c\\b\\f\\n\\r\\t\\u0000\\u001f\u00e9\u20ac/"'.encode()
 
 
 def test_a_lone_surrogate_is_refused() -> None:
@@ -330,8 +327,8 @@ def test_typed_params_refuses_what_could_not_be_keyed(params: dict, types: dict)
 
 def test_strings_are_not_normalised() -> None:
     # Precomposed and decomposed forms of the same letter stay two inputs.
-    nfc = canonical_params({"s": "é"}, {"s": "str"})
-    nfd = canonical_params({"s": "é"}, {"s": "str"})
+    nfc = canonical_params({"s": "\u00e9"}, {"s": "str"})
+    nfd = canonical_params({"s": "e\u0301"}, {"s": "str"})
     assert nfc != nfd
 
 
@@ -693,9 +690,13 @@ def test_a_recipe_within_the_limit_gets_a_key_from_a_deep_caller() -> None:
     assert _from_depth(400, lambda: canonical_recipe(_chain(98))) == canonical_recipe(_chain(98))
 
 
+# Calls left free under the interpreter's recursion limit, which an import can
+# raise: too few for either piece of work below, whatever the limit is.
+_HEADROOM = 60
+
+
 def _frames_left() -> int:
-    # How many more calls fit under the interpreter's limit, which importing
-    # build123d raises: these tests leave too few for the work, whatever it is.
+    # How many more calls fit under the interpreter's limit as it stands.
     frame, depth = sys._getframe(), 0
     while frame is not None:
         frame, depth = frame.f_back, depth + 1
@@ -704,12 +705,12 @@ def _frames_left() -> int:
 
 def test_a_caller_too_deep_to_write_the_recipe_back_is_refused() -> None:
     with pytest.raises(ItemKeyError, match="recipe"):
-        _from_depth(_frames_left() - 60, lambda: canonical_recipe(_chain(98)))
+        _from_depth(_frames_left() - _HEADROOM, lambda: canonical_recipe(_chain(98)))
 
 
 def test_a_caller_too_deep_to_write_a_value_is_refused() -> None:
     with pytest.raises(ItemKeyError, match="deep"):
-        _from_depth(_frames_left() - 60, lambda: jcs(_nested(100)))
+        _from_depth(_frames_left() - _HEADROOM, lambda: jcs(_nested(100)))
 
 
 def test_a_recipe_is_text() -> None:
@@ -757,7 +758,8 @@ def test_helpers_called_refuses_a_source_python_cannot_parse() -> None:
 
 
 def test_every_helper_a_script_is_handed_has_its_sources_listed() -> None:
-    # Imported here: joinery imports build123d, which the rest of this file does not need.
+    # Imported here rather than at the top, so the rest of this file runs without
+    # the geometry kernel.
     from cadless.joinery import script_namespace
 
     assert set(HELPER_SOURCES) == set(script_namespace())
@@ -1040,7 +1042,7 @@ def test_the_files_hashed_are_the_ones_beside_the_module_as_imported(tmp_path: P
     _change_one_byte(copy / "params.py")
     (copy / "item_key.py").symlink_to(package / "item_key.py")
     run = subprocess.run(
-        [sys.executable, "-I", "-c", _THROUGH_A_LINK, str(tmp_path)],
+        [sys.executable, "-I", "-B", "-c", _THROUGH_A_LINK, str(tmp_path)],
         capture_output=True,
         text=True,
         timeout=120,
@@ -1072,7 +1074,7 @@ def test_a_kernel_imported_from_files_its_distribution_did_not_install_is_refuse
     (tmp_path / "build123d" / "__init__.py").write_text("")
     root = Path(item_key_module.__file__).parents[1]
     run = subprocess.run(
-        [sys.executable, "-I", "-c", _SHADOWED_KERNEL, str(root), str(tmp_path)],
+        [sys.executable, "-I", "-B", "-c", _SHADOWED_KERNEL, str(root), str(tmp_path)],
         capture_output=True,
         text=True,
         timeout=120,
@@ -1128,7 +1130,7 @@ assert engine == ["cadless.item_key"], engine
 def test_the_module_works_without_importing_the_kernel() -> None:
     root = Path(item_key_module.__file__).parents[1]
     run = subprocess.run(
-        [sys.executable, "-I", "-c", _WITHOUT_KERNEL, str(root), TOOLCHAIN],
+        [sys.executable, "-I", "-B", "-c", _WITHOUT_KERNEL, str(root), TOOLCHAIN],
         capture_output=True,
         text=True,
         timeout=120,
@@ -1214,6 +1216,9 @@ def test_a_leaf_calling_a_helper_is_keyed_on_the_helpers_digest() -> None:
         "line = ExtensionLine([(0, 0), (params['w'], 0)], offset=5)",
         "page = TechnicalDrawing()",
         "draw = Text\nresult = draw('Hi', params['w'])",
+        "from build123d import Text as T\nresult = extrude(T('Hi', params['w']), 2)",
+        "import build123d\nresult = extrude(build123d.Text('Hi', params['w']), 2)",
+        "import build123d as b\nresult = extrude(b.Text('Hi', params['w']), 2)",
     ],
 )
 def test_a_leaf_that_draws_text_gets_no_key(body: str) -> None:
@@ -1221,6 +1226,21 @@ def test_a_leaf_that_draws_text_gets_no_key(body: str) -> None:
     source = f"from build123d import *\nparams = {{'w': 5.0}}\n{body}\n"
     with pytest.raises(ItemKeyError, match="text"):
         leaf_key(source, {"w": 5.0}, {"w": "float"}, TOOLCHAIN)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda: typed_params({"n": 10**5000}, {"n": "bool"}), id="typed-param"),
+        pytest.param(lambda: canonical_pose((10**5000, 0, 0, 0, 0, 0, 1)), id="pose"),
+        pytest.param(lambda: item_key([10**5000]), id="document"),
+        pytest.param(lambda: toolchain_identity(10**5000), id="helpers"),
+    ],
+)
+def test_a_refusal_shows_an_integer_too_long_to_print_without_failing(call) -> None:
+    # repr() of an integer past the interpreter's digit limit raises ValueError.
+    with pytest.raises(ItemKeyError, match="too long to show"):
+        call()
 
 
 def test_a_leaf_naming_text_only_inside_a_string_gets_a_key() -> None:

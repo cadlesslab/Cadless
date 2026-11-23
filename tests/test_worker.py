@@ -920,7 +920,7 @@ _SIZED_BY_SET_ORDER = (
 )
 
 
-def test_a_build_does_not_hang_on_the_hash_seed_it_was_started_under(monkeypatch):
+def test_a_build_does_not_depend_on_the_hash_seed_it_was_started_under(monkeypatch):
     volumes = set()
     for seed in ("1", "2", "3", "4", "5", "random"):
         monkeypatch.setenv("PYTHONHASHSEED", seed)
@@ -937,7 +937,7 @@ def test_a_build_keeps_its_asserts_whatever_the_environment_asks(monkeypatch):
     assert "AssertionError" in res.error
 
 
-def test_a_build_does_not_hang_on_the_digit_limit_it_was_started_under(monkeypatch):
+def test_a_build_does_not_depend_on_the_digit_limit_it_was_started_under(monkeypatch):
     # str() of a 5,001-digit integer raises under the default limit, not under 0.
     code = (
         "from build123d import *\n"
@@ -963,3 +963,39 @@ def test_a_build_does_not_fail_on_warnings_the_environment_turns_into_errors(mon
     monkeypatch.setenv("PYTHONWARNINGS", "error")
     res = run_code("from build123d import *\nlabel = '\\d'\nresult = Box(1, 1, 1)\n")
     assert res.ok, res.error
+
+
+def test_a_build_reads_its_script_as_written_whatever_the_locale(monkeypatch):
+    # Under a Latin-1 locale the child would read the two UTF-8 bytes of the accented
+    # letter as two characters, and the string would have five.
+    monkeypatch.setenv("LC_ALL", "en_US.ISO8859-1")
+    monkeypatch.setenv("LANG", "en_US.ISO8859-1")
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    res = run_code('from build123d import *\nresult = Box(len("caf\u00e9"), 1, 1)\n')
+    assert res.ok, res.error
+    assert res.volume == pytest.approx(4.0)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUSERBASE",
+        "PYTHONNOUSERSITE",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPYCACHEPREFIX",
+    ],
+)
+def test_the_child_keeps_where_python_and_its_packages_live(monkeypatch, name):
+    monkeypatch.setenv(name, "/kept")
+    assert worker._child_environment()[name] == "/kept"
+
+
+def test_the_child_gets_no_other_python_setting_and_fixed_ones_in_their_place(monkeypatch):
+    monkeypatch.setenv("PYTHONINSPECT", "1")
+    monkeypatch.setenv("PYTHONHASHSEED", "7")
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    env = worker._child_environment()
+    assert "PYTHONINSPECT" not in env
+    assert (env["PYTHONHASHSEED"], env["PYTHONUTF8"]) == ("0", "1")
