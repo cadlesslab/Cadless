@@ -693,14 +693,23 @@ def test_a_recipe_within_the_limit_gets_a_key_from_a_deep_caller() -> None:
     assert _from_depth(400, lambda: canonical_recipe(_chain(98))) == canonical_recipe(_chain(98))
 
 
+def _frames_left() -> int:
+    # How many more calls fit under the interpreter's limit, which importing
+    # build123d raises: these tests leave too few for the work, whatever it is.
+    frame, depth = sys._getframe(), 0
+    while frame is not None:
+        frame, depth = frame.f_back, depth + 1
+    return sys.getrecursionlimit() - depth
+
+
 def test_a_caller_too_deep_to_write_the_recipe_back_is_refused() -> None:
     with pytest.raises(ItemKeyError, match="recipe"):
-        _from_depth(900, lambda: canonical_recipe(_chain(98)))
+        _from_depth(_frames_left() - 60, lambda: canonical_recipe(_chain(98)))
 
 
 def test_a_caller_too_deep_to_write_a_value_is_refused() -> None:
     with pytest.raises(ItemKeyError, match="deep"):
-        _from_depth(900, lambda: jcs(_nested(100)))
+        _from_depth(_frames_left() - 60, lambda: jcs(_nested(100)))
 
 
 def test_a_recipe_is_text() -> None:
