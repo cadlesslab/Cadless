@@ -311,7 +311,7 @@ _DRAWS_TEXT_ATTRIBUTES = frozenset({"make_text", "make_triad", "symbol"})
 #: module whose bytes a leaf calling that helper is keyed on: the helper's module
 #: and every engine module it imports.
 HELPER_SOURCES: Mapping[str, tuple[str, ...]] = MappingProxyType(
-    {"split_and_join": ("joinery.py", "printer_profile.py")}
+    {"split_and_join": ("joinery.py", "joint_sizes.py", "printer_profile.py")}
 )
 
 

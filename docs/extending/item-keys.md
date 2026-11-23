@@ -319,5 +319,7 @@ so it ships as a new definitions version, never inside the current one:
 - [ ] Say in the release notes that keys of the old version are not comparable
       with the new ones, so stored items need re-keying.
 
-Adding a helper is not a definitions change, but it needs its `HELPER_SOURCES`
-entry; the tests fail until it has one.
+Adding a helper is not a definitions change, and neither is an engine module that
+a helper's source starts to import: each needs its place in `HELPER_SOURCES`, and
+the tests fail until it has one. A file that joins the hashed ones moves the keys
+it reaches, as a change to a hashed file's bytes does.

@@ -868,7 +868,7 @@ def test_an_engine_file_that_is_not_hashed_changes_nothing(engine_copy: Path) ->
     assert toolchain_identity({"split_and_join"}) == before
 
 
-@pytest.mark.parametrize("name", ["joinery.py", "printer_profile.py"])
+@pytest.mark.parametrize("name", ["joinery.py", "joint_sizes.py", "printer_profile.py"])
 def test_a_helpers_source_changes_only_the_leaves_that_call_it(
     engine_copy: Path, name: str
 ) -> None:
@@ -960,7 +960,7 @@ def test_a_hashed_file_that_cannot_be_read_is_refused(engine_copy: Path) -> None
         toolchain_identity()
 
 
-# Asks for a toolchain that calls split_and_join while both of its source files are
+# Asks for a toolchain that calls split_and_join while all of its source files are
 # missing; argv[1] is the source tree, argv[2] a directory holding the other files.
 _HELPERS_MISSING = """
 import sys
