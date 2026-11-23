@@ -66,7 +66,7 @@ def _refused_when_too_deep(function):
     return refusing
 
 
-# The most of a caller's value a refusal quotes.
+# The most of a caller's value or source a refusal quotes.
 _SHOWN_LENGTH = 120
 
 
@@ -78,6 +78,10 @@ def _shown(value: object) -> str:
         text = repr(value)
     except Exception:
         return f"<a value of type {type(value).__name__} that cannot be shown>"
+    return _cut(text)
+
+
+def _cut(text: str) -> str:
     return text if len(text) <= _SHOWN_LENGTH else text[: _SHOWN_LENGTH - 3] + "..."
 
 
@@ -371,9 +375,10 @@ def _parse_recipe(source: object) -> ast.Module:
             # turns warnings into errors must not turn the recipe into a refusal.
             warnings.simplefilter("ignore")
             return ast.parse(source)
-    except (SyntaxError, ValueError, RecursionError) as error:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as error:
         # A null byte raises SyntaxError, a lone surrogate UnicodeEncodeError (a
-        # ValueError), and nesting past the interpreter's limit RecursionError.
+        # ValueError), nesting past the interpreter's limit RecursionError, and
+        # syntax chained past the parser's own stack MemoryError.
         raise ItemKeyError(f"cannot parse the recipe: {error}") from error
 
 
@@ -431,19 +436,22 @@ def _blank_params_literal(tree: ast.Module) -> tuple[str, ...]:
     if _binds_params_elsewhere(tree, node.targets[0]):
         raise ItemKeyError("the recipe binds params outside its params literal; bind it only there")
     names: list[str] = []
+    seen: set[str] = set()
     for key, value in zip(node.value.keys, node.value.values, strict=True):
         if key is None:
             raise ItemKeyError("the params literal unpacks another mapping; write each name out")
         name, default = _literal(key, "name"), _literal(value, "value")
         if not isinstance(name, str):
-            raise ItemKeyError(f"params name {ast.unparse(key)} is not a string")
-        if name in names:
+            raise ItemKeyError(f"params name {_cut(ast.unparse(key))} is not a string")
+        if name in seen:
             raise ItemKeyError(f"params name {_shown(name)} appears twice in the params literal")
         if not isinstance(default, _PARAM_VALUE_TYPES):
             raise ItemKeyError(
-                f"params value {ast.unparse(value)} of {_shown(name)} is not a number, string or bool"
+                f"params value {_cut(ast.unparse(value))} of {_shown(name)} "
+                "is not a number, string or bool"
             )
         names.append(name)
+        seen.add(name)
     blank = ast.Assign(
         targets=[ast.Name(id=_PARAMS_NAME, ctx=ast.Store())],
         value=ast.Dict(
@@ -459,7 +467,7 @@ def _literal(node: ast.expr, what: str) -> object:
     try:
         return ast.literal_eval(node)
     except (ValueError, TypeError) as error:  # not a literal; an unhashable member
-        raise ItemKeyError(f"params {what} {ast.unparse(node)} is not a literal") from error
+        raise ItemKeyError(f"params {what} {_cut(ast.unparse(node))} is not a literal") from error
 
 
 def _binds_params(target: ast.expr) -> bool:

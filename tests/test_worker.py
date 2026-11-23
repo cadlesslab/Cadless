@@ -1016,6 +1016,7 @@ def test_a_script_that_is_not_utf8_text_is_refused_rather_than_raised():
         "PYTHONNOUSERSITE",
         "PYTHONDONTWRITEBYTECODE",
         "PYTHONPYCACHEPREFIX",
+        "PYTHONSAFEPATH",
     ],
 )
 def test_the_child_keeps_where_python_and_its_packages_live(monkeypatch, name):

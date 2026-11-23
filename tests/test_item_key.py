@@ -15,6 +15,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import warnings
 from collections.abc import Callable
 from importlib import metadata
@@ -1262,6 +1263,47 @@ def test_a_refusal_quotes_only_the_start_of_a_long_value() -> None:
     with pytest.raises(ItemKeyError, match="surrogate") as refused:
         jcs("\ud800" + "x" * 100_000)
     assert len(str(refused.value)) < 1_000
+
+
+_LONG = ", ".join(["1"] * 50_000)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(f"params = {{'w': [{_LONG}]}}\n", id="value-not-a-number"),
+        pytest.param(f"params = {{({_LONG}): 2}}\n", id="name-not-a-string"),
+        pytest.param(f"params = {{'w': f({_LONG})}}\n", id="value-not-a-literal"),
+    ],
+)
+def test_a_refusal_quotes_only_the_start_of_long_recipe_source(source: str) -> None:
+    with pytest.raises(ItemKeyError, match="params") as refused:
+        canonical_recipe(source)
+    assert len(str(refused.value)) < 1_000
+
+
+@pytest.mark.parametrize("read", [canonical_recipe, helpers_called], ids=["recipe", "helpers"])
+def test_a_recipe_too_deeply_chained_for_the_parser_is_refused(read) -> None:
+    # The parser runs out of its own stack on this and says so with MemoryError.
+    with pytest.raises(ItemKeyError, match="cannot parse"):
+        read("params = {}\ny = " + "lambda: " * 3000 + "1\n")
+
+
+def _canonical_recipe_time(names: int) -> float:
+    source = "params = {" + ", ".join(f"'p{i}': {i}" for i in range(names)) + "}\n"
+    best = math.inf
+    for _ in range(3):
+        start = time.perf_counter()
+        canonical_recipe(source)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def test_a_recipe_with_many_params_is_read_in_time_linear_in_their_number() -> None:
+    # A ratio within one process, so a slower machine slows both sides alike: four
+    # times the names takes about four times as long, where a quadratic scan takes
+    # sixteen.
+    assert _canonical_recipe_time(40_000) < 8 * _canonical_recipe_time(10_000)
 
 
 def test_every_public_function_is_refused_rather_than_left_too_deep() -> None:
