@@ -1274,6 +1274,19 @@ def test_a_refusal_survives_a_declared_type_that_cannot_be_printed() -> None:
         typed_params({"w": "text"}, {"w": _UnprintableType("float")})
 
 
+class _EqualOnlyToFloat(str):
+    def __eq__(self, other: object) -> bool:
+        return other == "float"
+
+    __hash__ = str.__hash__
+
+
+def test_canonical_params_name_the_type_a_value_was_converted_to() -> None:
+    # Typed as a float, so keyed as one, whatever the declared object's characters.
+    declared = canonical_params({"n": 5}, {"n": _EqualOnlyToFloat("int")})
+    assert declared == canonical_params({"n": 5}, {"n": "float"})
+
+
 def test_a_refusal_of_declared_names_survives_a_name_whose_repr_raises() -> None:
     extra = _UnshowableName("extra")
     with pytest.raises(ItemKeyError, match="declared params"):
@@ -1352,16 +1365,17 @@ def _canonical_recipe_time(names: int) -> float:
     source = "params = {" + ", ".join(f"'p{i}': {i}" for i in range(names)) + "}\n"
     best = math.inf
     for _ in range(3):
-        start = time.perf_counter()
+        start = time.process_time()
         canonical_recipe(source)
-        best = min(best, time.perf_counter() - start)
+        best = min(best, time.process_time() - start)
     return best
 
 
 def test_a_recipe_with_many_params_is_read_in_time_linear_in_their_number() -> None:
-    # A ratio within one process, so a slower machine slows both sides alike. With
-    # eight times the names, a linear scan takes about eight times as long and a
-    # quadratic one several times more; the bound sits between the two.
+    # A ratio of this process's CPU time, so neither a slower machine nor time spent
+    # waiting for a core moves it. With eight times the names, a linear scan takes
+    # about eight times as long and a quadratic one several times more; the bound
+    # sits between the two.
     assert _canonical_recipe_time(40_000) < 17 * _canonical_recipe_time(5_000)
 
 

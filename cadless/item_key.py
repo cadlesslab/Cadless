@@ -130,6 +130,27 @@ def typed_params(params: Mapping[str, object], types: Mapping[str, str]) -> dict
     undeclared name, an unknown type, a value that does not fit its type, or a name
     or value canonical JSON cannot write (so every value returned can be keyed).
     """
+    return {name: value for name, (_, value) in _typed_with_kinds(params, types).items()}
+
+
+@_refused_when_too_deep
+def canonical_params(params: Mapping[str, object], types: Mapping[str, str]) -> bytes:
+    """``params`` under their declared ``types``, as canonical JSON.
+
+    The values are those ``typed_params`` returns, each written beside the type it
+    was converted to, since canonical JSON writes 4 and 4.0 alike. Raises as
+    ``typed_params``.
+    """
+    typed = _typed_with_kinds(params, types)
+    return jcs({name: {"type": kind, "value": value} for name, (kind, value) in typed.items()})
+
+
+def _typed_with_kinds(
+    params: Mapping[str, object], types: Mapping[str, str]
+) -> dict[str, tuple[str, object]]:
+    # Each typed value beside the engine's own string for its type. A caller's
+    # declared object is compared once and never formatted or written, so a key
+    # names the conversion that was made.
     if not isinstance(params, Mapping) or not isinstance(types, Mapping):
         raise ItemKeyError("params and types are each a mapping from parameter names")
     for name in params:
@@ -137,28 +158,17 @@ def typed_params(params: Mapping[str, object], types: Mapping[str, str]) -> dict
             raise ItemKeyError(f"parameter {_shown(name)} has no declared type")
     typed = {}
     for name, declared in types.items():
-        if declared not in PARAM_TYPES:
+        kind = next((known for known in PARAM_TYPES if known == declared), None)
+        if kind is None:
             raise ItemKeyError(
                 f"parameter {_shown(name)} declares type {_shown(declared)}, not one of {PARAM_TYPES}"
             )
-        # The module's own string from here on, whatever equal object was declared.
-        kind = PARAM_TYPES[PARAM_TYPES.index(declared)]
         if name not in params:
             raise ItemKeyError(f"parameter {_shown(name)} is declared but has no value")
-        typed[name] = _typed(name, params[name], kind)
-    jcs(typed)  # a non-string name, an integer no double holds, a lone surrogate
+        typed[name] = (kind, _typed(name, params[name], kind))
+    # Refuses a non-string name, an integer no double holds, a lone surrogate.
+    jcs({name: value for name, (_, value) in typed.items()})
     return typed
-
-
-@_refused_when_too_deep
-def canonical_params(params: Mapping[str, object], types: Mapping[str, str]) -> bytes:
-    """``params`` under their declared ``types``, as canonical JSON.
-
-    The values are those ``typed_params`` returns, each written beside its declared
-    type, since canonical JSON writes 4 and 4.0 alike. Raises as ``typed_params``.
-    """
-    typed = typed_params(params, types)
-    return jcs({name: {"type": types[name], "value": value} for name, value in typed.items()})
 
 
 def _typed(name: str, value: object, declared: str) -> object:
