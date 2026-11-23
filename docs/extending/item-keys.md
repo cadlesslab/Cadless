@@ -182,7 +182,7 @@ platform=linux-x86_64;runtime=<sha256>;helpers=<sha256 or ->;fonts=-
 | `platform` | `sys.platform` and the machine |
 | `runtime` | the sha256 of the canonical JSON mapping each of `RUN_AND_BAKE_FILES` to the sha256 of its bytes: the whole engine files that run a recipe and bake its solid (the runtime and its allow-list, the code that writes the declared values into the recipe, the worker that starts the run, the child that bakes it, and the tree that places and scales a build's parts), read from beside the module as imported |
 | `helpers` | the same over the `HELPER_SOURCES` files of the helpers named, or `-` for none |
-| `fonts` | `-`: no fonts ship for recipes, so `leaf_key` refuses a recipe that uses `Text`, `DimensionLine`, `ExtensionLine` or `TechnicalDrawing` (by name, as an attribute such as `build123d.Text`, or through an import under another name), or a `make_text`, `make_triad` or `symbol` attribute: its solid would depend on whichever font the machine finds. The last two draw in a font build123d bundles, but build123d adds its copy only where the machine has no font of that family, so what they draw depends on the machine as well |
+| `fonts` | `-`: no fonts ship for recipes, so `leaf_key` refuses a recipe that uses `Text`, `DimensionLine`, `ExtensionLine` or `TechnicalDrawing` (by name, as an attribute such as `build123d.Text`, or through an import under another name), or a `make_text`, `make_triad` or `symbol` attribute: its solid would depend on whichever font the machine finds. `make_triad` and the symbol of a rigid or ball joint draw letters in the font build123d bundles, which it registers without overriding a font of that family already installed, so what they draw depends on the machine as well; every `symbol` is refused, since the name cannot say whose it is |
 
 There is no engine version number. A change to the engine's own code that can
 alter a shape changes a hashed file, and a kernel upgrade changes a kernel part,
@@ -239,8 +239,9 @@ key.
 
 A recipe must also not depend on object identity, which differs from one run to
 the next whatever the hash seed: `repr()` of a function shows its address, and a
-set of shapes, which hash by identity, orders them differently each time. The closed-recipe rules are to refuse that; until they do, such a recipe is
-a way for a leaf to build differently under one key.
+set of shapes, which hash by identity, orders them differently each time. The
+closed-recipe rules are to refuse that; until they do, such a recipe is a way
+for a leaf to build differently under one key.
 
 ## Item keys
 

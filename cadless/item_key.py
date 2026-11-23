@@ -287,9 +287,10 @@ _HUGE_INTEGER = 10**640
 
 # The build123d names and attributes that draw text. Text needs a font, and no
 # font ships with the engine for recipes, so a leaf that draws text has nothing in
-# its key to say which font built it. make_triad and a joint's symbol draw their
-# letters in a font build123d bundles, but build123d adds its copy only where the
-# machine has no font of that family, so what they draw depends on the machine too.
+# its key to say which font built it. make_triad and the symbol of a rigid or ball
+# joint draw letters in the font build123d bundles, which it registers without
+# overriding a font of that family already installed, so what they draw depends on
+# the machine too. Every symbol is refused, since the name cannot say whose it is.
 _DRAWS_TEXT = frozenset({"Text", "DimensionLine", "ExtensionLine", "TechnicalDrawing"})
 _DRAWS_TEXT_ATTRIBUTES = frozenset({"make_text", "make_triad", "symbol"})
 
@@ -684,7 +685,7 @@ def leaf_key(
     if undeclared or absent:
         raise ItemKeyError(
             "the declared params must be the names in the recipe's params literal: "
-            f"undeclared {undeclared}, not in the literal {absent}"
+            f"undeclared {_shown(undeclared)}, not in the literal {_shown(absent)}"
         )
     return hashlib.sha256(
         b"\x00".join([recipe, canonical, _toolchain(toolchain, source)])

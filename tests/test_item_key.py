@@ -1228,7 +1228,7 @@ def test_a_leaf_calling_a_helper_is_keyed_on_the_helpers_digest() -> None:
 def test_a_leaf_that_draws_text_gets_no_key(body: str) -> None:
     # No font ships with the engine for recipes, so the key could not say which drew it.
     source = f"from build123d import *\nparams = {{'w': 5.0}}\n{body}\n"
-    with pytest.raises(ItemKeyError, match="text"):
+    with pytest.raises(ItemKeyError, match="draws text"):
         leaf_key(source, {"w": 5.0}, {"w": "float"}, TOOLCHAIN)
 
 
@@ -1259,6 +1259,22 @@ def test_a_refusal_survives_a_value_whose_repr_raises() -> None:
         typed_params({"flag": _Unshowable(1.0)}, {"flag": "bool"})
 
 
+class _UnshowableName(str):
+    def __repr__(self) -> str:
+        raise RuntimeError("no")
+
+
+def test_a_refusal_of_declared_names_survives_a_name_whose_repr_raises() -> None:
+    extra = _UnshowableName("extra")
+    with pytest.raises(ItemKeyError, match="declared params"):
+        leaf_key(
+            PLATE,
+            {**PLATE_PARAMS, extra: 1.0},
+            {**PLATE_TYPES, extra: "float"},
+            TOOLCHAIN,
+        )
+
+
 @pytest.mark.parametrize(
     ("call", "says"),
     [
@@ -1269,6 +1285,26 @@ def test_a_refusal_survives_a_value_whose_repr_raises() -> None:
             ),
             "Python",
             id="toolchain-python",
+        ),
+        pytest.param(
+            lambda: leaf_key(
+                PLATE,
+                {**PLATE_PARAMS, **{f"n{i}": 1.0 for i in range(10_000)}},
+                {**PLATE_TYPES, **{f"n{i}": "float" for i in range(10_000)}},
+                TOOLCHAIN,
+            ),
+            "declared params",
+            id="declared-names",
+        ),
+        pytest.param(
+            lambda: leaf_key(
+                "params = {" + ", ".join(f"'n{i}': 1.0" for i in range(10_000)) + "}\n",
+                {},
+                {},
+                TOOLCHAIN,
+            ),
+            "declared params",
+            id="undeclared-names",
         ),
     ],
 )

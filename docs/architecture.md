@@ -56,10 +56,10 @@ port, bound to loopback.
    so to have the reasons sooner. Upstream orchestration treats programs as text
    rather than importing and running them in the API process. The child runs
    with a fixed string hash seed, in UTF-8 mode, and with no other `PYTHON*`
-   setting from the environment beyond where Python, its packages and its bytecode
-   live, so
-   none of those changes what a script builds (a loop over a set of strings, an
-   `assert`, the integer digit limit, the warning filters, the locale).
+   setting from the environment beyond where Python, its packages and its
+   bytecode live, so none of those changes what a script builds (a loop over a
+   set of strings, an `assert`, the integer digit limit, the warning filters,
+   the locale).
 
    The slicer is the one place that reads a *product* of that execution outside
    the boundary. `cadless/slicing.py` hands the exported mesh to a large
@@ -302,10 +302,11 @@ candidate judging, the identity seam and the image decisions are recorded under
    as a project version whose source remains available for parameter changes and
    rebuilds, which are deterministic unless the script depends on object identity
    (a function's `repr()`, the order of a set of shapes). The exception to a plain
-   re-run of a version's own code is a version in several pieces, or one that turns out to rebuild into
-   them: a single file per kind matches none of the pieces recorded, and
-   choosing between filing it as one more piece and leaving every recorded piece
-   stale would be inventing a contract rather than reading one. The second case
+   re-run of a version's own code is a version in several pieces, or one that
+   turns out to rebuild into them: a single file per kind matches none of the
+   pieces recorded, and choosing between filing it as one more piece and leaving
+   every recorded piece stale would be inventing a contract rather than reading
+   one. The second case
    is knowable only after rebuilding — a version recorded before a build could
    hold several files of a kind has one row per kind whatever its geometry — so
    a rebuild runs into a staging directory and is discarded there. A version's

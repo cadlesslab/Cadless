@@ -47,11 +47,11 @@ _SETTINGS_ATTR: dict[str, str] = {
 }
 # Engine tuning knobs. Same no-restart apply as the plain fields, but **never
 # exported to the environment**: `cadless/worker.py` runs generated code in a
-# subprocess that inherits this process's environment, less its PYTHON* settings,
-# so everything else exported here reaches the process that executes untrusted
-# geometry. A vendor key earns
-# that export because the SDK has no other way to receive it; a tuning value
-# earns nothing by it, and the child has no use for one.
+# subprocess that inherits this process's environment, less most of its PYTHON*
+# settings, so everything else exported here reaches the process that executes
+# untrusted geometry. A vendor key earns that export because the SDK has no other
+# way to receive it; a tuning value earns nothing by it, and the child has no use
+# for one.
 #
 # Each still names a variable, because an operator may pin one at launch and env
 # must keep winning. The name is derived rather than spelled out: `Settings` is a

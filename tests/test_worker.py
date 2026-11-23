@@ -970,9 +970,12 @@ def _locale_installed(name: str) -> bool:
     return subprocess.run([sys.executable, "-c", probe], capture_output=True).returncode == 0
 
 
-@pytest.mark.skipif(
+_needs_latin1 = pytest.mark.skipif(
     not _locale_installed("en_US.ISO8859-1"), reason="needs the en_US.ISO8859-1 locale"
 )
+
+
+@_needs_latin1
 def test_a_build_reads_its_script_as_written_whatever_the_locale(monkeypatch):
     # Under a Latin-1 locale the child would read the two UTF-8 bytes of the accented
     # letter as two characters, and the string would have five.
@@ -985,9 +988,7 @@ def test_a_build_reads_its_script_as_written_whatever_the_locale(monkeypatch):
 
 
 @pytest.mark.skipif(sys.flags.utf8_mode, reason="UTF-8 mode ignores the locale")
-@pytest.mark.skipif(
-    not _locale_installed("en_US.ISO8859-1"), reason="needs the en_US.ISO8859-1 locale"
-)
+@_needs_latin1
 def test_a_build_writes_its_script_as_utf8_whatever_this_process_locale():
     import locale
 
