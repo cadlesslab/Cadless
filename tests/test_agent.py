@@ -1512,6 +1512,19 @@ def test_the_operating_instructions_say_to_pass_the_stated_size_unchanged():
     assert "on an assembly turn a model larger than the bed is split" in prompt
 
 
+def test_the_operating_instructions_keep_split_and_join_in_an_assembly_s_script():
+    # Never told of the helper, the orchestrator once asked an edit to "replace the
+    # two split_and_join calls (which don't exist in build123d)", and the parts it
+    # had split came back whole and over the bed.
+    from cadless.agent import build_agent_system_prompt
+
+    prompt = " ".join(build_agent_system_prompt().split())
+    assert "an assembly's seams are made with `split_and_join`" in prompt
+    assert "every build script is given it, and it is not part of build123d" in prompt
+    assert "never ask for it to be removed or replaced" in prompt
+    assert "ask for a new seam to be made with it" in prompt
+
+
 def test_the_build_tools_take_a_proportional_resize_from_the_measured_size():
     tool = next(t for t in build_tools() if t.name == "edit_model")
     description = " ".join(tool.input_schema["properties"]["requested_mm"]["description"].split())

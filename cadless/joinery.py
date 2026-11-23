@@ -13,7 +13,8 @@ Scripts are handed :func:`split_and_join` in the globals :func:`script_namespace
 gives them rather than importing this module, so the import allow-list stays as
 it is. Handing a name over is no wall around the module behind it, so this one
 is written as if a script could reach whatever it holds: it imports nothing
-beyond build123d, the standard library and the printer profile's limits.
+beyond build123d, the standard library, the printer profile's limits and the
+joint sizes it builds to.
 """
 
 from __future__ import annotations
@@ -37,24 +38,25 @@ from build123d import (
     extrude,
 )
 
+from cadless.joint_sizes import (
+    DEPTH_PER_ROOT,
+    EDGE_PRECISION_MM,
+    FLANK_DEGREES,
+    PEG_LEAST,
+    PEG_MOST,
+    ROOT_LEAST,
+    ROOT_MOST,
+    RUN_LEAST,
+    dovetail_reach,
+    margin_mm,
+    stated_band_mm,
+    stated_spot_mm,
+)
 from cadless.printer_profile import PRINTER_PROFILE_LIMITS
 
-#: Off square, each flank of a dovetail: enough to lock the halves across the
-#: seam. Swept along an upright axis, a dovetail prints without support; along a
-#: level one, how its flanks print depends on how the part lies on the bed.
-_FLANK_DEGREES = 15.0
-#: A dovetail's root, across the seam, at most and at least (mm). Below the least
-#: it is too weak to hold the halves together.
-_ROOT_MOST, _ROOT_LEAST = 20.0, 3.0
-#: How deep a dovetail reaches into the other half, per unit of its root.
-_DEPTH_PER_ROOT = 0.6
-#: A peg's diameter, at most and at least (mm).
-_PEG_MOST, _PEG_LEAST = 8.0, 3.0
 #: Where a peg's flat side stands from its axis, as a share of its radius: enough
 #: to stop the halves turning about the peg, little enough to keep most of it.
 _FLAT = 0.5
-#: The shortest a joint may run along the axis the half goes in (mm).
-_RUN_LEAST = 3.0
 #: Joints per seam, at most: a second, as far from the first as the face allows,
 #: shares the load and holds the seam closed at both ends.
 _JOINTS_MOST = 2
@@ -66,6 +68,9 @@ _SAMPLES = 240
 _SAME_RUN = 1e-3
 #: Steps along each side of a cut face when looking for room for a peg.
 _GRID = 24
+#: The roomiest grid points moved on to the most room near them: enough for two
+#: pegs apart from each other along a wall, without walking every point.
+_SPOTS_REFINED = 8
 #: Places tried along one band of the cut face, at most, half a joint's reach
 #: apart: enough to find room between features near either end without trying
 #: every sample.
@@ -159,7 +164,7 @@ def split_and_join(
         )
     behind, ahead = _halves(_one_solid(part), plane, where)
     section = _section(behind, ahead, plane)
-    margin = max(1.0, 2 * clearance)
+    margin = margin_mm(clearance)
     blocked = placed = False
     if across <= _EPS:
         joints, blocked, placed = _dovetails(section, plane, axis, ahead, clearance, margin)
@@ -172,11 +177,10 @@ def split_and_join(
             "it; insert along another axis, or move the seam"
         )
     if not joints:
-        least = _ROOT_LEAST if across <= _EPS else _PEG_LEAST
         raise JoineryError(
-            f"{where}: no place on the cut face is solid enough for a joint {least:g} mm "
-            f"across with {margin:g} mm to spare along {_name(axis)}; make the wall thicker "
-            "there, move the seam, or insert along another axis"
+            f"{where}: no place on the cut face is solid enough for a joint: "
+            + _room_needed(across, axis, clearance)
+            + "; otherwise move the seam, or insert along another axis"
             + ("" if placed else _pegs_instead(across, section, plane, ahead, clearance, margin))
         )
     for tab, socket in joints:
@@ -185,6 +189,38 @@ def split_and_join(
     first, second = names or (f"{part.label or 'part'} 1", f"{part.label or 'part'} 2")
     behind.label, ahead.label = first, second
     return behind, ahead
+
+
+def _room_needed(across: float, axis: Vector, clearance: float) -> str:
+    """What a joint needs of the cut face, and how a part is made to give it.
+
+    Stated as the whole joint's room -- its least root or diameter with the
+    socket's flanks, clearance and margin -- because the root alone with its
+    margin read as a far narrower wall than any joint fits, and shells were made
+    that thin. Rounded up, so a part made to the figure takes the joint. A hollow
+    part is told where its room can be: a wall that thick running along the axis,
+    or, only where the part is open on one side, the top or floor opposite the
+    opening -- a closed box's top and floor are two runs to a line along the
+    axis, and no band.
+    """
+    along = _name(axis)
+    if across <= _EPS:
+        band = f"{stated_band_mm(clearance):g}"
+        return (
+            f"a dovetail along {along} needs a band of the cut face at least {band} mm "
+            f"wide that a line along {along} crosses in one unbroken run of at least "
+            f"{RUN_LEAST:g} mm, so make the part thicker there: a wall at least {band} mm "
+            f"thick running along {along} where the seam crosses it, or, in a part open "
+            "on one side, the top or floor opposite the opening, where a line along "
+            f"{along} crosses it through its thickness, at least {RUN_LEAST:g} mm thick "
+            "and kept whole across it"
+        )
+    spot = f"{stated_spot_mm(clearance):g}"
+    return (
+        f"a peg along {along} needs a solid spot of the cut face at least {spot} mm "
+        f"across, clear of every edge and hole, so make the part at least {spot} mm "
+        "thick there"
+    )
 
 
 def _pegs_instead(across, section, plane, ahead, clearance, margin) -> str:
@@ -407,9 +443,9 @@ def _dovetails(section, plane, axis, ahead, clearance, margin):
     sites = []
     for low, high, start, end in _bands(section, frame):
         root = _widest_root(end - start, clearance, margin)
-        if root < _ROOT_LEAST:
+        if root < ROOT_LEAST:
             continue
-        half = _reach(root, clearance + margin)
+        half = dovetail_reach(root, clearance + margin)
         for centre in _positions(start + half, end - half, half / 2):
             sites.append(_Site(centre, half, root, low, high))
     extent = _extent(ahead, frame)
@@ -425,26 +461,24 @@ def _dovetails(section, plane, axis, ahead, clearance, margin):
 
 def _widest_root(width: float, clearance: float, margin: float) -> float:
     """The widest dovetail root whose socket, grown by the margin, fits ``width``."""
-    root = (width - 2 * _reach(0.0, clearance + margin)) / (2 * _reach(1.0, 0.0))
-    return min(_ROOT_MOST, root)
-
-
-def _reach(root: float, grow: float) -> float:
-    """How far to either side of its centre a dovetail ``root`` wide, grown by
-    ``grow`` on its flanks and tip, reaches across the seam at its widest."""
-    slope = math.tan(math.radians(_FLANK_DEGREES))
-    depth = root * _DEPTH_PER_ROOT + grow
-    return root / 2 + grow / math.cos(math.radians(_FLANK_DEGREES)) + depth * slope
+    root = (width - 2 * dovetail_reach(0.0, clearance + margin)) / (2 * dovetail_reach(1.0, 0.0))
+    return min(ROOT_MOST, root)
 
 
 def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     """Runs of the cut face along the frame's x, as ``(low, high, start, end)``.
 
     ``low``-``high`` is the run along the axis, the same at every sampled
-    position from ``start`` to ``end`` across it. Only the sampled positions are
-    looked at, so a hole narrower than the step between them can lie inside a
-    band: the room check still finds one that reaches into the half ahead, and a
-    tab over one that does not bridges it.
+    position from ``start`` to ``end`` across it. A band's two edges are then
+    found by bisection between its last sample and the first one beyond it, so a
+    band is as wide as the face it stands on rather than as the samples that
+    landed in it: a wall inside a wide face lost up to two steps, and was refused
+    at the very width the brief and the refusal state. Between its edges only the
+    sampled positions are looked at, so a hole narrower than the step between
+    them can lie inside a band: the room check still finds one that reaches into
+    the half ahead, and a tab over one that does not bridges it. An edge is
+    bisected from the band's last sample, so a gap narrower than a step lying
+    between that sample and the edge is stepped over in the same way.
     """
     if not section:
         return []
@@ -452,18 +486,24 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
     x0, x1 = min(c.min.X for c in corners), max(c.max.X for c in corners)
     y0, y1 = min(c.min.Y for c in corners), max(c.max.Y for c in corners)
     step = (y1 - y0) / _SAMPLES
+
+    def run_at(across):
+        runs = _runs(section, frame, across, x0 - _OVERCUT, x1 + _OVERCUT)
+        return runs[0] if len(runs) == 1 and runs[0][1] - runs[0][0] >= RUN_LEAST else None
+
+    def same(run, band) -> bool:
+        return (
+            band is not None
+            and run is not None
+            and abs(run[0] - band[0]) < _SAME_RUN
+            and abs(run[1] - band[1]) < _SAME_RUN
+        )
+
     bands, current = [], None
     for k in range(_SAMPLES + 1):
         across = y0 + k * step
-        runs = _runs(section, frame, across, x0 - _OVERCUT, x1 + _OVERCUT)
-        run = runs[0] if len(runs) == 1 and runs[0][1] - runs[0][0] >= _RUN_LEAST else None
-        same = (
-            current is not None
-            and run is not None
-            and abs(run[0] - current[0]) < _SAME_RUN
-            and abs(run[1] - current[1]) < _SAME_RUN
-        )
-        if same:
+        run = run_at(across)
+        if same(run, current):
             current[3] = across
         else:
             if current is not None:
@@ -471,7 +511,26 @@ def _bands(section, frame) -> list[tuple[float, float, float, float]]:
             current = [run[0], run[1], across, across] if run is not None else None
     if current is not None:
         bands.append(tuple(current))
-    return [band for band in bands if band[3] > band[2]]
+
+    def edge(band, inside: float, outside: float) -> float:
+        """The last position from ``inside``, a sample in ``band``, toward
+        ``outside``, the next sample past it, where the run is still the band's."""
+        while abs(outside - inside) > EDGE_PRECISION_MM:
+            middle = (inside + outside) / 2
+            if same(run_at(middle), band):
+                inside = middle
+            else:
+                outside = middle
+        return inside
+
+    edged = []
+    for low, high, start, end in bands:
+        if start > y0:
+            start = edge((low, high), start, start - step)
+        if end < y1:
+            end = edge((low, high), end, end + step)
+        edged.append((low, high, start, end))
+    return [band for band in edged if band[3] > band[2]]
 
 
 def _runs(section, frame, across, start, end) -> list[tuple[float, float]]:
@@ -558,12 +617,12 @@ def _dovetail(frame, ahead, site, extent, clearance, margin, shrunk):
     if shrunk:
         roots = []
         root = site.root * _SHRINK
-        while root >= _ROOT_LEAST:
+        while root >= ROOT_LEAST:
             roots.append(root)
             root *= _SHRINK
     blocked = False
     for root in roots:
-        depth = root * _DEPTH_PER_ROOT
+        depth = root * DEPTH_PER_ROOT
         outline = _trapezoid(site.centre, root, depth, clearance, _OVERCUT)
         grown = _trapezoid(site.centre, root, depth, clearance + margin, 0.0)
         if not _fills(ahead, _prism(frame, grown, site.low, site.high)):
@@ -600,8 +659,8 @@ def _trapezoid(centre: float, root: float, depth: float, grow: float, below: flo
     straight line, ``below`` the seam as much as past it, so a socket's flanks run
     parallel to its tab's and the gap between them is the same at every depth.
     """
-    slope = math.tan(math.radians(_FLANK_DEGREES))
-    side = grow / math.cos(math.radians(_FLANK_DEGREES))
+    slope = math.tan(math.radians(FLANK_DEGREES))
+    side = grow / math.cos(math.radians(FLANK_DEGREES))
     bottom, top = -below, depth + grow
     return [
         (centre - root / 2 - side - bottom * slope, bottom),
@@ -628,13 +687,29 @@ def _pegs(section, plane, ahead, clearance, margin):
     Each peg is round with one flat side, so that one peg alone, all a small face
     may have room for, keeps the halves from turning about it, on no more room
     than a round peg of its size needs.
+
+    Placed from the walked spots first. A first peg walked to a boss's middle can
+    crowd out a second the grid points alone had room for, so where the walked
+    spots place fewer than two, the grid's own placement is kept if it places
+    more: walking never places fewer pegs than the grid did.
     """
     normal = Vector(plane.z_dir).normalized()
     frame = Plane(origin=plane.origin, x_dir=plane.x_dir, z_dir=normal)
+    walked, grid = _roomy_spots(section, frame)
+    joints = _placed_pegs(walked, frame, ahead, clearance, margin)
+    if len(joints) < _JOINTS_MOST:
+        from_grid = _placed_pegs(grid, frame, ahead, clearance, margin)
+        if len(from_grid) > len(joints):
+            joints = from_grid
+    return joints
+
+
+def _placed_pegs(spots, frame, ahead, clearance, margin):
+    """Up to two pegs at ``spots``, roomiest first, each apart from those placed."""
     joints, taken = [], []
-    for spot, edge in _roomy_spots(section, frame):
-        radius = min(_PEG_MOST / 2, edge - clearance - margin)
-        if radius < _PEG_LEAST / 2:
+    for spot, edge in spots:
+        radius = min(PEG_MOST / 2, edge - clearance - margin)
+        if radius < PEG_LEAST / 2:
             break
         if any(
             (spot - other).length < radius + other_radius + 2 * clearance + margin
@@ -651,24 +726,68 @@ def _pegs(section, plane, ahead, clearance, margin):
 
 
 def _roomy_spots(section, frame):
-    """Points on the cut face with how far each lies from the face's edge, farthest first."""
-    if not section:
-        return []
-    corners = [frame.to_local_coords(face).bounding_box() for face in section]
-    x0, x1 = min(c.min.X for c in corners), max(c.max.X for c in corners)
-    y0, y1 = min(c.min.Y for c in corners), max(c.max.Y for c in corners)
-    spots = []
-    for i in range(_GRID + 1):
-        for j in range(_GRID + 1):
-            local = Vector(x0 + (x1 - x0) * i / _GRID, y0 + (y1 - y0) * j / _GRID, 0)
-            at = frame.from_local_coords(local)
-            point = Vertex(at.X, at.Y, at.Z)
-            for face in section:
-                if point.distance_to(face) < _EPS:
-                    spots.append((local, min(point.distance_to(edge) for edge in face.edges())))
-                    break
-    spots.sort(key=lambda found: -found[1])
-    return spots
+    """Points on the cut face with how far each lies from the face's edge, farthest first.
+
+    Returned twice: walked, and as the grid found them. Each face of the cut is
+    sampled on a grid of its own, so a post too small for one grid across the
+    whole cut still has points on it. In the walked list the roomiest points,
+    and the roomiest of every face, are moved to the most room near them: a wall
+    thinner than a grid step has no point on its middle, and was refused at the
+    very thickness the brief and the refusal state for a peg.
+    """
+    found = []
+    steps = {}
+    for face in section:
+        box = frame.to_local_coords(face).bounding_box()
+        x0, x1, y0, y1 = box.min.X, box.max.X, box.min.Y, box.max.Y
+        steps[id(face)] = max(x1 - x0, y1 - y0) / _GRID
+        for i in range(_GRID + 1):
+            for j in range(_GRID + 1):
+                local = Vector(x0 + (x1 - x0) * i / _GRID, y0 + (y1 - y0) * j / _GRID, 0)
+                room = _room_at(face, frame, local)
+                if room is not None:
+                    found.append((local, room, face))
+    found.sort(key=lambda spot: -spot[1])
+    seeds = found[:_SPOTS_REFINED]
+    for face in section:
+        best = next((spot for spot in found if spot[2] is face), None)
+        if best is not None and all(best is not seed for seed in seeds):
+            seeds.append(best)
+    seeded = {id(seed) for seed in seeds}
+    walked = [
+        _roomiest(face, frame, local, room, steps[id(face)]) for local, room, face in seeds
+    ] + [(spot[0], spot[1]) for spot in found if id(spot) not in seeded]
+    walked.sort(key=lambda spot: -spot[1])
+    return walked, [(local, room) for local, room, _face in found]
+
+
+def _room_at(face, frame, local) -> float | None:
+    """How far the point at ``local`` lies from ``face``'s edges, or None off the face."""
+    at = frame.from_local_coords(local)
+    point = Vertex(at.X, at.Y, at.Z)
+    if point.distance_to(face) >= _EPS:
+        return None
+    return min(point.distance_to(edge) for edge in face.edges())
+
+
+def _roomiest(face, frame, local, room, step):
+    """The point near ``local`` with the most room on ``face``, and that room.
+
+    Moved a step at a time to whichever neighbour has more room, the step halved
+    when none has, down to :data:`EDGE_PRECISION_MM`: on a wall it walks across to
+    the middle, and the room it reports is within that precision of the most the
+    wall gives.
+    """
+    while step > EDGE_PRECISION_MM:
+        for dx, dy in ((step, 0.0), (-step, 0.0), (0.0, step), (0.0, -step)):
+            near = Vector(local.X + dx, local.Y + dy, 0)
+            more = _room_at(face, frame, near)
+            if more is not None and more > room:
+                local, room = near, more
+                break
+        else:
+            step /= 2
+    return local, room
 
 
 def _peg(frame, ahead, spot, radius, clearance, margin):

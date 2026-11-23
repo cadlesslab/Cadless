@@ -466,6 +466,21 @@ def test_the_parts_are_measured_after_the_export_scale_is_applied():
         assert box == pytest.approx([1000.0, 1000.0, 1000.0], rel=1e-3)
 
 
+def test_where_parts_overlap_comes_back_in_the_units_the_script_wrote():
+    # Measured in millimetres, a script written in metres is still told where its
+    # parts meet in the coordinates it placed them at.
+    res = run_code(
+        "from build123d import *\n"
+        "result = Compound(children=[Box(1, 1, 1), Pos(0.5, 0, 0) * Box(1, 1, 1)])\n",
+        export_scale=1000.0,
+        check_assembly=True,
+    )
+    assert res.ok, res.error
+    assert res.assembly is not None
+    _first, _second, *box = res.assembly.overlap_boxes[0]
+    assert box == pytest.approx([0.0, -0.5, -0.5, 0.5, 0.5, 0.5], abs=1e-6)
+
+
 def test_labels_that_are_not_text_still_name_the_whole_assembly(tmp_path):
     code = (
         "from build123d import *\n"
@@ -533,7 +548,7 @@ def test_the_child_measures_on_a_share_of_the_time_left(tmp_path, monkeypatch, c
 
     seen = {}
 
-    def fake_measure(parts, time_budget, names=None):
+    def fake_measure(parts, time_budget, names=None, scale=1.0):
         seen["budget"] = time_budget
         return AssemblyMeasurements(part_bboxes=[], gaps=[], order=None)
 
@@ -556,7 +571,7 @@ def test_the_child_hands_the_tree_s_names_to_the_measurement(tmp_path, monkeypat
 
     seen = {}
 
-    def fake_measure(parts, time_budget, names=None):
+    def fake_measure(parts, time_budget, names=None, scale=1.0):
         seen["names"] = names
         return AssemblyMeasurements(part_bboxes=[], gaps=[], order=None)
 

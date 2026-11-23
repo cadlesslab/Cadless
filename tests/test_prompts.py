@@ -305,6 +305,54 @@ def test_the_brief_says_which_axes_to_cut_along_and_not_to_shrink():
     assert "never shrink" in user.lower()
 
 
+def test_the_brief_s_worked_example_counts_pieces_as_the_check_does():
+    # On a short bed the joint's reach is a large share of a piece, so a panel the
+    # ratio alone cuts in 3 along its height needs 4 -- the count the size refusal
+    # would then give.
+    spec = AssemblySpec(volume=BuildVolume(width=14.0, depth=14.0, height=40.0), clearance_mm=0.2)
+    brief = " ".join(_assembly_rules(spec).split())
+    assert (
+        "17.5 mm wide and 100 mm tall is cut into 2 along its width and 4 along its height" in brief
+    )
+
+
+def test_the_brief_counts_each_seam_s_joint_in_the_piece_that_carries_it():
+    # Sized by the cut alone, a part cut in the middle leaves the half carrying the
+    # tabs over the bed by the joint's reach.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert "the half behind a seam's plane carries split_and_join's tabs or pegs" in brief
+    assert "stand up to 12 mm past the cut" in brief
+    assert "6 mm off-centre, toward the half behind it" in brief
+
+
+@pytest.mark.parametrize(("clearance", "band", "spot"), [(0.2, "7.1", "5.5"), (0.5, "7.9", "6.1")])
+def test_the_brief_states_the_solid_band_a_dovetail_needs_at_its_clearance(clearance, band, spot):
+    # A shell cut through walls thinner than a joint's band leaves no axis a place.
+    spec = AssemblySpec(
+        volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=clearance
+    )
+    brief = " ".join(_assembly_rules(spec).split())
+    assert f"a band of the cut face at least {band} mm wide" in brief
+    assert f"in a wall at least {band} mm thick running along insert_along" in brief
+    assert f"for a peg, a solid spot at least {spot} mm across" in brief
+
+
+def test_the_brief_keeps_a_hollow_part_s_top_or_floor_whole_across_a_seam():
+    # A shell's own cavity box cut away the top that would have held the joint.
+    brief = " ".join(_assembly_rules(_SPEC).split())
+    assert (
+        "open on one side, in the top or floor opposite the opening where a line along "
+        "insert_along crosses it through its thickness and nothing else, at least 3 mm"
+    ) in brief
+    assert "closed on every side, it gives it in its walls only" in brief
+
+
+def test_the_edit_rules_count_the_joint_where_a_seam_is_made():
+    rules = " ".join(_assembly_edit_rules(_SPEC).split())
+    assert "the half behind its plane carries the tabs or pegs" in rules
+    assert "12 mm past the cut" in rules
+
+
 def test_an_edit_on_an_assembly_is_told_all_three_axes_and_not_to_shrink():
     spec = AssemblySpec(
         volume=BuildVolume(width=210.0, depth=200.0, height=195.0), clearance_mm=0.35

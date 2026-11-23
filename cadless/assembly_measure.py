@@ -109,17 +109,21 @@ def measure_assembly(
     probe_budget: int = ORDER_PROBE_BUDGET,
     time_budget: float = MEASUREMENT_TIME_BUDGET_SECONDS,
     names: Sequence[str | None] | None = None,
+    scale: float = 1.0,
 ) -> AssemblyMeasurements:
     """Measure the relations between ``parts``, which must already be in millimetres.
 
     The scaled solids, not the authoring-unit ones: the build volume this is
     checked against is in millimetres, and measuring the unscaled result would
-    silently compare the two.
+    silently compare the two. ``scale`` is what the parts were scaled by from
+    the script's own units, about the origin, and is used for one thing: where
+    two parts overlap is said in the coordinates the script placed them at.
     """
     boxes = [_extent(part) for part in parts]
     labels = part_labels(len(parts), names)
     unchecked: list[str] = []
     overlaps: list[list[float]] = []
+    overlap_boxes: list[list[float]] = []
     gaps: list[list[float]] = []
     budget = _Budget(probe_budget, time_budget)
     scene = _Scene(parts)
@@ -155,6 +159,7 @@ def measure_assembly(
                     order=None,
                     trapped=[],
                     unchecked=unchecked,
+                    overlap_boxes=overlap_boxes,
                 )
             shared = _shared_volume(parts[first], parts[second])
             scene.at_rest[(first, second)] = shared
@@ -166,6 +171,10 @@ def measure_assembly(
                 )
             elif shared > 0.0:
                 overlaps.append([first, second, shared])
+                if shared > OVERLAP_EPSILON_MM3:
+                    place = _shared_box(parts[first], parts[second], scale, budget)
+                    if place is not None:
+                        overlap_boxes.append([first, second, *place])
 
             done += 1
             distance = _distance(parts[first], parts[second])
@@ -188,7 +197,40 @@ def measure_assembly(
         trapped=trapped,
         unchecked=unchecked,
         releases=releases,
+        overlap_boxes=overlap_boxes,
+        freed_without_overlaps=(
+            _freed_without_overlaps(parts, budget, scene, labels, overlaps) if trapped else None
+        ),
     )
+
+
+def _freed_without_overlaps(parts, budget, scene, labels, overlaps) -> bool | None:
+    """Whether an order is found once each overlapping pair is let pass through the other.
+
+    A part sharing volume with another is blocked every way it could move, so a
+    build whose parts overlap can be trapped by its overlaps alone, and saying
+    then that a joint needs reorienting sends the repair to what was never
+    wrong. Asked again on what is left of the same budget, so a build that
+    overlaps costs no more time than the measurement was given. It is asked of
+    any build trapped while it overlaps, whether or not its order will be
+    judged: the measurement is not told which checks a build faces, and the time
+    is its own share either way. ``None`` where the second search could not
+    rule: its reasons are about a build that does not exist, so they are not
+    reported either.
+    """
+    partners: dict[int, set[int]] = {}
+    for first, second, shared in overlaps:
+        if shared > OVERLAP_EPSILON_MM3:
+            partners.setdefault(first, set()).add(second)
+            partners.setdefault(second, set()).add(first)
+    if not partners:
+        return None
+    order, trapped, _unchecked, _releases = _disassembly_order(
+        parts, budget, scene, labels, ignoring=partners
+    )
+    if order is not None:
+        return True
+    return False if trapped else None
 
 
 def _extent(part) -> list[float]:
@@ -234,6 +276,37 @@ def _shared_volume(first, second) -> float | None:
         return None
 
 
+def _shared_box(first, second, scale: float, budget: _Budget) -> list[float] | None:
+    """The box around the volume two overlapping parts share, ``[x0, y0, z0, x1, y1,
+    z1]`` in the script's own coordinates, or ``None`` where it cannot be had.
+
+    Asked only of a pair measured to overlap past the noise the overlap check
+    passes, so parts that only touch pay nothing for it, and charged to the
+    budget like any other kernel work.
+    The intersection is made again rather than kept from the volume probe, which
+    every pair makes and the order search reads; a build that overlaps is
+    refused whatever, so the repeat costs only a build already failing. A
+    pair overlapping in several places -- an axle through both walls of a
+    bracket -- gets one box around all of them. ``None`` is not a fault: the
+    overlap is still refused, only without saying where.
+    """
+    try:
+        budget.spend()
+    except _BudgetSpent:
+        return None
+    try:
+        shared = first.intersect(second, include_touched=False)
+        boxes = [solid.bounding_box() for solid in (shared.solids() if shared else [])]
+    except Exception:  # noqa: BLE001 - a box nobody could compute leaves the sentence without one
+        return None
+    if not boxes:
+        return None
+    corners = [min(getattr(box.min, axis) for box in boxes) / scale for axis in "XYZ"] + [
+        max(getattr(box.max, axis) for box in boxes) / scale for axis in "XYZ"
+    ]
+    return corners if all(math.isfinite(corner) for corner in corners) else None
+
+
 def _distance(first, second) -> float | None:
     try:
         return _measurement(float(first.distance_to(second)))
@@ -241,7 +314,7 @@ def _distance(first, second) -> float | None:
         return None
 
 
-def _disassembly_order(parts, budget, scene=None, labels=None):
+def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
     """An order in which the parts can be assembled, or why there is none.
 
     Found by taking the assembly apart: repeatedly free a part that can be
@@ -257,7 +330,12 @@ def _disassembly_order(parts, budget, scene=None, labels=None):
     could not see past, or at a pair the kernel would not measure, nothing was
     shown trapped, so it says which parts and why instead -- a repair aimed at a
     trap that was never shown would change geometry nobody measured.
+
+    ``ignoring`` maps a part to the parts it may pass through, for asking what
+    order there would be if they did; nothing found that way is an order of the
+    build as it stands.
     """
+    ignoring = ignoring or {}
     if len(parts) < 2:
         return list(range(len(parts))), [], [], []
 
@@ -275,12 +353,15 @@ def _disassembly_order(parts, budget, scene=None, labels=None):
         scene.undecided.clear()
         scene.refused.clear()
         for index in remaining:
-            others = [other for other in remaining if other != index]
+            passed = ignoring.get(index, ())
+            others = [other for other in remaining if other != index and other not in passed]
             if not others:
                 # The part left standing is what the rest come off, not one that
                 # comes out itself. Nothing can block it, so every heading passes
                 # on the first probe and recording one would file the order the
-                # candidates happen to be listed in as a measurement.
+                # candidates happen to be listed in as a measurement. Asked with
+                # ``ignoring``, a part left only with what it may pass through is
+                # the same: nothing left can block it.
                 freed = index
                 break
             try:
