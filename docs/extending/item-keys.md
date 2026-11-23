@@ -11,10 +11,12 @@ kinds:
 
 **There is one implementation: `cadless/item_key.py`.** It imports nothing but the
 standard library, so code without the geometry kernel installed can compute and
-check keys, and it can be copied into another codebase as it is (only
-`toolchain_identity` needs the engine files beside it). Call it rather than
-writing your own. The rules below are what it does, written down so that they can
-be reviewed, and pinned by the shared vectors in `cadless/item_key_vectors.json`.
+check keys, and it can be copied into another codebase as it is, on Python 3.12
+or later (only `toolchain_identity` needs more: the engine files beside it, and
+build123d and OCP installed). Call it rather than writing your own. The rules
+below are what it does, written down so that they can be reviewed, and pinned by
+the shared vectors in `cadless/item_key_vectors.json`, which hold leaf cases for
+Python 3.12, 3.13 and 3.14.
 
 These are **definitions version 1** (`DEFINITIONS_VERSION`).
 
@@ -40,8 +42,9 @@ dependency, so that no third-party release can change a key.
   `1e+21`, `1e-7` is `1e-7`, and `-0.0` is `0`. A JSON number is a double, so an
   integer past +/-(2**53 - 1) is accepted only when a double holds it exactly, and
   is written as that double is (`2**60` as `1152921504606847000`).
-- An instance of a subclass (an `IntEnum` member, a numpy float, a `str` subclass)
-  is written as the plain value it stands for, whatever its own `repr` says.
+- An instance of a number or string subclass (an `IntEnum` member, a numpy
+  `float64`, a `str` subclass) is written as the plain value it stands for,
+  whatever its own `repr` says. Other numpy types are not numbers here.
 - Object members are sorted by the UTF-16 code units of their keys, which differs
   from code point order above U+FFFF.
 - Strings escape only what JSON requires; nothing is written between tokens.
@@ -129,13 +132,18 @@ literal that unpacks another mapping, names one parameter twice, has a name that
 is not a string, or a value that is not a number, string or boolean (a list or a
 tuple is refused, so write `hole_offset_1` and `hole_offset_2` rather than one
 list); a source Python cannot parse; syntax nested deeper than 100 levels; an
-integer literal of more than 4300 digits (past what the interpreter writes by
-default, a limit a process can change); and a recipe whose canonical text would
-hold a 0x00 byte, or would not read back as the same program. `ast.unparse` writes
-a few constructs so that they read back as others (a `}` in an f-string format
-spec reads back as an empty spec and a literal brace), and two recipes must never
-share a text while doing different things, so the canonical text is parsed again
-and compared.
+integer literal of more than 640 digits (the lowest limit a process can set on
+how many digits the interpreter writes, so below it the text cannot depend on
+that setting); and a recipe whose canonical text would not read back as the same
+program. `ast.unparse` writes a few constructs so that they read back as others (a
+`}` in an f-string format spec reads back as an empty spec and a literal brace; a
+0x00 byte there is written as it is and does not read back at all), and two
+recipes must never share a text while doing different things, so the canonical
+text is parsed again and compared.
+
+How deep a recipe or a value may nest is a fixed limit rather than the
+interpreter's, so a caller a few hundred calls deep gets the same answer as one at
+the top; a caller deeper still meets the interpreter's own limit and is refused.
 
 A syntax warning (an unknown escape such as `'\d'`, for one) changes nothing: it is
 ignored, so a process that turns warnings into errors gets the same text.
@@ -172,19 +180,20 @@ platform=linux-x86_64;runtime=<sha256>;helpers=<sha256 or ->;fonts=-
 | `platform` | `sys.platform` and the machine |
 | `runtime` | the sha256 of the canonical JSON mapping each of `RUN_AND_BAKE_FILES` to the sha256 of its bytes: the whole engine files that run a recipe and bake its solid (the runtime and its allow-list, the code that writes the declared values into the recipe, the worker that starts the run and the child that bakes it), read from beside the module as imported |
 | `helpers` | the same over the `HELPER_SOURCES` files of the helpers named, or `-` for none |
-| `fonts` | `-`: no fonts ship for recipes, so a recipe draws no text |
+| `fonts` | `-`: no fonts ship for recipes, so `leaf_key` refuses a recipe that draws text (it loads `Text`, `DimensionLine`, `ExtensionLine`, `TechnicalDrawing`, or a `make_text` attribute): its solid would depend on whichever font the machine finds |
 
-There is no engine version number. A change that can alter a shape changes a
-hashed file or a kernel version instead, and a release that changes neither keeps
-every key. A kernel upgrade gives every leaf a new key. A test fails when a hashed
-file starts importing an engine module that is neither hashed nor known to leave
-solids alone.
+There is no engine version number. A change to the engine's own code that can
+alter a shape changes a hashed file, and a kernel upgrade changes a kernel part,
+giving every leaf a new key. A test fails when a hashed file starts importing an
+engine module that is neither hashed nor known to leave solids alone.
 
-Outside the toolchain, on purpose: the other packages build123d depends on, which
-an engine release pins in its constraints; the code gate, which refuses a recipe
-or lets it run but never shapes it; and the exporters. A key names the solid, so a
-file exported from it in some format depends on that format's exporter as well,
-and is keyed with it by whatever stores it.
+Outside the toolchain, on purpose: the other packages build123d builds geometry
+with (scipy, sympy and others), which an engine release pins in its constraints
+but does not hash, so a release that changes only them keeps every key; the code
+gate, which refuses a recipe or lets it run but never shapes it; and the
+exporters. A key names the solid, so a file exported from it in some format
+depends on that format's exporter as well, and is keyed with it by whatever stores
+it.
 
 ## Leaf keys
 
@@ -200,7 +209,8 @@ Beyond the refusals of its parts, it refuses:
 - a toolchain whose `helpers` part disagrees with whether the recipe calls a
   helper, so that one leaf has one key;
 - a toolchain naming another Python than the one running, whose `ast.unparse`
-  could write the recipe otherwise.
+  could write the recipe otherwise;
+- a recipe that draws text, until fonts ship with the engine and are hashed.
 
 ### What a keyed build relies on
 
@@ -209,13 +219,22 @@ sound only if nothing else reaches the solid. Whatever runs a leaf must:
 
 - run the recipe with the values `typed_params` returns written into its params
   literal, exactly there and nowhere else;
-- run it with a fixed string hash seed and without `-O`: a recipe may iterate a
-  set of strings, whose order follows the seed, and may hold an `assert`.
+- run it with a fixed string hash seed and none of the interpreter settings that
+  can change what a script does: a recipe may iterate a set of strings, whose
+  order follows the seed, hold an `assert` (`-O` strips it), take `str()` of a
+  large integer (the digit limit decides whether that raises), or hold a syntax
+  warning (a warning filter can make it an error).
 
 The engine does both: `apply_param_overrides` finds the literal by the lines and
 columns Python itself counts, and the worker starts every build's child with
-`PYTHONHASHSEED=0` and without `PYTHONOPTIMIZE`. Both files are among
-`RUN_AND_BAKE_FILES`, so a change to either changes every key.
+`PYTHONHASHSEED=0` and no other `PYTHON*` setting from its environment beyond
+where Python and its packages live. Both files are among `RUN_AND_BAKE_FILES`, so
+a change to either changes every key.
+
+A recipe must also not depend on object identity: `repr()` of a function shows
+its address, which differs from one run to the next. The closed-recipe rules are
+to refuse that; until they do, such a recipe is the one way left for a leaf to
+build differently under one key.
 
 ## Item keys
 
@@ -231,7 +250,8 @@ Keys assume what the closed-recipe rules will require of a leaf:
 - leaves are in millimetres; an item from a metre domain is converted where it
   enters;
 - `math` is allowed beside build123d;
-- text is drawn only in fonts the engine ships, and none ship yet.
+- text is drawn only in fonts the engine ships, and none ship yet;
+- nothing depends on object identity (`repr()` of a function or an object, `id`).
 
 ## The API
 

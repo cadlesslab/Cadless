@@ -173,18 +173,33 @@ def _limit_resources(cpu_secs: int):
     return _apply
 
 
-def _child_environment() -> dict[str, str]:
-    """The environment a build's child runs in: this process's, made repeatable.
+# The interpreter settings a build's child keeps from this process's environment:
+# where Python, its packages and its bytecode live. Every other PYTHON* variable
+# can change what a script does (the hash seed orders a set of strings, the
+# optimisation level strips an assert, the digit limit decides whether str() of a
+# large integer raises, the warning filters whether a syntax warning is an error),
+# so none of them is passed on.
+_KEPT_PYTHON_SETTINGS = frozenset(
+    {
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUSERBASE",
+        "PYTHONNOUSERSITE",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPYCACHEPREFIX",
+    }
+)
 
-    A script may loop over a set of strings, whose order follows the string hash
-    seed, and may hold an ``assert``, which optimisation strips; with the seed left
-    random and the optimisation level inherited, one script could build a
-    different solid from one run to the next. So the seed is fixed and no
-    optimisation is asked for.
-    """
-    env = dict(os.environ)
+
+def _child_environment() -> dict[str, str]:
+    """The environment a build's child runs in: this process's, less the settings
+    that could change what a script does, with the string hash seed fixed at 0."""
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("PYTHON") or name in _KEPT_PYTHON_SETTINGS
+    }
     env["PYTHONHASHSEED"] = "0"
-    env.pop("PYTHONOPTIMIZE", None)
     return env
 
 

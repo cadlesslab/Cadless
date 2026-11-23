@@ -55,8 +55,11 @@ port, bound to loopback.
    what the gate refuses whoever called it; a caller that validates first does
    so to have the reasons sooner. Upstream orchestration treats programs as text
    rather than importing and running them in the API process. The child runs
-   with a fixed string hash seed and without optimisation, so one script builds
-   one solid from run to run (a loop over a set of strings, an `assert`).
+   with a fixed string hash seed and with no other `PYTHON*` setting from the
+   environment beyond where Python and its packages live, so neither can change
+   what a script builds (a loop over a set of strings, an `assert`, the integer
+   digit limit, the warning filters). A script that reads an object's address,
+   through `repr()` of a function, still can.
 
    The slicer is the one place that reads a *product* of that execution outside
    the boundary. `cadless/slicing.py` hands the exported mesh to a large

@@ -935,3 +935,31 @@ def test_a_build_keeps_its_asserts_whatever_the_environment_asks(monkeypatch):
     res = run_code("from build123d import *\nassert False, 'kept'\nresult = Box(1, 1, 1)\n")
     assert not res.ok
     assert "AssertionError" in res.error
+
+
+def test_a_build_does_not_hang_on_the_digit_limit_it_was_started_under(monkeypatch):
+    # str() of a 5,001-digit integer raises under the default limit, not under 0.
+    code = (
+        "from build123d import *\n"
+        "try:\n"
+        "    n = len(str(10 ** 5000))\n"
+        "except ValueError:\n"
+        "    n = 1\n"
+        "result = Box(10 + n / 1000, 10, 10)\n"
+    )
+    volumes = set()
+    for limit in (None, "0"):
+        if limit is None:
+            monkeypatch.delenv("PYTHONINTMAXSTRDIGITS", raising=False)
+        else:
+            monkeypatch.setenv("PYTHONINTMAXSTRDIGITS", limit)
+        res = run_code(code)
+        assert res.ok, res.error
+        volumes.add(round(res.volume, 6))
+    assert len(volumes) == 1, volumes
+
+
+def test_a_build_does_not_fail_on_warnings_the_environment_turns_into_errors(monkeypatch):
+    monkeypatch.setenv("PYTHONWARNINGS", "error")
+    res = run_code("from build123d import *\nlabel = '\\d'\nresult = Box(1, 1, 1)\n")
+    assert res.ok, res.error

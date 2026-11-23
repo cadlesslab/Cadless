@@ -24,6 +24,7 @@ import pytest
 
 import cadless
 from cadless import item_key as item_key_module
+from cadless import params as params_module
 from cadless.item_key import (
     DEFINITIONS_VERSION,
     HELPER_SOURCES,
@@ -314,6 +315,19 @@ def test_an_int_no_double_holds_is_refused_as_a_param() -> None:
         canonical_params({"n": 10**400}, {"n": "int"})
 
 
+@pytest.mark.parametrize(
+    ("params", "types"),
+    [
+        pytest.param({"n": 2**53 + 1}, {"n": "int"}, id="int-no-double-holds"),
+        pytest.param({"s": "\ud800"}, {"s": "str"}, id="lone-surrogate"),
+        pytest.param({1: 2.0}, {1: "float"}, id="name-not-a-string"),
+    ],
+)
+def test_typed_params_refuses_what_could_not_be_keyed(params: dict, types: dict) -> None:
+    with pytest.raises(ItemKeyError):
+        typed_params(params, types)
+
+
 def test_strings_are_not_normalised() -> None:
     # Precomposed and decomposed forms of the same letter stay two inputs.
     nfc = canonical_params({"s": "é"}, {"s": "str"})
@@ -412,7 +426,7 @@ def test_a_pose_that_is_not_seven_numbers_is_refused(pose: object) -> None:
     ],
 )
 def test_a_pose_holding_a_non_number_is_refused(pose: tuple) -> None:
-    with pytest.raises(ItemKeyError, match="finite|too large"):
+    with pytest.raises(ItemKeyError, match="finite|too large|int or float"):
         canonical_pose(pose)
 
 
@@ -521,6 +535,11 @@ def test_a_first_statement_that_is_not_a_lone_string_is_kept(body: str) -> None:
     assert canonical_recipe(source) == f"params = {{}}\n\ndef f():\n    {body}".encode()
 
 
+def test_the_literals_value_types_are_the_ones_the_engine_overrides_with() -> None:
+    # A copy, so the module stands alone; this keeps the copy in step.
+    assert set(item_key_module._PARAM_VALUE_TYPES) == set(params_module._VALUE_TYPES)
+
+
 def test_the_params_literal_is_the_one_the_engine_reads() -> None:
     source = f"{PARAMS_VARIABLE} = {{'w': 1}}\n"
     assert canonical_recipe(source) == f"{PARAMS_VARIABLE} = {{'w': ...}}".encode()
@@ -592,7 +611,7 @@ def test_an_annotated_params_is_refused_as_such() -> None:
         pytest.param("params = {'w': 1}\ndef (", id="syntax"),
         pytest.param("params = {'w': 1}\x00", id="null-byte"),
         pytest.param("params = {'w': '\ud800'}", id="lone-surrogate"),
-        pytest.param("params = {}\nx = " + "+".join(["1"] * 2_000), id="too-deep-to-write"),
+        pytest.param("params = {}\nx = " + "+".join(["1"] * 2_000), id="nested-past-the-limit"),
         pytest.param("params = {}\nx = " + "+".join(["1"] * 100_000), id="too-deep-to-parse"),
         pytest.param("params = {}\nx = f'{y!r:\\x00>3}'\n", id="nul-written-back"),
         pytest.param("params = {}\nx = f'{y!r:\\ud800>3}'\n", id="surrogate-written-back"),
@@ -628,16 +647,32 @@ def test_a_recipe_gets_the_same_text_whatever_the_warning_filters() -> None:
         assert canonical_recipe(source) == plain
 
 
-def test_an_integer_literal_past_4300_digits_is_refused_whatever_the_limit() -> None:
-    source = "params = {}\nx = 0x" + "f" * 4000 + "\n"  # parses under any limit
+def _under_each_digit_limit(check: Callable[[], None]) -> None:
+    # 640 is the lowest limit a process can set, 0 means none.
     default = sys.get_int_max_str_digits()
-    for limit in (default, 0):
+    for limit in (640, default, 0):
         sys.set_int_max_str_digits(limit)
         try:
-            with pytest.raises(ItemKeyError, match="4300"):
-                canonical_recipe(source)
+            check()
         finally:
             sys.set_int_max_str_digits(default)
+
+
+def test_an_integer_literal_past_640_digits_is_refused_whatever_the_limit() -> None:
+    source = "params = {}\nx = 0x" + "f" * 600 + "\n"  # 723 digits, written in hex
+
+    def refused() -> None:
+        with pytest.raises(ItemKeyError, match="640"):
+            canonical_recipe(source)
+
+    _under_each_digit_limit(refused)
+
+
+def test_an_integer_literal_of_640_digits_gets_one_text_whatever_the_limit() -> None:
+    source = "params = {}\nx = " + "9" * 640 + "\n"
+    texts = []
+    _under_each_digit_limit(lambda: texts.append(canonical_recipe(source)))
+    assert len(set(texts)) == 1
 
 
 def _chain(terms: int) -> str:
@@ -650,11 +685,22 @@ def test_how_deep_a_recipe_nests_is_refused_at_a_fixed_limit() -> None:
         canonical_recipe(_chain(99))
 
 
-def test_a_recipe_within_the_limit_gets_a_key_from_a_deep_caller() -> None:
-    def from_depth(frames: int) -> bytes:
-        return from_depth(frames - 1) if frames else canonical_recipe(_chain(98))
+def _from_depth(frames: int, call: Callable[[], object]) -> object:
+    return _from_depth(frames - 1, call) if frames else call()
 
-    assert from_depth(400) == canonical_recipe(_chain(98))
+
+def test_a_recipe_within_the_limit_gets_a_key_from_a_deep_caller() -> None:
+    assert _from_depth(400, lambda: canonical_recipe(_chain(98))) == canonical_recipe(_chain(98))
+
+
+def test_a_caller_too_deep_to_write_the_recipe_back_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="recipe"):
+        _from_depth(900, lambda: canonical_recipe(_chain(98)))
+
+
+def test_a_caller_too_deep_to_write_a_value_is_refused() -> None:
+    with pytest.raises(ItemKeyError, match="deep"):
+        _from_depth(900, lambda: jcs(_nested(100)))
 
 
 def test_a_recipe_is_text() -> None:
@@ -1148,6 +1194,29 @@ def test_a_leaf_calling_a_helper_is_keyed_on_the_helpers_digest() -> None:
     other = TOOLCHAIN_WITH_HELPER.replace("cd" * 32, "ef" * 32)
     args = (JOINED, {"x": 50}, {"x": "float"})
     assert leaf_key(*args, TOOLCHAIN_WITH_HELPER) != leaf_key(*args, other)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "result = extrude(Text('Hi', params['w']), 2)",
+        "result = Compound.make_text('Hi', params['w'])",
+        "line = DimensionLine([(0, 0), (params['w'], 0)])",
+        "line = ExtensionLine([(0, 0), (params['w'], 0)], offset=5)",
+        "page = TechnicalDrawing()",
+        "draw = Text\nresult = draw('Hi', params['w'])",
+    ],
+)
+def test_a_leaf_that_draws_text_gets_no_key(body: str) -> None:
+    # No font ships with the engine for recipes, so the key could not say which drew it.
+    source = f"from build123d import *\nparams = {{'w': 5.0}}\n{body}\n"
+    with pytest.raises(ItemKeyError, match="text"):
+        leaf_key(source, {"w": 5.0}, {"w": "float"}, TOOLCHAIN)
+
+
+def test_a_leaf_naming_text_only_inside_a_string_gets_a_key() -> None:
+    source = "from build123d import *\nparams = {'w': 5.0}\nlabel = 'Text'\n"
+    assert re.fullmatch("[0-9a-f]{64}", leaf_key(source, {"w": 5.0}, {"w": "float"}, TOOLCHAIN))
 
 
 def test_a_leaf_key_is_computed_on_the_python_its_toolchain_names() -> None:

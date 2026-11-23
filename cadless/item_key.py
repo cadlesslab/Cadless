@@ -92,7 +92,8 @@ def typed_params(params: Mapping[str, object], types: Mapping[str, str]) -> dict
     Strings are kept as given, not normalised.
 
     Raises ``ItemKeyError`` unless both arguments are mappings, for a missing or
-    undeclared name, an unknown type, or a value that does not fit its type.
+    undeclared name, an unknown type, a value that does not fit its type, or a name
+    or value canonical JSON cannot write (so every value returned can be keyed).
     """
     if not isinstance(params, Mapping) or not isinstance(types, Mapping):
         raise ItemKeyError("params and types are each a mapping from parameter names")
@@ -108,6 +109,7 @@ def typed_params(params: Mapping[str, object], types: Mapping[str, str]) -> dict
         if name not in params:
             raise ItemKeyError(f"parameter {name!r} is declared but has no value")
         typed[name] = _typed(name, params[name], declared)
+    jcs(typed)  # a non-string name, an integer no double holds, a lone surrogate
     return typed
 
 
@@ -182,7 +184,7 @@ def canonical_pose(pose: Sequence[float]) -> tuple[float, ...]:
     numbers = []
     for number in pose:
         if isinstance(number, bool) or not isinstance(number, (int, float)):
-            raise ItemKeyError(f"pose {pose!r} holds {number!r}, which is not a finite number")
+            raise ItemKeyError(f"pose {pose!r} holds {number!r}, which is not an int or float")
         try:
             value = float(_plain_number(number))
         except OverflowError as error:
@@ -223,14 +225,20 @@ _DOCUMENTED = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 # How deep a recipe's syntax tree, or a value given to jcs, may nest: far beyond
 # what a recipe or an item document needs, and far enough below the interpreter's
-# recursion limit that whether an input gets a key does not hang on how deep in
-# its own calls the caller is.
+# recursion limit that a caller a few hundred calls deep gets the same answer as
+# one at the top. A caller deeper still meets that limit, and is refused.
 _NESTING_LIMIT = 100
 
-# An integer literal this large has more decimal digits than the interpreter will
-# write by default, a limit a process can change; refusing it keeps a recipe's key
-# from depending on that setting.
-_HUGE_INTEGER = 10**4300
+# An integer literal past 640 digits is refused: 640 is the lowest limit a process
+# can set on writing an integer in decimal, so below it the interpreter writes the
+# literal whatever the setting, and the key cannot depend on it.
+_HUGE_INTEGER = 10**640
+
+# The build123d names and attributes that draw text. Text needs a font, and no
+# font ships with the engine for recipes, so a leaf that draws text has nothing in
+# its key to say which font built it.
+_DRAWS_TEXT = frozenset({"Text", "DimensionLine", "ExtensionLine", "TechnicalDrawing"})
+_DRAWS_TEXT_ATTRIBUTES = frozenset({"make_text"})
 
 #: Each engine helper a recipe is handed, by name, and the files beside this
 #: module whose bytes a leaf calling that helper is keyed on: the helper's module
@@ -291,16 +299,14 @@ def _canonical_recipe(source: object) -> tuple[bytes, tuple[str, ...]]:
         text = ast.unparse(tree)
     except (RecursionError, ValueError) as error:
         raise ItemKeyError(f"cannot write the recipe back: {error}") from error
-    if "\x00" in text:
-        # ast.unparse writes a format spec's characters as they are; a 0x00 byte
-        # in the text would let a leaf key's parts run into each other.
-        raise ItemKeyError("the recipe's canonical text would hold a 0x00 byte")
+    # Two recipes could otherwise share a text while doing different things. This
+    # also keeps 0x00 out of the text, which ast.unparse writes as it is inside a
+    # format spec and no parse reads back: a leaf key's parts cannot run together.
     try:
         same = ast.dump(_parse_recipe(text)) == ast.dump(tree)
     except ItemKeyError:
         same = False
     if not same:
-        # Two recipes could otherwise share a text while doing different things.
         raise ItemKeyError("the recipe's canonical text does not read back as the same program")
     return text.encode("utf-8"), names
 
@@ -332,7 +338,7 @@ def _check_shape(tree: ast.Module) -> None:
             and type(node.value) is int
             and abs(node.value) >= _HUGE_INTEGER
         ):
-            raise ItemKeyError("the recipe holds an integer literal of more than 4300 digits")
+            raise ItemKeyError("the recipe holds an integer literal of more than 640 digits")
         stack.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
 
 
@@ -488,9 +494,11 @@ def toolchain_identity(helpers: Iterable[str] = ()) -> str:
     ``RUN_AND_BAKE_FILES`` to the sha256 of its bytes; ``helpers`` is the same over
     the files ``HELPER_SOURCES`` lists for ``helpers`` (the names ``helpers_called``
     returns), or ``-`` when there are none. No fonts ship for recipes, so ``fonts``
-    is ``-``. The engine's version number is left out: a change that can alter a
-    shape changes a hashed file or a kernel version instead, and a release that
-    changes neither keeps every key.
+    is ``-`` and ``leaf_key`` refuses a recipe that draws text. The engine's version
+    number is left out: a change to the engine's code that can alter a shape changes
+    a hashed file, and a kernel upgrade a kernel part. The other packages build123d
+    builds with are pinned by an engine release but not hashed, so a release that
+    changes only them, or nothing that is hashed, keeps every key.
 
     Raises ``ItemKeyError`` when ``helpers`` is not a collection of names, for a
     helper ``HELPER_SOURCES`` does not list, a kernel module that no installed
@@ -595,12 +603,18 @@ def leaf_key(
     undeclared name would run with the literal's value, which no part of the key
     holds); when ``toolchain`` is not UTF-8 text free of 0x00 bytes with a
     ``helpers`` part, or that part disagrees with ``source`` about whether it
-    calls a helper (so one leaf has one key); and when its ``python`` part is not
-    the running interpreter's major.minor, since the canonical recipe is that
-    interpreter's ``ast.unparse``.
+    calls a helper (so one leaf has one key); when its ``python`` part is not the
+    running interpreter's major.minor, since the canonical recipe is that
+    interpreter's ``ast.unparse``; and when the recipe draws text, since the font
+    it would be drawn in is in no part of the key.
     """
     recipe, names = _canonical_recipe(source)
     canonical = canonical_params(params, types)
+    if _draws_text(source):
+        raise ItemKeyError(
+            "the recipe draws text, and no font ships with the engine for recipes, so no "
+            "key can say which font built it"
+        )
     undeclared, absent = sorted(set(names) - set(types)), sorted(set(types) - set(names))
     if undeclared or absent:
         raise ItemKeyError(
@@ -610,6 +624,17 @@ def leaf_key(
     return hashlib.sha256(
         b"\x00".join([recipe, canonical, _toolchain(toolchain, source)])
     ).hexdigest()
+
+
+def _draws_text(source: str) -> bool:
+    # A load of a text-drawing name or attribute counts wherever it appears, as a
+    # helper's does: telling a recipe's own name from build123d's is not worth it.
+    for node in ast.walk(_parse_recipe(source)):
+        if isinstance(node, ast.Name) and node.id in _DRAWS_TEXT:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in _DRAWS_TEXT_ATTRIBUTES:
+            return True
+    return False
 
 
 def _toolchain(toolchain: object, source: str) -> bytes:
@@ -657,17 +682,20 @@ def jcs(value: object) -> bytes:
     """``value`` as RFC 8785 canonical JSON, encoded as UTF-8.
 
     Accepts mappings with string keys, lists and tuples, strings, integers,
-    floats, booleans and ``None``; an instance of a subclass is written as the plain
-    value it stands for. Object members are sorted by the UTF-16 code units of
-    their keys, numbers take their shortest ECMAScript form, and nothing is written
-    between tokens.
+    floats, booleans and ``None``; an instance of a number or string subclass is
+    written as the plain value it stands for. Object members are sorted by the
+    UTF-16 code units of their keys, numbers take their shortest ECMAScript form,
+    and nothing is written between tokens.
 
     Raises ``ItemKeyError`` for a non-finite number, an integer a double cannot
     hold exactly, a non-string key, two keys that are the same string, a string
     holding a lone surrogate, nesting deeper than 100 levels (a container that holds
     itself among them), or any other type.
     """
-    return _write(value, 0).encode("utf-8")
+    try:
+        return _write(value, 0).encode("utf-8")
+    except RecursionError as error:  # only from a caller already very deep
+        raise ItemKeyError(f"cannot write the value from this deep: {error}") from error
 
 
 def _write(value: object, depth: int) -> str:
