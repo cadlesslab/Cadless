@@ -322,4 +322,9 @@ so it ships as a new definitions version, never inside the current one:
 Adding a helper is not a definitions change, and neither is an engine module that
 a helper's source starts to import: each needs its place in `HELPER_SOURCES`, and
 the tests fail until it has one. A file that joins the hashed ones moves the keys
-it reaches, as a change to a hashed file's bytes does.
+it reaches, as a change to a hashed file's bytes does: what moves is the toolchain
+text a leaf is built under, which `leaf_key` and the vectors take as given. A new
+helper does change one outcome for a stored key: a recipe that already loads the
+helper's bare name, as a name of its own, counts from then on as calling it, so
+one that called no helper before is refused by `leaf_key` under the toolchain
+text it was keyed with, whose `helpers` part is `-`.
