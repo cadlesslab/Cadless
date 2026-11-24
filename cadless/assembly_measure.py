@@ -54,9 +54,11 @@ _AXES = (
 #: their duration. Running out is reported as an unestablished
 #: check, never as a pass: work that stopped early has shown nothing.
 #:
-#: One budget covers the whole measurement, the pairwise comparisons included.
-#: Bounding only the order search left the O(n^2) phase ahead of it free to
-#: spend the executor's entire wall clock on a model with very many parts.
+#: One budget covers the whole measurement, the pairs the kernel is asked about
+#: included. Bounding only the order search left the O(n^2) phase ahead of it
+#: free to spend the executor's entire wall clock on a model with very many
+#: parts. A pair settled by its boxes spends none of it, which is what
+#: ``MEASURED_PARTS_MOST`` is for.
 ORDER_PROBE_BUDGET = 20_000
 
 #: The most parts a build may have for its pairs to be measured.
@@ -64,9 +66,14 @@ ORDER_PROBE_BUDGET = 20_000
 #: A pair settled by its boxes spends none of the budget above, and every pair
 #: leaves an entry in the table of gaps however it was settled. So the probe
 #: count does not bound how many pairs there are, and the clock alone lets that
-#: table run to millions of entries -- held here, sent in the payload and read
-#: again -- before it stops. Past this many parts nothing is measured between
-#: them, and that is said before any pair is taken on.
+#: table grow with the square of the part count -- held here, sent in the
+#: payload and read again -- before it stops. Past this many parts nothing is
+#: measured between them, and that is said before any pair is taken on.
+#:
+#: A bound on the parts rather than on the entries, because the pairs follow
+#: from the parts alone and a build can be refused before any work is done on
+#: it. What sets it is what the table costs to hold and to send, not what the
+#: kernel can measure: the clock and the probe count answer for that.
 MEASURED_PARTS_MOST = 500
 
 #: What share of the time left on the executor's wall clock the measurement
@@ -74,10 +81,10 @@ MEASURED_PARTS_MOST = 500
 #:
 #: A second bound beside the probe count, because the two fail differently. The
 #: count stops a model whose many parts each need the kernel; the clock stops a
-#: single part whose topology makes one boolean operation take seconds. Counting alone
-#: would rest on the units costing roughly the same, and they do not: building a
-#: sweep is charged one unit though it cuts, prisms and checks every face, and a
-#: pathological solid makes any one unit slow.
+#: single part whose topology makes one boolean operation take seconds. Counting
+#: alone would rest on the units costing roughly the same, and they do not:
+#: building a sweep is charged one unit though it cuts, prisms and checks every
+#: face, and a pathological solid makes any one unit slow.
 #:
 #: A share rather than a fixed number of seconds, because the executor returns no
 #: summary at all when its own clock runs out -- so this has to stop first, and a
@@ -138,7 +145,7 @@ def measure_assembly(
     gaps: list[list[float]] = []
 
     def stopped() -> AssemblyMeasurements:
-        """What a measurement that stops among the pairs hands back: no order looked for."""
+        """What a measurement that stops at the pairs hands back: no order looked for."""
         return AssemblyMeasurements(
             part_bboxes=boxes,
             overlaps=overlaps,
@@ -573,12 +580,14 @@ _UNBUILT = object()
 class _Scene:
     """What the measurement works out once and reuses.
 
-    A box that holds each part, which the pairwise phase reads for every pair;
-    the volume each pair shares where it stands, which that phase has already
-    asked or read off the pair's boxes; each part's cylinder axes, and whether
-    one of a pair sits inside a bore of the other along a line, which a heading
-    and its reverse share and every round asks again; and the pairs the current
-    round left undecided, which are what that round reports if it frees nothing.
+    A box that holds each part for certain, which the pairwise phase reads for
+    every pair, and the kernel's box of it, which the sweeps and the bore test
+    read its reach from; the volume each pair shares where it stands, which the
+    pairwise phase has already asked or read off the pair's boxes; each part's
+    cylinder axes, and whether one of a pair sits inside a bore of the other
+    along a line, which a heading and its reverse share and every round asks
+    again; and the pairs the current round left undecided, which are what that
+    round reports if it frees nothing.
     """
 
     def __init__(self, parts) -> None:
@@ -717,10 +726,11 @@ class _NoExactSweep(Exception):
 #: meant to be exact, and nothing more.
 _PARALLEL_COSINE = 1e-9
 
-#: How far each enclosing box is grown, in millimetres. The boxes prefilter a
-#: sweep's booleans, settle the pairs too far apart to mate and set how far the
-#: bore test reaches along its axis, and in each erring wide costs a little work
-#: and never an answer.
+#: How far each box is grown at the least, in millimetres. The kernel's box
+#: prefilters a sweep's booleans and sets how far the bore test reaches along its
+#: axis; the box built from each face's own bounds settles the pairs too far
+#: apart to mate, and is grown by the shape's own tolerance besides. In each,
+#: erring wide costs a little work and never an answer.
 _BOX_MARGIN_MM = 0.01
 
 
@@ -955,19 +965,20 @@ def _cut_by_planes(face, planes):
 def _box_of(shape):
     """An enclosing box grown by the margin, or ``None`` if none could be taken.
 
-    Bounded tightly from the exact geometry. The quick bound samples some
-    surfaces -- a surface of revolution among them -- and its box can sit inside
-    the surface, which would let the prefilter skip a boolean that clashes. Never
-    from a mesh the shape may carry either: a mesh cuts across a curved face, and
-    a box taken from it could miss the face.
+    The kernel's tight bound, taken from the exact geometry. The quick bound
+    samples some surfaces -- a surface of revolution among them -- and its box
+    can sit inside the surface, which would let the prefilter skip a boolean that
+    clashes. Never from a mesh the shape may carry either: a mesh cuts across a
+    curved face, and a box taken from it could miss the face.
 
     The tight bound of a B-spline or Bezier face or edge is found by a search,
     and the search can stop short of the surface: a box taken so sat inside a
     ball whose faces are B-splines. So the box is widened to hold the control
-    points of every such face and edge, which the geometry cannot leave. That
-    costs the prefilter some booleans on a free-form part. The box
-    :func:`_enclosing_box` builds would cost it more: that one bounds a sphere
-    and a torus whole, however small the piece of one a face is.
+    points of every such face and edge, which the geometry cannot leave, and on
+    a free-form part it is tight no longer. That costs the prefilter some
+    booleans there. The box :func:`_enclosing_box` builds would cost it more:
+    that one bounds a sphere and a torus whole, however small the piece of one a
+    face is.
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
@@ -992,7 +1003,7 @@ def _box_of(shape):
 def _enclosing_box(shape):
     """A box the shape cannot reach out of, grown by the margin, or ``None`` where none is known.
 
-    What settles a pair with no kernel work has to hold the part for certain, so
+    What settles a pair without a probe has to hold the part for certain, so
     this takes nothing from a search over a surface. Each face and edge is
     bounded by what bounds its kind outright:
 
