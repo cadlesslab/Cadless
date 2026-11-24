@@ -525,6 +525,18 @@ def test_the_joints_and_the_verdict_move_together_when_a_pair_drifts_apart():
     assert not apart.ok
 
 
+@pytest.mark.parametrize(
+    ("clearance", "tolerance"),
+    [(0.0, 1.0), (0.2, 1.0), (0.5, 2.0), (2.0, 8.0), (3.0, 8.0), (math.inf, 8.0)],
+)
+def test_the_mating_tolerance_stops_at_what_the_largest_clearance_gives(clearance, tolerance):
+    # The measurement settles a pair whose boxes sit farther apart than this
+    # without measuring it, so no reader may ask for more: a clearance past the
+    # largest a printer profile holds, which only a spec built by hand can carry,
+    # gets that profile's tolerance.
+    assert mating_tolerance(clearance) == tolerance
+
+
 def test_each_part_s_neighbours_come_back_in_order():
     # The guide names a part's neighbours in the order they are listed, so an
     # unsorted list makes a sentence's wording depend on set iteration. Nine

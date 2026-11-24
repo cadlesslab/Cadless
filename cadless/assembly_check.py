@@ -59,6 +59,7 @@ from cadless.assembly_tree import readable, unnamed
 from cadless.joint_sizes import REACH_MOST_MM, pieces_along
 from cadless.print_fit import _dimensions, _number, too_big_for
 from cadless.printer_profile import (
+    PRINTER_PROFILE_LIMITS,
     AssemblySpec,
     BuildVolume,
     requested_lengths,
@@ -79,6 +80,12 @@ MATING_TOLERANCE_FACTOR = 4.0
 #: The floor under that tolerance, in millimetres, so a printer configured with no
 #: clearance at all still leaves a usable window rather than demanding contact.
 MATING_TOLERANCE_FLOOR_MM = 1.0
+
+#: The most that tolerance comes to: what the largest joint clearance a printer
+#: profile holds gives.
+MATING_TOLERANCE_MOST_MM = (
+    PRINTER_PROFILE_LIMITS["printer_joint_clearance"][1] * MATING_TOLERANCE_FACTOR
+)
 
 #: Below this shared volume a boolean intersection is arithmetic noise rather than
 #: interpenetration. Faces that merely touch intersect at exactly zero, and the
@@ -347,8 +354,15 @@ def evaluate_assembly(
 
 
 def mating_tolerance(clearance_mm: float) -> float:
-    """How close two parts must come to count as joined, in millimetres."""
-    return max(clearance_mm * MATING_TOLERANCE_FACTOR, MATING_TOLERANCE_FLOOR_MM)
+    """How close two parts must come to count as joined, in millimetres.
+
+    Never more than ``MATING_TOLERANCE_MOST_MM``, whatever clearance a spec built
+    by hand carries.
+    """
+    return min(
+        max(clearance_mm * MATING_TOLERANCE_FACTOR, MATING_TOLERANCE_FLOOR_MM),
+        MATING_TOLERANCE_MOST_MM,
+    )
 
 
 def _length_scale(value: object) -> float | None:
