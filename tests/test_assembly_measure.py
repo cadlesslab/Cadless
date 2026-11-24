@@ -350,6 +350,29 @@ def test_a_distance_between_boxes_that_is_no_measurement_settles_nothing(
     assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
 
 
+def _refusing(*args):
+    raise RuntimeError("the kernel refused")
+
+
+@pytest.mark.parametrize("refused", ["the distance between two boxes", "a part's faces"])
+def test_box_work_the_kernel_refuses_leaves_the_pair_to_be_measured(
+    refused, monkeypatch, pair_probes
+):
+    # A box that cannot be had settles nothing and stops nothing: the pair is
+    # measured as it was before there were boxes.
+    from OCP.Bnd import Bnd_Box
+
+    import cadless.assembly_measure as module
+
+    if refused == "a part's faces":
+        monkeypatch.setattr(module, "_surfaces", _refusing)
+    else:
+        monkeypatch.setattr(Bnd_Box, "Distance", _refusing)
+    m = measure_assembly(_two_boxes(50.0), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+
+
 def test_a_spent_clock_stops_the_pairs_though_none_of_them_needs_a_probe():
     row = [Pos(30 * index, 0, 0) * Box(10, 10, 10) for index in range(4)]
     m = measure_assembly(row, time_budget=0.0)
@@ -495,6 +518,24 @@ def test_a_face_with_no_edge_leaves_the_shape_without_a_box():
 
     both = _together(Box(10, 10, 10).wrapped, BRepBuilderAPI_MakeFace(gp_Pln()).Face())
     assert module._enclosing_box(both) is None
+
+
+def test_an_edge_of_a_kind_with_no_bound_here_leaves_the_shape_without_a_box():
+    # An arc of a parabola is neither straight, nor a circle or an ellipse, nor
+    # drawn from control points, and it bulges past the cube beside it.
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.gp import gp_Ax2, gp_Parab
+
+    import cadless.assembly_measure as module
+
+    arc = BRepBuilderAPI_MakeEdge(gp_Parab(gp_Ax2(), 5.0), -30.0, 30.0).Edge()
+    assert module._enclosing_box(_together(Box(10, 10, 10).wrapped, arc)) is None
+
+
+def test_a_shape_with_nothing_in_it_has_no_box():
+    import cadless.assembly_measure as module
+
+    assert module._enclosing_box(_together()) is None
 
 
 def test_a_point_standing_loose_in_a_shape_is_held_too():
