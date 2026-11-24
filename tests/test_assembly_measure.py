@@ -357,8 +357,8 @@ def test_a_spent_clock_stops_the_pairs_though_none_of_them_needs_a_probe():
     assert m.gaps == []
 
 
-def _short_towards_minus_x(part, reach, by):
-    """``part``, seen to reach ``reach`` towards -X while the kernel's own tight box stops ``by`` short.
+def _ball_past_its_tight_box():
+    """A free-form ball the kernel's own tight box stops short of, on the side towards -X.
 
     Checked rather than taken as given: the tests that use it show what the
     measurement does about the shortfall, and on a kernel with none they would
@@ -367,15 +367,11 @@ def _short_towards_minus_x(part, reach, by):
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
 
+    ball = _as_nurbs(Sphere(120))
     tight = Bnd_Box()
-    BRepBndLib.AddOptimal_s(part.wrapped, tight, False, False)
-    assert tight.Get()[0] > reach + by
-    return part
-
-
-def _ball_past_its_tight_box():
-    """A free-form ball the kernel's own tight box stops short of, on the side towards -X."""
-    return _short_towards_minus_x(_as_nurbs(Sphere(120)), -120.0, 0.6)
+    BRepBndLib.AddOptimal_s(ball.wrapped, tight, False, False)
+    assert tight.Get()[0] > -119.4
+    return ball
 
 
 def test_a_free_form_ball_is_not_read_farther_off_than_it_is(pair_probes):
@@ -1528,13 +1524,15 @@ def test_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
 
 
 def test_a_sphere_about_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
-    # A ball stretched sixteen times along X. A sphere about the kernel's tight
-    # box, which stops short of the tip towards -X, leaves that tip outside it,
-    # and a cube rising through the tip is then never in the sphere's way.
+    # A ball stretched sixteen times along X. The box it gives of itself stops
+    # short of its tip towards -X, so a sphere about that box leaves the tip
+    # outside, and a cube rising through the tip is never in that sphere's way.
     import cadless.assembly_measure as module
 
-    long = _short_towards_minus_x(scale(Sphere(15), (16, 1, 1)), -240.0, 1.5)
+    long = scale(Sphere(15), (16, 1, 1))
     cube = Pos(-239.8, 0, -20) * Box(1, 1, 1)
+    own = [*module._sphere(cube, None), *module._sphere(long, None)]
+    assert module._travel_window(*own, (0.0, 0.0, 1.0)) is None
     assert module._shared_volume(long, Pos(0, 0, 20) * cube) > 0.1
     assert _rule([long, cube], 1, (0, 0, 1)) == BLOCKED
 

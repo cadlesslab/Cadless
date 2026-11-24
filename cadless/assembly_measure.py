@@ -1566,21 +1566,28 @@ def _spheres(scene):
 def _sphere(part, reach):
     """A part's bounding-sphere centre and radius, for the cheap pruning test.
 
-    About ``reach``, the box the sweeps read, where the part has one. The box a
-    part gives of itself is the kernel's own, which can stop short of a
-    free-form face: a sphere about that one left the tip of a long free-form
-    solid outside it, and a part passing through the tip was pruned as never in
-    the way. Only a part with no box of that kind is bounded by the one it
-    gives.
+    Centred on the middle of the box the part gives of itself, and wide enough
+    to hold ``reach``, the box the sweeps read, where the part has one. The box
+    a part gives of itself is the kernel's own, which can stop short of a
+    free-form face: a sphere about that one alone left the tip of a long
+    free-form solid outside it, and a part passing through the tip was pruned
+    as never in the way.
+
+    The centre stays where it was because the headings leading away from a
+    part are drawn from it, and the middle of a box widened by control points
+    can sit well off the part.
     """
+    box = part.bounding_box()
+    centre, size = box.center(), box.size
+    middle = (float(centre.X), float(centre.Y), float(centre.Z))
     if reach is None:
-        box = part.bounding_box()
-        centre, size = box.center(), box.size
-        radius = 0.5 * (size.X**2 + size.Y**2 + size.Z**2) ** 0.5
-        return (float(centre.X), float(centre.Y), float(centre.Z)), float(radius)
-    x0, y0, z0, x1, y1, z1 = reach.Get()
-    radius = 0.5 * ((x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2) ** 0.5
-    return ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0), radius
+        return middle, float(0.5 * (size.X**2 + size.Y**2 + size.Z**2) ** 0.5)
+    corners = reach.Get()
+    farthest = [
+        max(abs(low - at), abs(high - at))
+        for at, low, high in zip(middle, corners[:3], corners[3:], strict=True)
+    ]
+    return middle, sum(side**2 for side in farthest) ** 0.5
 
 
 def _look_ahead(parts) -> float | None:
