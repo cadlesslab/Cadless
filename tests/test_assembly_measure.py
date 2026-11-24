@@ -380,27 +380,50 @@ def test_a_spent_clock_stops_the_pairs_though_none_of_them_needs_a_probe():
     assert m.gaps == []
 
 
-def _ball_past_its_tight_box():
-    """A free-form ball the kernel's own tight box stops short of, on the side towards -X.
+@pytest.fixture
+def stopping_short_of(monkeypatch):
+    """Stand a kernel box that stops short of a part in the kernel's own place.
 
-    Checked rather than taken as given: the tests that use it show what the
-    measurement does about the shortfall, and on a kernel with none they would
-    pass without showing it.
+    Answers a function taking a part and where the kernel's tight box of it is to
+    start along X. The kernel finds the bound of a free-form face by a search,
+    and whether that search stops short of the face depends on the build the
+    kernel runs on: the same version stopped short of a B-spline ball on one
+    machine and reached it on another. The tests that use this show what the
+    measurement does about a box that stops short, whichever they run on.
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
 
-    ball = _as_nurbs(Sphere(120))
-    tight = Bnd_Box()
-    BRepBndLib.AddOptimal_s(ball.wrapped, tight, False, False)
-    assert tight.Get()[0] > -119.4
-    return ball
+    real = BRepBndLib.AddOptimal_s
+    starts: list[tuple[object, float]] = []
+
+    def stand_in(shape, box, *flags):
+        found = Bnd_Box()
+        real(shape, found, *flags)
+        if found.IsVoid():
+            return
+        corners = list(found.Get())
+        for held, start in starts:
+            if shape.IsSame(held):
+                corners[0] = start
+        box.Update(*corners)
+
+    monkeypatch.setattr(BRepBndLib, "AddOptimal_s", staticmethod(stand_in))
+
+    def shorten(part, start):
+        starts.append((part.wrapped, start))
+        tight = Bnd_Box()
+        BRepBndLib.AddOptimal_s(part.wrapped, tight, False, False)
+        assert tight.Get()[0] == start
+        return part
+
+    return shorten
 
 
-def test_a_free_form_ball_is_not_read_farther_off_than_it_is(pair_probes):
+def test_a_free_form_ball_is_not_read_farther_off_than_it_is(stopping_short_of, pair_probes):
     # The block stands 7.5 mm off the side the kernel's tight box stops short on.
     # Read from that box the two sit past the largest tolerance, and they do not.
-    ball = _ball_past_its_tight_box()
+    ball = stopping_short_of(_as_nurbs(Sphere(120)), -118.9)
     block = Pos(-132.5, 0, 0) * Box(10, 10, 10)
     m = measure_assembly([ball, block], probe_budget=2)
     assert pair_probes == {"shared": 1, "distance": 1}
@@ -1567,25 +1590,27 @@ def test_a_part_s_box_is_taken_once_however_many_headings_ask_for_it(monkeypatch
     assert set(taken.values()) == {1}
 
 
-def test_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
+def test_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes(stopping_short_of):
     # The block rises past the side the kernel's tight box stops short on, and
     # shaves it on the way. Skipped on that box, the boolean that sees the clash
     # is never made.
     import cadless.assembly_measure as module
 
-    ball = _ball_past_its_tight_box()
+    ball = stopping_short_of(_as_nurbs(Sphere(120)), -118.9)
     block = Pos(-129.75, 0, -175) * Box(20.5, 10, 50)
     assert module._shared_volume(ball, Pos(0, 0, 175) * block) > 1.0
     assert _rule([ball, block], 1, (0, 0, 1)) == BLOCKED
 
 
-def test_a_sphere_about_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
-    # A ball stretched sixteen times along X. The box it gives of itself stops
-    # short of its tip towards -X, so a sphere about that box leaves the tip
+def test_a_sphere_about_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes(
+    stopping_short_of,
+):
+    # A ball stretched sixteen times along X, reaching -240. The box it gives of
+    # itself stops short of that tip, so a sphere about that box leaves the tip
     # outside, and a cube rising through the tip is never in that sphere's way.
     import cadless.assembly_measure as module
 
-    long = scale(Sphere(15), (16, 1, 1))
+    long = stopping_short_of(scale(Sphere(15), (16, 1, 1)), -237.5)
     cube = Pos(-239.8, 0, -20) * Box(1, 1, 1)
     own = [*module._sphere(cube, None), *module._sphere(long, None)]
     assert module._travel_window(*own, (0.0, 0.0, 1.0)) is None

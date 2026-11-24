@@ -983,12 +983,14 @@ def _box_of(shape):
 
     The tight bound of a B-spline or Bezier face or edge is found by a search,
     and the search can stop short of the surface: a box taken so sat inside a
-    ball whose faces are B-splines. So the box is widened to hold the control
-    points of every such face and edge, which the geometry cannot leave, and on
-    a free-form part it is tight no longer. That costs the prefilter some
-    booleans there. The box :func:`_enclosing_box` builds would cost it more:
-    that one bounds a sphere and a torus whole, however small the piece of one a
-    face is.
+    ball whose faces are B-splines. Whether it does depends on the build the
+    kernel runs on -- the same version stopped short on one machine and reached
+    the ball on another -- so a machine where it reaches shows nothing about
+    the rest. The box is therefore widened to hold the control points of every
+    such face and edge, which the geometry cannot leave, and on a free-form
+    part it is tight no longer. That costs the prefilter some booleans there.
+    The box :func:`_enclosing_box` builds would cost it more: that one bounds a
+    sphere and a torus whole, however small the piece of one a face is.
 
     The other kinds the kernel bounds by a search -- a surface turned about an
     axis from a free-form profile, an offset surface -- have no control points
