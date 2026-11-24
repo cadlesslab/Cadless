@@ -1583,11 +1583,24 @@ def test_a_spent_clock_stops_the_search_before_a_part_s_sphere_is_taken(monkeypa
 
 def test_a_spent_clock_stops_the_search_at_a_heading_that_needs_no_probe():
     # The first cube leaves along +X with the other behind it, which no probe is
-    # spent on, so only the clock can stop the search there.
+    # spent on, so only the clock can stop the search there. The clock runs out
+    # once it has been read for the two spheres, so it is the reading at the
+    # heading that finds it out.
     import cadless.assembly_measure as module
 
+    class _OutAfterTwoReadings:
+        left = 2
+
+        def check(self):
+            if self.left == 0:
+                raise module._BudgetSpent
+            self.left -= 1
+
+        def spend(self):
+            raise AssertionError("a probe was spent on a heading with nothing in the way")
+
     pair = [Box(10, 10, 10), Pos(-60, 0, 0) * Box(10, 10, 10)]
-    order, _, unchecked, _ = module._disassembly_order(pair, module._Budget(10**6, 0.0))
+    order, _, unchecked, _ = module._disassembly_order(pair, _OutAfterTwoReadings())
     assert order is None
     assert any("ran out of budget" in reason for reason in unchecked)
 
