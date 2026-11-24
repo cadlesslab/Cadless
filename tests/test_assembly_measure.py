@@ -447,6 +447,18 @@ def test_a_face_with_no_edge_leaves_the_shape_without_a_box():
     assert module._enclosing_box(both) is None
 
 
+def test_a_shape_loose_about_its_own_edges_gets_a_box_that_much_wider():
+    # The kernel lets an edge sit as far off its face as the shape's tolerance,
+    # so a box drawn from the edges has to reach that much farther.
+    from OCP.ShapeFix import ShapeFix_ShapeTolerance
+
+    import cadless.assembly_measure as module
+
+    cube = Box(10, 10, 10)
+    ShapeFix_ShapeTolerance().SetTolerance(cube.wrapped, 0.5)
+    assert module._enclosing_box(cube.wrapped).Get()[0] <= -5.5
+
+
 def test_a_part_with_nothing_in_it_is_reported_rather_than_raised():
     m = measure_assembly([Box(10, 10, 10), Solid()])
     assert any("the distance could not be computed" in reason for reason in m.unchecked)
