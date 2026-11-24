@@ -463,6 +463,18 @@ def test_a_face_with_no_edge_leaves_the_shape_without_a_box():
     assert module._enclosing_box(both) is None
 
 
+def test_a_solid_turned_inside_out_is_not_settled_by_its_boxes(pair_probes):
+    # To the kernel such a solid is everything outside its shell, so it shares
+    # the whole of a cube standing well clear of that shell, and the build is
+    # refused for it. No box holds what it takes the solid to be.
+    from OCP.TopoDS import TopoDS
+
+    inside_out = Solid(TopoDS.Solid_s(Box(10, 10, 10).solid().wrapped.Reversed()))
+    m = measure_assembly([inside_out, Pos(60, 0, 0) * Box(10, 10, 10)], probe_budget=3)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert [entry[:2] for entry in m.overlaps] == [[0, 1]]
+
+
 def test_a_shape_loose_about_its_own_edges_gets_a_box_that_much_wider():
     # The kernel lets an edge sit as far off its face as the shape's tolerance,
     # so a box drawn from the edges has to reach that much farther.

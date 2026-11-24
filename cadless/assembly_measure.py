@@ -1020,10 +1020,16 @@ def _enclosing_box(shape):
     kind with no edge to end on; the shape then has no box, and its pairs are
     measured. The margin is widened by the loosest tolerance the shape carries,
     since an edge may sit that far off the face it bounds.
+
+    A solid turned inside out has no box either. The kernel takes it for
+    everything outside its shell, and says of a part standing well clear of that
+    shell that the two share the whole of the part; a box drawn round the shell
+    holds none of that.
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BndLib import BndLib
     from OCP.BRep import BRep_Tool
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
     from OCP.GeomAbs import (
         GeomAbs_Circle,
         GeomAbs_Cone,
@@ -1035,8 +1041,9 @@ def _enclosing_box(shape):
         GeomAbs_SurfaceOfExtrusion,
         GeomAbs_Torus,
     )
+    from OCP.Precision import Precision
     from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
-    from OCP.TopAbs import TopAbs_EDGE, TopAbs_VERTEX
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_OUT, TopAbs_SOLID, TopAbs_VERTEX
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopoDS import TopoDS
 
@@ -1044,6 +1051,11 @@ def _enclosing_box(shape):
         return None
     box = Bnd_Box()
     try:
+        for solid in _each(shape, TopAbs_SOLID):
+            beyond = BRepClass3d_SolidClassifier(solid)
+            beyond.PerformInfinitePoint(Precision.Confusion_s())
+            if beyond.State() != TopAbs_OUT:
+                return None
         for surface in _surfaces(shape):
             kind = surface.GetType()
             if kind in (GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_SurfaceOfExtrusion):
