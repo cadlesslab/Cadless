@@ -1520,25 +1520,31 @@ def _travel_window(centre, radius, other_centre, other_radius, direction):
 
 
 def _candidate_directions(spheres, index, others):
-    """The six axes, plus a direction leading away from each remaining part.
+    """The six axes, then a direction leading away from each remaining part.
 
     The geometry-derived ones cover a joint whose slide axis is not aligned to an
     axis. Adding a candidate can only remove a false refusal, never create a false
     pass: every direction offered is still checked against the solids, so one that
     is not really free is rejected when it is ruled.
+
+    Handed out one at a time, each worked out only when the one before it has
+    been ruled. A part that leaves along an axis never needs the rest, and
+    listing them all first cost the square of the part count for every part
+    tried, before the search had ruled a heading or read its clock.
     """
     from build123d import Vector
 
     directions = [Vector(*axis) for axis in _AXES]
+    yield from tuple(directions)
     centre = Vector(*spheres[index][0])
     for other in others:
         away = centre - Vector(*spheres[other][0])
         if away.length > 1e-9:
             away = away.normalized()
-            # A heading already listed would only be ruled a second time.
+            # A heading already handed out would only be ruled a second time.
             if all((away - known).length > 1e-9 for known in directions):
                 directions.append(away)
-    return directions
+                yield away
 
 
 def _sphere(part):

@@ -1497,6 +1497,20 @@ def test_a_heading_away_from_a_part_that_is_already_an_axis_is_tried_once():
     assert sum(1 for heading in headings if (heading - Vector(1, 0, 0)).length < 1e-9) == 1
 
 
+def test_the_headings_leading_away_are_worked_out_only_after_the_axes_are_handed_out():
+    # A part that leaves along an axis never needs them, and listing them for
+    # every part first costs the square of the part count before the search has
+    # ruled anything or read its clock.
+    import cadless.assembly_measure as module
+
+    class _NotToBeRead:
+        def __getitem__(self, item):
+            raise AssertionError("read before the axes had been handed out")
+
+    headings = module._candidate_directions({0: ((0.0, 0.0, 0.0), 1.0), 1: _NotToBeRead()}, 0, [1])
+    assert len([next(headings) for _ in range(6)]) == 6
+
+
 def test_the_order_search_does_not_ask_again_what_the_pairwise_phase_measured(monkeypatch):
     # Two blocks that sweep exactly: their shared volume where they stand is asked
     # once, by the pairwise phase, and not again for every heading tried.
