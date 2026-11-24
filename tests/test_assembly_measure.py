@@ -1397,6 +1397,26 @@ def test_a_part_whose_box_cannot_be_taken_is_not_read_as_clear(monkeypatch):
     assert _rule([channel, bar], 0, (0, 0, 1)) == BLOCKED
 
 
+def test_a_part_s_box_is_taken_once_however_many_headings_ask_for_it(monkeypatch):
+    # Taking it walks every face and edge of the part, and the search asks for
+    # the same part's at each heading it rules: a caged block and its shell are
+    # each ruled against the other along every one.
+    import cadless.assembly_measure as module
+
+    pair = _caged()
+    taken = {id(part.wrapped): 0 for part in pair}
+    real = module._box_of
+
+    def counted(shape):
+        if id(shape) in taken:
+            taken[id(shape)] += 1
+        return real(shape)
+
+    monkeypatch.setattr(module, "_box_of", counted)
+    measure_assembly(pair)
+    assert set(taken.values()) == {1}
+
+
 def test_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
     # The kernel's tight box stops short of this ball on the side the block rises
     # past, and the block shaves that side. Skipped on that box, the boolean that

@@ -539,12 +539,15 @@ def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, 
             return _BLOCKED
         if own is _UNBUILT:
             own = _sweep(parts[index], direction, length, budget)
-        met = None if own is None else _sweep_meets(own, parts[other], budget)
+        met = None
+        if own is not None:
+            met = _sweep_meets(own, parts[other], scene.reach(other), budget)
         if met is None:
             # No exact sweep of the moving part, or a boolean of it the kernel
             # refused: try the other part swept back.
             theirs = _sweep(parts[other], -direction, length, budget)
-            met = None if theirs is None else _sweep_meets(theirs, parts[index], budget)
+            if theirs is not None:
+                met = _sweep_meets(theirs, parts[index], scene.reach(index), budget)
         if met:
             return _BLOCKED
         if met is None:
@@ -583,6 +586,7 @@ class _Scene:
         self._nested: dict[tuple, bool] = {}
         self._axes: dict[int, list] = {}
         self._boxes: dict[int, object] = {}
+        self._reach: dict[int, object] = {}
         #: The volume each pair ``(i, j)``, ``i < j``, shares where it stands --
         #: ``None`` where the kernel could not say. Filled by the pairwise phase,
         #: which asked already or saw the pair's boxes apart, so no heading asks
@@ -607,12 +611,18 @@ class _Scene:
     def box(self, index):
         """A box the part cannot reach out of, taken once; ``None`` where none is known."""
         if index not in self._boxes:
-            try:
-                shape = self.parts[index].wrapped
-            except Exception:  # noqa: BLE001 - a part with nothing in it has no box
-                shape = None
-            self._boxes[index] = _enclosing_box(shape)
+            self._boxes[index] = _enclosing_box(_shape_of(self.parts[index]))
         return self._boxes[index]
+
+    def reach(self, index):
+        """The box the sweeps and the bore test read the part's reach from, taken once.
+
+        Once, because reading it walks every face and edge of the part and a
+        search asks for the same part's at every heading.
+        """
+        if index not in self._reach:
+            self._reach[index] = _box_of(_shape_of(self.parts[index]))
+        return self._reach[index]
 
     def apart(self, first, second) -> float | None:
         """How far apart the two parts' boxes sit, where that alone settles the pair.
@@ -651,7 +661,10 @@ class _Scene:
         for line in _bore_lines(self.axes(first) + self.axes(second), direction):
             key = (min(first, second), max(first, second), line[2])
             if key not in self._nested:
-                self._nested[key] = _one_inside_the_other(self.parts, first, second, line, budget)
+                boxes = {first: self.reach(first), second: self.reach(second)}
+                self._nested[key] = _one_inside_the_other(
+                    self.parts, boxes, first, second, line, budget
+                )
             if self._nested[key]:
                 return True
         return False
@@ -671,13 +684,12 @@ def _sweep(part, direction, length, budget):
         return None
 
 
-def _sweep_meets(pieces, part, budget) -> bool | None:
-    """Whether any piece of a sweep shares volume with ``part``.
+def _sweep_meets(pieces, part, reach, budget) -> bool | None:
+    """Whether any piece of a sweep shares volume with ``part``, whose box is ``reach``.
 
     ``None`` when the kernel could not tell -- no box for the part, or a boolean
     it refused -- which is neither a clash nor a clear path.
     """
-    reach = _box_of(getattr(part, "wrapped", None))
     if reach is None:
         return None
     refused = False
@@ -1065,6 +1077,14 @@ def _enclosing_box(shape):
     return box
 
 
+def _shape_of(part):
+    """The kernel's shape under ``part``, or ``None`` where it has none to give."""
+    try:
+        return part.wrapped
+    except Exception:  # noqa: BLE001 - a part with nothing in it has no box
+        return None
+
+
 def _each(shape, kind):
     """Every sub-shape of ``kind`` in ``shape``, once however many others share it."""
     from OCP.TopExp import TopExp
@@ -1239,8 +1259,10 @@ def _bore_lines(axes, direction):
     return list(lines.values())
 
 
-def _one_inside_the_other(parts, first, second, line, budget) -> bool:
+def _one_inside_the_other(parts, boxes, first, second, line, budget) -> bool:
     """Whether one part lies inside a round bore, about ``line``, of the other.
+
+    ``boxes`` holds each of the two parts' boxes, by its index.
 
     Distances only place a test cylinder: the outer part's nearest approach to the
     axis is its bore, and the cylinder goes halfway across the gap the inner part
@@ -1256,7 +1278,7 @@ def _one_inside_the_other(parts, first, second, line, budget) -> bool:
     cylinder fails one of the two booleans rather than passing both.
     """
     point, heading, _ = line
-    spans = {index: _span(parts[index], heading) for index in (first, second)}
+    spans = {index: _span(boxes[index], heading) for index in (first, second)}
     reach = {}
     for index in (first, second):
         segment = _axis_segment(point, heading, spans[index])
@@ -1299,9 +1321,8 @@ def _line_key(direction) -> tuple[float, float, float]:
     return tuple(round(sign * value, _HEADING_KEY_DECIMALS) for value in values)
 
 
-def _span(part, heading, margin: float = _SPAN_MARGIN_MM):
-    """How far along ``heading`` the part reaches, with ``margin`` beyond each end."""
-    box = _box_of(getattr(part, "wrapped", None))
+def _span(box, heading, margin: float = _SPAN_MARGIN_MM):
+    """How far along ``heading`` a part with this box reaches, with ``margin`` beyond each end."""
     if box is None:
         return None
     low = box.Get()
