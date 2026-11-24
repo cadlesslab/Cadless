@@ -145,14 +145,21 @@ def measure_assembly(
     gaps: list[list[float]] = []
 
     def stopped() -> AssemblyMeasurements:
-        """What a measurement that stops at the pairs hands back: no order looked for."""
+        """What a measurement that stops at the pairs hands back: no order looked for.
+
+        Said in a line of its own, since a report with no order and no word on
+        why reads as a search that came back with nothing.
+        """
         return AssemblyMeasurements(
             part_bboxes=boxes,
             overlaps=overlaps,
             gaps=gaps,
             order=None,
             trapped=[],
-            unchecked=unchecked,
+            unchecked=[
+                *unchecked,
+                f"{_ORDER_UNCHECKED_PREFIX} not looked for, as not every pair was measured",
+            ],
             overlap_boxes=overlap_boxes,
         )
 

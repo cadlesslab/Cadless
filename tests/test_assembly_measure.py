@@ -507,6 +507,14 @@ def test_a_build_of_more_parts_than_that_is_said_before_any_pair_is_measured():
     assert len(m.part_bboxes) == 501
 
 
+def test_a_measurement_stopped_at_the_pairs_says_why_no_order_was_looked_for():
+    # Without a line of its own the report read as though the order had been
+    # looked for and nothing had come back.
+    report = evaluate_assembly(measure_assembly(_caged(), probe_budget=1), _WIDEST_CLEARANCE)
+    about_the_order = [line for line in report.unchecked if line.startswith("assembly order:")]
+    assert about_the_order == ["assembly order: not looked for, as not every pair was measured"]
+
+
 _WIDEST_CLEARANCE = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=2.0)
 
 
