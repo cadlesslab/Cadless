@@ -262,6 +262,15 @@ def test_a_pair_whose_boxes_sit_far_apart_is_settled_with_no_probe_to_spend():
     assert m.overlaps == []
 
 
+def test_a_pair_settled_by_its_boxes_counts_among_the_pairs_measured():
+    # The second cube is far from the first and the third is near it: the far pair
+    # is settled, and the budget runs out on the near one that follows.
+    parts = [Box(10, 10, 10), Pos(60, 0, 0) * Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10)]
+    m = measure_assembly(parts, probe_budget=0)
+    assert any("ran out of budget after 1 of 3 pairs" in reason for reason in _pairs_line(m))
+    assert [entry[:2] for entry in m.gaps] == [[0, 1]]
+
+
 def test_two_hundred_parts_far_apart_are_measured_without_a_pair_probe(pair_probes):
     # 19,900 pairs: two probes each is twice the whole budget, and none is needed.
     grid = [Pos(30 * (i % 20), 30 * (i // 20), 0) * Box(10, 10, 10) for i in range(200)]
