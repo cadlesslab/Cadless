@@ -14,10 +14,13 @@ from types import SimpleNamespace
 import pytest
 from build123d import (
     Align,
+    Bezier,
     Box,
     Circle,
+    Compound,
     Cone,
     Cylinder,
+    Face,
     GeomType,
     Line,
     Plane,
@@ -401,17 +404,53 @@ def _loft():
     return loft([Circle(10), Pos(0, 0, 20) * Rectangle(8, 14)])
 
 
+def _bezier_plate():
+    """A plate whose one side is a Bezier curve, pulled out by a control point it never reaches."""
+    outline = Bezier((0, 0), (10, 15), (20, 0)) + Line((20, 0), (0, 0))
+    return extrude(make_face(outline), 5)
+
+
+def _raised_patch():
+    """A Bezier face whose middle stands above the four straight edges round it."""
+    return Face.make_bezier_surface(
+        [
+            [(0, 0, 0), (5, 0, 0), (10, 0, 0)],
+            [(0, 5, 0), (5, 5, 12), (10, 5, 0)],
+            [(0, 10, 0), (5, 10, 0), (10, 10, 0)],
+        ]
+    )
+
+
+def _together(*shapes):
+    """The kernel's shapes in one compound, as they are."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    both = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(both)
+    for shape in shapes:
+        builder.Add(both, shape)
+    return both
+
+
+# Placed away from the origin and turned, so a bound taken where the surface was
+# drawn rather than where the part stands does not hold it.
 _HELD = {
     "a bar turned off the axes": lambda: Rot(10, 20, 30) * Box(30, 4, 4),
     "a cone to a point": lambda: Rot(40, 0, 25) * Cone(10, 0, 20),
-    "a ring": lambda: Rot(20, 40, 0) * Torus(20, 3),
-    "a ball cut by a block": lambda: Sphere(10) & (Pos(5, 0, 0) * Box(10, 30, 30)),
+    "a ring": lambda: Pos(-15, 25, 10) * Rot(20, 40, 0) * Torus(20, 3),
+    "a ball cut by a block": lambda: (
+        Pos(40, 30, -20) * (Sphere(10) & (Pos(5, 0, 0) * Box(10, 30, 30)))
+    ),
     "a cylinder cut aslant": lambda: (
         Cylinder(5, 30) - Rot(0, 30, 0) * Pos(0, 0, 25) * Box(60, 60, 20)
     ),
     "a rounded block": lambda: fillet(Box(20, 20, 20).edges(), 3),
     "a spline plate": lambda: Rot(25, 35, 10) * _spline_plate(),
-    "a loft": _loft,
+    "a Bezier plate": lambda: Rot(25, 35, 10) * _bezier_plate(),
+    "a loft": lambda: Pos(-30, 12, 5) * Rot(15, 0, 40) * _loft(),
+    "a raised Bezier patch": lambda: Pos(8, -4, 3) * Rot(0, 30, 0) * _raised_patch(),
     "a free-form ball": lambda: _as_nurbs(Sphere(6)),
 }
 
@@ -448,43 +487,60 @@ def test_a_part_with_a_surface_no_closed_form_bounds_is_measured_by_the_kernel(p
 def test_a_face_with_no_edge_leaves_the_shape_without_a_box():
     # A plane with no edge runs on for ever, so nothing drawn from the cube
     # beside it bounds the two together.
-    from OCP.BRep import BRep_Builder
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
     from OCP.gp import gp_Pln
-    from OCP.TopoDS import TopoDS_Compound
 
     import cadless.assembly_measure as module
 
-    both = TopoDS_Compound()
-    builder = BRep_Builder()
-    builder.MakeCompound(both)
-    builder.Add(both, Box(10, 10, 10).wrapped)
-    builder.Add(both, BRepBuilderAPI_MakeFace(gp_Pln()).Face())
+    both = _together(Box(10, 10, 10).wrapped, BRepBuilderAPI_MakeFace(gp_Pln()).Face())
     assert module._enclosing_box(both) is None
 
 
-def test_a_solid_turned_inside_out_is_not_settled_by_its_boxes(pair_probes):
+def test_a_point_standing_loose_in_a_shape_is_held_too():
+    # No edge ends on it, and the kernel measures a distance to it all the same.
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+    from OCP.gp import gp_Pnt
+
+    import cadless.assembly_measure as module
+
+    both = _together(Box(10, 10, 10).wrapped, BRepBuilderAPI_MakeVertex(gp_Pnt(50, 0, 0)).Vertex())
+    assert module._enclosing_box(both).Get()[3] >= 50.0
+
+
+@pytest.mark.parametrize("beside_another", [False, True], ids=["alone", "beside a sound solid"])
+def test_a_solid_turned_inside_out_is_not_settled_by_its_boxes(beside_another, pair_probes):
     # To the kernel such a solid is everything outside its shell, so it shares
     # the whole of a cube standing well clear of that shell, and the build is
-    # refused for it. No box holds what it takes the solid to be.
+    # refused for it. No box holds what it takes the solid to be, whether the
+    # part is that solid or only holds it.
     from OCP.TopoDS import TopoDS
 
-    inside_out = Solid(TopoDS.Solid_s(Box(10, 10, 10).solid().wrapped.Reversed()))
-    m = measure_assembly([inside_out, Pos(60, 0, 0) * Box(10, 10, 10)], probe_budget=3)
+    part = Solid(TopoDS.Solid_s(Box(10, 10, 10).solid().wrapped.Reversed()))
+    if beside_another:
+        part = Compound(_together(part.wrapped, (Pos(0, 20, 0) * Box(5, 5, 5)).wrapped))
+    m = measure_assembly([part, Pos(60, 0, 0) * Box(10, 10, 10)], probe_budget=3)
     assert pair_probes == {"shared": 1, "distance": 1}
     assert [entry[:2] for entry in m.overlaps] == [[0, 1]]
 
 
-def test_a_shape_loose_about_its_own_edges_gets_a_box_that_much_wider():
-    # The kernel lets an edge sit as far off its face as the shape's tolerance,
-    # so a box drawn from the edges has to reach that much farther.
+def test_a_shape_loose_about_one_edge_gets_a_box_that_much_wider():
+    # The kernel lets an edge sit as far off its face as the edge's tolerance, so
+    # a box drawn from the edges has to reach as far as the loosest of them.
     from OCP.ShapeFix import ShapeFix_ShapeTolerance
 
     import cadless.assembly_measure as module
 
     cube = Box(10, 10, 10)
-    ShapeFix_ShapeTolerance().SetTolerance(cube.wrapped, 0.5)
+    ShapeFix_ShapeTolerance().SetTolerance(cube.edges()[0].wrapped, 0.5)
     assert module._enclosing_box(cube.wrapped).Get()[0] <= -5.5
+
+
+def test_the_box_the_sweeps_read_holds_a_free_form_edge_s_control_points():
+    # By its control points, as a free-form face is: the kernel bounds an edge by
+    # the same kind of search that stops short of a face.
+    import cadless.assembly_measure as module
+
+    assert module._box_of(_bezier_plate().wrapped).Get()[4] >= 15.0
 
 
 def test_a_part_with_nothing_in_it_is_reported_rather_than_raised():
