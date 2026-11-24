@@ -986,6 +986,10 @@ def _box_of(shape):
     booleans there. The box :func:`_enclosing_box` builds would cost it more:
     that one bounds a sphere and a torus whole, however small the piece of one a
     face is.
+
+    The other kinds the kernel bounds by a search -- a surface turned about an
+    axis from a free-form profile, an offset surface -- have no control points
+    to be held by, and are left to it.
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
