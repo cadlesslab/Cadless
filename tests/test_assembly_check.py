@@ -537,6 +537,13 @@ def test_the_mating_tolerance_stops_at_what_the_largest_clearance_gives(clearanc
     assert mating_tolerance(clearance) == tolerance
 
 
+def test_a_gap_of_exactly_the_tolerance_joins():
+    # The measurement leaves a pair whose boxes sit exactly the largest tolerance
+    # apart to the kernel for this reason: at that distance two parts still join.
+    neighbours, _ = mating_graph([[0, 1, 8.0]], 2, 8.0)
+    assert neighbours == {0: {1}, 1: {0}}
+
+
 def test_no_tolerance_past_the_largest_reads_a_gap_as_a_joint():
     # Past 8 mm a gap may be the distance between two parts' boxes, which their
     # own is never less than. Asked at 9, a pair recorded 8.5 apart may stand

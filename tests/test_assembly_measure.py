@@ -353,11 +353,27 @@ def test_a_spent_clock_stops_the_pairs_though_none_of_them_needs_a_probe():
     assert m.gaps == []
 
 
-def test_a_free_form_ball_is_not_read_farther_off_than_it_is(pair_probes):
-    # The kernel's own tight box stops short of this ball on the side the block
-    # is on. Read from that box the two sit past the largest tolerance, and they
-    # do not.
+def _ball_past_its_tight_box():
+    """A free-form ball the kernel's own tight box stops short of, on the side towards -X.
+
+    Checked rather than taken as given: the tests that use it show what the
+    measurement does about the shortfall, and on a kernel with none they would
+    pass without showing it.
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
     ball = _as_nurbs(Sphere(120))
+    tight = Bnd_Box()
+    BRepBndLib.AddOptimal_s(ball.wrapped, tight, False, False)
+    assert tight.Get()[0] > -119.4
+    return ball
+
+
+def test_a_free_form_ball_is_not_read_farther_off_than_it_is(pair_probes):
+    # The block stands 7.5 mm off the side the kernel's tight box stops short on.
+    # Read from that box the two sit past the largest tolerance, and they do not.
+    ball = _ball_past_its_tight_box()
     block = Pos(-132.5, 0, 0) * Box(10, 10, 10)
     m = measure_assembly([ball, block], probe_budget=2)
     assert pair_probes == {"shared": 1, "distance": 1}
@@ -466,7 +482,7 @@ def test_a_part_with_nothing_in_it_is_reported_rather_than_raised():
 
 def test_five_hundred_parts_have_their_pairs_measured():
     row = [Pos(30 * index, 0, 0) * Box(10, 10, 10) for index in range(500)]
-    m = measure_assembly(row, probe_budget=0)
+    m = measure_assembly(row, probe_budget=0, time_budget=600.0)
     assert _pairs_line(m) == []
     assert len(m.gaps) == 124_750
 
@@ -1418,11 +1434,14 @@ def test_a_part_s_box_is_taken_once_however_many_headings_ask_for_it(monkeypatch
 
 
 def test_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
-    # The kernel's tight box stops short of this ball on the side the block rises
-    # past, and the block shaves that side. Skipped on that box, the boolean that
-    # sees the clash is never made.
-    ball = _as_nurbs(Sphere(120))
+    # The block rises past the side the kernel's tight box stops short on, and
+    # shaves it on the way. Skipped on that box, the boolean that sees the clash
+    # is never made.
+    import cadless.assembly_measure as module
+
+    ball = _ball_past_its_tight_box()
     block = Pos(-129.75, 0, -175) * Box(20.5, 10, 50)
+    assert module._shared_volume(ball, Pos(0, 0, 175) * block) > 1.0
     assert _rule([ball, block], 1, (0, 0, 1)) == BLOCKED
 
 
