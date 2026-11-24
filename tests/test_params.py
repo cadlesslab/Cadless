@@ -94,3 +94,34 @@ def test_apply_overrides_non_literal_value_raises():
 def test_apply_overrides_no_params_block_raises():
     with pytest.raises(ValueError, match="no `params` block"):
         apply_param_overrides(NO_PARAMS, {"length": 5})
+
+
+# str.splitlines ends a line at each of these; Python's tokenizer, which gives the
+# literal its line number, ends a line at none of them.
+NOT_LINE_ENDS = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+
+
+@pytest.mark.parametrize("char", NOT_LINE_ENDS)
+@pytest.mark.parametrize(
+    "above", ['"""A plate.{char}Sized by params."""\n', "# A plate.{char}Sized by params.\n"]
+)
+def test_apply_overrides_lands_in_the_literal_past_text_python_reads_as_one_line(
+    char: str, above: str
+):
+    code = above.format(char=char) + 'params = {"w": 10}\nresult = params["w"]\n'
+    out = apply_param_overrides(code, {"w": 20})
+    assert out == code.replace('params = {"w": 10}', "params = {'w': 20}")
+
+
+def test_apply_overrides_lands_in_the_literal_after_non_ascii_text_on_its_line():
+    # The literal's column is counted in UTF-8 bytes; the text in characters.
+    code = 'label = "caf\u00e9 \u20ac"; params = {"w": 10}\nresult = params["w"]\n'
+    out = apply_param_overrides(code, {"w": 20})
+    assert out == code.replace('params = {"w": 10}', "params = {'w': 20}")
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_apply_overrides_counts_every_line_ending_python_counts(newline: str):
+    code = newline.join(["x = 1", 'params = {"w": 10}', 'result = params["w"]', ""])
+    out = apply_param_overrides(code, {"w": 20})
+    assert out == code.replace('params = {"w": 10}', "params = {'w': 20}")

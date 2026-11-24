@@ -923,3 +923,127 @@ def test_the_child_reports_what_ends_a_build_early(tmp_path, capsys, monkeypatch
     payload = _child(tmp_path, capsys, "from build123d import *\nresult = Box(1, 1, 1)\n")
 
     assert (payload["ok"], payload["error_type"]) == (False, "SystemExit")
+
+
+# The first side a loop over a set of strings meets follows the string hash seed;
+# its length sets the box's size, so the volume shows which side came first.
+_SIZED_BY_SET_ORDER = (
+    "from build123d import *\n"
+    "for side in {'left', 'right', 'front', 'back', 'top', 'bottom'}:\n"
+    "    break\n"
+    "result = Box(10 + len(side), 10, 10)\n"
+)
+
+
+def test_a_build_does_not_depend_on_the_hash_seed_it_was_started_under(monkeypatch):
+    volumes = set()
+    for seed in ("1", "2", "3", "4", "5", "random"):
+        monkeypatch.setenv("PYTHONHASHSEED", seed)
+        res = run_code(_SIZED_BY_SET_ORDER)
+        assert res.ok, res.error
+        volumes.add(round(res.volume, 6))
+    assert len(volumes) == 1, volumes
+
+
+def test_a_build_keeps_its_asserts_whatever_the_environment_asks(monkeypatch):
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+    res = run_code("from build123d import *\nassert False, 'kept'\nresult = Box(1, 1, 1)\n")
+    assert not res.ok
+    assert "AssertionError" in res.error
+
+
+def test_a_build_does_not_depend_on_the_digit_limit_it_was_started_under(monkeypatch):
+    # str() of a 5,001-digit integer raises under the default limit, not under 0.
+    code = (
+        "from build123d import *\n"
+        "try:\n"
+        "    n = len(str(10 ** 5000))\n"
+        "except ValueError:\n"
+        "    n = 1\n"
+        "result = Box(10 + n / 1000, 10, 10)\n"
+    )
+    volumes = set()
+    for limit in (None, "0"):
+        if limit is None:
+            monkeypatch.delenv("PYTHONINTMAXSTRDIGITS", raising=False)
+        else:
+            monkeypatch.setenv("PYTHONINTMAXSTRDIGITS", limit)
+        res = run_code(code)
+        assert res.ok, res.error
+        volumes.add(round(res.volume, 6))
+    assert len(volumes) == 1, volumes
+
+
+def test_a_build_does_not_fail_on_warnings_the_environment_turns_into_errors(monkeypatch):
+    monkeypatch.setenv("PYTHONWARNINGS", "error")
+    res = run_code("from build123d import *\nlabel = '\\d'\nresult = Box(1, 1, 1)\n")
+    assert res.ok, res.error
+
+
+def _locale_installed(name: str) -> bool:
+    probe = f"import locale; locale.setlocale(locale.LC_ALL, {name!r})"
+    return subprocess.run([sys.executable, "-c", probe], capture_output=True).returncode == 0
+
+
+_needs_latin1 = pytest.mark.skipif(
+    not _locale_installed("en_US.ISO8859-1"), reason="needs the en_US.ISO8859-1 locale"
+)
+
+
+@_needs_latin1
+def test_a_build_reads_its_script_as_written_whatever_the_locale(monkeypatch):
+    # Under a Latin-1 locale the child would read the two UTF-8 bytes of the accented
+    # letter as two characters, and the string would have five.
+    monkeypatch.setenv("LC_ALL", "en_US.ISO8859-1")
+    monkeypatch.setenv("LANG", "en_US.ISO8859-1")
+    monkeypatch.delenv("PYTHONUTF8", raising=False)
+    res = run_code('from build123d import *\nresult = Box(len("caf\u00e9"), 1, 1)\n')
+    assert res.ok, res.error
+    assert res.volume == pytest.approx(4.0)
+
+
+@pytest.mark.skipif(sys.flags.utf8_mode, reason="UTF-8 mode ignores the locale")
+@_needs_latin1
+def test_a_build_writes_its_script_as_utf8_whatever_this_process_locale():
+    import locale
+
+    saved = locale.setlocale(locale.LC_CTYPE)
+    locale.setlocale(locale.LC_CTYPE, "en_US.ISO8859-1")
+    try:
+        res = run_code('from build123d import *\nresult = Box(len("caf\u00e9"), 1, 1)\n')
+    finally:
+        locale.setlocale(locale.LC_CTYPE, saved)
+    assert res.ok, res.error
+    assert res.volume == pytest.approx(4.0)
+
+
+def test_a_script_that_is_not_utf8_text_is_refused_rather_than_raised():
+    res = run_code("from build123d import *\nlabel = '\ud800'\nresult = Box(1, 1, 1)\n")
+    assert not res.ok
+    assert "UTF-8" in res.error
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUSERBASE",
+        "PYTHONNOUSERSITE",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPYCACHEPREFIX",
+        "PYTHONSAFEPATH",
+    ],
+)
+def test_the_child_keeps_where_python_and_its_packages_live(monkeypatch, name):
+    monkeypatch.setenv(name, "/kept")
+    assert worker._child_environment()[name] == "/kept"
+
+
+def test_the_child_gets_no_other_python_setting_and_fixed_ones_in_their_place(monkeypatch):
+    monkeypatch.setenv("PYTHONINSPECT", "1")
+    monkeypatch.setenv("PYTHONHASHSEED", "7")
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    env = worker._child_environment()
+    assert "PYTHONINSPECT" not in env
+    assert (env["PYTHONHASHSEED"], env["PYTHONUTF8"]) == ("0", "1")

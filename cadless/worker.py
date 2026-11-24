@@ -173,6 +173,40 @@ def _limit_resources(cpu_secs: int):
     return _apply
 
 
+# The interpreter settings a build's child keeps from this process's environment:
+# where Python, its packages and its bytecode live. Any other PYTHON* variable is
+# dropped, since several can change what a script does (the hash seed orders a set
+# of strings, the optimisation level strips an assert, the digit limit decides
+# whether str() of a large integer raises, the warning filters whether a syntax
+# warning is an error).
+_KEPT_PYTHON_SETTINGS = frozenset(
+    {
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUSERBASE",
+        "PYTHONNOUSERSITE",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPYCACHEPREFIX",
+        "PYTHONSAFEPATH",
+    }
+)
+
+
+def _child_environment() -> dict[str, str]:
+    """The environment a build's child runs in: this process's, less the settings
+    that could change what a script does, with the string hash seed fixed at 0 and
+    UTF-8 mode on, so the child reads the script and writes its report in UTF-8,
+    as this process writes and reads them, whatever the locale."""
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("PYTHON") or name in _KEPT_PYTHON_SETTINGS
+    }
+    env["PYTHONHASHSEED"] = "0"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 def run_code(
     code: str,
     *,
@@ -203,9 +237,14 @@ def run_code(
         return _run_remote(code, export_dir, export_scale, check_assembly, cfg, wall)
     cpu = max(1, int(wall) + 1)  # CPU limit slightly above wall-clock
 
+    try:
+        code.encode("utf-8")
+    except UnicodeEncodeError as error:
+        # A lone surrogate has no UTF-8 form, so the script could not be written out.
+        return ExecResult(ok=False, error=f"the script is not UTF-8 text: {error}")
     with tempfile.TemporaryDirectory() as tmp:
         code_file = os.path.join(tmp, "model.py")
-        with open(code_file, "w") as fh:
+        with open(code_file, "w", encoding="utf-8") as fh:
             fh.write(code)
 
         cmd = [
@@ -223,9 +262,13 @@ def run_code(
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                # The kernel's own C code writes to these pipes too, past Python's
+                # encoding, so a byte that is not UTF-8 is replaced rather than raised.
+                errors="replace",
                 timeout=wall,
                 preexec_fn=preexec,  # noqa: PLW1509 - intentional resource limiting
+                env=_child_environment(),
             )
         except subprocess.TimeoutExpired:
             return ExecResult(
