@@ -83,9 +83,10 @@ MATING_TOLERANCE_FLOOR_MM = 1.0
 
 #: The most that tolerance comes to: what the largest joint clearance a printer
 #: profile holds gives. A ceiling as well as a consequence of that limit, because
-#: the gap recorded for a pair farther apart than this is the distance between
-#: the two parts' boxes rather than their closest approach, and a tolerance past
-#: it would read that lower bound as a distance and join parts that are apart.
+#: the gap recorded for a pair whose boxes sit farther apart than this is the
+#: distance between those boxes rather than the parts' closest approach, and a
+#: tolerance past it would read that lower bound as a distance and join parts
+#: that are apart.
 MATING_TOLERANCE_MOST_MM = (
     PRINTER_PROFILE_LIMITS["printer_joint_clearance"][1] * MATING_TOLERANCE_FACTOR
 )
@@ -164,9 +165,9 @@ class AssemblyMeasurements:
     ``gaps`` the closest approach of every pair -- or, for a pair whose enclosing
     boxes sit farther apart than ``MATING_TOLERANCE_MOST_MM``, the distance
     between those boxes, which is never more than the closest approach and is
-    past every tolerance a gap is compared with. ``order`` is an order in which
-    the parts can be brought together, or ``None`` when none was found, in which
-    case ``trapped`` names the parts that could not be freed.
+    past any tolerance :func:`mating_graph` reads a gap against. ``order`` is an
+    order in which the parts can be brought together, or ``None`` when none was
+    found, in which case ``trapped`` names the parts that could not be freed.
 
     ``releases`` carries, per part index, the unit direction the search actually
     took that part out along -- the heading it proved clear, not one derived
@@ -636,6 +637,11 @@ def mating_graph(
     The unreadable entries come back rather than being judged here, because what
     an unreadable gap means -- refuse, or pass over -- is the caller's policy and
     not a property of reading the table.
+
+    A ``tolerance`` past ``MATING_TOLERANCE_MOST_MM`` is read as that bound. Past
+    it a gap may be the distance between two parts' boxes, which says only that
+    the parts are at least that far apart, and read against a wider tolerance it
+    would join parts that are not.
     """
     neighbours, problems, _ = _read_gaps(gaps, part_count, tolerance)
     return neighbours, problems
@@ -657,6 +663,7 @@ def _read_gaps(
     neighbours: dict[int, set[int]] = {index: set() for index in range(part_count)}
     problems: list[str] = []
     measured: set[frozenset[int]] = set()
+    tolerance = min(tolerance, MATING_TOLERANCE_MOST_MM)
     for entry in gaps:
         pair = _pair(entry)
         if pair is None:

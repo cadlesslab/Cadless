@@ -527,7 +527,7 @@ def test_the_joints_and_the_verdict_move_together_when_a_pair_drifts_apart():
 
 @pytest.mark.parametrize(
     ("clearance", "tolerance"),
-    [(0.0, 1.0), (0.2, 1.0), (0.5, 2.0), (2.0, 8.0), (3.0, 8.0), (math.inf, 8.0)],
+    [(0.2, 1.0), (0.5, 2.0), (2.0, 8.0), (math.inf, 8.0)],
 )
 def test_the_mating_tolerance_stops_at_what_the_largest_clearance_gives(clearance, tolerance):
     # The measurement settles a pair whose boxes sit farther apart than this
@@ -535,6 +535,15 @@ def test_the_mating_tolerance_stops_at_what_the_largest_clearance_gives(clearanc
     # largest a printer profile holds, which only a spec built by hand can carry,
     # gets that profile's tolerance.
     assert mating_tolerance(clearance) == tolerance
+
+
+def test_no_tolerance_past_the_largest_reads_a_gap_as_a_joint():
+    # Past 8 mm a gap may be the distance between two parts' boxes, which their
+    # own is never less than. Asked at 9, a pair recorded 8.5 apart may stand
+    # farther off than that, so it is read at 8 and left apart.
+    neighbours, problems = mating_graph([[0, 1, 8.5]], 2, 9.0)
+    assert neighbours == {0: set(), 1: set()}
+    assert problems == []
 
 
 def test_each_part_s_neighbours_come_back_in_order():
