@@ -144,8 +144,9 @@ def test_where_parts_overlap_is_charged_to_the_measurement_s_budget():
 
 
 def test_a_budget_spent_mid_pairs_keeps_where_the_measured_pairs_overlap():
-    # The first pair overlaps and is placed; the budget runs out on the next.
-    parts = [Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10), Pos(0, 0, 30) * Box(10, 10, 10)]
+    # The first pair overlaps and is placed; the budget runs out on the next, which
+    # sits 2 mm above the first part and so still has to be measured.
+    parts = [Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10), Pos(0, 0, 12) * Box(10, 10, 10)]
     m = measure_assembly(parts, probe_budget=3)
     assert any("ran out of budget" in reason for reason in m.unchecked)
     assert [entry[:2] for entry in m.overlap_boxes] == [[0, 1]]
@@ -195,17 +196,144 @@ def test_the_gap_of_a_cleared_joint_is_the_clearance():
     assert _gap_between(m, 0, 1) == pytest.approx(CLEARANCE, abs=1e-6)
 
 
-def test_a_distant_part_records_its_real_distance():
+def test_a_nearby_part_records_its_real_distance():
+    m = measure_assembly([Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10)])
+    assert _gap_between(m, 0, 1) == pytest.approx(5.0, abs=1e-6)
+
+
+def test_a_distant_part_records_the_distance_between_the_boxes():
+    # Past the largest mating tolerance a pair is not measured: its gap is how far
+    # apart the two enclosing boxes sit, which their margins put a little under
+    # the 50 mm the parts are apart.
     m = measure_assembly([Box(10, 10, 10), Pos(60, 0, 0) * Box(10, 10, 10)])
-    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+    assert 49.9 < _gap_between(m, 0, 1) <= 50.0
 
 
 def test_every_pair_appears_in_the_gap_table():
+    # One pair near enough to be measured, two settled by their boxes.
     m = measure_assembly(
-        [Box(10, 10, 10), Pos(20, 0, 0) * Box(10, 10, 10), Pos(40, 0, 0) * Box(10, 10, 10)]
+        [Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10), Pos(40, 0, 0) * Box(10, 10, 10)]
     )
     pairs = {frozenset((int(i), int(j))) for i, j, _ in m.gaps}
     assert pairs == {frozenset((0, 1)), frozenset((0, 2)), frozenset((1, 2))}
+
+
+# --- pairs settled by their boxes -----------------------------------------
+
+
+@pytest.fixture
+def pair_probes(monkeypatch):
+    """How often the kernel was asked what two parts share and how far apart they are."""
+    import cadless.assembly_measure as module
+
+    asked = {"shared": 0, "distance": 0}
+    shared, distance = module._shared_volume, module._distance
+
+    def counted_shared(*args):
+        asked["shared"] += 1
+        return shared(*args)
+
+    def counted_distance(*args):
+        asked["distance"] += 1
+        return distance(*args)
+
+    monkeypatch.setattr(module, "_shared_volume", counted_shared)
+    monkeypatch.setattr(module, "_distance", counted_distance)
+    return asked
+
+
+def _pairs_line(measurements):
+    return [
+        reason
+        for reason in measurements.unchecked
+        if reason.startswith("overlap and gap between every pair")
+    ]
+
+
+def _two_boxes(gap):
+    """Two 10 mm cubes ``gap`` apart along x."""
+    return [Box(10, 10, 10), Pos(10 + gap, 0, 0) * Box(10, 10, 10)]
+
+
+def test_a_pair_whose_boxes_sit_far_apart_is_settled_with_no_probe_to_spend():
+    m = measure_assembly(_two_boxes(50.0), probe_budget=0)
+    assert _pairs_line(m) == []
+    assert [entry[:2] for entry in m.gaps] == [[0, 1]]
+    assert m.overlaps == []
+
+
+def test_two_hundred_parts_far_apart_are_measured_without_a_pair_probe(pair_probes):
+    # 19,900 pairs: two probes each is twice the whole budget, and none is needed.
+    grid = [Pos(30 * (i % 20), 30 * (i // 20), 0) * Box(10, 10, 10) for i in range(200)]
+    m = measure_assembly(grid, time_budget=600.0)
+    assert pair_probes == {"shared": 0, "distance": 0}
+    assert len(m.gaps) == 19_900
+    assert m.unchecked == []
+    assert sorted(m.order) == list(range(200))
+
+
+@pytest.mark.parametrize("gap", [7.9, 8.0, 8.015])
+def test_a_pair_the_boxes_cannot_put_past_the_largest_tolerance_is_measured(gap, pair_probes):
+    # 8 mm is the largest mating tolerance. Within the boxes' margins of it the
+    # boxes cannot say which side the parts are on, so the kernel still does.
+    m = measure_assembly(_two_boxes(gap), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(gap, abs=1e-6)
+
+
+def test_a_pair_just_past_the_largest_tolerance_is_settled_by_its_boxes(pair_probes):
+    m = measure_assembly(_two_boxes(8.5), probe_budget=2)
+    assert pair_probes == {"shared": 0, "distance": 0}
+    assert 8.0 < _gap_between(m, 0, 1) <= 8.5
+
+
+def test_the_distance_between_two_boxes_is_never_more_than_the_parts_own():
+    # Two bars turned 45 degrees: their boxes are wider than they are, so the
+    # boxes sit closer together than the bars do.
+    first = Rot(0, 0, 45) * Box(40, 4, 4)
+    second = Pos(60, 0, 0) * Rot(0, 0, 45) * Box(40, 4, 4)
+    recorded = _gap_between(measure_assembly([first, second], probe_budget=0), 0, 1)
+    assert 8.0 < recorded < first.distance_to(second) - 1.0
+
+
+def test_a_part_whose_box_cannot_be_taken_is_measured_by_the_kernel(monkeypatch, pair_probes):
+    import cadless.assembly_measure as module
+
+    monkeypatch.setattr(module, "_box_of", lambda shape: None)
+    m = measure_assembly(_two_boxes(50.0), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("distance", [math.nan, math.inf, -1.0], ids=["nan", "inf", "negative"])
+def test_a_distance_between_boxes_that_is_no_measurement_settles_nothing(
+    distance, monkeypatch, pair_probes
+):
+    from OCP.Bnd import Bnd_Box
+
+    monkeypatch.setattr(Bnd_Box, "Distance", lambda self, other: distance)
+    m = measure_assembly(_two_boxes(50.0), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+
+
+def test_a_spent_clock_stops_the_pairs_though_none_of_them_needs_a_probe():
+    row = [Pos(30 * index, 0, 0) * Box(10, 10, 10) for index in range(4)]
+    m = measure_assembly(row, time_budget=0.0)
+    assert any("ran out of budget after 0 of 6 pairs" in reason for reason in _pairs_line(m))
+    assert m.gaps == []
+
+
+_WIDEST_CLEARANCE = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=2.0)
+
+
+@pytest.mark.parametrize(("gap", "joined"), [(7.9, True), (8.015, False), (8.5, False)])
+def test_what_joins_at_the_largest_clearance_is_ruled_alike_either_side_of_the_boxes(gap, joined):
+    # At a clearance of 2 mm parts join when they come within 8 mm. A pair a
+    # hair past that is measured and one well past it is settled by its boxes,
+    # and neither may read as joined.
+    report = evaluate_assembly(measure_assembly(_two_boxes(gap)), _WIDEST_CLEARANCE)
+    assert report.joints == ([[1], [0]] if joined else [[], []])
 
 
 # --- the assembly order ---------------------------------------------------
@@ -453,7 +581,7 @@ def test_interpenetrating_parts_measured_as_no_number_are_given_no_order(monkeyp
 
 
 def test_a_distance_that_is_not_a_number_is_reported_not_recorded(distances_are_not_numbers):
-    m = measure_assembly([Box(10, 10, 10), Pos(60, 0, 0) * Box(10, 10, 10)])
+    m = measure_assembly([Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10)])
     assert m.gaps == []
     assert any(reason.startswith("gap between part 1 and part 2") for reason in m.unchecked)
 

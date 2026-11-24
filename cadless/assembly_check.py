@@ -82,7 +82,10 @@ MATING_TOLERANCE_FACTOR = 4.0
 MATING_TOLERANCE_FLOOR_MM = 1.0
 
 #: The most that tolerance comes to: what the largest joint clearance a printer
-#: profile holds gives.
+#: profile holds gives. A ceiling as well as a consequence of that limit, because
+#: the gap recorded for a pair farther apart than this is the distance between
+#: the two parts' boxes rather than their closest approach, and a tolerance past
+#: it would read that lower bound as a distance and join parts that are apart.
 MATING_TOLERANCE_MOST_MM = (
     PRINTER_PROFILE_LIMITS["printer_joint_clearance"][1] * MATING_TOLERANCE_FACTOR
 )
@@ -158,7 +161,10 @@ class AssemblyMeasurements:
 
     Pair entries are ``[i, j, value]`` with part indices into ``part_bboxes``:
     ``overlaps`` carries the shared volume of pairs that intersect at all, and
-    ``gaps`` the closest approach of every pair. ``order`` is an order in which
+    ``gaps`` the closest approach of every pair -- or, for a pair whose enclosing
+    boxes sit farther apart than ``MATING_TOLERANCE_MOST_MM``, the distance
+    between those boxes, which is never more than the closest approach and is
+    past every tolerance a gap is compared with. ``order`` is an order in which
     the parts can be brought together, or ``None`` when none was found, in which
     case ``trapped`` names the parts that could not be freed.
 

@@ -17,6 +17,7 @@ from cadless.assembly_check import (
     _ORDER_UNCHECKED_PREFIX,
     _PAIRS_UNCHECKED_PREFIX,
     _SHARED_UNCHECKED_PREFIX,
+    MATING_TOLERANCE_MOST_MM,
     OVERLAP_EPSILON_MM3,
     AssemblyMeasurements,
     _at,
@@ -144,8 +145,11 @@ def measure_assembly(
             if first in unplaced or second in unplaced:
                 continue
             try:
-                budget.spend()  # the shared-volume probe
-                budget.spend()  # the distance probe
+                budget.check()
+                apart = scene.apart(first, second)
+                if apart is None:
+                    budget.spend()  # the shared-volume probe
+                    budget.spend()  # the distance probe
             except _BudgetSpent:
                 unchecked.append(
                     f"{_PAIRS_UNCHECKED_PREFIX} the measurement ran out of "
@@ -161,6 +165,13 @@ def measure_assembly(
                     unchecked=unchecked,
                     overlap_boxes=overlap_boxes,
                 )
+            if apart is not None:
+                # Their boxes sit farther apart than any tolerance looks, so they
+                # share nothing and the kernel is not asked how close they come.
+                scene.at_rest[(first, second)] = 0.0
+                gaps.append([first, second, apart])
+                done += 1
+                continue
             shared = _shared_volume(parts[first], parts[second])
             scene.at_rest[(first, second)] = shared
             if shared is None:
@@ -543,9 +554,11 @@ class _Scene:
         self.parts = parts
         self._nested: dict[tuple, bool] = {}
         self._axes: dict[int, list] = {}
+        self._boxes: dict[int, object] = {}
         #: The volume each pair ``(i, j)``, ``i < j``, shares where it stands --
         #: ``None`` where the kernel could not say. Filled by the pairwise phase,
-        #: which already asked, so no heading asks again.
+        #: which asked already or saw the pair's boxes apart, so no heading asks
+        #: again.
         self.at_rest: dict[tuple[int, int], float | None] = {}
         #: Pairs ``(moving, other)`` a walk stopped at undecided: touching where no
         #: sweep could rule them, so nothing showed the path past the contact clear
@@ -562,6 +575,37 @@ class _Scene:
             budget.spend()
             self.at_rest[key] = _shared_volume(self.parts[key[0]], self.parts[key[1]])
         return self.at_rest[key]
+
+    def box(self, index):
+        """The part's enclosing box, taken once; ``None`` where none could be."""
+        if index not in self._boxes:
+            self._boxes[index] = _box_of(getattr(self.parts[index], "wrapped", None))
+        return self._boxes[index]
+
+    def apart(self, first, second) -> float | None:
+        """How far apart the two parts' boxes sit, where that alone settles the pair.
+
+        ``None`` where it does not: a part with no box, a distance that is no
+        measurement, or boxes no farther apart than the largest mating tolerance,
+        within which only the kernel says how close the parts come. A box encloses
+        its part, so the distance between two is never more than the parts' own,
+        and one past that tolerance is past whatever a gap is compared with.
+
+        The number answered is the one compared: growing a box by the tolerance
+        and asking whether it clears the other reads a pair a hair past the
+        tolerance as apart while the distance between the boxes, their margins
+        counted, still sits inside it -- and that distance is what gets recorded.
+        """
+        boxes = self.box(first), self.box(second)
+        if boxes[0] is None or boxes[1] is None:
+            return None
+        try:
+            distance = _measurement(float(boxes[0].Distance(boxes[1])))
+        except Exception:  # noqa: BLE001 - no distance, no shortcut: the pair is probed
+            return None
+        if distance is None or distance <= MATING_TOLERANCE_MOST_MM:
+            return None
+        return distance
 
     def axes(self, index):
         """The part's cylinder axes, read from its faces once."""
@@ -629,8 +673,9 @@ class _NoExactSweep(Exception):
 _PARALLEL_COSINE = 1e-9
 
 #: How far each enclosing box is grown, in millimetres. The boxes prefilter a
-#: sweep's booleans and set how far the bore test reaches along its axis, and in
-#: both erring wide costs a little work and never an answer.
+#: sweep's booleans, settle the pairs too far apart to be measured and set how far
+#: the bore test reaches along its axis, and in each erring wide costs a little
+#: work and never an answer.
 _BOX_MARGIN_MM = 0.01
 
 
@@ -1285,3 +1330,12 @@ class _Budget:
         if self._left <= 0 or time.monotonic() >= self._deadline:
             raise _BudgetSpent
         self._left -= 1
+
+    def check(self) -> None:
+        """Raise once the clock has run out, spending nothing.
+
+        For work that costs time and no probe: a pair settled by its boxes is
+        charged nothing, and a model of very many parts has very many of those.
+        """
+        if time.monotonic() >= self._deadline:
+            raise _BudgetSpent
