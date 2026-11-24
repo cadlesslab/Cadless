@@ -1064,11 +1064,15 @@ def _enclosing_box(shape):
         return None
     box = Bnd_Box()
     try:
-        for solid in _each(shape, TopAbs_SOLID):
-            beyond = BRepClass3d_SolidClassifier(solid)
+        # Every solid as it is held, not each distinct one once: a solid held the
+        # right way out and again inside out is one solid to a map of shapes.
+        solids = TopExp_Explorer(shape, TopAbs_SOLID)
+        while solids.More():
+            beyond = BRepClass3d_SolidClassifier(solids.Current())
             beyond.PerformInfinitePoint(Precision.Confusion_s())
             if beyond.State() != TopAbs_OUT:
                 return None
+            solids.Next()
         for surface in _surfaces(shape):
             kind = surface.GetType()
             if kind in (GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_SurfaceOfExtrusion):

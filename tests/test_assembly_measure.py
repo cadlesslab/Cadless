@@ -509,17 +509,23 @@ def test_a_point_standing_loose_in_a_shape_is_held_too():
     assert module._enclosing_box(both).Get()[3] >= 50.0
 
 
-@pytest.mark.parametrize("beside_another", [False, True], ids=["alone", "beside a sound solid"])
-def test_a_solid_turned_inside_out_is_not_settled_by_its_boxes(beside_another, pair_probes):
+@pytest.mark.parametrize(
+    "held", ["alone", "after a sound solid", "after the same solid the right way out"]
+)
+def test_a_solid_turned_inside_out_is_not_settled_by_its_boxes(held, pair_probes):
     # To the kernel such a solid is everything outside its shell, so it shares
     # the whole of a cube standing well clear of that shell, and the build is
     # refused for it. No box holds what it takes the solid to be, whether the
-    # part is that solid or only holds it.
+    # part is that solid or holds it behind another -- the same solid the right
+    # way out among them, which a look at each distinct solid passes over.
     from OCP.TopoDS import TopoDS
 
-    part = Solid(TopoDS.Solid_s(Box(10, 10, 10).solid().wrapped.Reversed()))
-    if beside_another:
-        part = Compound(_together(part.wrapped, (Pos(0, 20, 0) * Box(5, 5, 5)).wrapped))
+    cube = Box(10, 10, 10).solid().wrapped
+    part = Solid(TopoDS.Solid_s(cube.Reversed()))
+    if held == "after a sound solid":
+        part = Compound(_together((Pos(0, 20, 0) * Box(5, 5, 5)).wrapped, part.wrapped))
+    elif held == "after the same solid the right way out":
+        part = Compound(_together(cube, part.wrapped))
     m = measure_assembly([part, Pos(60, 0, 0) * Box(10, 10, 10)], probe_budget=3)
     assert pair_probes == {"shared": 1, "distance": 1}
     assert [entry[:2] for entry in m.overlaps] == [[0, 1]]
