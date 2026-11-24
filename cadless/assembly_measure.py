@@ -391,7 +391,16 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
         return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
     scene = scene or _Scene(parts)
-    spheres = _spheres(scene)
+    spent = (
+        None,
+        [],
+        [f"{_ORDER_UNCHECKED_PREFIX} the search ran out of budget before it could rule"],
+        [],
+    )
+    try:
+        spheres = _spheres(scene, budget)
+    except _BudgetSpent:
+        return spent
     remaining = list(range(len(parts)))
     removed: list[int] = []
     releases: list[list[float]] = [[] for _ in parts]
@@ -414,15 +423,7 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
             try:
                 direction = _can_be_freed(parts, spheres, index, others, look_ahead, budget, scene)
             except _BudgetSpent:
-                return (
-                    None,
-                    [],
-                    [
-                        f"{_ORDER_UNCHECKED_PREFIX} the search ran out of budget "
-                        "before it could rule"
-                    ],
-                    [],
-                )
+                return spent
             if direction is not None:
                 freed = index
                 releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
@@ -1564,9 +1565,18 @@ def _candidate_directions(spheres, index, others):
                 yield away
 
 
-def _spheres(scene):
-    """Each part's bounding sphere, in part order."""
-    return [_sphere(part, scene.reach(index)) for index, part in enumerate(scene.parts)]
+def _spheres(scene, budget):
+    """Each part's bounding sphere, in part order.
+
+    The clock is read before each. Taking a part's box walks all its faces and
+    edges, and with many such parts the search would spend its time here before
+    it ruled a heading, the clock unread.
+    """
+    spheres = []
+    for index, part in enumerate(scene.parts):
+        budget.check()
+        spheres.append(_sphere(part, scene.reach(index)))
+    return spheres
 
 
 def _sphere(part, reach):

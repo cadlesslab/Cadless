@@ -746,7 +746,14 @@ def test_a_grazing_contact_is_not_stepped_over():
     budget = module._Budget(10**6, 600.0)
 
     verdict = module._rule_heading(
-        parts, module._spheres(scene), 0, [1], heading, module._look_ahead(parts), budget, scene
+        parts,
+        module._spheres(scene, budget),
+        0,
+        [1],
+        heading,
+        module._look_ahead(parts),
+        budget,
+        scene,
     )
     assert verdict == BLOCKED, "the search walked past a real collision"
 
@@ -1079,7 +1086,7 @@ def _rule(parts, index, heading):
     budget = module._Budget(10**6, 600.0)
     return module._rule_heading(
         parts,
-        module._spheres(scene),
+        module._spheres(scene, budget),
         index,
         others,
         Vector(*heading).normalized(),
@@ -1543,6 +1550,35 @@ def test_a_sphere_about_a_box_short_of_a_free_form_solid_does_not_free_a_part_th
     assert module._travel_window(*own, (0.0, 0.0, 1.0)) is None
     assert module._shared_volume(long, Pos(0, 0, 20) * cube) > 0.1
     assert _rule([long, cube], 1, (0, 0, 1)) == BLOCKED
+
+
+def test_the_sphere_a_pair_is_pruned_by_holds_every_corner_of_the_box_it_is_handed():
+    # The box reaches four times as far one way from the part's own middle as the
+    # other, so its far corners lie well past half its diagonal.
+    from OCP.Bnd import Bnd_Box
+
+    import cadless.assembly_measure as module
+
+    reach = Bnd_Box()
+    reach.Update(-40.0, -5.0, -5.0, 10.0, 5.0, 5.0)
+    centre, radius = module._sphere(Box(10, 10, 10), reach)
+    corners = [(x, y, z) for x in (-40.0, 10.0) for y in (-5.0, 5.0) for z in (-5.0, 5.0)]
+    assert all(math.dist(centre, corner) <= radius + 1e-9 for corner in corners)
+
+
+def test_a_spent_clock_stops_the_search_before_a_part_s_sphere_is_taken(monkeypatch):
+    # Taking a part's sphere walks all its faces and edges, and a build of many
+    # such parts would spend its time there with the clock unread.
+    import cadless.assembly_measure as module
+
+    def unwanted(part, reach):
+        raise AssertionError("a sphere was taken with the clock already out")
+
+    monkeypatch.setattr(module, "_sphere", unwanted)
+    pair = [Box(10, 10, 10), Pos(-60, 0, 0) * Box(10, 10, 10)]
+    order, _, unchecked, _ = module._disassembly_order(pair, module._Budget(10**6, 0.0))
+    assert order is None
+    assert any("ran out of budget" in reason for reason in unchecked)
 
 
 def test_a_spent_clock_stops_the_search_at_a_heading_that_needs_no_probe():
