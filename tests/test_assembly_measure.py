@@ -37,6 +37,7 @@ from build123d import (
     loft,
     make_face,
     revolve,
+    scale,
 )
 
 from cadless.assembly_check import evaluate_assembly
@@ -356,8 +357,8 @@ def test_a_spent_clock_stops_the_pairs_though_none_of_them_needs_a_probe():
     assert m.gaps == []
 
 
-def _ball_past_its_tight_box():
-    """A free-form ball the kernel's own tight box stops short of, on the side towards -X.
+def _short_towards_minus_x(part, reach, by):
+    """``part``, seen to reach ``reach`` towards -X while the kernel's own tight box stops ``by`` short.
 
     Checked rather than taken as given: the tests that use it show what the
     measurement does about the shortfall, and on a kernel with none they would
@@ -366,11 +367,15 @@ def _ball_past_its_tight_box():
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
 
-    ball = _as_nurbs(Sphere(120))
     tight = Bnd_Box()
-    BRepBndLib.AddOptimal_s(ball.wrapped, tight, False, False)
-    assert tight.Get()[0] > -119.4
-    return ball
+    BRepBndLib.AddOptimal_s(part.wrapped, tight, False, False)
+    assert tight.Get()[0] > reach + by
+    return part
+
+
+def _ball_past_its_tight_box():
+    """A free-form ball the kernel's own tight box stops short of, on the side towards -X."""
+    return _short_towards_minus_x(_as_nurbs(Sphere(120)), -120.0, 0.6)
 
 
 def test_a_free_form_ball_is_not_read_farther_off_than_it_is(pair_probes):
@@ -732,12 +737,12 @@ def test_a_grazing_contact_is_not_stepped_over():
     first = Pos(5, 5, 5) * Box(10, 10, 10)
     second = Pos(25, 5.5, 5) * Box(10, 10, 10)
     parts = [first, second]
-    spheres = [module._sphere(part) for part in parts]
+    scene = module._Scene(parts)
     heading = Vector(1, 1, 0).normalized()
     budget = module._Budget(10**6, 600.0)
 
     verdict = module._rule_heading(
-        parts, spheres, 0, [1], heading, module._look_ahead(parts), budget
+        parts, module._spheres(scene), 0, [1], heading, module._look_ahead(parts), budget, scene
     )
     assert verdict == BLOCKED, "the search walked past a real collision"
 
@@ -1065,17 +1070,18 @@ def _rule(parts, index, heading):
     """How the search rules one part sliding along ``heading``: free, blocked or undecided."""
     import cadless.assembly_measure as module
 
-    spheres = [module._sphere(part) for part in parts]
+    scene = module._Scene(parts)
     others = [other for other in range(len(parts)) if other != index]
     budget = module._Budget(10**6, 600.0)
     return module._rule_heading(
         parts,
-        spheres,
+        module._spheres(scene),
         index,
         others,
         Vector(*heading).normalized(),
         module._look_ahead(parts),
         budget,
+        scene,
     )
 
 
@@ -1519,6 +1525,18 @@ def test_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
     block = Pos(-129.75, 0, -175) * Box(20.5, 10, 50)
     assert module._shared_volume(ball, Pos(0, 0, 175) * block) > 1.0
     assert _rule([ball, block], 1, (0, 0, 1)) == BLOCKED
+
+
+def test_a_sphere_about_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes():
+    # A ball stretched sixteen times along X. A sphere about the kernel's tight
+    # box, which stops short of the tip towards -X, leaves that tip outside it,
+    # and a cube rising through the tip is then never in the sphere's way.
+    import cadless.assembly_measure as module
+
+    long = _short_towards_minus_x(scale(Sphere(15), (16, 1, 1)), -240.0, 1.5)
+    cube = Pos(-239.8, 0, -20) * Box(1, 1, 1)
+    assert module._shared_volume(long, Pos(0, 0, 20) * cube) > 0.1
+    assert _rule([long, cube], 1, (0, 0, 1)) == BLOCKED
 
 
 def test_a_spent_clock_stops_the_search_at_a_heading_that_needs_no_probe():

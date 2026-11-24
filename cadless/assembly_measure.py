@@ -387,12 +387,12 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
     if len(parts) < 2:
         return list(range(len(parts))), [], [], []
 
-    spheres = [_sphere(part) for part in parts]
     look_ahead = _look_ahead(parts)
     if look_ahead is None:
         return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
     scene = scene or _Scene(parts)
+    spheres = _spheres(scene)
     remaining = list(range(len(parts)))
     removed: list[int] = []
     releases: list[list[float]] = [[] for _ in parts]
@@ -1558,13 +1558,29 @@ def _candidate_directions(spheres, index, others):
                 yield away
 
 
-def _sphere(part):
-    """A part's bounding-sphere centre and radius, for the cheap pruning test."""
-    box = part.bounding_box()
-    centre = box.center()
-    size = box.size
-    radius = 0.5 * (size.X**2 + size.Y**2 + size.Z**2) ** 0.5
-    return (float(centre.X), float(centre.Y), float(centre.Z)), float(radius)
+def _spheres(scene):
+    """Each part's bounding sphere, in part order."""
+    return [_sphere(part, scene.reach(index)) for index, part in enumerate(scene.parts)]
+
+
+def _sphere(part, reach):
+    """A part's bounding-sphere centre and radius, for the cheap pruning test.
+
+    About ``reach``, the box the sweeps read, where the part has one. The box a
+    part gives of itself is the kernel's own, which can stop short of a
+    free-form face: a sphere about that one left the tip of a long free-form
+    solid outside it, and a part passing through the tip was pruned as never in
+    the way. Only a part with no box of that kind is bounded by the one it
+    gives.
+    """
+    if reach is None:
+        box = part.bounding_box()
+        centre, size = box.center(), box.size
+        radius = 0.5 * (size.X**2 + size.Y**2 + size.Z**2) ** 0.5
+        return (float(centre.X), float(centre.Y), float(centre.Z)), float(radius)
+    x0, y0, z0, x1, y1, z1 = reach.Get()
+    radius = 0.5 * ((x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2) ** 0.5
+    return ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0), radius
 
 
 def _look_ahead(parts) -> float | None:
