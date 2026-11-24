@@ -435,8 +435,8 @@ def _together(*shapes):
     return both
 
 
-# Placed away from the origin and turned, so a bound taken where the surface was
-# drawn rather than where the part stands does not hold it.
+# Most stand away from the origin and turned, so a bound taken where the surface
+# was drawn rather than where the part stands does not hold them.
 _HELD = {
     "a bar turned off the axes": lambda: Rot(10, 20, 30) * Box(30, 4, 4),
     "a cone to a point": lambda: Rot(40, 0, 25) * Cone(10, 0, 20),
@@ -505,6 +505,7 @@ def test_a_point_standing_loose_in_a_shape_is_held_too():
     import cadless.assembly_measure as module
 
     both = _together(Box(10, 10, 10).wrapped, BRepBuilderAPI_MakeVertex(gp_Pnt(50, 0, 0)).Vertex())
+    assert Compound(both).distance_to(Pos(55, 0, 0) * Box(1, 1, 1)) < 5.0
     assert module._enclosing_box(both).Get()[3] >= 50.0
 
 
@@ -537,8 +538,9 @@ def test_a_shape_loose_about_one_edge_gets_a_box_that_much_wider():
 
 
 def test_the_box_the_sweeps_read_holds_a_free_form_edge_s_control_points():
-    # By its control points, as a free-form face is: the kernel bounds an edge by
-    # the same kind of search that stops short of a face.
+    # By its control points, as a free-form face is. The kernel bounds an edge by
+    # a search of the same kind, and nothing shows it cannot stop short as a
+    # face's did.
     import cadless.assembly_measure as module
 
     assert module._box_of(_bezier_plate().wrapped).Get()[4] >= 15.0
@@ -1588,7 +1590,15 @@ def test_the_headings_leading_away_are_worked_out_only_after_the_axes_are_handed
             raise AssertionError("read before the axes had been handed out")
 
     headings = module._candidate_directions({0: ((0.0, 0.0, 0.0), 1.0), 1: _NotToBeRead()}, 0, [1])
-    assert len([next(headings) for _ in range(6)]) == 6
+    axes = [next(headings) for _ in range(6)]
+    assert [(axis.X, axis.Y, axis.Z) for axis in axes] == [
+        (1, 0, 0),
+        (-1, 0, 0),
+        (0, 1, 0),
+        (0, -1, 0),
+        (0, 0, 1),
+        (0, 0, -1),
+    ]
 
 
 def test_the_order_search_does_not_ask_again_what_the_pairwise_phase_measured(monkeypatch):
