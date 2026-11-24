@@ -71,9 +71,9 @@ ORDER_PROBE_BUDGET = 20_000
 #: measured between them, and that is said before any pair is taken on.
 #:
 #: A bound on the parts rather than on the entries, because the pairs follow
-#: from the parts alone and a build can be refused before any work is done on
-#: it. What sets it is what the table costs to hold and to send, not what the
-#: kernel can measure: the clock and the probe count answer for that.
+#: from the parts alone and a build can be turned away before any of its pairs
+#: is worked on. What sets it is what the table costs to hold and to send, not
+#: what the kernel can measure: the clock and the probe count answer for that.
 MEASURED_PARTS_MOST = 500
 
 #: What share of the time left on the executor's wall clock the measurement
@@ -333,10 +333,9 @@ def _shared_box(first, second, scale: float, budget: _Budget) -> list[float] | N
     The intersection is made again rather than kept from the volume probe, which
     every pair near enough to be measured makes and the order search reads; a
     build that overlaps is refused whatever, so the repeat costs only a build
-    already failing. A
-    pair overlapping in several places -- an axle through both walls of a
-    bracket -- gets one box around all of them. ``None`` is not a fault: the
-    overlap is still refused, only without saying where.
+    already failing. A pair overlapping in several places -- an axle through
+    both walls of a bracket -- gets one box around all of them. ``None`` is not
+    a fault: the overlap is still refused, only without saying where.
     """
     try:
         budget.spend()
@@ -588,8 +587,9 @@ class _Scene:
     """What the measurement works out once and reuses.
 
     A box that holds each part for certain, which the pairwise phase reads for
-    every pair, and the kernel's box of it, which the sweeps and the bore test
-    read its reach from; the volume each pair shares where it stands, which the
+    every pair, and the kernel's box of it, which the sweeps, the bore test and
+    the spheres the search prunes by read its reach from; the volume each pair
+    shares where it stands, which the
     pairwise phase has already asked or read off the pair's boxes; each part's
     cylinder axes, and whether one of a pair sits inside a bore of the other
     along a line, which a heading and its reverse share and every round asks
@@ -631,10 +631,10 @@ class _Scene:
         return self._boxes[index]
 
     def reach(self, index):
-        """The box the sweeps and the bore test read the part's reach from, taken once.
+        """The box the sweeps, the bore test and the pruning sphere read the part's reach from.
 
-        Once, because reading it walks every face and edge of the part and a
-        search asks for the same part's at every heading.
+        Taken once, because reading it walks every face and edge of the part and
+        a search asks for the same part's at every heading.
         """
         if index not in self._reach:
             self._reach[index] = _box_of(_shape_of(self.parts[index]))
@@ -734,10 +734,11 @@ class _NoExactSweep(Exception):
 _PARALLEL_COSINE = 1e-9
 
 #: How far each box is grown at the least, in millimetres. The kernel's box
-#: prefilters a sweep's booleans and sets how far the bore test reaches along its
-#: axis; the box built from each face's own bounds settles the pairs too far
-#: apart to mate, and is grown by the shape's own tolerance besides. In each,
-#: erring wide costs a little work and never an answer.
+#: prefilters a sweep's booleans, sizes the sphere the search prunes by and sets
+#: how far the bore test reaches along its axis; the box built from each face's
+#: own bounds settles the pairs too far apart to mate, and is grown by the
+#: shape's own tolerance besides. In each, erring wide costs a little work and
+#: never an answer.
 _BOX_MARGIN_MM = 0.01
 
 
@@ -970,7 +971,8 @@ def _cut_by_planes(face, planes):
 
 
 def _box_of(shape):
-    """An enclosing box grown by the margin, or ``None`` if none could be taken.
+    """The kernel's box of the shape, widened to hold every control point and grown by
+    the margin, or ``None`` if none could be taken.
 
     The kernel's tight bound, taken from the exact geometry. The quick bound
     samples some surfaces -- a surface of revolution among them -- and its box
