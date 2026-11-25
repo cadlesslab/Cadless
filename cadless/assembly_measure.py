@@ -17,6 +17,7 @@ from cadless.assembly_check import (
     _ORDER_UNCHECKED_PREFIX,
     _PAIRS_UNCHECKED_PREFIX,
     _SHARED_UNCHECKED_PREFIX,
+    MATING_TOLERANCE_MOST_MM,
     OVERLAP_EPSILON_MM3,
     AssemblyMeasurements,
     _at,
@@ -53,20 +54,37 @@ _AXES = (
 #: their duration. Running out is reported as an unestablished
 #: check, never as a pass: work that stopped early has shown nothing.
 #:
-#: One budget covers the whole measurement, the pairwise comparisons included.
-#: Bounding only the order search left the O(n^2) phase ahead of it free to
-#: spend the executor's entire wall clock on a model with very many parts.
+#: One budget covers the whole measurement, the pairs the kernel is asked about
+#: included. Bounding only the order search left the O(n^2) phase ahead of it
+#: free to spend the executor's entire wall clock on a model with very many
+#: parts. A pair settled by its boxes spends none of it, which is what
+#: ``MEASURED_PARTS_MOST`` is for.
 ORDER_PROBE_BUDGET = 20_000
+
+#: The most parts a build may have for its pairs to be measured.
+#:
+#: A pair settled by its boxes spends none of the budget above, and every pair
+#: leaves an entry in the table of gaps however it was settled. So the probe
+#: count does not bound how many pairs there are, and the clock alone lets that
+#: table grow with the square of the part count -- held here, sent in the
+#: payload and read again -- before it stops. Past this many parts nothing is
+#: measured between them, and that is said before any pair is taken on.
+#:
+#: A bound on the parts rather than on the entries, because the pairs follow
+#: from the parts alone and a build can be turned away before any of its pairs
+#: is worked on. What sets it is what the table costs to hold and to send, not
+#: what the kernel can measure: the clock and the probe count answer for that.
+MEASURED_PARTS_MOST = 500
 
 #: What share of the time left on the executor's wall clock the measurement
 #: may spend.
 #:
 #: A second bound beside the probe count, because the two fail differently. The
-#: count stops a model that produced very many parts; the clock stops a single
-#: part whose topology makes one boolean operation take seconds. Counting alone
-#: would rest on the units costing roughly the same, and they do not: building a
-#: sweep is charged one unit though it cuts, prisms and checks every face, and a
-#: pathological solid makes any one unit slow.
+#: count stops a model whose many parts each need the kernel; the clock stops a
+#: single part whose topology makes one boolean operation take seconds. Counting
+#: alone would rest on the units costing roughly the same, and they do not:
+#: building a sweep is charged one unit though it cuts, prisms and checks every
+#: face, and a pathological solid makes any one unit slow.
 #:
 #: A share rather than a fixed number of seconds, because the executor returns no
 #: summary at all when its own clock runs out -- so this has to stop first, and a
@@ -125,6 +143,32 @@ def measure_assembly(
     overlaps: list[list[float]] = []
     overlap_boxes: list[list[float]] = []
     gaps: list[list[float]] = []
+
+    def stopped() -> AssemblyMeasurements:
+        """What a measurement that stops at the pairs hands back: no order looked for.
+
+        Said in a line of its own, since a report with no order and no word on
+        why reads as a search that came back with nothing.
+        """
+        return AssemblyMeasurements(
+            part_bboxes=boxes,
+            overlaps=overlaps,
+            gaps=gaps,
+            order=None,
+            trapped=[],
+            unchecked=[
+                *unchecked,
+                f"{_ORDER_UNCHECKED_PREFIX} not looked for, as not every pair was measured",
+            ],
+            overlap_boxes=overlap_boxes,
+        )
+
+    if len(parts) > MEASURED_PARTS_MOST:
+        unchecked.append(
+            f"{_PAIRS_UNCHECKED_PREFIX} the build has {len(parts)} parts and the check "
+            f"measures the pairs of no more than {MEASURED_PARTS_MOST}"
+        )
+        return stopped()
     budget = _Budget(probe_budget, time_budget)
     scene = _Scene(parts)
     done = 0
@@ -144,23 +188,26 @@ def measure_assembly(
             if first in unplaced or second in unplaced:
                 continue
             try:
-                budget.spend()  # the shared-volume probe
-                budget.spend()  # the distance probe
+                budget.check()
+                apart = scene.apart(first, second)
+                if apart is None:
+                    budget.spend()  # the shared-volume probe
+                    budget.spend()  # the distance probe
             except _BudgetSpent:
                 unchecked.append(
                     f"{_PAIRS_UNCHECKED_PREFIX} the measurement ran out of "
                     f"budget after {done} of "
                     f"{len(parts) * (len(parts) - 1) // 2} pairs"
                 )
-                return AssemblyMeasurements(
-                    part_bboxes=boxes,
-                    overlaps=overlaps,
-                    gaps=gaps,
-                    order=None,
-                    trapped=[],
-                    unchecked=unchecked,
-                    overlap_boxes=overlap_boxes,
-                )
+                return stopped()
+            if apart is not None:
+                # Boxes that hold them sit farther apart than any mating tolerance
+                # reaches, so they share nothing and the kernel is not asked how
+                # close they come.
+                scene.at_rest[(first, second)] = 0.0
+                gaps.append([first, second, apart])
+                done += 1
+                continue
             shared = _shared_volume(parts[first], parts[second])
             scene.at_rest[(first, second)] = shared
             if shared is None:
@@ -284,11 +331,11 @@ def _shared_box(first, second, scale: float, budget: _Budget) -> list[float] | N
     passes, so parts that only touch pay nothing for it, and charged to the
     budget like any other kernel work.
     The intersection is made again rather than kept from the volume probe, which
-    every pair makes and the order search reads; a build that overlaps is
-    refused whatever, so the repeat costs only a build already failing. A
-    pair overlapping in several places -- an axle through both walls of a
-    bracket -- gets one box around all of them. ``None`` is not a fault: the
-    overlap is still refused, only without saying where.
+    every pair near enough to be measured makes and the order search reads; a
+    build that overlaps is refused whatever, so the repeat costs only a build
+    already failing. A pair overlapping in several places -- an axle through
+    both walls of a bracket -- gets one box around all of them. ``None`` is not
+    a fault: the overlap is still refused, only without saying where.
     """
     try:
         budget.spend()
@@ -339,12 +386,21 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
     if len(parts) < 2:
         return list(range(len(parts))), [], [], []
 
-    spheres = [_sphere(part) for part in parts]
     look_ahead = _look_ahead(parts)
     if look_ahead is None:
         return None, [], [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"], []
 
     scene = scene or _Scene(parts)
+    spent = (
+        None,
+        [],
+        [f"{_ORDER_UNCHECKED_PREFIX} the search ran out of budget before it could rule"],
+        [],
+    )
+    try:
+        spheres = _spheres(scene, budget)
+    except _BudgetSpent:
+        return spent
     remaining = list(range(len(parts)))
     removed: list[int] = []
     releases: list[list[float]] = [[] for _ in parts]
@@ -367,15 +423,7 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
             try:
                 direction = _can_be_freed(parts, spheres, index, others, look_ahead, budget, scene)
             except _BudgetSpent:
-                return (
-                    None,
-                    [],
-                    [
-                        f"{_ORDER_UNCHECKED_PREFIX} the search ran out of budget "
-                        "before it could rule"
-                    ],
-                    [],
-                )
+                return spent
             if direction is not None:
                 freed = index
                 releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
@@ -474,6 +522,10 @@ def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, 
     meet along that line, whatever surfaces the ends of the inner part have.
     """
     scene = scene or _Scene(parts)
+    # A heading with no part in the way is ruled without a probe, and a build of
+    # many parts far apart has many of those: the clock is read here so that it
+    # stops them too.
+    budget.check()
     centre, radius = spheres[index]
     windows = {}
     for other in others:
@@ -501,12 +553,15 @@ def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, 
             return _BLOCKED
         if own is _UNBUILT:
             own = _sweep(parts[index], direction, length, budget)
-        met = None if own is None else _sweep_meets(own, parts[other], budget)
+        met = None
+        if own is not None:
+            met = _sweep_meets(own, parts[other], scene.reach(other), budget)
         if met is None:
             # No exact sweep of the moving part, or a boolean of it the kernel
             # refused: try the other part swept back.
             theirs = _sweep(parts[other], -direction, length, budget)
-            met = None if theirs is None else _sweep_meets(theirs, parts[index], budget)
+            if theirs is not None:
+                met = _sweep_meets(theirs, parts[index], scene.reach(index), budget)
         if met:
             return _BLOCKED
         if met is None:
@@ -530,22 +585,29 @@ _UNBUILT = object()
 
 
 class _Scene:
-    """What the order search works out once per measurement and reuses.
+    """What the measurement works out once and reuses.
 
-    The volume each pair shares where it stands, which the pairwise phase has
-    already asked; each part's cylinder axes, and whether one of a pair sits
-    inside a bore of the other along a line, which a heading and its reverse share
-    and every round asks again; and the pairs the current round left undecided,
-    which are what that round reports if it frees nothing.
+    A box that holds each part for certain, which the pairwise phase reads for
+    every pair, and the kernel's box of it, which the sweeps, the bore test and
+    the spheres the search prunes by read its reach from; the volume each pair
+    shares where it stands, which the
+    pairwise phase has already asked or read off the pair's boxes; each part's
+    cylinder axes, and whether one of a pair sits inside a bore of the other
+    along a line, which a heading and its reverse share and every round asks
+    again; and the pairs the current round left undecided, which are what that
+    round reports if it frees nothing.
     """
 
     def __init__(self, parts) -> None:
         self.parts = parts
         self._nested: dict[tuple, bool] = {}
         self._axes: dict[int, list] = {}
+        self._boxes: dict[int, object] = {}
+        self._reach: dict[int, object] = {}
         #: The volume each pair ``(i, j)``, ``i < j``, shares where it stands --
         #: ``None`` where the kernel could not say. Filled by the pairwise phase,
-        #: which already asked, so no heading asks again.
+        #: which asked already or saw the pair's boxes apart, so no heading asks
+        #: again.
         self.at_rest: dict[tuple[int, int], float | None] = {}
         #: Pairs ``(moving, other)`` a walk stopped at undecided: touching where no
         #: sweep could rule them, so nothing showed the path past the contact clear
@@ -563,6 +625,48 @@ class _Scene:
             self.at_rest[key] = _shared_volume(self.parts[key[0]], self.parts[key[1]])
         return self.at_rest[key]
 
+    def box(self, index):
+        """A box the part cannot reach out of, taken once; ``None`` where none is known."""
+        if index not in self._boxes:
+            self._boxes[index] = _enclosing_box(_shape_of(self.parts[index]))
+        return self._boxes[index]
+
+    def reach(self, index):
+        """The box the sweeps, the bore test and the pruning sphere read the part's reach from.
+
+        Taken once, because reading it walks every face and edge of the part and
+        a search asks for the same part's at every heading.
+        """
+        if index not in self._reach:
+            self._reach[index] = _box_of(_shape_of(self.parts[index]))
+        return self._reach[index]
+
+    def apart(self, first, second) -> float | None:
+        """How far apart the two parts' boxes sit, where that alone settles the pair.
+
+        ``None`` where it does not: a part no box is known to hold, a distance
+        that is no measurement, or boxes no farther apart than the largest mating
+        tolerance, within which only the kernel says how close the parts come.
+        Each box holds its part, so the distance between two is never more than
+        the parts' own, and one past that tolerance is past any a gap is read
+        against.
+
+        The number answered is the one compared: growing a box by the tolerance
+        and asking whether it clears the other reads a pair a hair past the
+        tolerance as apart while the distance between the boxes, their margins
+        counted, still sits inside it -- and that distance is what gets recorded.
+        """
+        boxes = self.box(first), self.box(second)
+        if boxes[0] is None or boxes[1] is None:
+            return None
+        try:
+            distance = _measurement(float(boxes[0].Distance(boxes[1])))
+        except Exception:  # noqa: BLE001 - no distance, no shortcut: the pair is probed
+            return None
+        if distance is None or distance <= MATING_TOLERANCE_MOST_MM:
+            return None
+        return distance
+
     def axes(self, index):
         """The part's cylinder axes, read from its faces once."""
         if index not in self._axes:
@@ -574,7 +678,10 @@ class _Scene:
         for line in _bore_lines(self.axes(first) + self.axes(second), direction):
             key = (min(first, second), max(first, second), line[2])
             if key not in self._nested:
-                self._nested[key] = _one_inside_the_other(self.parts, first, second, line, budget)
+                boxes = {first: self.reach(first), second: self.reach(second)}
+                self._nested[key] = _one_inside_the_other(
+                    self.parts, boxes, first, second, line, budget
+                )
             if self._nested[key]:
                 return True
         return False
@@ -594,13 +701,12 @@ def _sweep(part, direction, length, budget):
         return None
 
 
-def _sweep_meets(pieces, part, budget) -> bool | None:
-    """Whether any piece of a sweep shares volume with ``part``.
+def _sweep_meets(pieces, part, reach, budget) -> bool | None:
+    """Whether any piece of a sweep shares volume with ``part``, whose box is ``reach``.
 
     ``None`` when the kernel could not tell -- no box for the part, or a boolean
     it refused -- which is neither a clash nor a clear path.
     """
-    reach = _box_of(getattr(part, "wrapped", None))
     if reach is None:
         return None
     refused = False
@@ -628,9 +734,12 @@ class _NoExactSweep(Exception):
 #: meant to be exact, and nothing more.
 _PARALLEL_COSINE = 1e-9
 
-#: How far each enclosing box is grown, in millimetres. The boxes prefilter a
-#: sweep's booleans and set how far the bore test reaches along its axis, and in
-#: both erring wide costs a little work and never an answer.
+#: How far each box is grown at the least, in millimetres. The kernel's box
+#: prefilters a sweep's booleans, sizes the sphere the search prunes by and sets
+#: how far the bore test reaches along its axis; the box built from each face's
+#: own bounds settles the pairs too far apart to mate, and is grown by the
+#: shape's own tolerance besides. In each, erring wide costs a little work and
+#: never an answer.
 _BOX_MARGIN_MM = 0.01
 
 
@@ -863,13 +972,29 @@ def _cut_by_planes(face, planes):
 
 
 def _box_of(shape):
-    """An enclosing box grown by the margin, or ``None`` if none could be taken.
+    """The kernel's box of the shape, widened to hold every control point and grown by
+    the margin, or ``None`` if none could be taken.
 
-    Bounded tightly from the exact geometry. The quick bound samples some
-    surfaces -- a surface of revolution among them -- and its box can sit inside
-    the surface, which would let the prefilter skip a boolean that clashes. Never
-    from a mesh the shape may carry either: a mesh cuts across a curved face, and
-    a box taken from it could miss the face.
+    The kernel's tight bound, taken from the exact geometry. The quick bound
+    samples some surfaces -- a surface of revolution among them -- and its box
+    can sit inside the surface, which would let the prefilter skip a boolean that
+    clashes. Never from a mesh the shape may carry either: a mesh cuts across a
+    curved face, and a box taken from it could miss the face.
+
+    The tight bound of a B-spline or Bezier face or edge is found by a search,
+    and the search can stop short of the surface: a box taken so sat inside a
+    ball whose faces are B-splines. Whether it does depends on the build the
+    kernel runs on -- the same version stopped short on one machine and reached
+    the ball on another -- so a machine where it reaches shows nothing about
+    the rest. The box is therefore widened to hold the control points of every
+    such face and edge, which the geometry cannot leave, and on a free-form
+    part it is tight no longer. That costs the prefilter some booleans there.
+    The box :func:`_enclosing_box` builds would cost it more: that one bounds a
+    sphere and a torus whole, however small the piece of one a face is.
+
+    The other kinds the kernel bounds by a search -- a surface turned about an
+    axis from a free-form profile, an offset surface -- have no control points
+    to be held by, and are left to it.
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
@@ -879,12 +1004,213 @@ def _box_of(shape):
     box = Bnd_Box()
     try:
         BRepBndLib.AddOptimal_s(shape, box, False, False)
+        for surface in _surfaces(shape):
+            _hold_surface_poles(surface, box)
+        for curve in _curves(shape):
+            _hold_curve_poles(curve, box)
     except Exception:  # noqa: BLE001 - no box, no prefilter: the caller fails closed
         return None
     if box.IsVoid():
         return None
     box.Enlarge(_BOX_MARGIN_MM)
     return box
+
+
+def _enclosing_box(shape):
+    """A box the shape cannot reach out of, grown by the margin, or ``None`` where none is known.
+
+    What settles a pair without a probe has to hold the part for certain, so
+    this takes nothing from a search over a surface. Each face and edge is
+    bounded by what bounds its kind outright:
+
+    - a plane, a cylinder, a cone and a surface drawn along a straight line are
+      made of straight lines that end on the face's edges, so the edges bound the
+      face;
+    - a sphere and a torus are bounded whole, whatever part of one the face is;
+    - a B-spline or Bezier surface or curve lies among its control points;
+    - a straight edge lies between its ends, and an arc of a circle or an ellipse
+      has a closed form.
+
+    Any other kind -- a surface turned about an axis from a free-form profile, an
+    offset surface -- has no such bound here, and neither has a face of the first
+    kind with no edge to end on; the shape then has no box, and its pairs are
+    measured. The margin is widened by the loosest tolerance the shape carries,
+    since an edge may sit that far off the face it bounds.
+
+    A solid turned inside out has no box either. The kernel takes it for
+    everything outside its shell, and says of a part standing well clear of that
+    shell that the two share the whole of the part; a box drawn round the shell
+    holds none of that.
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BndLib import BndLib
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.GeomAbs import (
+        GeomAbs_Circle,
+        GeomAbs_Cone,
+        GeomAbs_Cylinder,
+        GeomAbs_Ellipse,
+        GeomAbs_Line,
+        GeomAbs_Plane,
+        GeomAbs_Sphere,
+        GeomAbs_SurfaceOfExtrusion,
+        GeomAbs_Torus,
+    )
+    from OCP.Precision import Precision
+    from OCP.ShapeAnalysis import ShapeAnalysis_ShapeTolerance
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_OUT, TopAbs_SOLID, TopAbs_VERTEX
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    if shape is None:
+        return None
+    box = Bnd_Box()
+    try:
+        # Every solid as it is held, not each distinct one once: a solid held the
+        # right way out and again inside out is one solid to a map of shapes.
+        solids = TopExp_Explorer(shape, TopAbs_SOLID)
+        while solids.More():
+            beyond = BRepClass3d_SolidClassifier(solids.Current())
+            beyond.PerformInfinitePoint(Precision.Confusion_s())
+            if beyond.State() != TopAbs_OUT:
+                return None
+            solids.Next()
+        for surface in _surfaces(shape):
+            kind = surface.GetType()
+            if kind in (GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_SurfaceOfExtrusion):
+                if not TopExp_Explorer(surface.Face(), TopAbs_EDGE).More():
+                    return None
+            elif kind == GeomAbs_Sphere:
+                ball = surface.Sphere()
+                _hold_about(ball.Location(), [ball.Radius()] * 3, box)
+            elif kind == GeomAbs_Torus:
+                ring = surface.Torus()
+                axis = ring.Axis().Direction()
+                # The ring's middle circle reaches this far along each axis, and
+                # the tube stands its own radius off that circle all round.
+                reach = [
+                    ring.MajorRadius() * math.sqrt(max(0.0, 1.0 - along * along))
+                    + ring.MinorRadius()
+                    for along in (axis.X(), axis.Y(), axis.Z())
+                ]
+                _hold_about(ring.Location(), reach, box)
+            elif not _hold_surface_poles(surface, box):
+                return None
+        for curve in _curves(shape):
+            kind = curve.GetType()
+            if kind == GeomAbs_Line:
+                box.Add(curve.Value(curve.FirstParameter()))
+                box.Add(curve.Value(curve.LastParameter()))
+            elif kind in (GeomAbs_Circle, GeomAbs_Ellipse):
+                conic = curve.Circle() if kind == GeomAbs_Circle else curve.Ellipse()
+                arc = Bnd_Box()
+                BndLib.Add_s(conic, curve.FirstParameter(), curve.LastParameter(), 0.0, arc)
+                box.Add(arc)
+            elif not _hold_curve_poles(curve, box):
+                return None
+        for vertex in _each(shape, TopAbs_VERTEX):
+            box.Add(BRep_Tool.Pnt_s(TopoDS.Vertex_s(vertex)))
+        loosest = _measurement(float(ShapeAnalysis_ShapeTolerance().Tolerance(shape, 1)))
+    except Exception:  # noqa: BLE001 - no box, no shortcut: the pair is measured
+        return None
+    if box.IsVoid() or loosest is None:
+        return None
+    box.Enlarge(_BOX_MARGIN_MM + loosest)
+    return box
+
+
+def _shape_of(part):
+    """The kernel's shape under ``part``, or ``None`` where it has none to give."""
+    try:
+        return part.wrapped
+    except Exception:  # noqa: BLE001 - a part with nothing in it has no box
+        return None
+
+
+def _each(shape, kind):
+    """Every sub-shape of ``kind`` in ``shape``, once however many others share it."""
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedMapOfShape
+
+    found = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, kind, found)
+    return [found.FindKey(index) for index in range(1, found.Extent() + 1)]
+
+
+def _surfaces(shape):
+    """The surface of every face of ``shape``, where the shape places it."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopoDS import TopoDS
+
+    return [BRepAdaptor_Surface(TopoDS.Face_s(face), False) for face in _each(shape, TopAbs_FACE)]
+
+
+def _curves(shape):
+    """The curve of every edge of ``shape`` that has one, where the shape places it.
+
+    An edge shrunk to a point -- the tip of a cone, the pole of a sphere -- has
+    none, and its vertex stands for it.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopoDS import TopoDS
+
+    edges = [TopoDS.Edge_s(edge) for edge in _each(shape, TopAbs_EDGE)]
+    return [BRepAdaptor_Curve(edge) for edge in edges if not BRep_Tool.Degenerated_s(edge)]
+
+
+def _hold_about(centre, reach, box) -> None:
+    """Widen ``box`` to hold what reaches ``reach`` along each axis either side of ``centre``."""
+    box.Update(
+        centre.X() - reach[0],
+        centre.Y() - reach[1],
+        centre.Z() - reach[2],
+        centre.X() + reach[0],
+        centre.Y() + reach[1],
+        centre.Z() + reach[2],
+    )
+
+
+def _hold_surface_poles(surface, box) -> bool:
+    """Widen ``box`` to hold a B-spline or Bezier surface's control points.
+
+    ``False`` for any other surface, which has none.
+    """
+    from OCP.GeomAbs import GeomAbs_BezierSurface, GeomAbs_BSplineSurface
+
+    kind = surface.GetType()
+    if kind == GeomAbs_BSplineSurface:
+        poles = surface.BSpline().Poles()
+    elif kind == GeomAbs_BezierSurface:
+        poles = surface.Bezier().Poles()
+    else:
+        return False
+    for row in range(poles.LowerRow(), poles.UpperRow() + 1):
+        for column in range(poles.LowerCol(), poles.UpperCol() + 1):
+            box.Add(poles.Value(row, column))
+    return True
+
+
+def _hold_curve_poles(curve, box) -> bool:
+    """Widen ``box`` to hold a B-spline or Bezier curve's control points.
+
+    ``False`` for any other curve, which has none.
+    """
+    from OCP.GeomAbs import GeomAbs_BezierCurve, GeomAbs_BSplineCurve
+
+    kind = curve.GetType()
+    if kind == GeomAbs_BSplineCurve:
+        poles = curve.BSpline().Poles()
+    elif kind == GeomAbs_BezierCurve:
+        poles = curve.Bezier().Poles()
+    else:
+        return False
+    for index in range(poles.Lower(), poles.Upper() + 1):
+        box.Add(poles.Value(index))
+    return True
 
 
 def _prism_overlap(prism, other) -> float | None:
@@ -976,8 +1302,10 @@ def _bore_lines(axes, direction):
     return list(lines.values())
 
 
-def _one_inside_the_other(parts, first, second, line, budget) -> bool:
+def _one_inside_the_other(parts, boxes, first, second, line, budget) -> bool:
     """Whether one part lies inside a round bore, about ``line``, of the other.
+
+    ``boxes`` holds each of the two parts' boxes, by its index.
 
     Distances only place a test cylinder: the outer part's nearest approach to the
     axis is its bore, and the cylinder goes halfway across the gap the inner part
@@ -993,7 +1321,7 @@ def _one_inside_the_other(parts, first, second, line, budget) -> bool:
     cylinder fails one of the two booleans rather than passing both.
     """
     point, heading, _ = line
-    spans = {index: _span(parts[index], heading) for index in (first, second)}
+    spans = {index: _span(boxes[index], heading) for index in (first, second)}
     reach = {}
     for index in (first, second):
         segment = _axis_segment(point, heading, spans[index])
@@ -1036,9 +1364,8 @@ def _line_key(direction) -> tuple[float, float, float]:
     return tuple(round(sign * value, _HEADING_KEY_DECIMALS) for value in values)
 
 
-def _span(part, heading, margin: float = _SPAN_MARGIN_MM):
-    """How far along ``heading`` the part reaches, with ``margin`` beyond each end."""
-    box = _box_of(getattr(part, "wrapped", None))
+def _span(box, heading, margin: float = _SPAN_MARGIN_MM):
+    """How far along ``heading`` a part with this box reaches, with ``margin`` beyond each end."""
     if box is None:
         return None
     low = box.Get()
@@ -1213,34 +1540,72 @@ def _travel_window(centre, radius, other_centre, other_radius, direction):
 
 
 def _candidate_directions(spheres, index, others):
-    """The six axes, plus a direction leading away from each remaining part.
+    """The six axes, then a direction leading away from each remaining part.
 
     The geometry-derived ones cover a joint whose slide axis is not aligned to an
     axis. Adding a candidate can only remove a false refusal, never create a false
     pass: every direction offered is still checked against the solids, so one that
     is not really free is rejected when it is ruled.
+
+    Handed out one at a time, each worked out only when the one before it has
+    been ruled. A part that leaves along an axis never needs the rest, and
+    listing them all first cost the square of the part count for every part
+    tried, before the search had ruled a heading or read its clock.
     """
     from build123d import Vector
 
     directions = [Vector(*axis) for axis in _AXES]
+    yield from tuple(directions)
     centre = Vector(*spheres[index][0])
     for other in others:
         away = centre - Vector(*spheres[other][0])
         if away.length > 1e-9:
             away = away.normalized()
-            # A heading already listed would only be ruled a second time.
+            # A heading already handed out would only be ruled a second time.
             if all((away - known).length > 1e-9 for known in directions):
                 directions.append(away)
-    return directions
+                yield away
 
 
-def _sphere(part):
-    """A part's bounding-sphere centre and radius, for the cheap pruning test."""
+def _spheres(scene, budget):
+    """Each part's bounding sphere, in part order.
+
+    The clock is read before each. Taking a part's box walks all its faces and
+    edges, and with many such parts the search would spend its time here before
+    it ruled a heading, the clock unread.
+    """
+    spheres = []
+    for index, part in enumerate(scene.parts):
+        budget.check()
+        spheres.append(_sphere(part, scene.reach(index)))
+    return spheres
+
+
+def _sphere(part, reach):
+    """A part's bounding-sphere centre and radius, for the cheap pruning test.
+
+    Centred on the middle of the box the part gives of itself, and wide enough
+    to hold ``reach``, the box the sweeps read, where the part has one. The box
+    a part gives of itself is the kernel's own, which can stop short of a
+    free-form face: a sphere about that one alone left the tip of a long
+    free-form solid outside it, and a part passing through the tip was pruned
+    as never in the way.
+
+    The centre stays where it was because the headings leading away from a
+    part are drawn from it, and the middle of a box widened by control points
+    can sit well off the part.
+    """
     box = part.bounding_box()
-    centre = box.center()
-    size = box.size
-    radius = 0.5 * (size.X**2 + size.Y**2 + size.Z**2) ** 0.5
-    return (float(centre.X), float(centre.Y), float(centre.Z)), float(radius)
+    centre, size = box.center(), box.size
+    middle = (float(centre.X), float(centre.Y), float(centre.Z))
+    if reach is None:
+        return middle, float(0.5 * (size.X**2 + size.Y**2 + size.Z**2) ** 0.5)
+    corners = reach.Get()
+    farthest = [
+        max(abs(low - at), abs(high - at))
+        for at, low, high in zip(middle, corners[:3], corners[3:], strict=True)
+    ]
+    return middle, sum(side**2 for side in farthest) ** 0.5
 
 
 def _look_ahead(parts) -> float | None:
@@ -1285,3 +1650,12 @@ class _Budget:
         if self._left <= 0 or time.monotonic() >= self._deadline:
             raise _BudgetSpent
         self._left -= 1
+
+    def check(self) -> None:
+        """Raise once the clock has run out, spending nothing.
+
+        For work that costs time and no probe: a pair settled by its boxes is
+        charged nothing, and a model of very many parts has very many of those.
+        """
+        if time.monotonic() >= self._deadline:
+            raise _BudgetSpent

@@ -14,15 +14,30 @@ from types import SimpleNamespace
 import pytest
 from build123d import (
     Align,
+    Bezier,
     Box,
+    Circle,
+    Compound,
     Cone,
     Cylinder,
+    Face,
     GeomType,
+    Line,
+    Plane,
     Pos,
+    Rectangle,
     Rot,
+    Solid,
     Sphere,
+    Spline,
     Torus,
     Vector,
+    extrude,
+    fillet,
+    loft,
+    make_face,
+    revolve,
+    scale,
 )
 
 from cadless.assembly_check import evaluate_assembly
@@ -144,8 +159,9 @@ def test_where_parts_overlap_is_charged_to_the_measurement_s_budget():
 
 
 def test_a_budget_spent_mid_pairs_keeps_where_the_measured_pairs_overlap():
-    # The first pair overlaps and is placed; the budget runs out on the next.
-    parts = [Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10), Pos(0, 0, 30) * Box(10, 10, 10)]
+    # The first pair overlaps and is placed; the budget runs out on the next, which
+    # sits 2 mm above the first part and so still has to be measured.
+    parts = [Box(20, 20, 10), Pos(19, 0, 0) * Box(20, 20, 10), Pos(0, 0, 12) * Box(10, 10, 10)]
     m = measure_assembly(parts, probe_budget=3)
     assert any("ran out of budget" in reason for reason in m.unchecked)
     assert [entry[:2] for entry in m.overlap_boxes] == [[0, 1]]
@@ -195,17 +211,449 @@ def test_the_gap_of_a_cleared_joint_is_the_clearance():
     assert _gap_between(m, 0, 1) == pytest.approx(CLEARANCE, abs=1e-6)
 
 
-def test_a_distant_part_records_its_real_distance():
+def test_a_nearby_part_records_its_real_distance():
+    m = measure_assembly([Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10)])
+    assert _gap_between(m, 0, 1) == pytest.approx(5.0, abs=1e-6)
+
+
+def test_a_distant_part_records_the_distance_between_the_boxes():
+    # Past the largest mating tolerance a pair is not measured: its gap is how far
+    # apart the two enclosing boxes sit, which their margins put a little under
+    # the 50 mm the parts are apart.
     m = measure_assembly([Box(10, 10, 10), Pos(60, 0, 0) * Box(10, 10, 10)])
-    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+    assert 49.9 < _gap_between(m, 0, 1) < 49.99
 
 
 def test_every_pair_appears_in_the_gap_table():
+    # One pair near enough to be measured, two settled by their boxes.
     m = measure_assembly(
-        [Box(10, 10, 10), Pos(20, 0, 0) * Box(10, 10, 10), Pos(40, 0, 0) * Box(10, 10, 10)]
+        [Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10), Pos(40, 0, 0) * Box(10, 10, 10)]
     )
     pairs = {frozenset((int(i), int(j))) for i, j, _ in m.gaps}
     assert pairs == {frozenset((0, 1)), frozenset((0, 2)), frozenset((1, 2))}
+
+
+# --- pairs settled by their boxes -----------------------------------------
+
+
+@pytest.fixture
+def pair_probes(monkeypatch):
+    """How often the kernel was asked what two parts share and how far apart they are."""
+    import cadless.assembly_measure as module
+
+    asked = {"shared": 0, "distance": 0}
+    shared, distance = module._shared_volume, module._distance
+
+    def counted_shared(*args):
+        asked["shared"] += 1
+        return shared(*args)
+
+    def counted_distance(*args):
+        asked["distance"] += 1
+        return distance(*args)
+
+    monkeypatch.setattr(module, "_shared_volume", counted_shared)
+    monkeypatch.setattr(module, "_distance", counted_distance)
+    return asked
+
+
+def _pairs_line(measurements):
+    return [
+        reason
+        for reason in measurements.unchecked
+        if reason.startswith("overlap and gap between every pair")
+    ]
+
+
+def _two_boxes(gap):
+    """Two 10 mm cubes ``gap`` apart along x."""
+    return [Box(10, 10, 10), Pos(10 + gap, 0, 0) * Box(10, 10, 10)]
+
+
+def test_a_pair_whose_boxes_sit_far_apart_is_settled_with_no_probe_to_spend():
+    m = measure_assembly(_two_boxes(50.0), probe_budget=0)
+    assert _pairs_line(m) == []
+    assert [entry[:2] for entry in m.gaps] == [[0, 1]]
+    assert m.overlaps == []
+
+
+def test_a_pair_settled_by_its_boxes_counts_among_the_pairs_measured():
+    # The second cube is far from the first and the third is near it: the far pair
+    # is settled, and the budget runs out on the near one that follows.
+    parts = [Box(10, 10, 10), Pos(60, 0, 0) * Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10)]
+    m = measure_assembly(parts, probe_budget=0)
+    assert any("ran out of budget after 1 of 3 pairs" in reason for reason in _pairs_line(m))
+    assert [entry[:2] for entry in m.gaps] == [[0, 1]]
+
+
+def test_two_hundred_parts_far_apart_are_measured_without_a_pair_probe(pair_probes):
+    # 19,900 pairs, and the kernel is asked about none of them.
+    grid = [Pos(30 * (i % 20), 30 * (i // 20), 0) * Box(10, 10, 10) for i in range(200)]
+    m = measure_assembly(grid, time_budget=600.0)
+    assert pair_probes == {"shared": 0, "distance": 0}
+    assert len(m.gaps) == 19_900
+    assert m.unchecked == []
+    assert sorted(m.order) == list(range(200))
+
+
+def test_a_pair_a_hair_past_the_largest_tolerance_is_measured(pair_probes):
+    # 8 mm is the largest mating tolerance. The boxes of a pair a hair past it
+    # still sit within it, their margins counted, so the kernel says how far.
+    m = measure_assembly(_two_boxes(8.015), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(8.015, abs=1e-6)
+
+
+def test_a_pair_just_past_the_largest_tolerance_is_settled_by_its_boxes(pair_probes):
+    m = measure_assembly(_two_boxes(8.5), probe_budget=2)
+    assert pair_probes == {"shared": 0, "distance": 0}
+    assert 8.0 < _gap_between(m, 0, 1) <= 8.5
+
+
+def test_boxes_exactly_the_largest_tolerance_apart_settle_nothing(monkeypatch, pair_probes):
+    # A gap of exactly the tolerance still joins, so a pair read at exactly that
+    # from its boxes is one the kernel has to measure.
+    from OCP.Bnd import Bnd_Box
+
+    monkeypatch.setattr(Bnd_Box, "Distance", lambda self, other: 8.0)
+    measure_assembly(_two_boxes(50.0), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+
+
+def test_a_turned_pair_is_recorded_at_the_distance_between_its_boxes():
+    # Two bars turned 45 degrees: their boxes are wider than they are, so the
+    # boxes sit closer together than the bars do.
+    first = Rot(0, 0, 45) * Box(40, 4, 4)
+    second = Pos(60, 0, 0) * Rot(0, 0, 45) * Box(40, 4, 4)
+    recorded = _gap_between(measure_assembly([first, second], probe_budget=0), 0, 1)
+    assert 8.0 < recorded < first.distance_to(second) - 1.0
+
+
+def test_a_part_with_no_box_is_measured_by_the_kernel(monkeypatch, pair_probes):
+    import cadless.assembly_measure as module
+
+    monkeypatch.setattr(module, "_enclosing_box", lambda shape: None)
+    m = measure_assembly(_two_boxes(50.0), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("distance", [math.nan, math.inf], ids=["nan", "inf"])
+def test_a_distance_between_boxes_that_is_no_measurement_settles_nothing(
+    distance, monkeypatch, pair_probes
+):
+    from OCP.Bnd import Bnd_Box
+
+    monkeypatch.setattr(Bnd_Box, "Distance", lambda self, other: distance)
+    m = measure_assembly(_two_boxes(50.0), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+
+
+def _refusing(*args):
+    raise RuntimeError("the kernel refused")
+
+
+@pytest.mark.parametrize("refused", ["the distance between two boxes", "a part's faces"])
+def test_box_work_the_kernel_refuses_leaves_the_pair_to_be_measured(
+    refused, monkeypatch, pair_probes
+):
+    # A box that cannot be had settles nothing and stops nothing: the pair is
+    # measured as it was before there were boxes.
+    from OCP.Bnd import Bnd_Box
+
+    import cadless.assembly_measure as module
+
+    if refused == "a part's faces":
+        monkeypatch.setattr(module, "_surfaces", _refusing)
+    else:
+        monkeypatch.setattr(Bnd_Box, "Distance", _refusing)
+    m = measure_assembly(_two_boxes(50.0), probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(50.0, abs=1e-6)
+
+
+def test_a_spent_clock_stops_the_pairs_though_none_of_them_needs_a_probe():
+    row = [Pos(30 * index, 0, 0) * Box(10, 10, 10) for index in range(4)]
+    m = measure_assembly(row, time_budget=0.0)
+    assert any("ran out of budget after 0 of 6 pairs" in reason for reason in _pairs_line(m))
+    assert m.gaps == []
+
+
+@pytest.fixture
+def stopping_short_of(monkeypatch):
+    """Stand a kernel box that stops short of a part in the kernel's own place.
+
+    Answers a function taking a part and where the kernel's tight box of it is to
+    start along X. The kernel finds the bound of a free-form face by a search,
+    and whether that search stops short of the face depends on the build the
+    kernel runs on: the same version stopped short of a B-spline ball on one
+    machine and reached it on another. The tests that use this show what the
+    measurement does about a box that stops short, whichever they run on.
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    real = BRepBndLib.AddOptimal_s
+    starts: list[tuple[object, float]] = []
+
+    def stand_in(shape, box, *flags):
+        found = Bnd_Box()
+        real(shape, found, *flags)
+        if found.IsVoid():
+            return
+        corners = list(found.Get())
+        for held, start in starts:
+            if shape.IsSame(held):
+                corners[0] = start
+        box.Update(*corners)
+
+    monkeypatch.setattr(BRepBndLib, "AddOptimal_s", staticmethod(stand_in))
+
+    def shorten(part, start):
+        starts.append((part.wrapped, start))
+        tight = Bnd_Box()
+        BRepBndLib.AddOptimal_s(part.wrapped, tight, False, False)
+        assert tight.Get()[0] == start
+        return part
+
+    return shorten
+
+
+def test_a_free_form_ball_is_not_read_farther_off_than_it_is(stopping_short_of, pair_probes):
+    # The block stands 7.5 mm off the side the kernel's tight box stops short on.
+    # Read from that box the two sit past the largest tolerance, and they do not.
+    ball = stopping_short_of(_as_nurbs(Sphere(120)), -118.9)
+    block = Pos(-132.5, 0, 0) * Box(10, 10, 10)
+    m = measure_assembly([ball, block], probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _gap_between(m, 0, 1) == pytest.approx(7.5, abs=1e-6)
+
+
+def _spline_plate():
+    """A plate with a spline down one side: free-form edges, and walls drawn along a line."""
+    outline = Spline((0, 0), (10, 6), (20, 0)) + Line((20, 0), (0, 0))
+    return extrude(make_face(outline), 5)
+
+
+def _vase():
+    """A solid turned about an axis from a spline: a surface no closed form bounds."""
+    profile = Plane.XZ * (
+        Spline((5, 0), (9, 6), (4, 12))
+        + Line((4, 12), (0, 12))
+        + Line((0, 12), (0, 0))
+        + Line((0, 0), (5, 0))
+    )
+    return revolve(make_face(profile))
+
+
+def _loft():
+    return loft([Circle(10), Pos(0, 0, 20) * Rectangle(8, 14)])
+
+
+def _bezier_plate():
+    """A plate whose one side is a Bezier curve, pulled out by a control point it never reaches."""
+    outline = Bezier((0, 0), (10, 15), (20, 0)) + Line((20, 0), (0, 0))
+    return extrude(make_face(outline), 5)
+
+
+def _raised_patch():
+    """A Bezier face whose middle stands above the four straight edges round it."""
+    return Face.make_bezier_surface(
+        [
+            [(0, 0, 0), (5, 0, 0), (10, 0, 0)],
+            [(0, 5, 0), (5, 5, 12), (10, 5, 0)],
+            [(0, 10, 0), (5, 10, 0), (10, 10, 0)],
+        ]
+    )
+
+
+def _together(*shapes):
+    """The kernel's shapes in one compound, as they are."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    both = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(both)
+    for shape in shapes:
+        builder.Add(both, shape)
+    return both
+
+
+# Most stand away from the origin and turned, so a bound taken where the surface
+# was drawn rather than where the part stands does not hold them.
+_HELD = {
+    "a bar turned off the axes": lambda: Rot(10, 20, 30) * Box(30, 4, 4),
+    "a cone to a point": lambda: Rot(40, 0, 25) * Cone(10, 0, 20),
+    "a ring": lambda: Pos(-15, 25, 10) * Rot(20, 40, 0) * Torus(20, 3),
+    "a ball cut by a block": lambda: (
+        Pos(40, 30, -20) * (Sphere(10) & (Pos(5, 0, 0) * Box(10, 30, 30)))
+    ),
+    "a cylinder cut aslant": lambda: (
+        Cylinder(5, 30) - Rot(0, 30, 0) * Pos(0, 0, 25) * Box(60, 60, 20)
+    ),
+    "a rounded block": lambda: fillet(Box(20, 20, 20).edges(), 3),
+    "a spline plate": lambda: Rot(25, 35, 10) * _spline_plate(),
+    "a Bezier plate": lambda: Rot(25, 35, 10) * _bezier_plate(),
+    "a loft": lambda: Pos(-30, 12, 5) * Rot(15, 0, 40) * _loft(),
+    "a raised Bezier patch": lambda: Pos(8, -4, 3) * Rot(0, 30, 0) * _raised_patch(),
+    "a free-form ball": lambda: _as_nurbs(Sphere(6)),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_HELD))
+def test_the_box_that_settles_a_pair_holds_every_point_of_the_part(name):
+    import cadless.assembly_measure as module
+
+    part = _HELD[name]()
+    low = module._enclosing_box(part.wrapped).Get()
+    for point in part.tessellate(0.05)[0]:
+        for axis, value in enumerate((point.X, point.Y, point.Z)):
+            assert low[axis] <= value <= low[axis + 3]
+
+
+def test_far_pairs_of_curved_and_free_form_parts_need_no_probe():
+    parts = [
+        fillet(Box(20, 20, 20).edges(), 3),
+        Pos(80, 0, 0) * Torus(20, 3),
+        Pos(0, 80, 0) * _spline_plate(),
+        Pos(0, 0, 80) * _loft(),
+    ]
+    m = measure_assembly(parts, probe_budget=0)
+    assert _pairs_line(m) == []
+    assert len(m.gaps) == 6
+
+
+def test_a_part_with_a_surface_no_closed_form_bounds_is_measured_by_the_kernel(pair_probes):
+    m = measure_assembly([_vase(), Pos(60, 0, 0) * Box(10, 10, 10)], probe_budget=2)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert _pairs_line(m) == []
+
+
+def test_a_face_with_no_edge_leaves_the_shape_without_a_box():
+    # A plane with no edge runs on for ever, so nothing drawn from the cube
+    # beside it bounds the two together.
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.gp import gp_Pln
+
+    import cadless.assembly_measure as module
+
+    both = _together(Box(10, 10, 10).wrapped, BRepBuilderAPI_MakeFace(gp_Pln()).Face())
+    assert module._enclosing_box(both) is None
+
+
+def test_an_edge_of_a_kind_with_no_bound_here_leaves_the_shape_without_a_box():
+    # An arc of a parabola is neither straight, nor a circle or an ellipse, nor
+    # drawn from control points, and it bulges past the cube beside it.
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.gp import gp_Ax2, gp_Parab
+
+    import cadless.assembly_measure as module
+
+    arc = BRepBuilderAPI_MakeEdge(gp_Parab(gp_Ax2(), 5.0), -30.0, 30.0).Edge()
+    assert module._enclosing_box(_together(Box(10, 10, 10).wrapped, arc)) is None
+
+
+def test_a_shape_with_nothing_in_it_has_no_box():
+    import cadless.assembly_measure as module
+
+    assert module._enclosing_box(_together()) is None
+
+
+def test_a_point_standing_loose_in_a_shape_is_held_too():
+    # No edge ends on it, and the kernel measures a distance to it all the same.
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+    from OCP.gp import gp_Pnt
+
+    import cadless.assembly_measure as module
+
+    both = _together(Box(10, 10, 10).wrapped, BRepBuilderAPI_MakeVertex(gp_Pnt(50, 0, 0)).Vertex())
+    assert Compound(both).distance_to(Pos(55, 0, 0) * Box(1, 1, 1)) < 5.0
+    assert module._enclosing_box(both).Get()[3] >= 50.0
+
+
+@pytest.mark.parametrize(
+    "held", ["alone", "after a sound solid", "after the same solid the right way out"]
+)
+def test_a_solid_turned_inside_out_is_not_settled_by_its_boxes(held, pair_probes):
+    # To the kernel such a solid is everything outside its shell, so it shares
+    # the whole of a cube standing well clear of that shell, and the build is
+    # refused for it. No box holds what it takes the solid to be, whether the
+    # part is that solid or holds it behind another -- the same solid the right
+    # way out among them, which a look at each distinct solid passes over.
+    from OCP.TopoDS import TopoDS
+
+    cube = Box(10, 10, 10).solid().wrapped
+    part = Solid(TopoDS.Solid_s(cube.Reversed()))
+    if held == "after a sound solid":
+        part = Compound(_together((Pos(0, 20, 0) * Box(5, 5, 5)).wrapped, part.wrapped))
+    elif held == "after the same solid the right way out":
+        part = Compound(_together(cube, part.wrapped))
+    m = measure_assembly([part, Pos(60, 0, 0) * Box(10, 10, 10)], probe_budget=3)
+    assert pair_probes == {"shared": 1, "distance": 1}
+    assert [entry[:2] for entry in m.overlaps] == [[0, 1]]
+
+
+def test_a_shape_loose_about_one_edge_gets_a_box_that_much_wider():
+    # The kernel lets an edge sit as far off its face as the edge's tolerance, so
+    # a box drawn from the edges has to reach as far as the loosest of them.
+    from OCP.ShapeFix import ShapeFix_ShapeTolerance
+
+    import cadless.assembly_measure as module
+
+    cube = Box(10, 10, 10)
+    ShapeFix_ShapeTolerance().SetTolerance(cube.edges()[0].wrapped, 0.5)
+    assert module._enclosing_box(cube.wrapped).Get()[0] <= -5.5
+
+
+def test_the_box_the_sweeps_read_holds_a_free_form_edge_s_control_points():
+    # By its control points, as a free-form face is. The kernel bounds an edge by
+    # a search of the same kind, and nothing shows it cannot stop short as a
+    # face's did.
+    import cadless.assembly_measure as module
+
+    assert module._box_of(_bezier_plate().wrapped).Get()[4] >= 15.0
+
+
+def test_a_part_with_nothing_in_it_is_reported_rather_than_raised():
+    m = measure_assembly([Box(10, 10, 10), Solid()])
+    assert any("the distance could not be computed" in reason for reason in m.unchecked)
+
+
+def test_five_hundred_parts_have_their_pairs_measured():
+    row = [Pos(30 * index, 0, 0) * Box(10, 10, 10) for index in range(500)]
+    m = measure_assembly(row, probe_budget=0, time_budget=600.0)
+    assert _pairs_line(m) == []
+    assert len(m.gaps) == 124_750
+
+
+def test_a_build_of_more_parts_than_that_is_said_before_any_pair_is_measured():
+    row = [Pos(30 * index, 0, 0) * Box(10, 10, 10) for index in range(501)]
+    m = measure_assembly(row)
+    assert any("the build has 501 parts" in reason for reason in _pairs_line(m))
+    assert m.gaps == []
+    assert len(m.part_bboxes) == 501
+
+
+def test_a_measurement_stopped_at_the_pairs_says_why_no_order_was_looked_for():
+    # Without a line of its own the report read as though the order had been
+    # looked for and nothing had come back.
+    report = evaluate_assembly(measure_assembly(_caged(), probe_budget=1), _WIDEST_CLEARANCE)
+    about_the_order = [line for line in report.unchecked if line.startswith("assembly order:")]
+    assert about_the_order == ["assembly order: not looked for, as not every pair was measured"]
+
+
+_WIDEST_CLEARANCE = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=2.0)
+
+
+@pytest.mark.parametrize(("gap", "joined"), [(7.9, True), (8.015, False), (8.5, False)])
+def test_what_joins_at_the_largest_clearance_is_ruled_alike_either_side_of_the_boxes(gap, joined):
+    # At a clearance of 2 mm parts join when they come within 8 mm. A pair a
+    # hair past that is measured and one well past it is settled by its boxes,
+    # and neither may read as joined.
+    report = evaluate_assembly(measure_assembly(_two_boxes(gap)), _WIDEST_CLEARANCE)
+    assert report.joints == ([[1], [0]] if joined else [[], []])
 
 
 # --- the assembly order ---------------------------------------------------
@@ -357,12 +805,19 @@ def test_a_grazing_contact_is_not_stepped_over():
     first = Pos(5, 5, 5) * Box(10, 10, 10)
     second = Pos(25, 5.5, 5) * Box(10, 10, 10)
     parts = [first, second]
-    spheres = [module._sphere(part) for part in parts]
+    scene = module._Scene(parts)
     heading = Vector(1, 1, 0).normalized()
     budget = module._Budget(10**6, 600.0)
 
     verdict = module._rule_heading(
-        parts, spheres, 0, [1], heading, module._look_ahead(parts), budget
+        parts,
+        module._spheres(scene, budget),
+        0,
+        [1],
+        heading,
+        module._look_ahead(parts),
+        budget,
+        scene,
     )
     assert verdict == BLOCKED, "the search walked past a real collision"
 
@@ -453,7 +908,7 @@ def test_interpenetrating_parts_measured_as_no_number_are_given_no_order(monkeyp
 
 
 def test_a_distance_that_is_not_a_number_is_reported_not_recorded(distances_are_not_numbers):
-    m = measure_assembly([Box(10, 10, 10), Pos(60, 0, 0) * Box(10, 10, 10)])
+    m = measure_assembly([Box(10, 10, 10), Pos(15, 0, 0) * Box(10, 10, 10)])
     assert m.gaps == []
     assert any(reason.startswith("gap between part 1 and part 2") for reason in m.unchecked)
 
@@ -690,17 +1145,18 @@ def _rule(parts, index, heading):
     """How the search rules one part sliding along ``heading``: free, blocked or undecided."""
     import cadless.assembly_measure as module
 
-    spheres = [module._sphere(part) for part in parts]
+    scene = module._Scene(parts)
     others = [other for other in range(len(parts)) if other != index]
     budget = module._Budget(10**6, 600.0)
     return module._rule_heading(
         parts,
-        spheres,
+        module._spheres(scene, budget),
         index,
         others,
         Vector(*heading).normalized(),
         module._look_ahead(parts),
         budget,
+        scene,
     )
 
 
@@ -1114,6 +1570,107 @@ def test_a_part_whose_box_cannot_be_taken_is_not_read_as_clear(monkeypatch):
     assert _rule([channel, bar], 0, (0, 0, 1)) == BLOCKED
 
 
+def test_a_part_s_box_is_taken_once_however_many_headings_ask_for_it(monkeypatch):
+    # Taking it walks every face and edge of the part, and the search asks for
+    # the same part's at each heading it rules: a caged block and its shell are
+    # each ruled against the other along every one.
+    import cadless.assembly_measure as module
+
+    pair = _caged()
+    taken = {id(part.wrapped): 0 for part in pair}
+    real = module._box_of
+
+    def counted(shape):
+        if id(shape) in taken:
+            taken[id(shape)] += 1
+        return real(shape)
+
+    monkeypatch.setattr(module, "_box_of", counted)
+    measure_assembly(pair)
+    assert set(taken.values()) == {1}
+
+
+def test_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes(stopping_short_of):
+    # The block rises past the side the kernel's tight box stops short on, and
+    # shaves it on the way. Skipped on that box, the boolean that sees the clash
+    # is never made.
+    import cadless.assembly_measure as module
+
+    ball = stopping_short_of(_as_nurbs(Sphere(120)), -118.9)
+    block = Pos(-129.75, 0, -175) * Box(20.5, 10, 50)
+    assert module._shared_volume(ball, Pos(0, 0, 175) * block) > 1.0
+    assert _rule([ball, block], 1, (0, 0, 1)) == BLOCKED
+
+
+def test_a_sphere_about_a_box_short_of_a_free_form_solid_does_not_free_a_part_that_clashes(
+    stopping_short_of,
+):
+    # A ball stretched sixteen times along X, reaching -240. The box it gives of
+    # itself stops short of that tip, so a sphere about that box leaves the tip
+    # outside, and a cube rising through the tip is never in that sphere's way.
+    import cadless.assembly_measure as module
+
+    long = stopping_short_of(scale(Sphere(15), (16, 1, 1)), -237.5)
+    cube = Pos(-239.8, 0, -20) * Box(1, 1, 1)
+    own = [*module._sphere(cube, None), *module._sphere(long, None)]
+    assert module._travel_window(*own, (0.0, 0.0, 1.0)) is None
+    assert module._shared_volume(long, Pos(0, 0, 20) * cube) > 0.1
+    assert _rule([long, cube], 1, (0, 0, 1)) == BLOCKED
+
+
+def test_the_sphere_a_pair_is_pruned_by_holds_every_corner_of_the_box_it_is_handed():
+    # The box reaches four times as far one way from the part's own middle as the
+    # other, so its far corners lie well past half its diagonal.
+    from OCP.Bnd import Bnd_Box
+
+    import cadless.assembly_measure as module
+
+    reach = Bnd_Box()
+    reach.Update(-40.0, -5.0, -5.0, 10.0, 5.0, 5.0)
+    centre, radius = module._sphere(Box(10, 10, 10), reach)
+    corners = [(x, y, z) for x in (-40.0, 10.0) for y in (-5.0, 5.0) for z in (-5.0, 5.0)]
+    assert all(math.dist(centre, corner) <= radius + 1e-9 for corner in corners)
+
+
+def test_a_spent_clock_stops_the_search_before_a_part_s_sphere_is_taken(monkeypatch):
+    # Taking a part's sphere walks all its faces and edges, and a build of many
+    # such parts would spend its time there with the clock unread.
+    import cadless.assembly_measure as module
+
+    def unwanted(part, reach):
+        raise AssertionError("a sphere was taken with the clock already out")
+
+    monkeypatch.setattr(module, "_sphere", unwanted)
+    pair = [Box(10, 10, 10), Pos(-60, 0, 0) * Box(10, 10, 10)]
+    order, _, unchecked, _ = module._disassembly_order(pair, module._Budget(10**6, 0.0))
+    assert order is None
+    assert any("ran out of budget" in reason for reason in unchecked)
+
+
+def test_a_spent_clock_stops_the_search_at_a_heading_that_needs_no_probe():
+    # The first cube leaves along +X with the other behind it, which no probe is
+    # spent on, so only the clock can stop the search there. The clock runs out
+    # once it has been read for the two spheres, so it is the reading at the
+    # heading that finds it out.
+    import cadless.assembly_measure as module
+
+    class _OutAfterTwoReadings:
+        left = 2
+
+        def check(self):
+            if self.left == 0:
+                raise module._BudgetSpent
+            self.left -= 1
+
+        def spend(self):
+            raise AssertionError("a probe was spent on a heading with nothing in the way")
+
+    pair = [Box(10, 10, 10), Pos(-60, 0, 0) * Box(10, 10, 10)]
+    order, _, unchecked, _ = module._disassembly_order(pair, _OutAfterTwoReadings())
+    assert order is None
+    assert any("ran out of budget" in reason for reason in unchecked)
+
+
 def test_a_walk_never_steps_over_a_clash_shorter_than_the_smallest_step():
     # The same clip as the plain cubes', on cubes neither of which can be swept,
     # so the walk alone rules it: it may stop short at the contact, never pass it.
@@ -1141,6 +1698,28 @@ def test_a_heading_away_from_a_part_that_is_already_an_axis_is_tried_once():
     spheres = [((0.0, 0.0, 0.0), 1.0), ((-5.0, 0.0, 0.0), 1.0)]
     headings = module._candidate_directions(spheres, 0, [1])
     assert sum(1 for heading in headings if (heading - Vector(1, 0, 0)).length < 1e-9) == 1
+
+
+def test_the_headings_leading_away_are_worked_out_only_after_the_axes_are_handed_out():
+    # A part that leaves along an axis never needs them, and listing them for
+    # every part first costs the square of the part count before the search has
+    # ruled anything or read its clock.
+    import cadless.assembly_measure as module
+
+    class _NotToBeRead:
+        def __getitem__(self, item):
+            raise AssertionError("read before the axes had been handed out")
+
+    headings = module._candidate_directions({0: ((0.0, 0.0, 0.0), 1.0), 1: _NotToBeRead()}, 0, [1])
+    axes = [next(headings) for _ in range(6)]
+    assert [(axis.X, axis.Y, axis.Z) for axis in axes] == [
+        (1, 0, 0),
+        (-1, 0, 0),
+        (0, 1, 0),
+        (0, -1, 0),
+        (0, 0, 1),
+        (0, 0, -1),
+    ]
 
 
 def test_the_order_search_does_not_ask_again_what_the_pairwise_phase_measured(monkeypatch):
