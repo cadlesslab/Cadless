@@ -1476,9 +1476,10 @@ def test_a_heading_of_numbers_too_large_to_square_still_gives_its_direction():
         ({"time_budget": math.nan}, "time budget"),
         ({"time_budget": "3"}, "time budget"),
         ({"time_budget": True}, "time budget"),
-        ({"probe_budget": 0}, "probe budget"),
-        ({"probe_budget": 2.5}, "probe budget"),
-        ({"probe_budget": True}, "probe budget"),
+        ({"probe_budget": 0}, "probe budget 0 is not a positive whole number"),
+        ({"probe_budget": 2.5}, "probe budget 2.5 is not a positive whole number"),
+        # a flag is no count, though Python counts it a whole number
+        ({"probe_budget": True}, "probe budget True is not a positive whole number"),
         # a whole number, and past what a number sent between processes may be
         ({"probe_budget": 10**400}, "probe budget is too large"),
     ],
@@ -1582,8 +1583,8 @@ def test_a_binding_order_that_is_blocked_fails_in_a_sentence_of_its_own():
     ids=["trapped parts", "trapped parts their overlaps explain"],
 )
 def test_a_declared_order_that_fails_is_never_called_no_order_at_all(found):
-    # Beside everything the search's own two sentences are said from. No search
-    # ran for an order that binds, so neither may be said of it.
+    # Beside each thing the search's own sentences are said from. No search ran
+    # for an order that binds, so none of them may be said of it.
     report = _declared(_BLOCKED_AT_KEY, **found)
     about_the_order = [failure for failure in report.failures if "assembly order" in failure]
     assert len(about_the_order) == 1
