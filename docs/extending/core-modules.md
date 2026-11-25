@@ -126,11 +126,14 @@ CheckRequest(order=[0, 1, 2], releases=[[], [0, 0, 1], [1, 0, 0]],
 
 `order` is the order the parts go together in and `releases` the heading each
 comes off along, both by a part's ordinal in the build's part order — the shape
-`ExecResult.assembly` hands a measured order back in, and a motion file holds
-one in. With an order the measurement rules the parts in it and searches for
-none, unless `binds=False` and the order does not hold; `assembly.declared` says
-how it came out, and an order that binds and does not hold fails the check at
-the first part that cannot go on. It is the
+`ExecResult.assembly` hands a measured order back in, so the `order` and
+`releases` of one run can be declared to the next as they stand. A motion file's
+two lists look the same and are not always a request: there `[]` is a part that
+stays where it is, and here it is a part with no heading declared, which the
+check tries its own headings for. With an order the measurement rules the parts
+in it and searches for none, unless `binds=False` and the order does not hold;
+`assembly.declared` says how it came out, and an order that binds and does not
+hold fails the check at the first part that cannot go on. It is the
 worked example of an input on this path: one reader
 (`read_check_request`) checks it in `run_code`, and again in the child before
 the script runs; it reaches the child as a file named in its last argument and
