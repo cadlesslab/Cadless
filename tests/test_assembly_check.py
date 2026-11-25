@@ -1466,6 +1466,10 @@ def test_a_heading_of_numbers_too_large_to_square_still_gives_its_direction():
         ({"order": [0, 1], "releases": [[]]}, "headings"),
         ({"order": [0, 1], "releases": [[], [0, 1]]}, "slot 1"),
         ({"order": [0, 1], "releases": [[0, 0, math.nan], []]}, "slot 0"),
+        # the two a heading's own arithmetic would take: an infinite one divides
+        # to no number at all, and text that spells a number converts to one
+        ({"order": [0, 1], "releases": [[], [0, 0, math.inf]]}, "three finite numbers"),
+        ({"order": [0, 1], "releases": [[], [0, 0, "1"]]}, "three finite numbers"),
         ({"order": [0, 1], "releases": [[], [0, 0, 0]]}, "slot 1"),
         ({"order": [0, 1], "binds": 1}, "binds"),
         ({"time_budget": 0}, "time budget"),

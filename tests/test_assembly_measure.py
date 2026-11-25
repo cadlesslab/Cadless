@@ -2028,3 +2028,110 @@ def test_a_heading_given_long_is_ruled_as_the_direction_it_names(no_search):
 
 def test_nothing_declared_leaves_no_record():
     assert measure_assembly(_mated_pair()).declared is None
+
+
+def test_what_one_part_met_is_not_reported_of_the_next(monkeypatch):
+    # The scene holds what the part being ruled met. Left there, the pairs an
+    # earlier part stopped at before it was freed would be read as the reasons
+    # the next one failed.
+    import cadless.assembly_measure as module
+
+    rulings = {
+        # tried along the search's own headings: three that do not free it, then one that does
+        1: [(BLOCKED, 0), (UNDECIDED, 0), ("refused", 0), (FREE, None)],
+        # ruled once, along its declared heading
+        2: [(BLOCKED, 1)],
+    }
+
+    def scripted(parts, spheres, index, others, direction, look_ahead, budget, scene):
+        verdict, other = rulings[index].pop(0)
+        if verdict == BLOCKED:
+            scene.blocking.add((index, other))
+        elif verdict == UNDECIDED:
+            scene.undecided.add((index, other))
+        elif verdict == "refused":
+            scene.refused.add((index, other))
+            verdict = UNDECIDED
+        return verdict
+
+    monkeypatch.setattr(module, "_rule_heading", scripted)
+    row = [Pos(30 * index, 0, 0) * Box(10, 10, 10) for index in range(3)]
+
+    m = measure_assembly(row, order=[0, 1, 2], releases=[[], [], [1, 0, 0]])
+
+    assert m.declared == {
+        "binds": True,
+        "outcome": "blocked",
+        "part": 2,
+        "heading": [1.0, 0.0, 0.0],
+        "blockers": [1],
+    }
+    assert m.unchecked == []
+
+
+def test_a_part_that_shares_volume_with_one_placed_before_it_is_blocked_by_it(no_search):
+    spec = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=CLEARANCE)
+    overlapping = [Box(20, 20, 10), Pos(15, 0, 0) * Box(20, 20, 10)]
+
+    m = measure_assembly(overlapping, order=[0, 1], releases=[[], [1, 0, 0]])
+
+    assert m.declared == {
+        "binds": True,
+        "outcome": "blocked",
+        "part": 1,
+        "heading": [1.0, 0.0, 0.0],
+        "blockers": [0],
+    }
+    assert (
+        "the declared assembly order fails at part 2: it shares volume with part 1 where it "
+        "stands, so it cannot move at all; fix the shared volume first"
+    ) in evaluate_assembly(m, spec).failures
+
+
+def test_a_clash_found_by_walking_names_the_part_it_was_found_with(no_search):
+    # Neither can be swept, so the pair is walked: the first closes the gap to
+    # the second and clashes with it a look past the contact.
+    pair = [_as_nurbs(Box(10, 10, 10)), _as_nurbs(Pos(15, 0, 0) * Box(10, 10, 10))]
+
+    m = measure_assembly(pair, order=[1, 0], releases=[[1, 0, 0], []])
+
+    assert m.declared == {
+        "binds": True,
+        "outcome": "blocked",
+        "part": 0,
+        "heading": [1.0, 0.0, 0.0],
+        "blockers": [1],
+    }
+
+
+def test_a_pair_the_kernel_would_not_measure_leaves_a_declared_order_undecided(
+    monkeypatch, no_search
+):
+    import cadless.assembly_measure as module
+
+    monkeypatch.setattr(module, "_shared_volume", lambda first, second: None)
+    pair = [Box(20, 20, 10), Pos(20, 0, 0) * Box(20, 20, 10)]
+
+    m = measure_assembly(pair, order=[0, 1], releases=[[], [1, 0, 0]])
+
+    assert m.declared == {"binds": True, "outcome": "undecided", "part": 1}
+    assert m.trapped == []
+    assert any("could not measure part 1 and part 2" in reason for reason in m.unchecked)
+
+
+def test_a_declared_order_is_not_reached_past_a_part_with_no_measurable_size(no_search):
+    parts = [_Awkward(size=(0.0, 10.0, 10.0)), _Awkward(centre=(30.0, 0.0, 0.0))]
+
+    m = measure_assembly(parts, order=[0, 1])
+
+    assert m.declared == {"binds": True, "outcome": "unreached"}
+    assert m.order is None
+    assert any("no measurable size" in reason for reason in m.unchecked)
+
+
+def test_an_order_declared_for_a_lone_part_is_confirmed_as_it_stands(no_search):
+    m = measure_assembly([Box(10, 10, 10)], order=[0])
+
+    assert m.declared == {"binds": True, "outcome": "confirmed"}
+    assert m.order == [0]
+    assert m.releases == []
