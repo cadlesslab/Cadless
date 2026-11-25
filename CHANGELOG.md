@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.5.2...backend-v1.6.0) (2026-11-25)
+
+
+### Features
+
+* add item keys with a written spec and shared test vectors ([#103](https://github.com/cadlesslab/Cadless/issues/103)) ([040146e](https://github.com/cadlesslab/Cadless/commit/040146e1bf23736356ffc8d7d7bd1bf8b317ecfe))
+
+
+### Improvements
+
+* keep more assembly builds by counting the joint's reach and saying where parts overlap ([#97](https://github.com/cadlesslab/Cadless/issues/97)) ([11f0ef5](https://github.com/cadlesslab/Cadless/commit/11f0ef50889aaf822eca4b43453bc048b96fcb6d))
+* settle far pairs of parts by their boxes, so a build of hundreds of parts can be checked ([#105](https://github.com/cadlesslab/Cadless/issues/105)) ([a2c8390](https://github.com/cadlesslab/Cadless/commit/a2c83904f8897a94db34728fdae6a6a5b1222a25))
+
 ## [1.5.2](https://github.com/cadlesslab/Cadless/compare/backend-v1.5.1...backend-v1.5.2) (2026-11-20)
 
 
