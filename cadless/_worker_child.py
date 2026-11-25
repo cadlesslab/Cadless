@@ -344,8 +344,9 @@ def main(argv: list[str]) -> int:
         parts = _parts_to_export(shape, tree)
         # A request asks for the measurement, whatever the flag says. A build of
         # one part has no relation to measure and is left alone, unless an order
-        # was declared for it: that order is then not this build's, and saying
-        # nothing would leave the caller to take silence for agreement.
+        # was declared for it: whether that order is this build's is then for
+        # the measurement to say, where saying nothing would leave the caller
+        # to take silence for agreement.
         declares = request is not None and request.order is not None
         if (check_assembly or request is not None) and (len(parts) > 1 or declares):
             from dataclasses import asdict  # noqa: PLC0415 - lazy, as the exporters are

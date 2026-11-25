@@ -154,8 +154,9 @@ _SHARED_UNCHECKED_PREFIX = "shared volume between"
 _GAP_UNCHECKED_PREFIX = "gap between"
 
 #: How an order a caller declared can come out. ``confirmed``: every part went on
-#: in the order given. ``blocked``: a part met one placed before it, and that was
-#: measured. ``undecided``: a part was neither shown free nor seen to clash.
+#: in the order given. ``blocked``: a part met one placed before it along every
+#: heading tried for it, and each of those was measured. ``undecided``: a part was
+#: not shown free, and a heading tried for it stopped short of a measured clash.
 #: ``mismatch``: the declaration does not describe the build. ``unreached``: the
 #: measurement stopped before it ruled the order.
 DECLARED_OUTCOMES = frozenset({"confirmed", "blocked", "undecided", "mismatch", "unreached"})
@@ -1008,7 +1009,7 @@ def _fail_declared_order(
 ) -> None:
     """Say where an author's order stopped at a clash the measurement saw.
 
-    Three sentences, by what the author can change: the shared volume, where
+    A sentence for each thing the author can change: the shared volume, where
     the part cannot move at all whatever heading it is given; the heading or
     the order, where one was declared and ruled; and a heading to declare,
     where none was and the search's own all met something. Shared volume is
@@ -1039,7 +1040,9 @@ def _fail_declared_order(
         return
     which = _listed_parts(labels, blockers)
     if declared["heading"]:
-        along = ", ".join(_coordinate(component, 3) for component in declared["heading"])
+        along = ", ".join(
+            _coordinate(component, _HEADING_DECIMALS) for component in declared["heading"]
+        )
         report.failures.append(
             f"{stops}along its declared heading ({along}) it passes through {which}, which the "
             "order places before it"
@@ -1050,6 +1053,12 @@ def _fail_declared_order(
         f"passes through a part the order places before it ({which}); declare the heading it "
         "comes off along"
     )
+
+
+#: How many decimals a heading's components are said to in a sentence. They are
+#: parts of a unit length, so the third decimal turns a heading by less than a
+#: tenth of a degree, which is enough to recognise the heading that was declared.
+_HEADING_DECIMALS = 3
 
 
 def _listed_parts(labels: Sequence[str], indices: Sequence[int]) -> str:

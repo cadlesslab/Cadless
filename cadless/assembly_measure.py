@@ -143,10 +143,12 @@ def measure_assembly(
 
     ``order`` is an order the caller declares its parts go together in, each
     named by its place in ``parts``, and ``releases`` the heading each comes off
-    along, ``[]`` in the slot of a part with none. Given an order, the parts are
+    along, ``[]`` in the slot of a part with none, or no slots at all where no
+    part has one. Given an order, the parts are
     ruled in it and no order is searched for, unless ``binds`` is false and the
-    order does not hold. Whatever is handed in is checked here as well as where
-    a request is read, since this is called directly too.
+    order does not hold. What is handed in is held to the parts here, the one
+    place an order meets how many parts the build has: a request is read before
+    there is a build to count.
     """
     boxes = [_extent(part) for part in parts]
     labels = part_labels(len(parts), names)
@@ -447,11 +449,7 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
                 releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
                 break
         if freed is None:
-            reasons = []
-            if scene.refused:
-                reasons.append(_unmeasured_reason(scene.refused, labels))
-            if scene.undecided:
-                reasons.append(_touching_reason(scene.undecided, labels))
+            reasons = _unruled_reasons(scene, labels)
             if reasons:
                 return None, [], reasons, []
             return None, sorted(remaining), [], []
@@ -469,8 +467,8 @@ def _declared_order(parts, budget, scene, labels, order, releases, binds):
     and nothing is searched for: an author's order that does not hold is a
     fault for the author to hear of, where an order found in its place would
     send the kit out with steps nobody wrote. One that does not bind is a hint.
-    Where it does not hold the search runs as it would have with none given,
-    and only the record says what became of it.
+    Where it does not hold the search runs after it, on what trying it left of
+    the budget, and only the record says what became of it.
     """
     proved, record, reasons = _confirm_order(parts, budget, scene, labels, order, releases)
     record = {"binds": bool(binds), **record}
@@ -561,11 +559,7 @@ def _stopped_at(index, heading, scene, labels):
     Read off what the scene holds, which is this part's alone: the scene is
     cleared before each part is ruled.
     """
-    reasons = []
-    if scene.refused:
-        reasons.append(_unmeasured_reason(scene.refused, labels))
-    if scene.undecided:
-        reasons.append(_touching_reason(scene.undecided, labels))
+    reasons = _unruled_reasons(scene, labels)
     if reasons:
         return None, {"outcome": "undecided", "part": index}, reasons
     blocked = {
@@ -575,6 +569,21 @@ def _stopped_at(index, heading, scene, labels):
         "blockers": sorted({other for _moving, other in scene.blocking}),
     }
     return None, blocked, []
+
+
+def _unruled_reasons(scene, labels) -> list[str]:
+    """Why what the scene holds shows nothing blocked: the pairs it left open.
+
+    Empty where every heading tried met a clash that was measured. One reading
+    for the search and for a declared order, so that neither calls a part
+    trapped or blocked over a pair the other would say was never ruled.
+    """
+    reasons = []
+    if scene.refused:
+        reasons.append(_unmeasured_reason(scene.refused, labels))
+    if scene.undecided:
+        reasons.append(_touching_reason(scene.undecided, labels))
+    return reasons
 
 
 def _unmeasured_reason(pairs, labels=None) -> str:
