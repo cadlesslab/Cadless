@@ -1583,8 +1583,8 @@ def test_a_binding_order_that_is_blocked_fails_in_a_sentence_of_its_own():
     ids=["trapped parts", "trapped parts their overlaps explain"],
 )
 def test_a_declared_order_that_fails_is_never_called_no_order_at_all(found):
-    # Beside each thing the search's own sentences are said from. No search ran
-    # for an order that binds, so none of them may be said of it.
+    # Set beside what a search's verdict would be read from. No search ran for
+    # an order that binds, so what a search would say is not said of it.
     report = _declared(_BLOCKED_AT_KEY, **found)
     about_the_order = [failure for failure in report.failures if "assembly order" in failure]
     assert len(about_the_order) == 1
