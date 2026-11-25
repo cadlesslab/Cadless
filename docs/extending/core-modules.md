@@ -107,13 +107,35 @@ into the server's vendored copy as well.
 
 ```python
 run_code(code, *, export_dir=None, export_scale=1.0, check_assembly=False,
-         assembly_turn=False, config=None) -> ExecResult
+         assembly_turn=False, config=None, check=None) -> ExecResult
 ```
 
 `check_assembly` asks the child to measure how a multi-part result's parts
 relate; `assembly_turn` puts the build on the assembly clock. They are separate
 on purpose: the pipeline measures every build, and only a turn that asked for an
 assembly earns the longer clock.
+
+`check` is what a caller asks of that measurement beyond taking it, as a
+`CheckRequest` from `cadless/assembly_check.py`, and giving one asks for the
+measurement:
+
+```python
+CheckRequest(order=[0, 1, 2], releases=[[], [0, 0, 1], [1, 0, 0]],
+             binds=True, time_budget=None, probe_budget=None)
+```
+
+`order` is the order the parts go together in and `releases` the heading each
+comes off along, both by a part's ordinal in the build's part order — the shape
+`ExecResult.assembly` hands a measured order back in, and a motion file holds
+one in. With an order the measurement rules the parts in it and searches for
+none, unless `binds=False` and the order does not hold; `assembly.declared` says
+how it came out, and an order that binds and does not hold fails the check at
+the first part that cannot go on. It is the
+worked example of an input on this path: one reader
+(`read_check_request`) checks it in `run_code`, and again in the child before
+the script runs; it reaches the child as a file named in its last argument and
+the worker service as a field of the body; and neither is there for a run that
+asks nothing, so what a run without one starts is unchanged.
 
 `ExecResult` carries `ok` / `error` / `timed_out`, the geometry summary
 (`volume`, `bbox`, `part_count`, `manifold`, `min_wall_thickness`), the four
