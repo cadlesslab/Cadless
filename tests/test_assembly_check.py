@@ -1479,11 +1479,21 @@ def test_a_heading_of_numbers_too_large_to_square_still_gives_its_direction():
         ({"probe_budget": 0}, "probe budget"),
         ({"probe_budget": 2.5}, "probe budget"),
         ({"probe_budget": True}, "probe budget"),
+        # a whole number, and past what a number sent between processes may be
+        ({"probe_budget": 10**400}, "probe budget is too large"),
     ],
 )
 def test_a_request_that_cannot_be_used_is_refused_with_its_field_named(sent, named):
     with pytest.raises(ValueError, match=named):
         read_check_request(sent)
+
+
+def test_no_slots_at_all_declares_no_heading_for_any_part():
+    # What a measurement hands back for a lone part: read as slots that are
+    # missing, the order it was measured with could not be declared.
+    assert read_check_request({"order": [0], "releases": []}) == CheckRequest(order=[0])
+    assert read_check_request({"releases": []}) == CheckRequest()
+    assert declared_headings([1, 0], [], 2) == [None, None]
 
 
 def test_a_declared_order_is_held_to_the_parts_there_are():

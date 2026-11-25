@@ -168,9 +168,10 @@ class CheckRequest:
     ``order`` is the order the caller put its parts together in, each part named
     by its ordinal in the build's part order, and ``releases`` holds in each
     part's slot the heading it comes off along, or ``[]`` where the caller names
-    none. That is the shape :class:`AssemblyMeasurements` hands an order and its
-    headings back in, so one that was measured can be handed in as it is. A part
-    is not named by its label, since two parts may share one.
+    none; no slots at all names none for any part. That is the shape
+    :class:`AssemblyMeasurements` hands an order and its headings back in, so
+    one that was measured can be handed in as it is. A part is not named by its
+    label, since two parts may share one.
 
     ``binds`` says whose order it is. An author's binds: where it does not hold,
     that is the result, and no other order is looked for -- repaired silently, a
@@ -202,6 +203,8 @@ def read_check_request(data: object) -> CheckRequest | None:
     if not isinstance(data, dict):
         raise ValueError(f"the request is {_quoted(data)} rather than an object")
     order, releases = data.get("order"), data.get("releases")
+    if isinstance(releases, list | tuple) and not releases:
+        releases = None  # no slots at all: no heading is declared for any part
     headings = None
     if order is not None:
         listed = isinstance(order, list | tuple)
@@ -223,8 +226,14 @@ def read_check_request(data: object) -> CheckRequest | None:
             )
         seconds = number
     probes = data.get("probe_budget")
-    if probes is not None and (type(probes) is not int or probes <= 0):
-        raise ValueError(f"the probe budget {_quoted(probes)} is not a positive whole number")
+    if probes is not None:
+        if type(probes) is not int or probes <= 0:
+            raise ValueError(f"the probe budget {_quoted(probes)} is not a positive whole number")
+        if _number(probes) is None:
+            # Held to what a float holds, as the time is. A count past that is
+            # one nobody means, and a request that was taken has to be one that
+            # can be written out and sent.
+            raise ValueError("the probe budget is too large a number to send")
     return CheckRequest(
         order=None if order is None else list(order),
         releases=(
@@ -245,17 +254,20 @@ def declared_headings(
 
     Raises ``ValueError`` where ``order`` and ``releases`` do not describe
     ``count`` parts: an order that is not each of them once, or headings that
-    are not a slot a part holding ``[]`` or a direction. A heading is made unit
-    length here, once, so that no reader rules a part along one of another
-    length.
+    are not one slot per part, each ``[]`` or a direction. No slots at all, as
+    ``None`` or an empty list, declares no heading for any part. A heading is
+    made unit length here, once, so that no reader rules a part along one of
+    another length.
     """
     if not isinstance(order, list | tuple) or not all(type(index) is int for index in order):
-        raise ValueError(f"the order is {_quoted(order)} rather than a list of part numbers")
+        raise ValueError(
+            f"the order is {_quoted(order)} rather than a list of part ordinals, counted from 0"
+        )
     if len(order) != count:
         raise ValueError(f"the order names {len(order)} parts where there are {count}")
     if sorted(order) != list(range(count)):
         raise ValueError(f"the order does not name each of the {count} parts once")
-    if releases is None:
+    if releases is None or (isinstance(releases, list | tuple) and not releases):
         return [None] * count
     if not isinstance(releases, list | tuple):
         raise ValueError(

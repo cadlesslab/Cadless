@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 
 from cadless._worker_child import SENTINEL
 from cadless.assembly_check import (
@@ -247,8 +247,12 @@ def run_code(
     cfg = config or settings
     wall = cfg.assembly_exec_timeout_secs if assembly_turn else cfg.exec_timeout_secs
     if check is not None:
+        if isinstance(check, CheckRequest):
+            # Its fields as they are, for the reader to refuse or take: copied
+            # deeply first, one holding what cannot be copied raised here instead.
+            check = {field.name: getattr(check, field.name) for field in fields(check)}
         try:
-            check = read_check_request(asdict(check) if isinstance(check, CheckRequest) else check)
+            check = read_check_request(check)
         except ValueError as refused:
             return ExecResult(
                 ok=False, error=f"the assembly check's request cannot be used: {refused}"

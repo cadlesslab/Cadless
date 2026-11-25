@@ -40,7 +40,7 @@ from build123d import (
     scale,
 )
 
-from cadless.assembly_check import evaluate_assembly
+from cadless.assembly_check import evaluate_assembly, read_check_request
 from cadless.assembly_measure import _BLOCKED as BLOCKED
 from cadless.assembly_measure import _FREE as FREE
 from cadless.assembly_measure import _UNDECIDED as UNDECIDED
@@ -1918,6 +1918,22 @@ def test_an_order_the_search_found_is_confirmed_when_it_is_handed_back(rulings):
     assert again.order == searched.order
     assert again.releases == searched.releases
     assert len(rulings) == 3
+
+
+@pytest.mark.parametrize(
+    "build", [lambda: [Box(10, 10, 10)], lambda: _capped_peg()], ids=["a lone part", "three parts"]
+)
+def test_what_a_measurement_hands_back_is_a_request_as_it_stands(build):
+    # Through the reader a request comes in by, with nothing added or taken
+    # away. A lone part is the one whose headings come back with no slot at all.
+    parts = build()
+    measured = measure_assembly(parts)
+    request = read_check_request({"order": measured.order, "releases": measured.releases})
+
+    again = measure_assembly(parts, order=request.order, releases=request.releases)
+
+    assert again.declared == {"binds": True, "outcome": "confirmed"}
+    assert (again.order, again.releases) == (measured.order, measured.releases)
 
 
 def test_a_heading_declared_for_the_first_part_is_neither_ruled_nor_handed_back(rulings):

@@ -1260,13 +1260,27 @@ def test_with_no_request_the_child_is_run_as_it_was(monkeypatch):
 
 @pytest.mark.parametrize(
     "check",
-    [{"order": [0, 0]}, [0, 1], "order"],
-    ids=["a part twice", "a list", "text"],
+    # the last is a whole number above nought, and one no file or body could carry
+    [{"order": [0, 0]}, [0, 1], "order", {"probe_budget": 10**5000}],
+    ids=["a part twice", "a list", "text", "a budget too large to send"],
 )
 def test_a_request_that_cannot_be_used_fails_the_run_with_nothing_spawned(monkeypatch, check):
     runs = _spawning(monkeypatch)
 
     res = run_code("result = 1\n", check=check)
+
+    assert res.ok is False
+    assert "request" in res.error
+    assert runs == []
+
+
+def test_a_request_object_holding_what_is_no_list_is_refused_as_any_other_is(monkeypatch):
+    # Copied before it was read, such a request raised out of the call instead.
+    from cadless.assembly_check import CheckRequest
+
+    runs = _spawning(monkeypatch)
+
+    res = run_code("result = 1\n", check=CheckRequest(order=(part for part in (0, 1))))
 
     assert res.ok is False
     assert "request" in res.error
