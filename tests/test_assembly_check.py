@@ -15,11 +15,14 @@ from cadless.assembly_check import (
     PARTS_CHECKS,
     AssemblyMeasurements,
     AssemblyReport,
+    CheckRequest,
+    declared_headings,
     evaluate_assembly,
     evaluate_lone_part,
     evaluate_requested_size,
     mating_graph,
     mating_tolerance,
+    read_check_request,
 )
 from cadless.printer_profile import AssemblySpec, BuildVolume
 
@@ -1399,3 +1402,259 @@ def test_the_names_that_moved_to_the_measurement_still_resolve_here():
     ):
         assert getattr(assembly_check, name) is getattr(assembly_measure, name)
     assert not hasattr(assembly_check, "no_such_name")
+
+
+# --- a request for the check ------------------------------------------------
+
+
+def test_nothing_asked_is_no_request():
+    assert read_check_request(None) is None
+
+
+def test_a_request_is_read_with_its_headings_made_unit_length():
+    request = read_check_request(
+        {
+            "order": [1, 0, 2],
+            "releases": [[0, 0, 5], [], [3.0, 0.0, 4.0]],
+            "binds": False,
+            "time_budget": 12,
+            "probe_budget": 500,
+        }
+    )
+    assert request is not None
+    assert request.order == [1, 0, 2]
+    assert request.releases == [[0.0, 0.0, 1.0], [], pytest.approx([0.6, 0.0, 0.8])]
+    assert request.binds is False
+    assert request.time_budget == 12.0
+    assert request.probe_budget == 500
+
+
+def test_a_declared_order_binds_unless_the_request_says_otherwise():
+    request = read_check_request({"order": [0, 1]})
+    assert request == CheckRequest(order=[0, 1], releases=None, binds=True)
+
+
+def test_a_request_may_ask_for_budgets_and_no_order():
+    request = read_check_request({"time_budget": 3.5, "probe_budget": 7})
+    assert request == CheckRequest(time_budget=3.5, probe_budget=7)
+
+
+def test_a_key_the_request_reader_does_not_know_is_ignored():
+    request = read_check_request({"order": [0, 1], "invented_later": 7})
+    assert request == CheckRequest(order=[0, 1])
+
+
+def test_a_heading_of_numbers_too_large_to_square_still_gives_its_direction():
+    request = read_check_request({"order": [0, 1], "releases": [[], [1e200, 0, 1e200]]})
+    assert request is not None
+    assert request.releases is not None
+    assert request.releases[1] == pytest.approx([math.sqrt(0.5), 0.0, math.sqrt(0.5)])
+
+
+@pytest.mark.parametrize(
+    "sent, named",
+    [
+        ([0, 1], "request"),
+        ({"order": "0,1"}, "order"),
+        ({"order": []}, "order"),
+        ({"order": [True, False]}, "order"),
+        ({"order": [0.0, 1.0]}, "order"),
+        ({"order": [0, 2]}, "order"),
+        ({"order": [0, 0]}, "order"),
+        ({"releases": [[0, 0, 1]]}, "no order"),
+        ({"order": [0, 1], "releases": "up"}, "headings"),
+        ({"order": [0, 1], "releases": [[]]}, "headings"),
+        ({"order": [0, 1], "releases": [[], [0, 1]]}, "slot 1"),
+        ({"order": [0, 1], "releases": [[0, 0, math.nan], []]}, "slot 0"),
+        ({"order": [0, 1], "releases": [[], [0, 0, 0]]}, "slot 1"),
+        ({"order": [0, 1], "binds": 1}, "binds"),
+        ({"time_budget": 0}, "time budget"),
+        ({"time_budget": math.nan}, "time budget"),
+        ({"time_budget": "3"}, "time budget"),
+        ({"time_budget": True}, "time budget"),
+        ({"probe_budget": 0}, "probe budget"),
+        ({"probe_budget": 2.5}, "probe budget"),
+        ({"probe_budget": True}, "probe budget"),
+    ],
+)
+def test_a_request_that_cannot_be_used_is_refused_with_its_field_named(sent, named):
+    with pytest.raises(ValueError, match=named):
+        read_check_request(sent)
+
+
+def test_a_declared_order_is_held_to_the_parts_there_are():
+    assert declared_headings([1, 0], None, 2) == [None, None]
+    assert declared_headings((1, 0), [[0, 0, 2], ()], 2) == [(0.0, 0.0, 1.0), None]
+    with pytest.raises(ValueError, match="names 2 parts where there are 3"):
+        declared_headings([1, 0], None, 3)
+    with pytest.raises(ValueError, match="given for 3 parts where there are 2"):
+        declared_headings([1, 0], [[], [], []], 2)
+
+
+# --- how a declared order came out -------------------------------------------
+
+_BLOCKED_AT_KEY = {
+    "binds": True,
+    "outcome": "blocked",
+    "part": 1,
+    "heading": [0.5, 0.0, 0.8660254037844386],
+    "blockers": [0],
+}
+
+
+def test_how_a_declared_order_came_out_is_read_from_a_payload():
+    m = AssemblyMeasurements.from_payload({"declared": dict(_BLOCKED_AT_KEY)})
+    assert m is not None
+    assert m.declared == _BLOCKED_AT_KEY
+
+
+def test_a_payload_that_declares_nothing_reads_as_no_record():
+    m = AssemblyMeasurements.from_payload({"order": [0, 1]})
+    assert m is not None
+    assert m.declared is None
+
+
+def test_a_record_is_rebuilt_from_the_keys_it_is_read_by():
+    m = AssemblyMeasurements.from_payload(
+        {"declared": {"binds": False, "outcome": "confirmed", "invented_later": 7, "part": 4}}
+    )
+    assert m is not None
+    assert m.declared == {"binds": False, "outcome": "confirmed"}
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "confirmed",
+        {"outcome": "confirmed"},
+        {"binds": 1, "outcome": "confirmed"},
+        {"binds": True, "outcome": "passed"},
+        {"binds": True, "outcome": ["confirmed"]},
+        {"binds": True, "outcome": "undecided"},
+        {"binds": True, "outcome": "blocked"},
+        {**_BLOCKED_AT_KEY, "part": True},
+        {**_BLOCKED_AT_KEY, "part": -1},
+        {**_BLOCKED_AT_KEY, "heading": [0.0, 0.0]},
+        {**_BLOCKED_AT_KEY, "blockers": "0"},
+        {**_BLOCKED_AT_KEY, "blockers": []},
+    ],
+)
+def test_a_record_that_cannot_be_read_is_no_record(record):
+    m = AssemblyMeasurements.from_payload({"declared": record})
+    assert m is not None
+    assert m.declared is None
+
+
+def _declared(record, **kw) -> AssemblyReport:
+    return evaluate_assembly(
+        _m(order=None, trapped=[], declared=record, **kw), SPEC, names=["bridge", "key A"]
+    )
+
+
+def test_a_binding_order_that_is_blocked_fails_in_a_sentence_of_its_own():
+    report = _declared(_BLOCKED_AT_KEY)
+    assert report.failures == [
+        "the declared assembly order fails at key A: along its declared heading "
+        "(0.5, 0, 0.866) it passes through bridge, which the order places before it"
+    ]
+    assert report.unchecked == []
+    assert report.order is None
+
+
+def test_a_declared_order_that_fails_is_never_called_no_order_at_all():
+    for record in (_BLOCKED_AT_KEY, {**_BLOCKED_AT_KEY, "heading": []}):
+        report = _declared(record, overlaps=[[0, 1, 30.0]])
+        assert not any("no assembly order exists" in failure for failure in report.failures)
+        assert not any("reorient the joint" in failure for failure in report.failures)
+
+
+def test_a_part_with_no_declared_heading_that_is_blocked_says_what_was_tried():
+    report = _declared({**_BLOCKED_AT_KEY, "heading": []})
+    assert report.failures == [
+        "the declared assembly order fails at key A: no heading was declared for it, and "
+        "along every heading the check tries it passes through a part the order places "
+        "before it (bridge); declare the heading it comes off along"
+    ]
+
+
+def test_a_part_blocked_by_one_it_shares_volume_with_is_sent_to_the_overlap():
+    report = _declared(_BLOCKED_AT_KEY, overlaps=[[0, 1, 30.0]])
+    order = [failure for failure in report.failures if "declared assembly order" in failure]
+    assert order == [
+        "the declared assembly order fails at key A: it shares volume with bridge where it "
+        "stands, so it cannot move at all; fix the shared volume first"
+    ]
+
+
+@pytest.mark.parametrize("overlaps", [[[0, 1, 0.0]], [[0, 1, math.inf]], [[1, 1, 30.0]]])
+def test_an_overlap_nobody_measured_does_not_reword_a_blocked_order(overlaps):
+    report = _declared(_BLOCKED_AT_KEY, overlaps=overlaps)
+    assert any("along its declared heading (0.5, 0, 0.866)" in f for f in report.failures)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [{**_BLOCKED_AT_KEY, "part": 2}, {**_BLOCKED_AT_KEY, "blockers": [0, 9]}],
+)
+def test_a_blocked_order_naming_a_part_that_is_not_there_is_not_established(record):
+    report = _declared(record)
+    assert report.failures == []
+    assert any(
+        reason.startswith("assembly order:") and "not all among the 2 parts" in reason
+        for reason in report.unchecked
+    )
+
+
+@pytest.mark.parametrize("outcome", ["undecided", "mismatch", "unreached"])
+def test_a_binding_order_that_was_not_ruled_reads_as_not_established(outcome):
+    record = {"binds": True, "outcome": outcome}
+    if outcome == "undecided":
+        record["part"] = 1
+    why = "assembly order: bridge and key A touch where the check cannot follow them"
+    report = _declared(record, unchecked=[why])
+    assert report.failures == []
+    assert report.unchecked == [why]
+    # and with no reason beside it, the record alone is no pass
+    silent = _declared(record)
+    assert silent.unchecked == ["assembly order: no result and no reason was given"]
+
+
+@pytest.mark.parametrize("outcome", ["blocked", "undecided", "mismatch", "unreached"])
+def test_a_binding_order_that_was_not_confirmed_is_never_handed_on_as_an_order(outcome):
+    record = {**_BLOCKED_AT_KEY, "outcome": outcome}
+    report = evaluate_assembly(_m(order=[0, 1], declared=record), SPEC)
+    assert not report.ok
+    assert report.order is None
+
+
+def test_a_binding_order_that_was_not_confirmed_never_reads_as_trapped_parts():
+    report = evaluate_assembly(
+        _m(order=None, trapped=[0, 1], declared={"binds": True, "outcome": "unreached"}), SPEC
+    )
+    assert report.failures == []
+    assert report.unchecked == ["assembly order: no result and no reason was given"]
+
+
+def test_a_declared_order_that_was_a_hint_changes_no_verdict():
+    hint = {**_BLOCKED_AT_KEY, "binds": False}
+    assert evaluate_assembly(_m(declared=hint), SPEC).ok
+    trapped = evaluate_assembly(_m(order=None, trapped=[1], declared=hint), SPEC)
+    assert any("no assembly order exists" in failure for failure in trapped.failures)
+
+
+def test_a_confirmed_order_passes_as_any_order_does():
+    report = evaluate_assembly(_m(declared={"binds": True, "outcome": "confirmed"}), SPEC)
+    assert report.ok
+    assert report.order == [0, 1]
+
+
+def test_a_confirmed_record_beside_no_order_is_no_pass():
+    report = evaluate_assembly(
+        _m(order=None, declared={"binds": True, "outcome": "confirmed"}), SPEC
+    )
+    assert report.unchecked == ["assembly order: no result and no reason was given"]
+
+
+def test_a_build_not_held_to_its_order_is_not_refused_over_a_declared_one():
+    report = evaluate_assembly(_m(order=None, declared=_BLOCKED_AT_KEY), SPEC, checks=PARTS_CHECKS)
+    assert report.ok

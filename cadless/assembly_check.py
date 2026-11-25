@@ -55,6 +55,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from cadless.assembly_motion import _is_slot, _unit
 from cadless.assembly_tree import readable, unnamed
 from cadless.joint_sizes import REACH_MOST_MM, pieces_along
 from cadless.print_fit import _dimensions, _number, too_big_for
@@ -152,6 +153,128 @@ _PAIRS_UNCHECKED_PREFIX = "overlap and gap between every pair:"
 _SHARED_UNCHECKED_PREFIX = "shared volume between"
 _GAP_UNCHECKED_PREFIX = "gap between"
 
+#: How an order a caller declared can come out. ``confirmed``: every part went on
+#: in the order given. ``blocked``: a part met one placed before it, and that was
+#: measured. ``undecided``: a part was neither shown free nor seen to clash.
+#: ``mismatch``: the declaration does not describe the build. ``unreached``: the
+#: measurement stopped before it ruled the order.
+DECLARED_OUTCOMES = frozenset({"confirmed", "blocked", "undecided", "mismatch", "unreached"})
+
+
+@dataclass(frozen=True)
+class CheckRequest:
+    """What a caller asks of the measurement beyond taking it.
+
+    ``order`` is the order the caller put its parts together in, each part named
+    by its ordinal in the build's part order, and ``releases`` holds in each
+    part's slot the heading it comes off along, or ``[]`` where the caller names
+    none. That is the shape :class:`AssemblyMeasurements` hands an order and its
+    headings back in, so one that was measured can be handed in as it is. A part
+    is not named by its label, since two parts may share one.
+
+    ``binds`` says whose order it is. An author's binds: where it does not hold,
+    that is the result, and no other order is looked for -- repaired silently, a
+    kit would go out with steps its author never wrote. An order that is only a
+    hint is tried first and searched past.
+
+    ``time_budget`` bounds the measurement in seconds and ``probe_budget`` in
+    units of kernel work; ``None`` leaves each as the measurement sets it.
+    """
+
+    order: list[int] | None = None
+    releases: list[list[float]] | None = None
+    binds: bool = True
+    time_budget: float | None = None
+    probe_budget: int | None = None
+
+
+def read_check_request(data: object) -> CheckRequest | None:
+    """The request ``data`` carries, or ``None`` where it carries none.
+
+    Raises ``ValueError`` saying which field cannot be used. Checked rather than
+    converted, since a request arrives from another process and each value read
+    loosely is acted on as something nobody asked for: a flag as part 0 or 1, a
+    fraction as the part below it, a heading of no length as a direction. A key
+    nothing here reads is ignored.
+    """
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError(f"the request is {_quoted(data)} rather than an object")
+    order, releases = data.get("order"), data.get("releases")
+    headings = None
+    if order is not None:
+        listed = isinstance(order, list | tuple)
+        if listed and not order:
+            raise ValueError("the order names no part")
+        # Held to its own length: how many parts the build has is not known yet.
+        headings = declared_headings(order, releases, len(order) if listed else 0)
+    elif releases is not None:
+        raise ValueError("headings are given for no order")
+    binds = data.get("binds", True)
+    if not isinstance(binds, bool):
+        raise ValueError(f"whether the order binds is {_quoted(binds)} rather than true or false")
+    seconds = data.get("time_budget")
+    if seconds is not None:
+        number = _number(seconds)
+        if number is None or not math.isfinite(number) or number <= 0.0:
+            raise ValueError(
+                f"the time budget {_quoted(seconds)} is not a positive finite number of seconds"
+            )
+        seconds = number
+    probes = data.get("probe_budget")
+    if probes is not None and (type(probes) is not int or probes <= 0):
+        raise ValueError(f"the probe budget {_quoted(probes)} is not a positive whole number")
+    return CheckRequest(
+        order=None if order is None else list(order),
+        releases=(
+            None
+            if headings is None or releases is None
+            else [list(heading or ()) for heading in headings]
+        ),
+        binds=binds,
+        time_budget=seconds,
+        probe_budget=probes,
+    )
+
+
+def declared_headings(
+    order: object, releases: object, count: int
+) -> list[tuple[float, float, float] | None]:
+    """Each part's declared heading at unit length, ``None`` where it has none.
+
+    Raises ``ValueError`` where ``order`` and ``releases`` do not describe
+    ``count`` parts: an order that is not each of them once, or headings that
+    are not a slot a part holding ``[]`` or a direction. A heading is made unit
+    length here, once, so that no reader rules a part along one of another
+    length.
+    """
+    if not isinstance(order, list | tuple) or not all(type(index) is int for index in order):
+        raise ValueError(f"the order is {_quoted(order)} rather than a list of part numbers")
+    if len(order) != count:
+        raise ValueError(f"the order names {len(order)} parts where there are {count}")
+    if sorted(order) != list(range(count)):
+        raise ValueError(f"the order does not name each of the {count} parts once")
+    if releases is None:
+        return [None] * count
+    if not isinstance(releases, list | tuple):
+        raise ValueError(
+            f"the headings are {_quoted(releases)} rather than a list with a slot for each part"
+        )
+    if len(releases) != count:
+        raise ValueError(f"headings are given for {len(releases)} parts where there are {count}")
+    headings: list[tuple[float, float, float] | None] = []
+    for position, slot in enumerate(releases):
+        if not _is_slot(slot):
+            raise ValueError(
+                f"the heading in slot {position} is neither [] nor three finite numbers"
+            )
+        heading = _unit(slot) if len(slot) else None
+        if len(slot) and heading is None:
+            raise ValueError(f"the heading in slot {position} gives no direction")
+        headings.append(heading)
+    return headings
+
 
 @dataclass(frozen=True)
 class AssemblyMeasurements:
@@ -184,6 +307,14 @@ class AssemblyMeasurements:
     reached, or it could not finish. Both are kept apart from the tables a
     verdict is read from, so a reader of another release loses a sentence's
     detail, never a verdict.
+
+    ``declared`` says how an order the caller declared came out, and is ``None``
+    where none was declared: whether it ``binds``, its ``outcome`` -- one of
+    :data:`DECLARED_OUTCOMES` -- the ``part`` it stopped at where it was blocked
+    or undecided, and where it was blocked the ``heading`` that part was ruled
+    along, ``[]`` where none was declared for it, with the ``blockers`` it met.
+    A binding order that was not confirmed leaves ``order`` ``None`` and
+    ``trapped`` empty: no search ran, so nothing was shown trapped.
     """
 
     part_bboxes: list[list[float]] = field(default_factory=list)
@@ -195,6 +326,7 @@ class AssemblyMeasurements:
     releases: list[list[float]] = field(default_factory=list)
     overlap_boxes: list[list[float]] = field(default_factory=list)
     freed_without_overlaps: bool | None = None
+    declared: dict | None = None
 
     @classmethod
     def from_payload(cls, data: object) -> AssemblyMeasurements | None:
@@ -231,6 +363,7 @@ class AssemblyMeasurements:
             releases=tables["releases"] or [],
             overlap_boxes=tables["overlap_boxes"] or [],
             freed_without_overlaps=_ruling(data.get("freed_without_overlaps")),
+            declared=_declared(data.get("declared")),
         )
 
 
@@ -345,10 +478,13 @@ def evaluate_assembly(
 
     labels = part_labels(len(measurements.part_bboxes), names)
     report.order = measurements.order
-    if not _is_permutation(report.order, len(measurements.part_bboxes)):
+    if not _is_permutation(report.order, len(measurements.part_bboxes)) or (
+        _unconfirmed(measurements) is not None
+    ):
         # Withheld whatever is judged: an order of other parts would be played
-        # and described as this build's. Why it was withheld is the order
-        # check's to say, below, where that check is faced.
+        # and described as this build's, and so would one found beside an
+        # author's order that was not confirmed. Why it was withheld is the
+        # order check's to say, below, where that check is faced.
         report.order = None
     if "fit" in checks:
         _check_fit(measurements, spec, report, labels)
@@ -774,7 +910,18 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequen
     model to fix geometry that was never measured, and it is the first line of
     the repair prompt -- which is exactly the confusion the module docstring
     promises this report does not make.
+
+    An author's order that was not confirmed is ruled before any of that, and
+    on its own terms: no search ran, so nothing here may say that no order
+    exists or that a part is trapped.
     """
+    declared = _unconfirmed(m)
+    if declared is not None:
+        if declared["outcome"] == "blocked":
+            _fail_declared_order(m, declared, report, labels)
+        else:
+            _say_if_no_reason_was_given(m, report)
+        return
     if m.order is not None:
         # An order that is not a permutation of the parts describes a different
         # assembly from the one measured. Type-checking the list is not enough:
@@ -815,14 +962,86 @@ def _check_order(m: AssemblyMeasurements, report: AssemblyReport, labels: Sequen
             "through another part; reorient the joint so it slides in along one axis"
         )
         return
-    # The executor normally says why it could not rule, and that reason is
-    # already on the report. A payload carrying neither a result nor a reason is
-    # inconsistent, and this is the only thing between it and reading as a pass.
+    _say_if_no_reason_was_given(m, report)
+
+
+def _say_if_no_reason_was_given(m: AssemblyMeasurements, report: AssemblyReport) -> None:
+    """Refuse an order check that came back with neither a result nor a reason.
+
+    The executor normally says why it could not rule, and that reason is already
+    on the report. A payload carrying neither is inconsistent, and this is the
+    only thing between it and reading as a pass.
+    """
     if not any(
         isinstance(reason, str) and reason.startswith(_ORDER_UNCHECKED_PREFIX)
         for reason in m.unchecked
     ):
         report.unchecked.append(f"{_ORDER_UNCHECKED_PREFIX} no result and no reason was given")
+
+
+def _unconfirmed(m: AssemblyMeasurements) -> dict | None:
+    """The record of an order that binds and was not confirmed, or ``None``.
+
+    Read again rather than trusted as it stands, since measurements can be built
+    by hand as well as read from a payload.
+    """
+    declared = _declared(m.declared)
+    if declared is None or not declared["binds"] or declared["outcome"] == "confirmed":
+        return None
+    return declared
+
+
+def _fail_declared_order(
+    m: AssemblyMeasurements, declared: dict, report: AssemblyReport, labels: Sequence[str]
+) -> None:
+    """Say where an author's order stopped at a clash the measurement saw.
+
+    Three sentences, by what the author can change: the shared volume, where
+    the part cannot move at all whatever heading it is given; the heading or
+    the order, where one was declared and ruled; and a heading to declare,
+    where none was and the search's own all met something. Shared volume is
+    believed only from an overlap the same measurements show, as the search's
+    own ruling on overlaps is.
+    """
+    part, blockers, count = declared["part"], declared["blockers"], len(m.part_bboxes)
+    if not all(0 <= index < count for index in (part, *blockers)):
+        # Named, a part that is not there sends the author after it.
+        report.unchecked.append(
+            f"{_ORDER_UNCHECKED_PREFIX} the parts a declared order is said to stop at, "
+            f"{_quoted([part, *blockers])}, are not all among the {count} parts"
+        )
+        return
+    stops = f"the declared assembly order fails at {_at(labels, part)}: "
+    readable, _problems = _read_overlaps(m, labels)
+    sharing = {
+        frozenset((first, second))
+        for first, second, shared in readable
+        if shared > OVERLAP_EPSILON_MM3
+    }
+    overlapped = [other for other in blockers if frozenset((part, other)) in sharing]
+    if overlapped:
+        report.failures.append(
+            f"{stops}it shares volume with {_listed_parts(labels, overlapped)} where it stands, "
+            "so it cannot move at all; fix the shared volume first"
+        )
+        return
+    which = _listed_parts(labels, blockers)
+    if declared["heading"]:
+        along = ", ".join(_coordinate(component, 3) for component in declared["heading"])
+        report.failures.append(
+            f"{stops}along its declared heading ({along}) it passes through {which}, which the "
+            "order places before it"
+        )
+        return
+    report.failures.append(
+        f"{stops}no heading was declared for it, and along every heading the check tries it "
+        f"passes through a part the order places before it ({which}); declare the heading it "
+        "comes off along"
+    )
+
+
+def _listed_parts(labels: Sequence[str], indices: Sequence[int]) -> str:
+    return ", ".join(_at(labels, index) for index in indices)
 
 
 def _groups(neighbours: dict[int, set[int]], count: int) -> list[set[int]]:
@@ -972,6 +1191,38 @@ def _ruling(value: object) -> bool | None:
     overlaps on the strength of a value nobody measured.
     """
     return value if isinstance(value, bool) else None
+
+
+def _declared(value: object) -> dict | None:
+    """How a declared order came out, as a payload says it, or ``None``.
+
+    Rebuilt from the keys it is read by, each checked, so that what is handed on
+    holds nothing but what was read. A record of any other shape is read as
+    none: an author's order that was not confirmed is then refused for coming
+    back with no result, rather than passed on a record nobody could read.
+    """
+    if not isinstance(value, dict):
+        return None
+    binds, outcome = value.get("binds"), value.get("outcome")
+    if (
+        not isinstance(binds, bool)
+        or not isinstance(outcome, str)
+        or outcome not in DECLARED_OUTCOMES
+    ):
+        return None
+    record: dict = {"binds": binds, "outcome": outcome}
+    if outcome in ("blocked", "undecided"):
+        part = value.get("part")
+        if type(part) is not int or part < 0:
+            return None
+        record["part"] = part
+    if outcome == "blocked":
+        heading, blockers = value.get("heading"), _index_list(value.get("blockers"))
+        if not _is_slot(heading) or not blockers:
+            return None
+        record["heading"] = [float(component) for component in heading]
+        record["blockers"] = blockers
+    return record
 
 
 def _overlap_places(boxes: list[list[float]]) -> dict[tuple[int, int], str]:
