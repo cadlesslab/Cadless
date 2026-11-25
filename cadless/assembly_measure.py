@@ -144,11 +144,10 @@ def measure_assembly(
     ``order`` is an order the caller declares its parts go together in, each
     named by its place in ``parts``, and ``releases`` the heading each comes off
     along, ``[]`` in the slot of a part with none, or no slots at all where no
-    part has one. Given an order, the parts are
-    ruled in it and no order is searched for, unless ``binds`` is false and the
-    order does not hold. What is handed in is held to the parts here, the one
-    place an order meets how many parts the build has: a request is read before
-    there is a build to count.
+    part has one. Given an order, the parts are ruled in it and no order is
+    searched for, unless ``binds`` is false and the order does not hold. What is
+    handed in is held to the parts here, since a request is read before there is
+    a build to count.
     """
     boxes = [_extent(part) for part in parts]
     labels = part_labels(len(parts), names)

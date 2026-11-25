@@ -130,7 +130,8 @@ comes off along, both by a part's ordinal in the build's part order — the shap
 `releases` of one run can be declared to the next as they stand. A motion file's
 two lists look the same and are not always a request: there `[]` is a part that
 stays where it is, and here it is a part with no heading declared, which the
-check tries its own headings for. With an order the measurement rules the parts
+check tries its own headings for — except the part that goes on first, which
+is ruled along none. With an order the measurement rules the parts
 in it and searches for none, unless `binds=False` and the order does not hold;
 `assembly.declared` says how it came out, and an order that binds and does not
 hold fails the check at the first part that cannot go on. It is the
