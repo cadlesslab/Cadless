@@ -1143,14 +1143,15 @@ def test_a_request_for_budgets_alone_declares_no_order_to_the_measurement(
 
 
 @pytest.mark.parametrize(
-    "written, named",
-    [('{"order": [0, 0]}', "order"), ("{", "request"), ("[" * 100_000, "request")],
+    "written",
+    ['{"order": [0, 0]}', "{", "[" * 100_000],
     ids=["a part twice", "no JSON", "nesting past the parser"],
 )
 def test_the_child_refuses_a_request_it_cannot_use_before_the_script_runs(
-    tmp_path, capsys, written, named
+    tmp_path, capsys, written
 ):
-    # The script would fail on its own first line, were it run.
+    # The script fails on its own first line, so an error that is the request's
+    # is one that came before it ran.
     check_file = tmp_path / "check.json"
     check_file.write_text(written)
 
@@ -1159,9 +1160,16 @@ def test_the_child_refuses_a_request_it_cannot_use_before_the_script_runs(
     )
 
     assert payload["ok"] is False
-    assert "request" in payload["error"]
-    assert named in payload["error"]
-    assert "ran" not in payload["error"]
+    assert payload["error"].startswith("the assembly check's request cannot be used: ")
+
+
+def test_the_child_says_why_it_could_not_use_a_request(tmp_path, capsys):
+    check_file = tmp_path / "check.json"
+    check_file.write_text('{"order": [0, 0]}')
+
+    payload = _child(tmp_path, capsys, "result = 1\n", "", "1", "1", "30", str(check_file))
+
+    assert payload["error"].endswith("the order does not name each of the 2 parts once")
 
 
 def test_a_one_part_build_is_measured_when_an_order_is_declared_for_it(tmp_path, capsys):

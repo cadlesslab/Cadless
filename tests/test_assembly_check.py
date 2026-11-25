@@ -1545,7 +1545,6 @@ def test_a_record_is_rebuilt_from_the_keys_it_is_read_by():
         {"binds": True, "outcome": "passed"},
         {"binds": True, "outcome": ["confirmed"]},
         {"binds": True, "outcome": "undecided"},
-        {"binds": True, "outcome": "blocked"},
         {**_BLOCKED_AT_KEY, "part": True},
         {**_BLOCKED_AT_KEY, "part": -1},
         {**_BLOCKED_AT_KEY, "heading": [0.0, 0.0]},
@@ -1560,9 +1559,8 @@ def test_a_record_that_cannot_be_read_is_no_record(record):
 
 
 def _declared(record, **kw) -> AssemblyReport:
-    return evaluate_assembly(
-        _m(order=None, trapped=[], declared=record, **kw), SPEC, names=["bridge", "key A"]
-    )
+    measured = {"order": None, "trapped": [], "declared": record, **kw}
+    return evaluate_assembly(_m(**measured), SPEC, names=["bridge", "key A"])
 
 
 def test_a_binding_order_that_is_blocked_fails_in_a_sentence_of_its_own():
@@ -1575,11 +1573,21 @@ def test_a_binding_order_that_is_blocked_fails_in_a_sentence_of_its_own():
     assert report.order is None
 
 
-def test_a_declared_order_that_fails_is_never_called_no_order_at_all():
-    for record in (_BLOCKED_AT_KEY, {**_BLOCKED_AT_KEY, "heading": []}):
-        report = _declared(record, overlaps=[[0, 1, 30.0]])
-        assert not any("no assembly order exists" in failure for failure in report.failures)
-        assert not any("reorient the joint" in failure for failure in report.failures)
+@pytest.mark.parametrize(
+    "found",
+    [
+        {"trapped": [1]},
+        {"trapped": [1], "overlaps": [[0, 1, 30.0]], "freed_without_overlaps": True},
+    ],
+    ids=["trapped parts", "trapped parts their overlaps explain"],
+)
+def test_a_declared_order_that_fails_is_never_called_no_order_at_all(found):
+    # Beside everything the search's own two sentences are said from. No search
+    # ran for an order that binds, so neither may be said of it.
+    report = _declared(_BLOCKED_AT_KEY, **found)
+    about_the_order = [failure for failure in report.failures if "assembly order" in failure]
+    assert len(about_the_order) == 1
+    assert about_the_order[0].startswith("the declared assembly order fails at key A")
 
 
 def test_a_part_with_no_declared_heading_that_is_blocked_says_what_was_tried():
@@ -1600,7 +1608,9 @@ def test_a_part_blocked_by_one_it_shares_volume_with_is_sent_to_the_overlap():
     ]
 
 
-@pytest.mark.parametrize("overlaps", [[[0, 1, 0.0]], [[0, 1, math.inf]], [[1, 1, 30.0]]])
+@pytest.mark.parametrize(
+    "overlaps", [[[0, 1, 0.0]], [[0, 1, math.inf]]], ids=["only touching", "no measurement"]
+)
 def test_an_overlap_nobody_measured_does_not_reword_a_blocked_order(overlaps):
     report = _declared(_BLOCKED_AT_KEY, overlaps=overlaps)
     assert any("along its declared heading (0.5, 0, 0.866)" in f for f in report.failures)
@@ -1625,11 +1635,14 @@ def test_a_binding_order_that_was_not_ruled_reads_as_not_established(outcome):
     if outcome == "undecided":
         record["part"] = 1
     why = "assembly order: bridge and key A touch where the check cannot follow them"
-    report = _declared(record, unchecked=[why])
+    # Beside trapped parts, which a search that ran would be believed about: none
+    # ran for an order that binds, so they are no failure here.
+    report = _declared(record, trapped=[0, 1], unchecked=[why])
     assert report.failures == []
     assert report.unchecked == [why]
     # and with no reason beside it, the record alone is no pass
-    silent = _declared(record)
+    silent = _declared(record, trapped=[0, 1])
+    assert silent.failures == []
     assert silent.unchecked == ["assembly order: no result and no reason was given"]
 
 
@@ -1639,14 +1652,6 @@ def test_a_binding_order_that_was_not_confirmed_is_never_handed_on_as_an_order(o
     report = evaluate_assembly(_m(order=[0, 1], declared=record), SPEC)
     assert not report.ok
     assert report.order is None
-
-
-def test_a_binding_order_that_was_not_confirmed_never_reads_as_trapped_parts():
-    report = evaluate_assembly(
-        _m(order=None, trapped=[0, 1], declared={"binds": True, "outcome": "unreached"}), SPEC
-    )
-    assert report.failures == []
-    assert report.unchecked == ["assembly order: no result and no reason was given"]
 
 
 def test_a_declared_order_that_was_a_hint_changes_no_verdict():
