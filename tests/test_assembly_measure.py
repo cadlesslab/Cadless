@@ -1785,3 +1785,246 @@ def test_parts_the_walk_cannot_see_past_are_named_by_their_build():
     pair = [_as_nurbs(Box(20, 20, 10)), _as_nurbs(Pos(20, 0, 0) * Box(20, 20, 10))]
     m = measure_assembly(pair, names=["base", "lid"])
     assert any("base and lid touch" in reason for reason in m.unchecked)
+
+
+# --- an order the caller declares -------------------------------------------
+
+_TILT = 30.0
+_ALONG_A_KEY = [math.sin(math.radians(_TILT)), 0.0, math.cos(math.radians(_TILT))]
+_UP = [0.0, 0.0, 1.0]
+
+
+def _tilted_keys():
+    """A base, two keys in pockets tilted off Z, and a bridge standing over the keys.
+
+    A key leaves along its pocket and no other way, and that heading is neither
+    an axis nor one leading away from another part's middle. The bridge crosses
+    both keys' way out, so the order that works is base, the keys, the bridge.
+    """
+
+    def placed(x, shape):
+        return Pos(x, 0, 12) * Rot(0, _TILT, 0) * shape
+
+    wide = 10 + 2 * CLEARANCE
+    pocket = Pos(0, 0, 12.5 - CLEARANCE / 2) * Box(wide, wide, 55 + CLEARANCE)
+    base = Box(60, 40, 30) - placed(-12, pocket) - placed(14, pocket)
+    legs = [Pos(0, y, 22.5 + CLEARANCE / 2) * Box(60, 6, 15 - CLEARANCE) for y in (15, -15)]
+    bridge = Pos(0, 0, 33) * Box(60, 36, 6) + legs[0] + legs[1]
+    return [base, placed(-12, Box(10, 10, 30)), placed(14, Box(10, 10, 30)), bridge]
+
+
+def _capped_peg():
+    """A base, a peg standing on it, and a cap over the peg.
+
+    The cap lifts off and the base drops away, but the peg goes nowhere while
+    both are there: the order base, cap, peg does not work.
+    """
+    peg = Pos(0, 0, 10 + CLEARANCE) * Box(10, 10, 10)
+    hollow = Pos(0, 0, 10.3) * Box(10 + 2 * CLEARANCE, 10 + 2 * CLEARANCE, 10 + CLEARANCE)
+    cap = Pos(0, 0, 12 + CLEARANCE) * Box(20, 20, 14) - hollow
+    return [Box(40, 40, 10), peg, cap]
+
+
+@pytest.fixture
+def rulings(monkeypatch):
+    """The part each heading ruling moved, in the order the rulings were made."""
+    import cadless.assembly_measure as module
+
+    real, ruled = module._rule_heading, []
+
+    def counted(parts, spheres, index, *rest):
+        ruled.append(index)
+        return real(parts, spheres, index, *rest)
+
+    monkeypatch.setattr(module, "_rule_heading", counted)
+    return ruled
+
+
+@pytest.fixture
+def no_search(monkeypatch):
+    import cadless.assembly_measure as module
+
+    def searched(*args, **kwargs):
+        raise AssertionError("an order was searched for")
+
+    monkeypatch.setattr(module, "_disassembly_order", searched)
+
+
+def test_the_tilted_keys_are_parts_the_search_finds_no_order_for():
+    # What the tests below confirm an order for is a build the search refuses:
+    # confirmed for one the search orders anyway, they would show nothing.
+    m = measure_assembly(_tilted_keys())
+    assert m.overlaps == []
+    assert m.order is None
+    assert m.trapped == [0, 1, 2]
+
+
+def test_a_declared_order_is_confirmed_with_one_ruling_a_part_and_no_search(rulings, no_search):
+    m = measure_assembly(
+        _tilted_keys(), order=[0, 1, 2, 3], releases=[[], _ALONG_A_KEY, _ALONG_A_KEY, _UP]
+    )
+    assert m.declared == {"binds": True, "outcome": "confirmed"}
+    assert m.order == [0, 1, 2, 3]
+    assert m.releases == [[], pytest.approx(_ALONG_A_KEY), pytest.approx(_ALONG_A_KEY), _UP]
+    assert rulings == [1, 2, 3]
+    assert m.trapped == []
+    assert m.unchecked == []
+
+
+def test_a_declared_order_that_does_not_hold_stops_at_the_first_part_in_the_way(rulings, no_search):
+    # The bridge placed before the keys stands in the way of both: the first of
+    # them is where an assembler would stop, and the second is never tried.
+    m = measure_assembly(
+        _tilted_keys(), order=[0, 3, 1, 2], releases=[[], _ALONG_A_KEY, _ALONG_A_KEY, _UP]
+    )
+    assert m.declared == {
+        "binds": True,
+        "outcome": "blocked",
+        "part": 1,
+        "heading": pytest.approx(_ALONG_A_KEY),
+        "blockers": [3],
+    }
+    assert rulings == [3, 1]
+    assert m.order is None
+    assert m.releases == []
+    assert m.trapped == []
+    assert m.unchecked == []
+
+
+def test_a_declared_order_that_fails_is_reported_in_its_own_words():
+    spec = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=CLEARANCE)
+    names = ["base", "key A", "key B", "bridge"]
+    m = measure_assembly(
+        _tilted_keys(),
+        names=names,
+        order=[0, 3, 1, 2],
+        releases=[[], _ALONG_A_KEY, _ALONG_A_KEY, _UP],
+    )
+    report = evaluate_assembly(m, spec, names=names)
+    assert report.failures == [
+        "the declared assembly order fails at key A: along its declared heading "
+        "(0.5, 0, 0.866) it passes through bridge, which the order places before it"
+    ]
+    assert report.unchecked == []
+    assert report.order is None
+
+
+def test_an_order_the_search_found_is_confirmed_when_it_is_handed_back(rulings):
+    chain = [Pos(i * (20 + CLEARANCE), 0, 0) * Box(20, 20, 10) for i in range(4)]
+    searched = measure_assembly(chain)
+    rulings.clear()
+    again = measure_assembly(chain, order=searched.order, releases=searched.releases)
+    assert again.declared == {"binds": True, "outcome": "confirmed"}
+    assert again.order == searched.order
+    assert again.releases == searched.releases
+    assert len(rulings) == 3
+
+
+def test_a_heading_declared_for_the_first_part_is_neither_ruled_nor_handed_back(rulings):
+    m = measure_assembly(_capped_peg(), order=[0, 1, 2], releases=[_UP, _UP, _UP])
+    assert m.declared == {"binds": True, "outcome": "confirmed"}
+    assert m.releases == [[], _UP, _UP]
+    assert rulings == [1, 2]
+
+
+def test_a_part_with_no_declared_heading_is_tried_along_the_search_s_own(no_search):
+    m = measure_assembly(_capped_peg(), order=[0, 1, 2])
+    assert m.declared == {"binds": True, "outcome": "confirmed"}
+    assert m.order == [0, 1, 2]
+    # the cap leaves the peg one way only, and the base, first, has no heading
+    assert m.releases[0] == []
+    assert len(m.releases[1]) == 3
+    assert m.releases[2] == _UP
+
+
+def test_a_part_no_heading_frees_names_everything_that_stood_in_its_way(no_search):
+    m = measure_assembly(_capped_peg(), order=[0, 2, 1])
+    assert m.declared == {
+        "binds": True,
+        "outcome": "blocked",
+        "part": 1,
+        "heading": [],
+        "blockers": [0, 2],
+    }
+    assert m.order is None
+    assert m.trapped == []
+
+
+def test_an_order_that_is_only_a_hint_is_searched_past(rulings):
+    m = measure_assembly(_capped_peg(), order=[0, 2, 1], releases=[[], _UP, _UP], binds=False)
+    assert m.declared == {
+        "binds": False,
+        "outcome": "blocked",
+        "part": 1,
+        "heading": _UP,
+        "blockers": [2],
+    }
+    assert m.order is not None
+    assert sorted(m.order) == [0, 1, 2]
+    assert m.order != [0, 2, 1]
+    assert m.unchecked == []
+    assert len(rulings) > 2
+
+
+def test_a_hint_that_holds_is_confirmed_with_no_search(no_search):
+    m = measure_assembly(_capped_peg(), order=[0, 1, 2], releases=[[], _UP, _UP], binds=False)
+    assert m.declared == {"binds": False, "outcome": "confirmed"}
+    assert m.order == [0, 1, 2]
+
+
+def test_a_contact_a_declared_heading_cannot_be_followed_past_is_not_called_a_clash(no_search):
+    pair = [_as_nurbs(Box(20, 20, 10)), _as_nurbs(Pos(20, 0, 0) * Box(20, 20, 10))]
+    m = measure_assembly(pair, order=[0, 1], releases=[[], [1.0, 0.0, 0.0]])
+    assert m.declared == {"binds": True, "outcome": "undecided", "part": 1}
+    assert m.order is None
+    assert m.trapped == []
+    assert any("part 1 and part 2 touch" in reason for reason in m.unchecked)
+
+
+def test_a_declared_order_of_other_parts_is_not_ruled(rulings, no_search):
+    m = measure_assembly(_mated_pair(), order=[0, 1, 2])
+    assert m.declared == {"binds": True, "outcome": "mismatch"}
+    assert m.order is None
+    assert rulings == []
+    assert m.unchecked == [
+        "assembly order: the declared order does not describe the build: the order names "
+        "3 parts where there are 2"
+    ]
+
+
+def test_a_hint_of_other_parts_leaves_the_search_to_rule():
+    m = measure_assembly(_mated_pair(), order=[0, 1, 2], binds=False)
+    assert m.declared == {"binds": False, "outcome": "mismatch"}
+    assert m.order is not None
+    assert m.unchecked == []
+
+
+def test_a_budget_spent_on_a_declared_order_is_reported_as_that(no_search):
+    # Enough for the one pair, and nothing for the sweep the heading needs.
+    m = measure_assembly(_mated_pair(), probe_budget=2, order=[0, 1], releases=[[], [1, 0, 0]])
+    assert m.declared == {"binds": True, "outcome": "unreached"}
+    assert m.order is None
+    assert m.trapped == []
+    assert m.unchecked == [
+        "assembly order: the check ran out of budget before it could confirm the declared order"
+    ]
+
+
+def test_a_declared_order_is_not_reached_when_the_pairs_were_not_all_measured(no_search):
+    m = measure_assembly(_mated_pair(), probe_budget=1, order=[0, 1])
+    assert m.declared == {"binds": True, "outcome": "unreached"}
+    assert m.order is None
+    assert "assembly order: not looked for, as not every pair was measured" in m.unchecked
+
+
+def test_a_heading_given_long_is_ruled_as_the_direction_it_names(no_search):
+    # Ruled as given, a long heading puts every other part out of the moving
+    # part's way, and the peg under its cap reads as free.
+    m = measure_assembly(_capped_peg(), order=[0, 2, 1], releases=[[], [0, 0, 300], [0, 0, 5]])
+    assert m.declared is not None
+    assert m.declared["outcome"] == "blocked"
+    assert m.declared["heading"] == _UP
+
+
+def test_nothing_declared_leaves_no_record():
+    assert measure_assembly(_mated_pair()).declared is None
