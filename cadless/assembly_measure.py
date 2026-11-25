@@ -556,7 +556,11 @@ def _confirm_order(parts, budget, scene, labels, order, releases):
 
 
 def _stopped_at(index, heading, scene, labels):
-    """What :func:`_confirm_order` answers for a part that was not shown free."""
+    """What :func:`_confirm_order` answers for a part that was not shown free.
+
+    Read off what the scene holds, which is this part's alone: the scene is
+    cleared before each part is ruled.
+    """
     reasons = []
     if scene.refused:
         reasons.append(_unmeasured_reason(scene.refused, labels))
@@ -568,7 +572,7 @@ def _stopped_at(index, heading, scene, labels):
         "outcome": "blocked",
         "part": index,
         "heading": [] if heading is None else list(heading),
-        "blockers": sorted({other for moving, other in scene.blocking if moving == index}),
+        "blockers": sorted({other for _moving, other in scene.blocking}),
     }
     return None, blocked, []
 
