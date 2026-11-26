@@ -1388,3 +1388,123 @@ def test_a_result_that_answers_for_the_order_is_left_as_it_came(monkeypatch):
 
     assert res.assembly.order == [1, 0]
     assert res.assembly.unchecked == []
+
+
+# --- the kinds a caller asks a run for --------------------------------------
+
+_ONE_BOX = "from build123d import *\nresult = Box(8, 8, 8)\n"
+_REFUSED_KINDS = "the run's export kinds cannot be used: "
+
+
+def _written(tmp_path, capsys, code: str, kinds: str | None) -> tuple[dict, list[str]]:
+    """The child's result for ``code`` asked for ``kinds``, and the files then in its folder.
+
+    A folder of its own: the child's script is written beside it, not into it.
+    """
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    asked = () if kinds is None else ("", kinds)
+    payload = _child(tmp_path, capsys, code, str(out), "1", "", "30", *asked)
+    return payload, sorted(path.name for path in out.iterdir())
+
+
+def test_a_build_of_several_parts_writes_the_kinds_asked_and_their_whole_files(tmp_path, capsys):
+    payload, files = _written(tmp_path, capsys, _CAR, '["glb", "step"]')
+
+    assert payload["ok"] is True
+    assert files == sorted(
+        [f"model_p{part}.{kind}" for part in range(4) for kind in ("glb", "step")]
+        + ["assembly.glb", "assembly.step"]
+    )
+    assert payload["glb_path"].endswith("model_p0.glb")
+    assert "stl_path" not in payload
+    assert "obj_path" not in payload
+
+
+def test_no_whole_file_is_written_where_neither_of_its_kinds_is_asked(tmp_path, capsys):
+    payload, files = _written(tmp_path, capsys, _CAR, '["stl"]')
+
+    assert files == [f"model_p{part}.stl" for part in range(4)]
+    assert "assembly_glb_path" not in payload
+    assert "assembly_step_path" not in payload
+
+
+def test_a_kind_not_asked_for_leaves_nothing_of_an_earlier_build_behind(tmp_path, capsys):
+    _written(tmp_path, capsys, _CAR, None)
+    motion = tmp_path / "out" / "assembly.json"
+    motion.write_text("{}")
+
+    payload, files = _written(tmp_path, capsys, _CAR, '["glb"]')
+
+    assert files == sorted(
+        [f"model_p{part}.glb" for part in range(4)] + ["assembly.glb", "assembly.json"]
+    )
+    assert payload["assembly_glb_path"].endswith("assembly.glb")
+    assert "assembly_step_path" not in payload
+    assert motion.read_text() == "{}"
+
+
+def test_a_one_part_build_asked_for_one_kind_clears_a_build_of_several_parts(tmp_path, capsys):
+    _written(tmp_path, capsys, _CAR, None)
+
+    payload, files = _written(tmp_path, capsys, _ONE_BOX, '["step"]')
+
+    assert payload["ok"] is True
+    assert files == ["model.step"]
+
+
+def test_the_child_walks_the_registry_as_it_stands_for_what_it_writes_and_clears(
+    tmp_path, capsys, monkeypatch
+):
+    from cadless import exporters
+
+    def writes(kind):
+        def export(shape, out_dir, name="model"):
+            path = Path(out_dir) / f"{name}.{kind}"
+            path.write_text(kind)
+            return str(path)
+
+        return export
+
+    monkeypatch.setattr(exporters, "EXPORTERS", {"mesh": writes("mesh"), "brep": writes("brep")})
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "model.brep").write_text("an earlier build's")
+
+    payload, files = _written(tmp_path, capsys, _ONE_BOX, '["mesh"]')
+
+    assert payload["ok"] is True
+    assert files == ["model.mesh"]
+    assert payload["mesh_path"].endswith("model.mesh")
+    assert "brep_path" not in payload
+
+
+@pytest.mark.parametrize(
+    ("argument", "fault"),
+    [
+        ("[]", "the list names no kind"),
+        ('["dxf"]', "dxf is not an export kind (step, glb, stl, obj)"),
+        ('"stl"', "the kinds are the text 'stl' rather than a list of names"),
+        ('["glb", ["stl"]]', "entry 1 is not text"),
+    ],
+    ids=["an empty list", "an unknown name", "a bare name", "an entry that is a list"],
+)
+def test_the_child_refuses_kinds_it_cannot_use_before_the_script_runs(
+    tmp_path, capsys, argument, fault
+):
+    # The script fails on its own first line, so an error that is the request's
+    # is one that came before it ran.
+    payload, _ = _written(tmp_path, capsys, "raise SystemExit('ran')\n", argument)
+
+    assert payload["ok"] is False
+    assert payload["error"] == _REFUSED_KINDS + fault
+
+
+@pytest.mark.parametrize(
+    "argument", ["{", "[" * 100_000], ids=["no JSON", "nesting past the parser"]
+)
+def test_the_child_refuses_kinds_it_cannot_read_before_the_script_runs(tmp_path, capsys, argument):
+    payload, _ = _written(tmp_path, capsys, "raise SystemExit('ran')\n", argument)
+
+    assert payload["ok"] is False
+    assert payload["error"].startswith(_REFUSED_KINDS)
