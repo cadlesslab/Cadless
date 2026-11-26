@@ -5,7 +5,7 @@ a catalog manifest's checks need these names, and reading a manifest must not
 need an engine configured to run.
 """
 
-#: The formats every part of a build is exported to, one file per part each.
+#: The formats a part of a build can be exported to, one file per part each.
 PART_KINDS = ("step", "glb", "stl", "obj")
 
 #: The whole-assembly files, keyed by artifact kind. Not part kinds: each is one

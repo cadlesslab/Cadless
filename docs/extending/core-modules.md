@@ -149,12 +149,14 @@ run_code(code, export_dir=out, kinds=["glb", "step"])
 ```
 
 Only those kinds are written, and the result's path for any other is `None`.
-What an earlier build left in the directory is cleared for every kind, asked for
-or not, so the directory holds one build's files and never one build's beside
-another's. The whole-assembly files follow their kind: `assembly.glb` is written
-where `glb` is asked for, `assembly.step` where `step` is. An empty list, a name
-the registry does not hold, the name of a whole-assembly file and anything that
-is not a list are refused before anything is started.
+A run that finishes leaves in the directory none of the files an earlier run
+wrote there, of any kind, asked for or not; a run that fails can leave them
+beside what it wrote. The whole-assembly files follow their kind:
+`assembly.glb` is written where `glb` is asked for, `assembly.step` where `step`
+is. An empty list, an entry that is not text, a name the registry does not hold,
+the name of a whole-assembly file, and anything that is neither `None` nor a
+list or a tuple itself are refused before anything is started; a list or a tuple
+of a caller's own kind, a named tuple for one, is refused with them.
 
 It travels as `check` does: one reader (`read_kinds` in `cadless/exporters.py`)
 in `run_code` and again in the child before the script runs, an argument of the
@@ -167,7 +169,8 @@ No caller inside the engine asks for fewer kinds, because the engine reads them
 itself: the render review, the guide drawings, the motion's travel and printing
 read STL, and the viewport and the chat's way to a turn's files read GLB. A
 caller that asks for fewer is one that reads the files on its own, and
-[what a catalog step without a kind cannot do](catalog.md) is what it gives up.
+[what a catalog step without a kind cannot do](catalog.md#what-an-item-looks-like)
+is what it gives up.
 
 `ExecResult` carries `ok` / `error` / `timed_out`, the geometry summary
 (`volume`, `bbox`, `part_count`, `manifold`, `min_wall_thickness`), the four

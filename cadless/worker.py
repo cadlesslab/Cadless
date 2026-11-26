@@ -401,7 +401,7 @@ def _run_remote(
     """Delegate execution to the isolated worker service over HTTP.
 
     Both api and worker share the artifacts volume at the same path, so the worker
-    writes STEP/GLB into `export_dir` and the api reads them back. ``wall`` is the
+    writes the run's files into `export_dir` and the api reads them back. ``wall`` is the
     clock the build runs on there, sent so the worker keeps the api's choice.
     ``check`` and ``kinds`` are each sent only where one was asked, so a worker is
     sent what it always was where nothing is.

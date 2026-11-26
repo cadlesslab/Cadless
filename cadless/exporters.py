@@ -383,11 +383,15 @@ _ECHOED = 40
 def _echo(text: str) -> str:
     """``text`` as a refusal repeats it: on one line, and cut where it runs long.
 
-    What is repeated came from whoever made the request, and the sentence it
-    lands in is logged and sent back to them, so it is written with its line
-    breaks and control characters escaped, and never longer than a name needs.
+    What is repeated came from whoever made the request and goes into a
+    sentence of one line, so it is written with its line breaks and control
+    characters escaped, and never longer than a name needs. Only its start is
+    read, so a text of any length costs what a name does, and that start is
+    taken as plain text: a text of the caller's own kind writes itself with
+    the caller's code, and the name of a type can be such a text.
     """
-    shown = repr(text)[1:-1]
+    # One character past what is kept, so that a text cut short is known to be.
+    shown = repr(str.__getitem__(text, slice(0, _ECHOED + 1)))[1:-1]
     return shown if len(shown) <= _ECHOED else shown[:_ECHOED] + "..."
 
 
@@ -406,23 +410,28 @@ def read_kinds(data) -> tuple[str, ...] | None:
 
     It raises nothing but that, whatever it is handed: only a list or a tuple
     itself is walked, each entry is found to be text before anything looks it
-    up, and a caller's own kind of text is copied to plain text first. So no
-    code of the caller's runs here, and none of its objects is handed on.
+    up, and a caller's own kind of text is copied to plain text before it is
+    looked up or repeated. So no code of the caller's runs here, and none of
+    its objects is handed on. That is why every question below is put to the
+    type an object really has and never to the object: what it says its class
+    is, how its class answers a comparison and what its class says its name is
+    are all the caller's to write, and so is the text a type is named in.
 
     An empty list is refused rather than read as every kind: a caller whose own
     filter left it no kind did not ask for all of them.
     """
     if data is None:
         return None
-    if type(data) not in (list, tuple):
-        if isinstance(data, str):
-            text = _echo(str.__str__(data))
+    kind_of_data = type(data)
+    if kind_of_data is not list and kind_of_data is not tuple:
+        if issubclass(kind_of_data, str):
+            text = _echo(data)
             raise ValueError(f"the kinds are the text '{text}' rather than a list of names")
-        kind_of_value = _echo(type(data).__name__)
-        raise ValueError(f"the kinds are of type {kind_of_value} rather than a list of names")
+        name_of_kind = _echo(type.__dict__["__name__"].__get__(kind_of_data))
+        raise ValueError(f"the kinds are of type {name_of_kind} rather than a list of names")
     asked: set[str] = set()
     for place, entry in enumerate(data):
-        if not isinstance(entry, str):
+        if not issubclass(type(entry), str):
             raise ValueError(f"entry {place} is not text")
         name = str.__str__(entry)
         if name in ASSEMBLY_FILES or name in ASSEMBLY_FILES.values():

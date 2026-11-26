@@ -1,8 +1,8 @@
 """Isolated execution-worker HTTP service.
 
 Runs in the worker container (no network egress, cgroup-limited). Receives
-build123d code from the api, executes it locally, writes STEP/GLB into the shared
-artifacts volume, and returns a geometry summary. It never calls Bedrock.
+build123d code from the api, executes it locally, writes the run's files into the
+shared artifacts volume, and returns a geometry summary. It never calls Bedrock.
 
 Run: uvicorn worker.service:app --host 0.0.0.0 --port 9000
 """

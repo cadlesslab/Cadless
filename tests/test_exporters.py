@@ -802,6 +802,18 @@ def test_a_name_that_breaks_the_line_is_repeated_on_one_line():
     assert str(refused.value) == "st\\nl\\x1b[31m is not an export kind (step, glb, stl, obj)"
 
 
+def test_what_a_refusal_repeats_of_a_long_name_does_not_turn_on_what_lies_past_the_start_it_reads():
+    from cadless.exporters import read_kinds
+
+    # Read to its end, the second kind of quote would have the first one escaped.
+    with pytest.raises(ValueError) as refused:
+        read_kinds(["it's" + "x" * 50 + '"'])
+
+    assert str(refused.value) == (
+        "it's" + "x" * 36 + "... is not an export kind (step, glb, stl, obj)"
+    )
+
+
 def test_the_registry_as_it_stands_is_the_one_a_request_is_read_against(monkeypatch):
     from cadless import exporters
 
@@ -813,20 +825,91 @@ def test_the_registry_as_it_stands_is_the_one_a_request_is_read_against(monkeypa
     assert str(refused.value) == "step is not an export kind (mesh, brep)"
 
 
+def _answered(self, *args, **kwargs):
+    raise AssertionError("the caller's own text answered for itself")
+
+
+#: What an object and its class are made with.
+_MADE_WITH = {"__new__", "__init__", "__class__", "__init_subclass__", "__subclasshook__"}
+
+#: A caller's own kind of text: every other method ``str`` has fails the test.
+_OwnText = type(
+    "_OwnText",
+    (str,),
+    {
+        name: _answered
+        for name in dir(str)
+        if callable(getattr(str, name)) and name not in _MADE_WITH
+    },
+)
+
+
 def test_a_name_handed_over_as_a_caller_s_own_kind_of_text_is_not_what_is_looked_up():
     from cadless.exporters import read_kinds
 
-    class Loud(str):
-        def __hash__(self):
-            raise AssertionError("looked up as it was handed over")
+    assert read_kinds([_OwnText("glb")]) == ("glb",)
 
-        def __eq__(self, other):
-            raise AssertionError("compared as it was handed over")
 
-    read = read_kinds([Loud("glb")])
+def test_an_entry_that_only_says_it_is_text_is_not_taken_for_text():
+    from unittest.mock import Mock
 
-    assert read == ("glb",)
-    assert type(read[0]) is str
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(["glb", Mock(spec=str)])
+
+    assert str(refused.value) == "entry 1 is not text"
+
+
+def test_what_only_says_it_is_text_is_named_by_the_type_it_has():
+    from unittest.mock import Mock
+
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(Mock(spec=str))
+
+    assert str(refused.value) == "the kinds are of type Mock rather than a list of names"
+
+
+def test_a_type_is_asked_nothing_its_own_class_could_answer_for_it():
+    from cadless.exporters import read_kinds
+
+    class Answering(type):
+        __hash__ = type.__hash__
+
+        def __eq__(cls, other):
+            raise AssertionError("compared")
+
+        @property
+        def __name__(cls):
+            raise AssertionError("asked its name")
+
+    class Handed(metaclass=Answering):
+        pass
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(Handed())
+
+    assert str(refused.value) == "the kinds are of type Handed rather than a list of names"
+
+
+def test_a_type_named_in_a_caller_s_own_kind_of_text_is_named_in_plain_text():
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(type(_OwnText("Handed"), (), {})())
+
+    assert str(refused.value) == "the kinds are of type Handed rather than a list of names"
+
+
+def test_a_caller_s_own_kind_of_text_given_for_the_list_is_repeated_in_plain_text():
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(_OwnText("stl"))
+
+    assert str(refused.value) == "the kinds are the text 'stl' rather than a list of names"
 
 
 def test_a_caller_s_own_kind_of_list_is_refused_without_being_walked():

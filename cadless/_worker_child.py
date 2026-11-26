@@ -7,10 +7,11 @@ computes a geometry summary, optionally exports artifacts, and prints a single
 a program, it points everything else written to stdout at stderr. Kept
 dependency-light, and side-effect free apart from the optional export — which
 writes one file per solid for each kind asked, every kind unless the caller
-names fewer, and first removes what an earlier build left of any kind in the
-same directory; plus, for a build of several parts, the whole as one GLB and
-one STEP where those kinds are written, clearing an earlier build's pair by
-exact name.
+names fewer, removing what an earlier build left of a kind in the same
+directory before it writes that kind, and what it left of every kind it does
+not write; plus, for a build of several parts, the whole as one GLB and one
+STEP where those kinds are written, clearing an earlier build's pair by exact
+name.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
      [<check_assembly>] [<wall_secs>] [<check_file>] [<kinds>]
@@ -393,15 +394,15 @@ def main(argv: list[str]) -> int:
             from cadless import exporters  # lazy: only when export requested
 
             registry = exporters.EXPORTERS
-            asked = registry if kinds is None else {kind: registry[kind] for kind in kinds}
+            writers = registry if kinds is None else {kind: registry[kind] for kind in kinds}
             # A kind the caller did not ask for is cleared all the same: the
             # directory is reused, and whoever reads it next files what it finds
             # with this build. Nothing to do where every kind is written, each
             # being cleared below as it always was.
             for kind in registry:
-                if kind not in asked:
+                if kind not in writers:
                     _clear_previous(export_dir, kind)
-            for kind, export in asked.items():
+            for kind, export in writers.items():
                 _clear_previous(export_dir, kind)
                 paths = [
                     export(part, export_dir, exporters.part_name(i, len(parts)))

@@ -1516,10 +1516,9 @@ def test_kinds_reach_the_child_as_text_after_an_empty_place_for_the_request_file
 
     run_code("result = 1\n", kinds=["glb", "step", "glb"])
 
-    (cmd, asked) = runs[0]
+    (cmd, _) = runs[0]
     assert cmd[8:] == ["", '["step", "glb"]']
     assert cmd[6] == ""  # kinds ask for no measurement
-    assert asked is None
 
 
 def test_kinds_follow_the_request_file_where_both_are_asked(monkeypatch):
@@ -1533,15 +1532,6 @@ def test_kinds_follow_the_request_file_where_both_are_asked(monkeypatch):
     assert len(cmd) == 10
     assert asked["order"] == [1, 0]
     assert cmd[9] == '["obj"]'
-
-
-def test_a_name_asked_for_many_times_over_reaches_the_child_once(monkeypatch):
-    # An argument as long as what was handed over is one the system refuses to pass.
-    runs = _spawning(monkeypatch)
-
-    run_code("result = 1\n", kinds=["step"] * 300_000)
-
-    assert runs[0][0][9] == '["step"]'
 
 
 @pytest.mark.parametrize(

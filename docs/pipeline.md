@@ -174,10 +174,10 @@ way and under the same rule: an argument of the child's after the request
 file's place, which is left empty where there is no request, and the `kinds`
 field of the posted body; read by `run_code` before anything is started and by
 the child before the code runs; and absent for a run that asks for none, which
-writes every kind. The child clears what an earlier build left of every kind
-and writes the kinds asked for. A worker that takes no kinds ignores the field
-and writes them all; `run_code` removes nothing afterwards, and the paths in the
-result say what was written.
+writes every kind. A build that finishes has cleared what an earlier build left
+of every kind and written the kinds asked for. A worker that takes no kinds
+ignores the field and writes them all; `run_code` removes nothing afterwards,
+and the paths in the result say what was written.
 
 ## Threads, processes, async
 
