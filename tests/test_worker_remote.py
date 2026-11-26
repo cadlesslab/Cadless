@@ -399,8 +399,8 @@ def test_worker_service_can_serialise_a_result_carrying_measurements(monkeypatch
 # --- a reply that is no reading ------------------------------------------------
 
 
-def _reply(monkeypatch, body: str):
-    """What the remote path makes of the worker service answering ``body``."""
+def _reply(monkeypatch, body: str, **asked):
+    """What the remote path makes of the worker service answering ``body`` to a run asked with ``asked``."""
     import urllib.request
 
     class FakeResp:
@@ -414,7 +414,7 @@ def _reply(monkeypatch, body: str):
             return body.encode()
 
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
-    return run_code("result = 1", config=Settings(worker_url="http://worker:9000"))
+    return run_code("result = 1", config=Settings(worker_url="http://worker:9000"), **asked)
 
 
 def test_a_reply_that_is_not_an_object_is_a_failed_build(monkeypatch):
@@ -589,3 +589,139 @@ def test_worker_service_refuses_a_request_it_cannot_use():
     assert reply["ok"] is False
     assert "request" in reply["error"]
     assert "order" in reply["error"]
+
+
+def test_worker_service_leaves_a_request_that_is_no_object_to_its_reader():
+    # Typed as an object, the field was answered by the framework before the
+    # reader saw it: with all of what was sent, and for a lone surrogate with an
+    # error of the service's own.
+    from fastapi.testclient import TestClient
+
+    from worker.service import app
+
+    with TestClient(app) as c:
+        r = c.post(
+            "/run",
+            content=b'{"code": "result = 1", "check": "\\ud800"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert r.json()["error"].startswith("the assembly check's request cannot be used: ")
+    assert r.json()["error"].endswith(" rather than an object")
+
+
+# --- the kinds a caller asks a run for, on the remote path ---------------------
+
+_REFUSED_KINDS = "the run's export kinds cannot be used: "
+
+
+def test_run_code_remote_sends_the_kinds_as_they_were_read(monkeypatch):
+    body = _sent(monkeypatch, kinds=["glb", "step", "glb"])
+
+    assert body["kinds"] == ["step", "glb"]
+
+
+def test_run_code_remote_sends_no_kinds_where_none_were_asked(monkeypatch):
+    assert "kinds" not in _sent(monkeypatch)
+
+
+@pytest.mark.parametrize(
+    ("kinds", "fault"),
+    [
+        ([], "the list names no kind"),
+        ("stl", "the kinds are the text 'stl' rather than a list of names"),
+        (["dxf"], "dxf is not an export kind (step, glb, stl, obj)"),
+    ],
+    ids=["an empty list", "a bare name", "an unknown name"],
+)
+def test_kinds_that_cannot_be_used_are_refused_before_a_worker_is_asked(monkeypatch, kinds, fault):
+    import urllib.request
+
+    def asked_of_the_worker(req, timeout=None):
+        raise AssertionError("a worker was asked")
+
+    monkeypatch.setattr(urllib.request, "urlopen", asked_of_the_worker)
+
+    res = run_code("result = 1", config=Settings(worker_url="http://worker:9000"), kinds=kinds)
+
+    assert (res.ok, res.error) == (False, _REFUSED_KINDS + fault)
+
+
+def test_a_worker_that_takes_no_kinds_is_reported_as_writing_every_kind_it_wrote(monkeypatch):
+    # The api and the worker can be of different releases. A worker that
+    # predates the kinds ignores them, and what it wrote is not passed off as
+    # what was asked.
+    written = {f"{kind}_path": f"/shared/model.{kind}" for kind in ("step", "glb", "stl", "obj")}
+    reply = {"ok": True, "volume": 1.0, "bbox": [1, 1, 1], **written}
+
+    res = _reply(monkeypatch, json.dumps(reply), kinds=["glb"])
+
+    assert res.ok is True
+    assert (res.step_path, res.glb_path, res.stl_path, res.obj_path) == tuple(written.values())
+
+
+def test_worker_service_hands_kinds_to_run_code_only_where_they_were_asked(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import worker.service as service
+
+    calls = []
+
+    def fake_run_code(code, **asked):
+        calls.append(asked)
+        from cadless.worker import ExecResult
+
+        return ExecResult(ok=True, volume=1.0, bbox=(1, 1, 1))
+
+    monkeypatch.setattr(service, "run_code", fake_run_code)
+    with TestClient(service.app) as c:
+        c.post("/run", json={"code": "result = 1"})
+        c.post("/run", json={"code": "result = 1", "kinds": []})
+
+    assert "kinds" not in calls[0]
+    # An empty list is a request, and the reader's to refuse.
+    assert calls[1]["kinds"] == []
+
+
+@pytest.mark.parametrize(
+    ("sent", "fault"),
+    [
+        (b"[]", "the list names no kind"),
+        (b'"stl"', "the kinds are the text 'stl' rather than a list of names"),
+        (b'{"glb": true}', "the kinds are of type dict rather than a list of names"),
+        (b'"\\ud800"', "the kinds are the text '\\ud800' rather than a list of names"),
+    ],
+    ids=["an empty list", "a text", "an object", "a lone surrogate"],
+)
+def test_worker_service_answers_kinds_it_cannot_use_with_the_reader_s_sentence(sent, fault):
+    from fastapi.testclient import TestClient
+
+    from worker.service import app
+
+    with TestClient(app) as c:
+        r = c.post(
+            "/run",
+            content=b'{"code": "result = 1", "kinds": ' + sent + b"}",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert r.status_code == 200
+    assert (r.json()["ok"], r.json()["error"]) == (False, _REFUSED_KINDS + fault)
+
+
+@pytest.mark.build123d
+def test_worker_service_writes_only_the_kinds_asked(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from worker.service import app
+
+    asked = {"code": _TWO_BLOCKS, "export_dir": str(tmp_path), "kinds": ["stl"]}
+    with TestClient(app) as c:
+        reply = c.post("/run", json=asked).json()
+
+    assert reply["ok"] is True
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["model_p0.stl", "model_p1.stl"]
+    assert reply["stl_path"] == str(tmp_path / "model_p0.stl")
+    assert (reply["glb_path"], reply["assembly_glb_path"]) == (None, None)

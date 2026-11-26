@@ -24,6 +24,7 @@ from cadless.assembly_check import (
 )
 from cadless.assembly_tree import parts_record
 from cadless.config import Settings, settings
+from cadless.exporters import read_kinds
 from cadless.print_fit import _dimensions, _number
 
 
@@ -221,6 +222,7 @@ def run_code(
     assembly_turn: bool = False,
     config: Settings | None = None,
     check: CheckRequest | dict | None = None,
+    kinds: list[str] | tuple[str, ...] | None = None,
 ) -> ExecResult:
     """Execute `code` in an isolated subprocess and return an ExecResult.
 
@@ -243,6 +245,14 @@ def run_code(
     is sent as. Giving one asks for the measurement. It is read here whichever
     it is, so that a request no worker could use fails the run before anything
     is started, the same way on both paths.
+
+    ``kinds`` names the export kinds the run is to write, by the names the
+    exporter registry gives them; ``None`` writes every kind. It is read here
+    as ``check`` is, and for the same reason. What is sent on is what was read
+    rather than what was handed over, which may hold one name any number of
+    times. Nothing here removes a kind that was written without being asked
+    for: a worker on an older build takes no kinds and writes them all, and
+    the paths in the result are then the record of it.
     """
     cfg = config or settings
     wall = cfg.assembly_exec_timeout_secs if assembly_turn else cfg.exec_timeout_secs
@@ -258,9 +268,16 @@ def run_code(
                 ok=False, error=f"the assembly check's request cannot be used: {refused}"
             )
         check_assembly = True
+    if kinds is not None:
+        try:
+            kinds = read_kinds(kinds)
+        except ValueError as refused:
+            return ExecResult(ok=False, error=f"the run's export kinds cannot be used: {refused}")
     if cfg.worker_url:
         return _held_to_its_order(
-            _run_remote(code, export_dir, export_scale, check_assembly, cfg, wall, check=check),
+            _run_remote(
+                code, export_dir, export_scale, check_assembly, cfg, wall, check=check, kinds=kinds
+            ),
             check,
         )
     cpu = max(1, int(wall) + 1)  # CPU limit slightly above wall-clock
@@ -294,6 +311,13 @@ def run_code(
             with open(check_file, "w", encoding="utf-8") as fh:
                 json.dump(asdict(check), fh)
             cmd.append(check_file)
+        if kinds is not None:
+            # After the request file's place, left empty where there is none. In
+            # the argument itself: what was read is a few of the registry's
+            # names, never as long as what a caller may have handed over.
+            if check is None:
+                cmd.append("")
+            cmd.append(json.dumps(list(kinds)))
         preexec = _limit_resources(cpu) if os.name == "posix" else None
         try:
             proc = subprocess.run(
@@ -372,14 +396,15 @@ def _run_remote(
     cfg: Settings,
     wall: float,
     check: CheckRequest | None = None,
+    kinds: tuple[str, ...] | None = None,
 ) -> ExecResult:
     """Delegate execution to the isolated worker service over HTTP.
 
     Both api and worker share the artifacts volume at the same path, so the worker
     writes STEP/GLB into `export_dir` and the api reads them back. ``wall`` is the
     clock the build runs on there, sent so the worker keeps the api's choice.
-    ``check`` is sent only where one was made, so a worker is sent what it always
-    was where nothing is asked.
+    ``check`` and ``kinds`` are each sent only where one was asked, so a worker is
+    sent what it always was where nothing is.
     """
     import urllib.request
 
@@ -392,6 +417,8 @@ def _run_remote(
     }
     if check is not None:
         body["check"] = asdict(check)
+    if kinds is not None:
+        body["kinds"] = list(kinds)
     payload = json.dumps(body).encode()
     req = urllib.request.Request(
         cfg.worker_url.rstrip("/") + "/run",
