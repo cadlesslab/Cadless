@@ -11,8 +11,8 @@ build123d's writer; build123d has no OBJ writer, so ``export_obj`` is written
 directly from ``Shape.tessellate`` (a trivial ``v``/``f`` text format — no extra
 dependency). Every member of ``EXPORTERS`` shares the signature
 ``(result, out_dir, name="model") -> path`` so the registry can drive them
-uniformly; ``export_assembly``, one file of each for the whole build, is outside
-it.
+uniformly; ``export_assembly``, the whole build as one file of a kind, is outside
+it. ``read_kinds`` reads which of the registry's kinds a caller asks a run for.
 """
 
 from __future__ import annotations
@@ -367,13 +367,76 @@ def export_obj(
 
 
 # Registry of all artifact exporters, keyed by artifact ``kind``. The worker
-# iterates this to produce every format; the API serves the same kinds.
+# walks this for the formats a run writes, every one unless a caller asked for
+# fewer; the API serves the same kinds.
 EXPORTERS = {
     "step": export_step,
     "glb": export_glb,
     "stl": export_stl,
     "obj": export_obj,
 }
+
+#: How much of a name a refusal repeats.
+_ECHOED = 40
+
+
+def _echo(text: str) -> str:
+    """``text`` as a refusal repeats it: on one line, and cut where it runs long.
+
+    What is repeated came from whoever made the request, and the sentence it
+    lands in is logged and sent back to them, so it is written with its line
+    breaks and control characters escaped, and never longer than a name needs.
+    """
+    shown = repr(text)[1:-1]
+    return shown if len(shown) <= _ECHOED else shown[:_ECHOED] + "..."
+
+
+def _kind_of_whole_file(name: str) -> str:
+    """The kind a whole-assembly file is written with: the one its name ends in."""
+    return name.rsplit(".", 1)[1]
+
+
+def read_kinds(data) -> tuple[str, ...] | None:
+    """The export kinds a caller asks a run for, or ``None`` where it asks for none.
+
+    ``None`` is no request, which is every kind. Otherwise a list or a tuple of
+    kinds from ``EXPORTERS`` as it stands when this is called, returned as the
+    registry's own names in the registry's order, a name given twice counting
+    once. Anything else raises ``ValueError`` naming the fault.
+
+    It raises nothing but that, whatever it is handed: only a list or a tuple
+    itself is walked, each entry is found to be text before anything looks it
+    up, and a caller's own kind of text is copied to plain text first. So no
+    code of the caller's runs here, and none of its objects is handed on.
+
+    An empty list is refused rather than read as every kind: a caller whose own
+    filter left it no kind did not ask for all of them.
+    """
+    if data is None:
+        return None
+    if type(data) not in (list, tuple):
+        if isinstance(data, str):
+            text = _echo(str.__str__(data))
+            raise ValueError(f"the kinds are the text '{text}' rather than a list of names")
+        kind_of_value = _echo(type(data).__name__)
+        raise ValueError(f"the kinds are of type {kind_of_value} rather than a list of names")
+    asked: set[str] = set()
+    for place, entry in enumerate(data):
+        if not isinstance(entry, str):
+            raise ValueError(f"entry {place} is not text")
+        name = str.__str__(entry)
+        if name in ASSEMBLY_FILES or name in ASSEMBLY_FILES.values():
+            whole = ASSEMBLY_FILES.get(name, name)
+            raise ValueError(
+                f"{_echo(name)} is a whole-assembly file, "
+                f"written with its kind {_kind_of_whole_file(whole)}"
+            )
+        if name not in EXPORTERS:
+            raise ValueError(f"{_echo(name)} is not an export kind ({', '.join(EXPORTERS)})")
+        asked.add(name)
+    if not asked:
+        raise ValueError("the list names no kind")
+    return tuple(kind for kind in EXPORTERS if kind in asked)
 
 
 def _assembly_compound(tree):
@@ -429,17 +492,32 @@ def _assembly_compound(tree):
     return Compound(children=gather(parts, 0), label=tree.name)
 
 
-def export_assembly(tree, out_dir: str) -> dict[str, str]:
-    """Write the whole build as one GLB and one STEP; return ``{kind: path}``.
+def export_assembly(tree, out_dir: str, kinds: tuple[str, ...] | None = None) -> dict[str, str]:
+    """Write the whole build as one file of each kind asked; return ``{kind: path}``.
+
+    ``kinds`` is what ``read_kinds`` returns. ``None`` writes one GLB and one
+    STEP. Otherwise a whole file is written only where the kind it is written
+    with is among them, and only the files written are returned. Where neither
+    is asked, the whole is not put together at all: it is a copy of every part,
+    made for these files alone.
 
     The GLB carries a node per part and per labelled group, named as the tree
     names them, and a material per colour; the STEP names its products the same
     way. Written at the GLB deflection every part file is written at. Raises
-    when either file is not written.
+    when a file it was to write is not written.
     """
+    wanted = {
+        kind: name
+        for kind, name in ASSEMBLY_FILES.items()
+        if kinds is None or _kind_of_whole_file(name) in kinds
+    }
+    if not wanted:
+        return {}
     compound = _assembly_compound(tree)
     os.makedirs(out_dir, exist_ok=True)
-    paths = {kind: os.path.join(out_dir, name) for kind, name in ASSEMBLY_FILES.items()}
-    _write_glb(compound, paths["assembly_glb"], settings.gltf_deflection)
-    _write_step(compound, paths["assembly_step"])
+    paths = {kind: os.path.join(out_dir, name) for kind, name in wanted.items()}
+    if "assembly_glb" in paths:
+        _write_glb(compound, paths["assembly_glb"], settings.gltf_deflection)
+    if "assembly_step" in paths:
+        _write_step(compound, paths["assembly_step"])
     return paths
