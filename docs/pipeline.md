@@ -160,7 +160,7 @@ API delegates with `POST /run` to `worker/service.py`, which calls the same
 
 **What a caller asks of the assembly check** (`run_code(check=...)`) travels
 with the run on both paths and only where it was asked: as a file beside the
-script, named as the child's last argument, and as the `check` field of the
+script, named in an argument of the child's, and as the `check` field of the
 posted body, which the worker service hands to its own `run_code`. `run_code`
 reads it before anything is started and the child reads it again before the
 code runs, so a request that cannot be used fails the run and never a build.
@@ -168,6 +168,16 @@ An api and a worker can be of different releases, and a worker that takes no
 request ignores the field and searches; `run_code` therefore reads a binding
 order whose result carries no record of it as not established, and does not
 hand on the order that worker found.
+
+**The export kinds a caller asks for** (`run_code(kinds=...)`) travel the same
+way and under the same rule: an argument of the child's after the request
+file's place, which is left empty where there is no request, and the `kinds`
+field of the posted body; read by `run_code` before anything is started and by
+the child before the code runs; and absent for a run that asks for none, which
+writes every kind. The child clears what an earlier build left of every kind
+and writes the kinds asked for. A worker that takes no kinds ignores the field
+and writes them all; `run_code` removes nothing afterwards, and the paths in the
+result say what was written.
 
 ## Threads, processes, async
 
