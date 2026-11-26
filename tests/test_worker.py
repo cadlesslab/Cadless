@@ -1047,3 +1047,344 @@ def test_the_child_gets_no_other_python_setting_and_fixed_ones_in_their_place(mo
     env = worker._child_environment()
     assert "PYTHONINSPECT" not in env
     assert (env["PYTHONHASHSEED"], env["PYTHONUTF8"]) == ("0", "1")
+
+
+# --- what a caller asks of the assembly check ---------------------------------
+
+# A base, two keys in pockets tilted thirty degrees off Z, and a bridge over the
+# keys: the search finds no order for it, and the order that works is base, the
+# keys, the bridge.
+_TILTED_KEYS = (
+    "from build123d import *\n"
+    "def placed(x, shape):\n"
+    "    return Pos(x, 0, 12) * Rot(0, 30, 0) * shape\n"
+    "pocket = Pos(0, 0, 12.4) * Box(10.4, 10.4, 55.2)\n"
+    "base = Box(60, 40, 30) - placed(-12, pocket) - placed(14, pocket)\n"
+    "bridge = (Pos(0, 0, 33) * Box(60, 36, 6) + Pos(0, 15, 22.6) * Box(60, 6, 14.8)\n"
+    "          + Pos(0, -15, 22.6) * Box(60, 6, 14.8))\n"
+    "keys = [placed(-12, Box(10, 10, 30)), placed(14, Box(10, 10, 30))]\n"
+    "result = Compound(children=[base, *keys, bridge])\n"
+)
+_ALONG_A_KEY = [0.5, 0.0, math.sqrt(0.75)]
+_UP = [0.0, 0.0, 1.0]
+_KEYS_THEN_BRIDGE = {"order": [0, 1, 2, 3], "releases": [[], _ALONG_A_KEY, _ALONG_A_KEY, _UP]}
+_BRIDGE_THEN_KEYS = {"order": [0, 3, 1, 2], "releases": [[], _ALONG_A_KEY, _ALONG_A_KEY, _UP]}
+
+
+def test_a_budget_the_caller_asks_for_is_kept_where_it_is_the_smaller():
+    from cadless import assembly_measure
+    from cadless._worker_child import measurement_budget
+
+    share = assembly_measure.MEASUREMENT_TIME_SHARE
+    assert measurement_budget(30.0, 0.0, 4.0) == 4.0
+    assert measurement_budget(30.0, 0.0, 400.0) == pytest.approx(30.0 * share)
+    assert measurement_budget(30.0, 40.0, 4.0) == 0.0
+
+
+def test_a_worker_with_no_clock_measures_on_the_budget_it_is_asked_for():
+    from cadless._worker_child import measurement_budget
+
+    assert measurement_budget(0.0, 5.0, 77.0) == 77.0
+
+
+def _asked_of_the_measurement(tmp_path, monkeypatch, capsys, request, flag: str) -> dict:
+    """What the child hands the measurement of a two-part build asked with ``request``.
+
+    Run with no clock, so the budget handed on is the one asked for however
+    long this process has been running.
+    """
+    from cadless import _worker_child, assembly_measure
+    from cadless.assembly_check import AssemblyMeasurements
+
+    seen = {}
+
+    def fake_measure(parts, time_budget, names=None, scale=1.0, **asked):
+        seen.update(asked, time_budget=time_budget)
+        return AssemblyMeasurements(part_bboxes=[], gaps=[], order=None)
+
+    monkeypatch.setattr(assembly_measure, "measure_assembly", fake_measure)
+    code_file, check_file = tmp_path / "m.py", tmp_path / "check.json"
+    code_file.write_text(
+        "from build123d import *\nresult = Compound([Box(1, 1, 1), Pos(5, 0, 0) * Box(1, 1, 1)])\n"
+    )
+    check_file.write_text(json.dumps(request))
+    _worker_child.main(["prog", str(code_file), "", "1", flag, "", str(check_file)])
+    capsys.readouterr()
+    return seen
+
+
+def test_the_child_hands_what_was_asked_to_the_measurement(tmp_path, monkeypatch, capsys):
+    request = {
+        "order": [1, 0],
+        "releases": [[], [0, 0, 2]],
+        "binds": False,
+        "time_budget": 0.5,
+        "probe_budget": 9,
+    }
+
+    # the measurement flag is left off: a request asks for the measurement itself
+    seen = _asked_of_the_measurement(tmp_path, monkeypatch, capsys, request, "")
+
+    assert seen == {
+        "order": [1, 0],
+        "releases": [[], [0.0, 0.0, 1.0]],
+        "binds": False,
+        "probe_budget": 9,
+        "time_budget": 0.5,
+    }
+
+
+def test_a_request_for_budgets_alone_declares_no_order_to_the_measurement(
+    tmp_path, monkeypatch, capsys
+):
+    seen = _asked_of_the_measurement(tmp_path, monkeypatch, capsys, {"time_budget": 0.25}, "1")
+
+    assert seen == {"time_budget": 0.25}
+
+
+@pytest.mark.parametrize(
+    "written",
+    ['{"order": [0, 0]}', "{", "[" * 100_000],
+    ids=["a part twice", "no JSON", "nesting past the parser"],
+)
+def test_the_child_refuses_a_request_it_cannot_use_before_the_script_runs(
+    tmp_path, capsys, written
+):
+    # The script fails on its own first line, so an error that is the request's
+    # is one that came before it ran.
+    check_file = tmp_path / "check.json"
+    check_file.write_text(written)
+
+    payload = _child(
+        tmp_path, capsys, "raise SystemExit('ran')\n", "", "1", "1", "30", str(check_file)
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"].startswith("the assembly check's request cannot be used: ")
+
+
+def test_the_child_says_why_it_could_not_use_a_request(tmp_path, capsys):
+    check_file = tmp_path / "check.json"
+    check_file.write_text('{"order": [0, 0]}')
+
+    payload = _child(tmp_path, capsys, "result = 1\n", "", "1", "1", "30", str(check_file))
+
+    assert payload["error"].endswith("the order does not name each of the 2 parts once")
+
+
+def test_a_one_part_build_is_measured_when_an_order_is_declared_for_it(tmp_path, capsys):
+    # Never measured otherwise; with an order declared it has to be said that
+    # the order is not this build's.
+    check_file = tmp_path / "check.json"
+    check_file.write_text(json.dumps({"order": [0, 1]}))
+    code = "from build123d import *\nresult = Box(1, 1, 1)\n"
+
+    payload = _child(tmp_path, capsys, code, "", "1", "1", "30", str(check_file))
+
+    assert payload["ok"] is True
+    assert payload["assembly"]["declared"] == {"binds": True, "outcome": "mismatch"}
+    assert payload["assembly"]["order"] is None
+    assert "assembly" not in _child(tmp_path, capsys, code, "", "1", "1", "30")
+
+
+def test_run_code_confirms_an_order_the_search_does_not_find():
+    from cadless.assembly_check import CheckRequest
+
+    searched = run_code(_TILTED_KEYS, check_assembly=True)
+    assert searched.ok, searched.error
+    assert searched.assembly.order is None
+    assert searched.assembly.declared is None
+
+    # no measurement flag: the request asks for it
+    res = run_code(_TILTED_KEYS, check=CheckRequest(**_KEYS_THEN_BRIDGE))
+
+    assert res.ok, res.error
+    assert res.assembly.declared == {"binds": True, "outcome": "confirmed"}
+    assert res.assembly.order == [0, 1, 2, 3]
+    assert res.assembly.releases[1] == pytest.approx(_ALONG_A_KEY)
+
+
+def test_run_code_says_where_a_declared_order_stops():
+    from cadless.assembly_check import CheckRequest
+
+    res = run_code(_TILTED_KEYS, check=CheckRequest(**_BRIDGE_THEN_KEYS))
+
+    assert res.ok, res.error
+    assert res.assembly.order is None
+    assert res.assembly.trapped == []
+    assert res.assembly.declared == {
+        "binds": True,
+        "outcome": "blocked",
+        "part": 1,
+        "heading": pytest.approx(_ALONG_A_KEY),
+        "blockers": [3],
+    }
+
+
+def _spawning(monkeypatch) -> list:
+    """Have a child's run recorded rather than made: each command, with what its request file held."""
+    runs = []
+
+    def run(cmd, **kwargs):
+        asked = json.loads(Path(cmd[8]).read_text()) if len(cmd) > 8 else None
+        runs.append((cmd, asked))
+        line = f"{SENTINEL} " + json.dumps({"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0]})
+        return subprocess.CompletedProcess(cmd, 0, stdout=line + "\n", stderr="")
+
+    stand_in = types.SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired)
+    monkeypatch.setattr(worker, "subprocess", stand_in)
+    return runs
+
+
+def test_a_request_reaches_the_child_as_a_file_named_last(monkeypatch):
+    from cadless.assembly_check import CheckRequest
+
+    runs = _spawning(monkeypatch)
+
+    run_code("result = 1\n", check=CheckRequest(order=[1, 0], releases=[[], [0, 0, 2]]))
+
+    (cmd, asked) = runs[0]
+    assert len(cmd) == 9
+    assert cmd[6] == "1"  # the request asks for the measurement
+    assert asked == {
+        "order": [1, 0],
+        "releases": [[], [0.0, 0.0, 1.0]],
+        "binds": True,
+        "time_budget": None,
+        "probe_budget": None,
+    }
+
+
+def test_with_no_request_the_child_is_run_as_it_was(monkeypatch):
+    runs = _spawning(monkeypatch)
+
+    run_code("result = 1\n", check_assembly=True)
+
+    (cmd, asked) = runs[0]
+    assert cmd[1:3] == ["-m", "cadless._worker_child"]
+    assert len(cmd) == 8
+    assert asked is None
+
+
+@pytest.mark.parametrize(
+    "check",
+    # the last is a whole number above nought, and one no file or body could carry
+    [{"order": [0, 0]}, [0, 1], "order", {"probe_budget": 10**5000}],
+    ids=["a part twice", "a list", "text", "a budget too large to send"],
+)
+def test_a_request_that_cannot_be_used_fails_the_run_with_nothing_spawned(monkeypatch, check):
+    runs = _spawning(monkeypatch)
+
+    res = run_code("result = 1\n", check=check)
+
+    assert res.ok is False
+    assert "request" in res.error
+    assert runs == []
+
+
+def test_a_request_object_holding_what_is_no_list_is_refused_as_any_other_is(monkeypatch):
+    # Copied before it was read, such a request raised out of the call instead.
+    from cadless.assembly_check import CheckRequest
+
+    runs = _spawning(monkeypatch)
+
+    res = run_code("result = 1\n", check=CheckRequest(order=(part for part in (0, 1))))
+
+    assert res.ok is False
+    assert "request" in res.error
+    assert runs == []
+
+
+_NO_RECORD = {
+    "ok": True,
+    "volume": 1.0,
+    "bbox": [1.0, 1.0, 1.0],
+    "assembly": {
+        "part_bboxes": [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        "gaps": [[0, 1, 0.2]],
+        "order": [1, 0],
+        "releases": [[1.0, 0.0, 0.0], []],
+    },
+}
+
+
+def test_an_order_that_binds_is_not_established_by_a_result_that_says_nothing_of_it(monkeypatch):
+    # A worker of an earlier release takes no request: it searches, and what it
+    # finds is an order nobody declared.
+    from cadless.assembly_check import CheckRequest, evaluate_assembly
+    from cadless.printer_profile import AssemblySpec, BuildVolume
+
+    _forged(monkeypatch, _NO_RECORD)
+
+    res = run_code("result = 1\n", check=CheckRequest(order=[0, 1]))
+
+    assert res.ok
+    assert res.assembly.order is None
+    assert res.assembly.releases == []
+    assert res.assembly.unchecked == [
+        "assembly order: the declared order was not checked: the worker that ran the build "
+        "takes no request"
+    ]
+    spec = AssemblySpec(volume=BuildVolume(210.0, 200.0, 195.0), clearance_mm=0.2)
+    assert not evaluate_assembly(res.assembly, spec).ok
+
+
+def test_a_search_that_trapped_parts_is_not_the_answer_to_an_order_that_binds(monkeypatch):
+    from cadless.assembly_check import CheckRequest
+
+    trapped = {**_NO_RECORD["assembly"], "order": None, "trapped": [0, 1], "releases": []}
+    _forged(monkeypatch, {**_NO_RECORD, "assembly": trapped})
+
+    res = run_code("result = 1\n", check=CheckRequest(order=[0, 1]))
+
+    assert res.assembly.trapped == []
+    assert len(res.assembly.unchecked) == 1
+
+
+def test_an_order_that_binds_is_not_established_by_a_result_with_no_measurement(monkeypatch):
+    from cadless.assembly_check import CheckRequest
+
+    _forged(monkeypatch, {"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0]})
+
+    res = run_code("result = 1\n", check=CheckRequest(order=[0, 1]))
+
+    assert res.assembly is not None
+    assert any("was not checked" in reason for reason in res.assembly.unchecked)
+
+
+def test_a_record_that_says_the_order_did_not_bind_does_not_answer_for_one_that_does(monkeypatch):
+    from cadless.assembly_check import CheckRequest
+
+    hinted = {**_NO_RECORD["assembly"], "declared": {"binds": False, "outcome": "confirmed"}}
+    _forged(monkeypatch, {**_NO_RECORD, "assembly": hinted})
+
+    res = run_code("result = 1\n", check=CheckRequest(order=[1, 0]))
+
+    assert res.assembly.order is None
+    assert any("was not checked" in reason for reason in res.assembly.unchecked)
+
+
+@pytest.mark.parametrize(
+    "check",
+    [{"order": [0, 1], "binds": False}, {"time_budget": 5.0}],
+    ids=["a hint", "budgets alone"],
+)
+def test_a_result_that_says_nothing_of_an_order_stands_where_none_was_bound(monkeypatch, check):
+    _forged(monkeypatch, _NO_RECORD)
+
+    res = run_code("result = 1\n", check=check)
+
+    assert res.assembly.order == [1, 0]
+    assert res.assembly.unchecked == []
+
+
+def test_a_result_that_answers_for_the_order_is_left_as_it_came(monkeypatch):
+    from cadless.assembly_check import CheckRequest
+
+    confirmed = {**_NO_RECORD["assembly"], "declared": {"binds": True, "outcome": "confirmed"}}
+    _forged(monkeypatch, {**_NO_RECORD, "assembly": confirmed})
+
+    res = run_code("result = 1\n", check=CheckRequest(order=[1, 0]))
+
+    assert res.assembly.order == [1, 0]
+    assert res.assembly.unchecked == []

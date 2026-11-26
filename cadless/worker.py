@@ -13,10 +13,15 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
 
 from cadless._worker_child import SENTINEL
-from cadless.assembly_check import AssemblyMeasurements
+from cadless.assembly_check import (
+    _ORDER_UNCHECKED_PREFIX,
+    AssemblyMeasurements,
+    CheckRequest,
+    read_check_request,
+)
 from cadless.assembly_tree import parts_record
 from cadless.config import Settings, settings
 from cadless.print_fit import _dimensions, _number
@@ -215,6 +220,7 @@ def run_code(
     check_assembly: bool = False,
     assembly_turn: bool = False,
     config: Settings | None = None,
+    check: CheckRequest | dict | None = None,
 ) -> ExecResult:
     """Execute `code` in an isolated subprocess and return an ExecResult.
 
@@ -230,11 +236,33 @@ def run_code(
     one. It is the turn's ask, not the measurement, that earns it: the pipeline
     measures every build, so keying the clock on ``check_assembly`` would hand
     the longer clock to every build there is.
+
+    ``check`` is what the caller asks of that measurement beyond taking it -- an
+    order to confirm in place of the search, a heading per part, budgets of its
+    own -- as a :class:`~cadless.assembly_check.CheckRequest` or the object one
+    is sent as. Giving one asks for the measurement. It is read here whichever
+    it is, so that a request no worker could use fails the run before anything
+    is started, the same way on both paths.
     """
     cfg = config or settings
     wall = cfg.assembly_exec_timeout_secs if assembly_turn else cfg.exec_timeout_secs
+    if check is not None:
+        if isinstance(check, CheckRequest):
+            # Its fields as they are, for the reader to refuse or take: copied
+            # deeply first, one holding what cannot be copied raised here instead.
+            check = {field.name: getattr(check, field.name) for field in fields(check)}
+        try:
+            check = read_check_request(check)
+        except ValueError as refused:
+            return ExecResult(
+                ok=False, error=f"the assembly check's request cannot be used: {refused}"
+            )
+        check_assembly = True
     if cfg.worker_url:
-        return _run_remote(code, export_dir, export_scale, check_assembly, cfg, wall)
+        return _held_to_its_order(
+            _run_remote(code, export_dir, export_scale, check_assembly, cfg, wall, check=check),
+            check,
+        )
     cpu = max(1, int(wall) + 1)  # CPU limit slightly above wall-clock
 
     try:
@@ -257,6 +285,15 @@ def run_code(
             "1" if check_assembly else "",
             str(wall),
         ]
+        if check is not None:
+            # A file rather than an argument: a request grows with the number of
+            # parts, and how long one argument may be is the system's to set.
+            # Named only where there is one, so the child is run as it always
+            # was where nothing is asked.
+            check_file = os.path.join(tmp, "check.json")
+            with open(check_file, "w", encoding="utf-8") as fh:
+                json.dump(asdict(check), fh)
+            cmd.append(check_file)
         preexec = _limit_resources(cpu) if os.name == "posix" else None
         try:
             proc = subprocess.run(
@@ -289,7 +326,42 @@ def run_code(
                 error=f"the build's process ended with code {proc.returncode} after reporting success",
                 timed_out=proc.returncode < 0,
             )
-        return _read_result(payload, _repair_context_from_payload(payload))
+        return _held_to_its_order(
+            _read_result(payload, _repair_context_from_payload(payload)), check
+        )
+
+
+def _held_to_its_order(result: ExecResult, check: CheckRequest | None) -> ExecResult:
+    """``result``, with an order that binds read as not established where nothing answers for it.
+
+    A worker of a release that takes no request ignores one and searches. What
+    it finds is then an order nobody declared, or parts called trapped by a
+    search the caller did not ask for, and handed on as it came either would
+    stand as the answer to a question that was never put. So a result that
+    carries no record of a binding order -- none at all, or one saying the
+    order did not bind -- keeps what it measured of the pairs and loses what it
+    says of the order, with the reason in its place.
+    """
+    if check is None or check.order is None or not check.binds or not result.ok:
+        return result
+    measured = result.assembly
+    if measured is not None and measured.declared is not None and measured.declared["binds"]:
+        return result
+    measured = measured or AssemblyMeasurements()
+    unanswered = replace(
+        measured,
+        order=None,
+        trapped=[],
+        releases=[],
+        freed_without_overlaps=None,
+        declared=None,
+        unchecked=[
+            *measured.unchecked,
+            f"{_ORDER_UNCHECKED_PREFIX} the declared order was not checked: the worker that "
+            "ran the build takes no request",
+        ],
+    )
+    return replace(result, assembly=unanswered)
 
 
 def _run_remote(
@@ -299,24 +371,28 @@ def _run_remote(
     check_assembly: bool,
     cfg: Settings,
     wall: float,
+    check: CheckRequest | None = None,
 ) -> ExecResult:
     """Delegate execution to the isolated worker service over HTTP.
 
     Both api and worker share the artifacts volume at the same path, so the worker
     writes STEP/GLB into `export_dir` and the api reads them back. ``wall`` is the
     clock the build runs on there, sent so the worker keeps the api's choice.
+    ``check`` is sent only where one was made, so a worker is sent what it always
+    was where nothing is asked.
     """
     import urllib.request
 
-    payload = json.dumps(
-        {
-            "code": code,
-            "export_dir": export_dir,
-            "export_scale": export_scale,
-            "check_assembly": check_assembly,
-            "timeout": wall,
-        }
-    ).encode()
+    body = {
+        "code": code,
+        "export_dir": export_dir,
+        "export_scale": export_scale,
+        "check_assembly": check_assembly,
+        "timeout": wall,
+    }
+    if check is not None:
+        body["check"] = asdict(check)
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
         cfg.worker_url.rstrip("/") + "/run",
         data=payload,

@@ -249,7 +249,10 @@ candidate judging, the identity seam and the image decisions are recorded under
    before any execution, and the worker child runs it again before the script.
 4. `cadless.worker.run_code` sends the program to the worker service when
    `CADLESS_WORKER_URL` is configured; local development and tests use a
-   resource-limited subprocess fallback.
+   resource-limited subprocess fallback. A caller may hand it what it asks of
+   the assembly check (`CheckRequest` in `cadless/assembly_check.py`): an order
+   to confirm in place of the search, a heading per part, and budgets of its
+   own. It reaches the child on either path and is read before the script runs.
 5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
    the shared data volume — one file per kind, or one per solid where the build
    produced several. It reads the result as the tree build123d makes
@@ -402,6 +405,10 @@ catalog content read-only.
   search takes a share of what the build leaves of the clock, and a split into
   many parts with running fits needs more than the plain clock leaves it. Like
   the plain clock it is operator-only: the settings endpoint refuses it.
+- The API and the worker can run different releases, and a worker that takes no
+  request for the assembly check ignores one and searches. `run_code` reads a
+  binding order whose result carries no record of it as not established, and
+  does not hand on the order or the trapped parts that worker's search found.
 - SSE must remain unbuffered through the proxy or progress appears only after a
   generation has finished.
 - Catalog items contain executable source. Third-party catalog content crosses

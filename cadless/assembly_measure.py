@@ -22,6 +22,7 @@ from cadless.assembly_check import (
     AssemblyMeasurements,
     _at,
     _measurement,
+    declared_headings,
     part_labels,
 )
 from cadless.print_fit import _dimensions
@@ -128,6 +129,9 @@ def measure_assembly(
     time_budget: float = MEASUREMENT_TIME_BUDGET_SECONDS,
     names: Sequence[str | None] | None = None,
     scale: float = 1.0,
+    order: Sequence[int] | None = None,
+    releases: Sequence[Sequence[float]] | None = None,
+    binds: bool = True,
 ) -> AssemblyMeasurements:
     """Measure the relations between ``parts``, which must already be in millimetres.
 
@@ -136,6 +140,14 @@ def measure_assembly(
     silently compare the two. ``scale`` is what the parts were scaled by from
     the script's own units, about the origin, and is used for one thing: where
     two parts overlap is said in the coordinates the script placed them at.
+
+    ``order`` is an order the caller declares its parts go together in, each
+    named by its place in ``parts``, and ``releases`` the heading each comes off
+    along, ``[]`` in the slot of a part with none, or no slots at all where no
+    part has one. Given an order, the parts are ruled in it and no order is
+    searched for, unless ``binds`` is false and the order does not hold. What is
+    handed in is held to the parts here, since a request is read before there is
+    a build to count.
     """
     boxes = [_extent(part) for part in parts]
     labels = part_labels(len(parts), names)
@@ -161,6 +173,7 @@ def measure_assembly(
                 f"{_ORDER_UNCHECKED_PREFIX} not looked for, as not every pair was measured",
             ],
             overlap_boxes=overlap_boxes,
+            declared=(None if order is None else {"binds": bool(binds), "outcome": "unreached"}),
         )
 
     if len(parts) > MEASURED_PARTS_MOST:
@@ -234,20 +247,25 @@ def measure_assembly(
             else:
                 gaps.append([first, second, distance])
 
-    order, trapped, order_unchecked, releases = _disassembly_order(parts, budget, scene, labels)
+    if order is None:
+        found, declared = _disassembly_order(parts, budget, scene, labels), None
+    else:
+        found, declared = _declared_order(parts, budget, scene, labels, order, releases, binds)
+    established, trapped, order_unchecked, proved = found
     unchecked.extend(order_unchecked)
     return AssemblyMeasurements(
         part_bboxes=boxes,
         overlaps=overlaps,
         gaps=gaps,
-        order=order,
+        order=established,
         trapped=trapped,
         unchecked=unchecked,
-        releases=releases,
+        releases=proved,
         overlap_boxes=overlap_boxes,
         freed_without_overlaps=(
             _freed_without_overlaps(parts, budget, scene, labels, overlaps) if trapped else None
         ),
+        declared=declared,
     )
 
 
@@ -408,6 +426,7 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
         freed = None
         scene.undecided.clear()
         scene.refused.clear()
+        scene.blocking.clear()
         for index in remaining:
             passed = ignoring.get(index, ())
             others = [other for other in remaining if other != index and other not in passed]
@@ -429,11 +448,7 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
                 releases[index] = [float(direction.X), float(direction.Y), float(direction.Z)]
                 break
         if freed is None:
-            reasons = []
-            if scene.refused:
-                reasons.append(_unmeasured_reason(scene.refused, labels))
-            if scene.undecided:
-                reasons.append(_touching_reason(scene.undecided, labels))
+            reasons = _unruled_reasons(scene, labels)
             if reasons:
                 return None, [], reasons, []
             return None, sorted(remaining), [], []
@@ -441,6 +456,133 @@ def _disassembly_order(parts, budget, scene=None, labels=None, ignoring=None):
         removed.append(freed)
     # Removing in this order works, so assembling in the reverse of it does.
     return list(reversed(removed)), [], [], releases
+
+
+def _declared_order(parts, budget, scene, labels, order, releases, binds):
+    """Rule an order the caller declared, and say how it came out.
+
+    Returns what :func:`_disassembly_order` returns, and beside it the record of
+    the declared order. An order that binds is the answer however it came out,
+    and nothing is searched for: an author's order that does not hold is a
+    fault for the author to hear of, where an order found in its place would
+    send the kit out with steps nobody wrote. One that does not bind is a hint.
+    Where it does not hold the search runs after it, on what trying it left of
+    the budget, and only the record says what became of it.
+    """
+    proved, record, reasons = _confirm_order(parts, budget, scene, labels, order, releases)
+    record = {"binds": bool(binds), **record}
+    if proved is not None:
+        return (list(order), [], [], proved), record
+    if binds:
+        return (None, [], reasons, []), record
+    return _disassembly_order(parts, budget, scene, labels), record
+
+
+def _confirm_order(parts, budget, scene, labels, order, releases):
+    """The heading each part was proved to come off along, or where the order stopped.
+
+    Returns those headings, ``None`` where the order was not confirmed; the
+    record's outcome and what goes with it; and, where nothing was ruled either
+    way, the reasons.
+
+    Each part after the first is ruled against the parts the order places
+    before it and against no others, those being the ones in place when it goes
+    on: along the heading declared for it where there is one, which is ruled
+    once, and along the search's own candidates where there is none. The parts
+    are taken in the order given and the first that is not free ends it, so
+    what is reported is the first step an assembler could not make.
+
+    A part is called blocked only where every heading tried met a clash that
+    was measured, as the search calls a part trapped. Where one stopped at a
+    contact it could not see past, or at a pair the kernel would not measure,
+    the part is undecided, and the reasons say which pairs.
+    """
+    from build123d import Vector
+
+    try:
+        headings = declared_headings(order, releases, len(parts))
+    except ValueError as mismatch:
+        return (
+            None,
+            {"outcome": "mismatch"},
+            [
+                f"{_ORDER_UNCHECKED_PREFIX} the declared order does not describe the build: "
+                f"{mismatch}"
+            ],
+        )
+    if len(parts) < 2:
+        return [], {"outcome": "confirmed"}, []
+    look_ahead = _look_ahead(parts)
+    if look_ahead is None:
+        return (
+            None,
+            {"outcome": "unreached"},
+            [f"{_ORDER_UNCHECKED_PREFIX} a part has no measurable size"],
+        )
+    proved: list[list[float]] = [[] for _ in parts]
+    try:
+        spheres = _spheres(scene, budget)
+        for position in range(1, len(order)):
+            index, before = order[position], list(order[:position])
+            scene.undecided.clear()
+            scene.refused.clear()
+            scene.blocking.clear()
+            heading = headings[index]
+            if heading is None:
+                freed = _can_be_freed(parts, spheres, index, before, look_ahead, budget, scene)
+            else:
+                freed = Vector(*heading)
+                verdict = _rule_heading(
+                    parts, spheres, index, before, freed, look_ahead, budget, scene
+                )
+                if verdict != _FREE:
+                    freed = None
+            if freed is None:
+                return _stopped_at(index, heading, scene, labels)
+            proved[index] = [float(freed.X), float(freed.Y), float(freed.Z)]
+    except _BudgetSpent:
+        return (
+            None,
+            {"outcome": "unreached"},
+            [
+                f"{_ORDER_UNCHECKED_PREFIX} the check ran out of budget before it could confirm "
+                "the declared order"
+            ],
+        )
+    return proved, {"outcome": "confirmed"}, []
+
+
+def _stopped_at(index, heading, scene, labels):
+    """What :func:`_confirm_order` answers for a part that was not shown free.
+
+    Read off what the scene holds, which is this part's alone: the scene is
+    cleared before each part is ruled.
+    """
+    reasons = _unruled_reasons(scene, labels)
+    if reasons:
+        return None, {"outcome": "undecided", "part": index}, reasons
+    blocked = {
+        "outcome": "blocked",
+        "part": index,
+        "heading": [] if heading is None else list(heading),
+        "blockers": sorted({other for _moving, other in scene.blocking}),
+    }
+    return None, blocked, []
+
+
+def _unruled_reasons(scene, labels) -> list[str]:
+    """Why what the scene holds shows nothing blocked: the pairs it left open.
+
+    Empty where every heading tried met a clash that was measured. One reading
+    for the search and for a declared order, so that neither calls a part
+    trapped or blocked over a pair the other would say was never ruled.
+    """
+    reasons = []
+    if scene.refused:
+        reasons.append(_unmeasured_reason(scene.refused, labels))
+    if scene.undecided:
+        reasons.append(_touching_reason(scene.undecided, labels))
+    return reasons
 
 
 def _unmeasured_reason(pairs, labels=None) -> str:
@@ -550,6 +692,7 @@ def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, 
             refused.append(other)
             continue
         if at_rest > OVERLAP_EPSILON_MM3:
+            scene.blocking.add((index, other))
             return _BLOCKED
         if own is _UNBUILT:
             own = _sweep(parts[index], direction, length, budget)
@@ -563,15 +706,17 @@ def _rule_heading(parts, spheres, index, others, direction, look_ahead, budget, 
             if theirs is not None:
                 met = _sweep_meets(theirs, parts[index], scene.reach(index), budget)
         if met:
+            scene.blocking.add((index, other))
             return _BLOCKED
         if met is None:
             walked.append(other)
     undecided = []
     if walked:
-        verdict, undecided, unmeasured = _walk(
+        verdict, undecided, unmeasured, clashed = _walk(
             parts, {other: windows[other] for other in walked}, index, direction, look_ahead, budget
         )
         if verdict == _BLOCKED:
+            scene.blocking.add((index, clashed))
             return _BLOCKED
         refused += unmeasured
     scene.undecided.update((index, other) for other in undecided)
@@ -595,7 +740,8 @@ class _Scene:
     cylinder axes, and whether one of a pair sits inside a bore of the other
     along a line, which a heading and its reverse share and every round asks
     again; and the pairs the current round left undecided, which are what that
-    round reports if it frees nothing.
+    round reports if it frees nothing, with the pairs it saw clash, which are
+    what a declared order that stops there reports.
     """
 
     def __init__(self, parts) -> None:
@@ -616,6 +762,10 @@ class _Scene:
         #: Pairs ``(moving, other)`` the kernel would not measure along a heading --
         #: refused where they stand, or by the walk once no sweep could rule them.
         self.refused: set[tuple[int, int]] = set()
+        #: Pairs ``(moving, other)`` a heading was ruled blocked at: the two share
+        #: volume where they stand, or were measured meeting on the way. One
+        #: heading names one, the first met, since that ends its ruling.
+        self.blocking: set[tuple[int, int]] = set()
 
     def shared_at_rest(self, first, second, budget) -> float | None:
         """The volume the two share where they stand, asked of the kernel once."""
@@ -1464,8 +1614,9 @@ def _walk(parts, windows, index, direction, look_ahead, budget):
 
     Walks against several others advance in turn, so one that blocks near the
     start ends the heading before a long walk past another is paid for. Returns
-    the verdict and, when it is undecided, the other parts the walk stopped at a
-    contact and those it could not measure.
+    the verdict; when it is undecided, the other parts the walk stopped at a
+    contact and those it could not measure; and, when it is blocked, the part
+    the clash was found with.
     """
     from build123d import Location
 
@@ -1494,12 +1645,12 @@ def _walk(parts, windows, index, direction, look_ahead, budget):
                 budget.spend()
                 shared = _shared_volume(part.moved(Location(direction * ahead)), parts[other])
                 if shared is not None and shared > OVERLAP_EPSILON_MM3:
-                    return _BLOCKED, [], []
+                    return _BLOCKED, [], [], other
                 looked.append(shared)
             walks.remove(walk)
             (refused if None in looked else undecided).append(other)
     verdict = _UNDECIDED if undecided or refused else _FREE
-    return verdict, undecided, refused
+    return verdict, undecided, refused, None
 
 
 def _travel_window(centre, radius, other_centre, other_radius, direction):

@@ -11,7 +11,7 @@ kind in the same directory, plus one GLB and one STEP of the whole for a build
 of several parts, clearing an earlier build's pair by exact name.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
-     [<check_assembly>] [<wall_secs>]
+     [<check_assembly>] [<wall_secs>] [<check_file>]
 """
 
 from __future__ import annotations
@@ -85,19 +85,28 @@ def _not_a_shape_payload(result) -> dict:
     return {"ok": False, "error": message, "error_type": "TypeError", "message": message}
 
 
-def measurement_budget(wall_secs: float, elapsed: float) -> float:
+def measurement_budget(wall_secs: float, elapsed: float, asked: float | None = None) -> float:
     """How many seconds the assembly measurement may spend.
 
     A share of the time left rather than of the whole clock: the clock covers the
     build, the measurement and the export together, and a build that already ran
     long would otherwise be pushed past it by the measurement and return nothing.
     With no clock to divide, the fixed budget.
+
+    ``asked`` is a figure the caller set for itself. It is kept where it is the
+    smaller and never lengthens the share: the export comes after the
+    measurement on the same clock, so a measurement let run past its share can
+    leave the files unwritten and the whole build unreported, where one stopped
+    at its share says what it did not establish and the files are written. A
+    caller that wants longer lengthens the clock. With no clock there is
+    nothing to stay inside, and the figure asked for stands.
     """
     from cadless import assembly_measure  # noqa: PLC0415 - lazy, as below
 
     if wall_secs <= 0:
-        return assembly_measure.MEASUREMENT_TIME_BUDGET_SECONDS
-    return max(0.0, wall_secs - elapsed) * assembly_measure.MEASUREMENT_TIME_SHARE
+        return assembly_measure.MEASUREMENT_TIME_BUDGET_SECONDS if asked is None else asked
+    share = max(0.0, wall_secs - elapsed) * assembly_measure.MEASUREMENT_TIME_SHARE
+    return share if asked is None else min(asked, share)
 
 
 def _error_payload(exc: BaseException, code: str, *, prefix: str = "") -> dict:
@@ -272,6 +281,20 @@ def main(argv: list[str]) -> int:
         error = f"export scale {argv[3]!r} is not a positive finite number"
         _emit({"ok": False, "error": error})
         return 1
+    # What the caller asks of the assembly measurement, read before the script
+    # runs: a request nobody could act on is the caller's fault and is said as
+    # that, rather than found after a build was paid for, and a script has run
+    # nothing by the time what is asked of its build is settled.
+    request = None
+    if len(argv) > 6 and argv[6]:
+        from cadless.assembly_check import read_check_request  # noqa: PLC0415 - lazy, as below
+
+        try:
+            with open(argv[6], encoding="utf-8") as fh:  # trusted path from parent
+                request = read_check_request(json.load(fh))
+        except (OSError, ValueError, RecursionError) as refused:
+            _emit({"ok": False, "error": f"the assembly check's request cannot be used: {refused}"})
+            return 1
     code = open(code_file).read()  # noqa: S108,SIM115 - trusted path from parent
 
     # Lazy, as the exporters are: the parent imports this module for SENTINEL.
@@ -319,17 +342,36 @@ def main(argv: list[str]) -> int:
         tree = _read_tree(result, export_scale)
         summary["parts"] = tree.as_payload()["parts"] if tree is not None else None
         parts = _parts_to_export(shape, tree)
-        if check_assembly and len(parts) > 1:
+        # A request asks for the measurement, whatever the flag says. A build of
+        # one part has no relation to measure and is left alone, unless an order
+        # was declared for it: whether that order is this build's is then for
+        # the measurement to say, where saying nothing would leave the caller
+        # to take silence for agreement.
+        declares = request is not None and request.order is not None
+        if (check_assembly or request is not None) and (len(parts) > 1 or declares):
             from dataclasses import asdict  # noqa: PLC0415 - lazy, as the exporters are
 
             from cadless.assembly_measure import measure_assembly  # noqa: PLC0415
 
-            budget = measurement_budget(wall_secs, time.monotonic() - _STARTED)
+            budget = measurement_budget(
+                wall_secs,
+                time.monotonic() - _STARTED,
+                None if request is None else request.time_budget,
+            )
+            # Handed on only where it was asked, so a measurement nothing was
+            # asked of is called as it always was.
+            asked: dict = {}
+            if declares:
+                asked.update(order=request.order, releases=request.releases, binds=request.binds)
+            if request is not None and request.probe_budget is not None:
+                asked["probe_budget"] = request.probe_budget
             # The names the tree gave, so what the measurement could not
             # establish is worded as everything else a reader is shown.
             names = [part.name for part in tree.parts] if tree is not None else None
             summary["assembly"] = asdict(
-                measure_assembly(parts, time_budget=budget, names=names, scale=export_scale)
+                measure_assembly(
+                    parts, time_budget=budget, names=names, scale=export_scale, **asked
+                )
             )
         if export_dir:
             from pathlib import Path  # noqa: PLC0415 - lazy, as below

@@ -27,6 +27,7 @@ class RunRequest(BaseModel):
     export_scale: float = 1.0  # authoring units -> mm, applied to exports only
     check_assembly: bool = False  # measure how a multi-part result's parts relate
     timeout: float | None = None
+    check: dict | None = None  # what the caller asks of that measurement; run_code reads it
 
 
 @app.get("/health")
@@ -41,11 +42,15 @@ def run(req: RunRequest) -> dict:
     cfg = Settings(worker_url="")
     if req.timeout:
         cfg = cfg.model_copy(update={"exec_timeout_secs": req.timeout})
+    # Handed on only where one was made, so a run that asks nothing is started
+    # as it always was.
+    asked = {} if req.check is None else {"check": req.check}
     result = run_code(
         req.code,
         export_dir=req.export_dir,
         export_scale=req.export_scale,
         check_assembly=req.check_assembly,
         config=cfg,
+        **asked,
     )
     return asdict(result)

@@ -456,3 +456,136 @@ def test_a_repair_context_from_another_build_keeps_what_it_recognises(monkeypatc
         res.repair_context.offending_line,
         res.repair_context.last_traceback,
     ) == ("ValueError", "x = 1", "tb")
+
+
+# --- what a caller asks of the assembly check, on the remote path --------------
+
+
+def _sent(monkeypatch, **asked) -> dict:
+    """The body the remote path posts for a run asked with ``asked``."""
+    import urllib.request
+
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"ok": True, "volume": 1.0, "bbox": [1, 1, 1]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured.update(json.loads(req.data.decode()))
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    run_code("result = 1", config=Settings(worker_url="http://worker:9000"), **asked)
+    return captured
+
+
+def test_run_code_remote_sends_what_was_asked_of_the_check(monkeypatch):
+    from cadless.assembly_check import CheckRequest
+
+    body = _sent(monkeypatch, check=CheckRequest(order=[1, 0], releases=[[], [0, 0, 2]]))
+
+    assert body["check"] == {
+        "order": [1, 0],
+        "releases": [[], [0.0, 0.0, 1.0]],
+        "binds": True,
+        "time_budget": None,
+        "probe_budget": None,
+    }
+    assert body["check_assembly"] is True  # the request asks for the measurement
+
+
+def test_run_code_remote_sends_no_request_where_none_was_made(monkeypatch):
+    assert "check" not in _sent(monkeypatch, check_assembly=True)
+
+
+def test_a_reply_that_says_nothing_of_an_order_that_binds_does_not_establish_it(monkeypatch):
+    # The api and the worker can be of different releases, and a worker that
+    # takes no request ignores the field and searches.
+    import urllib.request
+
+    from cadless.assembly_check import CheckRequest
+
+    reply = {
+        "ok": True,
+        "volume": 1.0,
+        "bbox": [1, 1, 1],
+        "assembly": {"part_bboxes": [[1, 1, 1], [1, 1, 1]], "order": [1, 0]},
+    }
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(reply).encode()
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
+    cfg = Settings(worker_url="http://worker:9000")
+
+    res = run_code("result = 1", config=cfg, check=CheckRequest(order=[0, 1]))
+
+    assert res.assembly.order is None
+    assert any("was not checked" in reason for reason in res.assembly.unchecked)
+
+
+def test_worker_service_hands_what_was_asked_to_run_code(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import worker.service as service
+
+    captured = {}
+
+    def fake_run_code(code, **asked):
+        captured.update(asked)
+        from cadless.worker import ExecResult
+
+        return ExecResult(ok=True, volume=1.0, bbox=(1, 1, 1))
+
+    monkeypatch.setattr(service, "run_code", fake_run_code)
+    asked = {"order": [1, 0], "binds": False}
+    with TestClient(service.app) as c:
+        r = c.post("/run", json={"code": "result = 1", "check": asked})
+    assert r.status_code == 200
+    assert captured["check"] == asked
+
+
+_TWO_BLOCKS = "from build123d import *\nresult = Compound([Box(10, 10, 10), Pos(30, 0, 0) * Box(10, 10, 10)])\n"
+
+
+@pytest.mark.build123d
+def test_worker_service_confirms_a_declared_order():
+    from fastapi.testclient import TestClient
+
+    from worker.service import app
+
+    asked = {"order": [1, 0], "releases": [[], [-3, 0, 0]]}
+    with TestClient(app) as c:
+        reply = c.post("/run", json={"code": _TWO_BLOCKS, "check": asked}).json()
+
+    assert reply["ok"] is True
+    assert reply["assembly"]["declared"] == {"binds": True, "outcome": "confirmed"}
+    assert reply["assembly"]["order"] == [1, 0]
+    assert reply["assembly"]["releases"] == [[-1.0, 0.0, 0.0], []]
+
+
+def test_worker_service_refuses_a_request_it_cannot_use():
+    from fastapi.testclient import TestClient
+
+    from worker.service import app
+
+    with TestClient(app) as c:
+        reply = c.post("/run", json={"code": _TWO_BLOCKS, "check": {"order": [0, 0]}}).json()
+
+    assert reply["ok"] is False
+    assert "request" in reply["error"]
+    assert "order" in reply["error"]
