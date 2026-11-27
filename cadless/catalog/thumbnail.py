@@ -184,6 +184,61 @@ _WORLD_LIGHT = np.array([-0.25, 0.45, 0.86]) @ _view_basis("iso")
 _WORLD_LIGHT /= np.linalg.norm(_WORLD_LIGHT)
 
 
+# Lines along a model's creases, for a reader who has to find an edge. A flat-shaded
+# facet takes its colour from its angle to the light alone, so faces that point the
+# same way, such as a counterbore's floor and the face it is cut into, come out one
+# colour and the step between them vanishes; a narrow strip such as a small chamfer
+# can come out within a shade of the faces beside it. A crease is where two facets
+# meet at more than this angle, read without regard to which way a facet is wound,
+# as the shading is, so a fold sharper than this angle the other way, a knife edge,
+# is left to the outline. The facets that tessellate a curved surface meet at far
+# less, so a cylinder keeps its smooth look.
+_CREASE_DEGREES = 35.0
+_EDGE_RGBA = (40, 52, 66, 255)
+# Corners are welded on a grid this many steps across the mesh's largest side: fine
+# enough to keep a small feature's corners apart, coarse enough to join the copies of
+# one corner that separate facets carry.
+_WELD_STEPS = 1e6
+# One pixel of line width per this many canvas pixels, so a line keeps about the
+# same weight relative to the picture, down to a one-pixel floor at small sizes.
+_CANVAS_PER_LINE_PIXEL = 512
+
+
+def _creases(tris: np.ndarray, normals: np.ndarray) -> np.ndarray:
+    """Which of each facet's three edges lies on a crease, as an ``(n, 3)`` mask.
+
+    Edge ``k`` runs from corner ``k`` to corner ``(k + 1) % 3``. Facets are matched
+    by the corners they share once coinciding corners are welded; an edge that no
+    other facet shares, or more than one does, counts as a crease too. A facet with
+    no area has no direction to compare, so it is left out of the matching and none
+    of its edges is drawn: counted in, it would turn the flat edge it lies along
+    into a crease.
+    """
+    lines = np.zeros((len(tris), 3), dtype=bool)
+    kept = np.nonzero(np.linalg.norm(normals, axis=1) > 0)[0]
+    if len(kept) == 0:
+        return lines
+    corners = tris[kept].reshape(-1, 3)
+    span = max(float(np.ptp(corners, axis=0).max()), 1e-9)
+    _, ids = np.unique(np.round(corners / span * _WELD_STEPS), axis=0, return_inverse=True)
+    ids = ids.reshape(-1, 3)
+    edges = np.sort(np.stack([ids[:, [0, 1]], ids[:, [1, 2]], ids[:, [2, 0]]], axis=1), axis=2)
+    _, group, counts = np.unique(
+        edges.reshape(-1, 2), axis=0, return_inverse=True, return_counts=True
+    )
+    group = group.reshape(-1)
+    facet = np.repeat(kept, 3)
+    order = np.argsort(group, kind="stable")
+    starts = np.searchsorted(group[order], np.arange(len(counts)))
+    crease = counts != 2
+    pairs = np.nonzero(counts == 2)[0]
+    first, second = facet[order[starts[pairs]]], facet[order[starts[pairs] + 1]]
+    cosine = np.abs(np.einsum("ij,ij->i", normals[first], normals[second]))
+    crease[pairs] = cosine < np.cos(np.radians(_CREASE_DEGREES))
+    lines[kept] = crease[group].reshape(-1, 3)
+    return lines
+
+
 def projected_extent(tris: np.ndarray, basis: np.ndarray) -> float:
     """The larger screen-space side of the bbox this view projects onto."""
     xy = (tris.reshape(-1, 3) @ basis.T)[:, :2]
@@ -203,6 +258,8 @@ def _rasterize(
     basis: np.ndarray,
     extent: float,
     centre: np.ndarray | None = None,
+    *,
+    edges: bool = False,
 ) -> Image.Image:
     """Project, shade and paint the triangles at a caller-chosen scale.
 
@@ -211,6 +268,11 @@ def _rasterize(
     Passing one shared across several drawings is what holds a *changing* subject
     still: a shared extent alone keeps each part the same size while letting the
     whole picture slide as the subject grows.
+
+    ``edges`` draws each facet's creases with it, in the same far-to-near order,
+    so a nearer facet paints over a crease behind it just as it does over a farther
+    face. Facets are ordered by their centres, so in an oblique view a crease can
+    show where that order is wrong, as a face can.
     """
     view = (tris.reshape(-1, 3) @ basis.T).reshape(-1, 3, 3)
     xy, depth = view[..., :2], view[..., 2].mean(axis=1)
@@ -230,11 +292,17 @@ def _rasterize(
     shade = 0.35 + 0.65 * np.abs(normals @ _WORLD_LIGHT)
     colors = np.clip(_BASE_RGB * shade[:, None], 0, 255).astype(np.uint8)
 
+    lines = _creases(tris, normals) if edges else None
+    width = max(1, round(canvas / _CANVAS_PER_LINE_PIXEL))
     img = Image.new("RGBA", (canvas, canvas), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     for i in np.argsort(depth):  # farthest first
         r, g, bl = colors[i]
         draw.polygon([tuple(p) for p in screen[i]], fill=(int(r), int(g), int(bl), 255))
+        if lines is not None:
+            for k in np.nonzero(lines[i])[0]:
+                start, end = screen[i][k], screen[i][(k + 1) % 3]
+                draw.line([tuple(start), tuple(end)], fill=_EDGE_RGBA, width=width)
     return img.resize((size, size), Image.LANCZOS)
 
 
@@ -263,6 +331,7 @@ def render_bytes(
     basis: np.ndarray | None = None,
     extent: float | None = None,
     centre: np.ndarray | None = None,
+    edges: bool = False,
 ) -> bytes:
     """One orthographic frame as PNG bytes.
 
@@ -275,7 +344,7 @@ def render_bytes(
     basis = isometric_basis() if basis is None else basis
     extent = projected_extent(tris, basis) if extent is None else extent
     buf = io.BytesIO()
-    _rasterize(tris, size, basis, extent, centre).save(buf, format="PNG")
+    _rasterize(tris, size, basis, extent, centre, edges=edges).save(buf, format="PNG")
     return buf.getvalue()
 
 
@@ -283,6 +352,8 @@ def render_views(
     mesh: Path | str | Sequence[Path | str],
     views: Sequence[str] = DEFAULT_VIEWS,
     size: int = DEFAULT_SIZE,
+    *,
+    edges: bool = False,
 ) -> list[tuple[str, bytes]]:
     """Render ``mesh`` once per named view, as ``(view, PNG bytes)``.
 
@@ -297,7 +368,8 @@ def render_views(
     reader can compare them as one object; fitted per view each would fill its
     own frame and the same edge would appear at a different size in each. A set
     of parts shares that extent as well, so none is sized against its own bounds
-    rather than the model's.
+    rather than the model's. With ``edges`` every frame also carries the creases
+    as lines, found across all the parts together.
     Raises ``ValueError`` for an unknown view name, an unloadable mesh, or more
     parts than :data:`MAX_COMPOSITE_PARTS`. A caller that reads a refusal as "not
     drawn" rather than as a failure gets the right behaviour from all three.
@@ -320,7 +392,10 @@ def render_views(
     if not bases:
         return []
     extent = max(projected_extent(tris, basis) for _, basis in bases)
-    return [(name, render_bytes(tris, size, basis=basis, extent=extent)) for name, basis in bases]
+    return [
+        (name, render_bytes(tris, size, basis=basis, extent=extent, edges=edges))
+        for name, basis in bases
+    ]
 
 
 # GL-capable renderers can be prepended here; the software one always works.
