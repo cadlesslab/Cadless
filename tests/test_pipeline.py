@@ -6,12 +6,14 @@ build123d; the full live test is marked bedrock.
 
 import inspect
 import os
+import threading
 
 import pytest
 
 from cadless.config import Settings, settings
 from cadless.pipeline import Pipeline, generate_cad
 from cadless.printer_profile import AssemblySpec, BuildVolume
+from cadless.vlm_critique import Critique
 
 GOOD = "from build123d import *\nresult = Box(10, 10, 10)\n"
 GOOD_PARAMS = (
@@ -146,6 +148,40 @@ def test_repair_count_respects_budget():
     gen = FakeGen([BANNED, BANNED])
     Pipeline(generator=gen, config=Settings(repair_max_attempts=2)).run("x")
     assert gen.repairs == 1  # 2 tries total => exactly 1 repair
+
+
+def test_a_stopped_run_makes_no_repair_call():
+    gen = FakeGen([BANNED, GOOD])
+    result = Pipeline(
+        generator=gen, config=Settings(repair_max_attempts=3), should_stop=lambda: True
+    ).run("x")
+    assert not result.ok
+    assert gen.repairs == 0
+    assert result.attempt_count == 1
+    assert result.error.startswith("stopped before repairing it: validation")
+
+
+@pytest.mark.build123d
+def test_a_stop_at_a_repair_that_does_not_check_its_result_ends_the_run(tmp_path):
+    """The review's repair site goes straight on to the next attempt with what it got
+    back. A stop that arrives while the review runs must end the run there."""
+    stop = threading.Event()
+
+    class StopsWhileReviewing:
+        def critique(self, intent, mesh_path):
+            stop.set()
+            return Critique(False, "wrong size")
+
+    gen = FakeGen([GOOD, GOOD, GOOD])
+    result = Pipeline(
+        generator=gen,
+        config=Settings(vlm_critique_enabled=True, repair_max_attempts=3),
+        critic=StopsWhileReviewing(),
+        should_stop=stop.is_set,
+    ).run("a cube", export_dir=str(tmp_path))
+    assert not result.ok
+    assert gen.repairs == 0
+    assert result.error.startswith("stopped before repairing it: critique: wrong size")
 
 
 @pytest.mark.build123d

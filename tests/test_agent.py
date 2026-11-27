@@ -18,6 +18,7 @@ from collections.abc import Iterator, Sequence
 import pytest
 
 from cadless.agent import (
+    STOPPED_STOP,
     Agent,
     AgentResult,
     ListSteerSource,
@@ -1003,6 +1004,102 @@ def test_stream_turn_emits_steer_event_when_injected():
     events = list(agent.stream_turn(user_text="go", context=_context(), steer=steer))
     steered = [e for e in events if e.kind == "steer"]
     assert steered and steered[0].data["text"] == "steer me"
+
+
+# --- stopping a turn at its next boundary -----------------------------------
+
+
+def _turn_end(events):
+    return [e for e in events if e.kind == "turn_end"][-1]
+
+
+def _closing_text(events) -> str:
+    return [e for e in events if e.kind == "text_delta"][-1].data["text"]
+
+
+def test_a_stop_before_the_first_call_makes_no_model_call():
+    provider = ScriptedProvider([_text_turn("never sent")])
+    agent = Agent(provider=provider, model="m")
+
+    events = list(agent.stream_turn(user_text="go", context=_context(), stop=lambda: True))
+
+    assert provider.calls == []
+    assert _turn_end(events).data["stop_reason"] == STOPPED_STOP
+    assert _closing_text(events) == "\n\nStopped before anything was built."
+
+
+def test_a_stop_during_the_model_call_runs_none_of_the_tools_it_asked_for():
+    """The call that was running when the user stopped finishes; its build does not run."""
+    pipeline = SpyPipeline()
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a"}),
+            _text_turn("never sent"),
+        ]
+    )
+    agent = Agent(provider=provider, model="m")
+
+    events = list(
+        agent.stream_turn(
+            user_text="go",
+            context=_context(pipeline=pipeline),
+            stop=lambda: len(provider.calls) >= 1,
+        )
+    )
+
+    assert len(provider.calls) == 1
+    assert pipeline.calls == []
+    assert not [e for e in events if e.kind == "tool_start"]
+    assert _turn_end(events).data["stop_reason"] == STOPPED_STOP
+
+
+def test_a_stop_during_a_build_makes_no_further_model_call():
+    pipeline = SpyPipeline()
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a"}),
+            _text_turn("never sent"),
+        ]
+    )
+    agent = Agent(provider=provider, model="m")
+
+    events = list(
+        agent.stream_turn(
+            user_text="go",
+            context=_context(pipeline=pipeline),
+            stop=lambda: len(pipeline.calls) >= 1,
+        )
+    )
+
+    assert len(pipeline.calls) == 1
+    assert len(provider.calls) == 1
+    assert _turn_end(events).data["stop_reason"] == STOPPED_STOP
+    assert _closing_text(events) == "\n\nStopped. Kept the last build."
+    # The closing line is persisted with the turn, so a reload reads it too.
+    assert _turn_end(events).data["result"].blocks[-1].text == "\n\nStopped. Kept the last build."
+
+
+def test_a_stop_between_two_tools_skips_the_second():
+    pipeline = SpyPipeline()
+    two_builds = [
+        StreamChunk(StreamEvent.TURN_START),
+        *_tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a"})[1:2],
+        *_tool_turn(tool_use_id="tu-2", name="edit_model", tool_input={"change": "b"})[1:],
+    ]
+    provider = ScriptedProvider([two_builds, _text_turn("never sent")])
+    agent = Agent(provider=provider, model="m")
+
+    events = list(
+        agent.stream_turn(
+            user_text="go",
+            context=_context(pipeline=pipeline),
+            stop=lambda: len(pipeline.calls) >= 1,
+        )
+    )
+
+    assert len(pipeline.calls) == 1
+    assert [e.data["tool"] for e in events if e.kind == "tool_start"] == ["generate_model"]
+    assert _turn_end(events).data["stop_reason"] == STOPPED_STOP
 
 
 # --- attempt-count + stage surfacing / same-stage escalation ------

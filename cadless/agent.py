@@ -826,6 +826,10 @@ def tool_label(name: str) -> str:
 # backed by a session-keyed queue (see :class:`SessionSteerRegistry`).
 SteerSource = Callable[[], "str | None"]
 
+# Asked at each boundary of a streamed turn whether its user has asked it to stop.
+# Called from the turn's own thread, so it reads a thread-safe flag and nothing else.
+StopSignal = Callable[[], bool]
+
 
 class ListSteerSource:
     """A trivial FIFO :data:`SteerSource` over a fixed list (tests / in-process).
@@ -1018,6 +1022,17 @@ class AgentResult:
 # Why a turn ended awaiting the user's reply (``ask_clarification`` was called):
 # a terminal, non-auto-continued stop reason distinct from ``end_turn``.
 CLARIFICATION_STOP = "clarification"
+
+# Why a turn ended because its user asked it to stop: at the first boundary after
+# the request, before another model call or another tool starts.
+STOPPED_STOP = "stopped"
+
+
+def _stopped_note(kept_a_build: bool) -> str:
+    """The line a stopped turn ends on, saying whether it leaves a build behind."""
+    if kept_a_build:
+        return "\n\nStopped. Kept the last build."
+    return "\n\nStopped before anything was built."
 
 
 # The line a turn ends on when the loop, not the model, stopped it. Appended to
@@ -1347,6 +1362,7 @@ class Agent:
         context: ToolContext,
         history: Sequence[Message] | None = None,
         steer: SteerSource | None = None,
+        stop: StopSignal | None = None,
     ):
         """Run one user turn, yielding neutral :class:`StreamEventOut`s as it goes.
 
@@ -1356,6 +1372,11 @@ class Agent:
         call (pipeline ``stage`` events nest inside ``tool_progress``), then a
         single ``turn_end``. The final event carries the assembled neutral blocks
         so the caller can persist the turn.
+
+        ``stop`` is asked before each model call and before each tool. Once it
+        answers yes the turn ends there with :data:`STOPPED_STOP` and a closing
+        line; a model call or a tool already running finishes first, since neither
+        can be cut short from here.
         """
         messages: list[Message] = list(history or [])
         ctx_block = _model_context_block(context)
@@ -1388,10 +1409,27 @@ class Agent:
         stage_failures: dict[str, int] = {}
         start = time.monotonic()
         time_budget = self._time_budget_for(context)
+        # Whether a tool in this turn built something, which is what a stopped
+        # turn's closing line says it leaves behind.
+        kept_a_build = False
+
+        def asked_to_stop() -> bool:
+            return stop is not None and stop()
+
+        def end_stopped() -> StreamEventOut:
+            result.stop_reason = STOPPED_STOP
+            note = _stopped_note(kept_a_build)
+            produced.append(ContentBlock.of_text(note))
+            return StreamEventOut("text_delta", {"text": note})
 
         yield StreamEventOut("turn_start")
 
         while True:
+            # Before the steer drain and the model call, so nothing the user asked
+            # for after stopping is sent, and no further call is paid for.
+            if asked_to_stop():
+                yield end_stopped()
+                break
             # Boundary: drain queued steer messages, inject + persist them, and
             # surface each as a ``steer`` UI event so the transcript shows it.
             for block in _drain_steer(steer):
@@ -1494,7 +1532,13 @@ class Agent:
             if action_uses:
                 result.tool_iters += 1
             guide_blocks: list[ContentBlock] = []
+            stopped = False
             for tu in action_uses:
+                # Asked before each tool, the first included: the model call that
+                # just ended may have asked for a build the user no longer wants.
+                if asked_to_stop():
+                    stopped = True
+                    break
                 yield StreamEventOut(
                     "tool_start", {"tool": tu.name, "label": tool_label(tu.name or "")}
                 )
@@ -1526,6 +1570,7 @@ class Agent:
                 # layer maps it to persistence rather than emitting it on the wire.
                 if payload.get("forge") is not None:
                     tool_result_data["forge"] = payload["forge"]
+                kept_a_build = kept_a_build or tool_result_data["ok"]
                 yield StreamEventOut("tool_result", tool_result_data)
                 guide_block = _guide_block(payload.get("guide"))
                 if guide_block is not None:
@@ -1537,6 +1582,9 @@ class Agent:
             # written. Persisting it is what puts it back after a reload.
             produced.extend(guide_blocks)
             messages.append(Message(role="user", content=tool_results))
+            if stopped:
+                yield end_stopped()
+                break
 
             spent = self._budget_reached(result, start, time_budget)
             if spent is not None:
