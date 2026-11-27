@@ -436,6 +436,164 @@ def test_view_order_covers_every_view_exactly_once():
     assert thumb.DEFAULT_VIEWS == thumb.VIEW_ORDER[: len(thumb.DEFAULT_VIEWS)]
 
 
+# Two boxes side by side whose tops stand at different heights. From above both
+# tops face the light alike, so a flat-shaded top view gives them one colour and
+# the step between them disappears.
+_STEPPED = _cube_tris((0.0, 0.0, 0.0), 5.0) + _cube_tris((10.0, 0.0, -2.0), 5.0)
+
+
+def _cylinder_tris(radius: float, height: float, segments: int):
+    """A closed Z-axis cylinder as a mesher draws one: flat side facets meeting at
+    a few degrees, and fan caps."""
+    ring = [
+        (radius * np.cos(2 * np.pi * k / segments), radius * np.sin(2 * np.pi * k / segments))
+        for k in range(segments)
+    ]
+    tris = []
+    for k in range(segments):
+        (x0, y0), (x1, y1) = ring[k], ring[(k + 1) % segments]
+        low0, low1, high1, high0 = (x0, y0, 0.0), (x1, y1, 0.0), (x1, y1, height), (x0, y0, height)
+        tris += [(low0, low1, high1), (low0, high1, high0)]
+        tris += [((0.0, 0.0, 0.0), low1, low0), ((0.0, 0.0, height), high0, high1)]
+    return tris
+
+
+def _middle_row(tris, view: str, edges: bool) -> np.ndarray:
+    """Brightness along the middle row of one view of ``tris``, inside its outline."""
+    png = thumb.render_bytes(
+        np.asarray(tris, float), 384, basis=thumb._view_basis(view), edges=edges
+    )
+    row = _decode(png)[192]
+    opaque = np.nonzero(row[:, 3] == 255)[0]
+    return row[opaque.min() + 4 : opaque.max() - 3, :3].astype(int).sum(axis=1)
+
+
+def test_edge_lines_draw_a_step_the_shading_cannot_show():
+    """The case a reader of the critique's pictures needs the line for: a
+    counterbore's floor takes the colour of the face around it, so the step
+    between them shows only as a line."""
+    plain, lined = _middle_row(_STEPPED, "top", False), _middle_row(_STEPPED, "top", True)
+
+    assert plain.max() - plain.min() < 30, "the step already shows without lines"
+    assert lined.min() < plain.min() - 100
+
+
+def test_edge_lines_leave_a_curved_surface_smooth():
+    """A mesher draws a cylinder's side as flat facets meeting a few degrees
+    apart; a line at every one of those would stripe the side with edges the part
+    does not have."""
+    cylinder = _cylinder_tris(5.0, 10.0, 64)
+    plain, lined = _middle_row(cylinder, "front", False), _middle_row(cylinder, "front", True)
+
+    # Pixel by pixel: the side's own shading runs dark towards its outline, so a
+    # line there can be no darker than the darkest face in the row.
+    assert (plain - lined).max() < 30
+
+
+# A cube inside a larger one: from the front, the outer cube's face hides the inner
+# cube and every crease on it.
+_NESTED = _cube_tris((0.0, 0.0, 0.0), 5.0) + _cube_tris((0.0, 0.0, 0.0), 2.0)
+
+
+def test_edge_lines_stay_behind_the_faces_that_hide_them():
+    """A crease behind a nearer face is not drawn through it: the reviewer is told
+    that a feature inside a closed part shows in no view, and a line showing one
+    through a wall would say otherwise."""
+    plain, lined = _middle_row(_NESTED, "front", False), _middle_row(_NESTED, "front", True)
+
+    assert (plain - lined).max() < 30
+
+
+# Two cubes side by side with flush tops: from above, one flat face to the eye.
+_FLUSH = _cube_tris((0.0, 0.0, 0.0), 5.0) + _cube_tris((10.0, 0.0, 0.0), 5.0)
+
+
+def test_edge_lines_mark_where_two_parts_meet():
+    """Where parts drawn together meet, an edge is shared by more than two facets.
+    It is drawn even where the faces either side lie flat, so the seam between two
+    parts shows."""
+    plain, lined = _middle_row(_FLUSH, "top", False), _middle_row(_FLUSH, "top", True)
+
+    assert plain.max() - plain.min() < 30, "the seam already shows without lines"
+    assert lined.min() < plain.min() - 100
+
+
+def _unit_normals(tris: np.ndarray) -> np.ndarray:
+    cross = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    length = np.linalg.norm(cross, axis=1, keepdims=True)
+    return np.divide(cross, length, out=np.zeros_like(cross), where=length > 0)
+
+
+# A flat square in two triangles, with a facet of no area lying along their shared
+# diagonal, as a mesher leaves one at a pole or a cone's tip.
+_SLIVERED = np.asarray(
+    [
+        ((0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0)),
+        ((0.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (10.0, 10.0, 0.0)),
+    ]
+)
+
+
+def test_a_45_degree_fold_is_a_crease():
+    """A 45-degree chamfer meets the faces either side at a 45-degree fold; the
+    lines exist so the reviewer can find such an edge, so that fold has to count."""
+    s = 10.0 * np.sqrt(0.5)
+    folded = np.asarray(
+        [
+            ((0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (5.0, 10.0, 0.0)),
+            ((10.0, 0.0, 0.0), (0.0, 0.0, 0.0), (5.0, -s, -s)),
+        ]
+    )
+    lines = thumb._creases(folded, _unit_normals(folded))
+
+    assert lines[0, 0] and lines[1, 0]
+
+
+def test_a_facet_wound_the_other_way_makes_no_crease():
+    """Facets are compared without regard to which way each is wound, as they are
+    shaded: a flat face whose triangles disagree on winding is still flat."""
+    flat = np.asarray(
+        [
+            ((0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0)),
+            ((0.0, 0.0, 0.0), (0.0, 10.0, 0.0), (10.0, 10.0, 0.0)),
+        ]
+    )
+    lines = thumb._creases(flat, _unit_normals(flat))
+
+    assert not lines[0, 2] and not lines[1, 2]
+
+
+def test_a_facet_with_no_area_makes_no_crease():
+    """A facet with no area has no direction to compare: it neither turns the flat
+    diagonal it lies along into a crease nor draws a line of its own."""
+    lines = thumb._creases(_SLIVERED, _unit_normals(_SLIVERED))
+
+    assert not lines[0, 2] and not lines[1, 0], "the flat diagonal was drawn"
+    assert not lines[2].any()
+
+
+def test_render_views_draws_edge_lines_when_asked(tmp_path):
+    """``render_views`` is what the critique's renderer calls, so the option has
+    to reach every frame it draws."""
+    stl = _write_binary_stl(tmp_path / "stepped.stl", tris=_STEPPED)
+
+    lined = thumb.render_views(stl, ("top", "front"), size=128, edges=True)
+    plain = thumb.render_views(stl, ("top", "front"), size=128)
+
+    assert all(a != b for (_, a), (_, b) in zip(lined, plain, strict=True))
+
+
+def test_a_render_draws_no_edge_lines_unless_asked():
+    """Thumbnails and the guide's drawings keep their look; the lines are asked for."""
+    tris = np.asarray(_STEPPED, float)
+    top = thumb._view_basis("top")
+
+    assert thumb.render_bytes(tris, 128, basis=top) == thumb.render_bytes(
+        tris, 128, basis=top, edges=False
+    )
+
+
 def test_render_views_returns_a_png_per_view(tmp_path):
     stl = _write_binary_stl(tmp_path / "tet.stl")
     shots = thumb.render_views(stl, ("front", "right", "top", "iso"), size=96)

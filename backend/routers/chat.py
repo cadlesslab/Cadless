@@ -31,6 +31,7 @@ import json
 import logging
 import shutil
 import uuid
+from functools import partial
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -159,8 +160,20 @@ def build_pipeline() -> Pipeline:
     without it a multi-part build is still described, from the order and the
     joints the engine measured. What a writer adds is names for the parts, so a
     pipeline built without one loses vocabulary rather than the guide.
+
+    The renderer is handed the size its captures are drawn at, and told to draw
+    the creases as lines: flat shading gives faces that point the same way one
+    colour, so without them a step between such faces is not in the picture the
+    reviewer is asked about. The critic is told nothing about how a mesh becomes
+    an image, so both travel with the renderer rather than through the critic's
+    settings.
     """
-    return Pipeline(critic=VlmCritic(renderer=render_views), guide_writer=GuideWriter())
+    return Pipeline(
+        critic=VlmCritic(
+            renderer=partial(render_views, size=settings.vlm_critique_view_size, edges=True)
+        ),
+        guide_writer=GuideWriter(),
+    )
 
 
 def _refusal(detail: str) -> EventSourceResponse:

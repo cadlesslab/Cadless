@@ -123,8 +123,11 @@ def _unwrap(line: str) -> tuple[str, str]:
 # views before it commits, so the ceiling has to cover that reasoning as well as
 # the answer — sized for the answer alone, replies were cut off mid-description
 # and never reached a verdict at all. The reasoning is worth paying for: it is
-# what makes the feedback name the defect instead of restating the request.
-_MAX_TOKENS = 1000
+# what makes the feedback name the defect instead of restating the request. The
+# question asks for a line on every feature the request names, so a reply grows
+# with the request; a ceiling costs nothing until a reply reaches it, so it sits
+# well above the longest replies rather than near them.
+_MAX_TOKENS = 2000
 
 # "model" rather than "part": what is shown is one solid on most turns and a
 # whole assembly on a turn that produced several, and calling the second one a
@@ -160,6 +163,21 @@ def _question(intent: str, views: Sequence[str], parts: int = 1) -> str:
     # reason to call a perfectly good split wrong -- and a mismatch here forces
     # a repair round on code that built correctly, so the wrong-fail direction
     # costs a turn rather than merely reading oddly.
+    #
+    # Asked only whether the geometry matched, a reviewer listed the features
+    # the request named and ticked each off on what merely appeared to be it --
+    # a bore in a solid bridge, a chamfer read off the iso view's shading -- and
+    # passed the build, so the repair that a mismatch forces never ran. It is
+    # asked instead which view would show each feature and what that view shows
+    # there: a feature is missing when the view that would show it shows
+    # something else, such as a solid where the opening should be. A missing
+    # feature is named, and that name is what the repair round is given.
+    #
+    # Told instead to count every feature it could not point to as missing, a
+    # reviewer called correct builds wrong for what no view it was sent can
+    # show -- a boss inside a closed box, a groove behind a face -- and each of
+    # those forces a repair of a build with nothing to repair. So a feature no
+    # sent view can show is not grounds for a mismatch.
     subject = (
         "one CAD part"
         if parts < 2
@@ -168,13 +186,31 @@ def _question(intent: str, views: Sequence[str], parts: int = 1) -> str:
             f"positions they hold when assembled"
         )
     )
+    several = len(views) > 1
+    which = "which of these views would show it" if several else "whether this view would show it"
+    cannot = "none of these views can show" if several else "this view cannot show"
+    overrule = ", even if another view seems to suggest it" if several else ""
+    shading = (
+        "; the iso view's shading can draw lines that are not edges, so do not take a "
+        "feature as present from the iso view alone"
+        if "iso" in views
+        else ""
+    )
     return (
         f"These are renders of {subject}, viewed from {', '.join(views)}, "
         f"generated for the request:\n"
         f'"{intent}"\n\n'
-        f"Does the geometry match the request? Think it through if you need to, "
-        f"then end your reply with the verdict on a line of its own: either "
-        f"MATCH, or MISMATCH: <what is wrong>."
+        f"List every feature the request names. For each one, say {which} and what that "
+        f"view shows there. A through hole or bore shows as an opening, and a chamfered or "
+        f"rounded edge as a cut or rounded corner, in the outline of a view that looks "
+        f"along it{shading}. Call a feature missing when a view that would show it shows "
+        f"something else instead, such as a solid where an opening should be or a square "
+        f"corner where a chamfer should be{overrule}. A "
+        f"feature that {cannot}, such as one inside a closed part or on a face that is not "
+        f"drawn, is not grounds for a mismatch.\n\n"
+        f"Then end your reply with the verdict on a line of its own: either MATCH, if no "
+        f"named feature is missing or wrong, or MISMATCH: <the features that are missing "
+        f"or wrong>."
     )
 
 
