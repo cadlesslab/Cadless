@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from cadless.model_profiles import resolve_model_id
@@ -365,6 +365,13 @@ class Settings(BaseSettings):
     # than a constant — and why raising it is gated like the other knobs that
     # multiply per-turn spend.
     vlm_critique_view_count: int = 4
+    # How large each of those views is drawn, in pixels a side. At the thumbnail
+    # size a small edge treatment reads as a square corner, and a reviewer asked
+    # about every feature the request names then calls a correct part wrong.
+    # Every step up multiplies the image tokens each critique sends, which is
+    # why the size is a setting rather than the renderer's default. Bounded so a
+    # mistyped size fails when the settings load rather than on every critique.
+    vlm_critique_view_size: int = Field(768, ge=64, le=2048)
     vlm_model_slug: str = "sonnet-4-6"  # vision-capable
 
     @property

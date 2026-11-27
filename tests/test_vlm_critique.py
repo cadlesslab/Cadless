@@ -365,6 +365,104 @@ def test_critic_names_the_views_it_sent():
     assert "a cube" in question
 
 
+def _asked(provider: FakeChatProvider) -> str:
+    """The question text of the provider's first call."""
+    return provider.calls[0]["messages"][0].content[-1].text
+
+
+def test_the_question_asks_which_view_would_show_each_named_feature():
+    """Asked only whether the shape matches, a reviewer ticked named features off
+    on what merely appeared to be them — a bore in a solid bridge, a chamfer on a
+    square edge — and called the build a match. It is asked instead where each
+    feature the request names would show, and what that view shows there.
+    """
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a bracket", "/tmp/x.stl")
+
+    question = _asked(provider)
+    assert "List every feature the request names" in question
+    assert "say which of these views would show it and what that view shows there" in question
+
+
+def test_a_feature_is_missing_when_the_view_that_would_show_it_shows_something_else():
+    """What turns a feature that is not there into a mismatch: the view that would
+    show it shows something else, whatever another view seems to suggest."""
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a bracket", "/tmp/x.stl")
+
+    question = _asked(provider)
+    assert (
+        "Call a feature missing when a view that would show it shows something else instead"
+        in question
+    )
+    assert "even if another view seems to suggest it" in question
+
+
+def test_a_feature_no_view_can_show_is_not_grounds_for_a_mismatch():
+    """Told to count every feature it could not point to as missing, a reviewer
+    called correct builds wrong for what no view it was sent can show — a boss
+    inside a closed box, a groove behind a face — and each such call forces a
+    repair of a build that had nothing to repair."""
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a bracket", "/tmp/x.stl")
+
+    assert "A feature that none of these views can show" in _asked(provider)
+    assert "is not grounds for a mismatch" in _asked(provider)
+
+
+def test_the_question_says_where_holes_and_edge_treatments_show():
+    """The iso view's shading draws lines that are not edges, and a reviewer read
+    them as chamfers; a hole or an edge treatment shows in the outline of a view
+    that looks along it."""
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a bracket", "/tmp/x.stl")
+
+    question = _asked(provider)
+    assert "in the outline of a view that looks along it" in question
+    assert "from the iso view alone" in question
+
+
+def test_the_question_names_no_view_it_did_not_send():
+    """A reviewer told to look at a view it was not given has nowhere to look."""
+    provider = _provider("MATCH")
+    cfg = Settings(vlm_critique_view_count=2)
+    VlmCritic(renderer=_renderer(), provider=provider, config=cfg).critique(
+        "a bracket", "/tmp/x.stl"
+    )
+
+    question = _asked(provider)
+    assert "iso" not in question
+    assert "top" not in question
+
+
+def test_the_question_reads_right_with_a_single_view():
+    """One view is one place to look: no "these views" to choose among."""
+    provider = _provider("MATCH")
+    cfg = Settings(vlm_critique_view_count=1)
+    VlmCritic(renderer=_renderer(), provider=provider, config=cfg).critique(
+        "a bracket", "/tmp/x.stl"
+    )
+
+    question = _asked(provider)
+    assert "say whether this view would show it" in question
+    assert "A feature that this view cannot show" in question
+    assert "these views" not in question
+    assert "another view" not in question
+
+
+def test_the_question_asks_for_the_verdict_the_parser_reads():
+    """The question and ``parse_verdict`` are two halves of one contract: a reply
+    with no line the parser reads as a verdict is refused, and a refused critique
+    is a review the turn never gets."""
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a bracket", "/tmp/x.stl")
+
+    question = _asked(provider)
+    assert "end your reply with the verdict on a line of its own" in question
+    assert "either MATCH, if" in question
+    assert "or MISMATCH: <" in question
+
+
 def test_critic_sends_the_slug_the_adapter_resolves():
     """A pre-resolved vendor id is what every adapter is handed a slug to make.
 
@@ -734,13 +832,85 @@ def test_the_chat_route_is_the_one_place_a_critic_is_injected():
     critic = build_pipeline()._critic
 
     assert isinstance(critic, VlmCritic)
-    assert critic._render is render_views
+    assert getattr(critic._render, "func", None) is render_views
     assert critic._provider is None, "built a provider before anything asked for one"
     # The default is what every other construction site gets, so this one
     # assertion is what keeps a pipeline nobody is watching from paying for
     # vision — the eval's baseline and the legacy generate route both build
     # their pipeline with no arguments.
     assert Pipeline()._critic is None
+
+
+def _reviewer_render_call(monkeypatch) -> dict:
+    """What the chat route's reviewer hands the renderer for one capture.
+
+    The critic is told nothing about how a mesh becomes an image, so whatever the
+    captures are drawn with travels in the renderer the route hands it; this
+    records that renderer's arguments instead of drawing anything.
+    """
+    import backend.routers.chat as chat
+
+    seen: dict = {}
+
+    def record(mesh, views, **options):
+        seen.update(options, mesh=mesh, views=tuple(views))
+        return []
+
+    monkeypatch.setattr(chat, "render_views", record)
+    chat.build_pipeline()._critic._render("/tmp/model.stl", ("front",))
+    return seen
+
+
+def test_the_reviewer_sees_its_captures_at_the_configured_size(monkeypatch):
+    """The size is the chat route's to give, from the setting."""
+    from cadless.config import settings
+
+    monkeypatch.setattr(settings, "vlm_critique_view_size", 64)
+
+    assert _reviewer_render_call(monkeypatch)["size"] == 64
+
+
+def test_the_reviewer_sees_its_captures_with_edge_lines(monkeypatch):
+    """Flat shading gives faces that point the same way one colour, so a step
+    between them, such as a counterbore's floor, is not in the picture the reviewer
+    is asked about, and a narrow chamfer can come out within a shade of its
+    neighbours; its captures carry the creases as lines, which the catalog's
+    thumbnails do not."""
+    assert _reviewer_render_call(monkeypatch).get("edges") is True
+
+
+def test_the_reviewers_captures_are_768_px_by_default():
+    """At the thumbnail size a small chamfer reads as a square corner, so a
+    question that asks for every named feature calls a correct part wrong; at
+    this size the same corner reads as cut. Each step up multiplies the image
+    tokens every critique spends, which is why it is a setting. Read from the
+    field itself, so an environment that sets it cannot pass or fail this."""
+    assert Settings.model_fields["vlm_critique_view_size"].default == 768
+
+
+@pytest.mark.parametrize("size", [0, 63, 2049])
+def test_a_view_size_no_capture_should_be_drawn_at_is_refused(size):
+    """A mistyped size fails when the settings load, not on every critique."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(vlm_critique_view_size=size)
+
+
+@pytest.mark.parametrize("size", [64, 2048])
+def test_a_view_size_at_either_bound_is_kept(size):
+    """The bounds themselves are sizes an operator may set."""
+    assert Settings(vlm_critique_view_size=size).vlm_critique_view_size == size
+
+
+def test_the_reply_has_room_for_a_line_on_every_named_feature():
+    """A reply cut off at the ceiling never reaches its verdict and the review is
+    skipped; the question asks for a line on every feature the request names, so
+    the ceiling sits well above the longest replies measured."""
+    provider = _provider("MATCH")
+    VlmCritic(renderer=_renderer(), provider=provider).critique("a bracket", "/tmp/x.stl")
+
+    assert provider.calls[0]["params"].max_tokens >= 2000
 
 
 def _capture_judge_kwargs(monkeypatch) -> dict:
