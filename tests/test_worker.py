@@ -1226,7 +1226,8 @@ def _spawning(monkeypatch) -> list:
     runs = []
 
     def run(cmd, **kwargs):
-        asked = json.loads(Path(cmd[8]).read_text()) if len(cmd) > 8 else None
+        # Its place is there and empty where kinds follow a run that made no request.
+        asked = json.loads(Path(cmd[8]).read_text()) if len(cmd) > 8 and cmd[8] else None
         runs.append((cmd, asked))
         line = f"{SENTINEL} " + json.dumps({"ok": True, "volume": 1.0, "bbox": [1.0, 1.0, 1.0]})
         return subprocess.CompletedProcess(cmd, 0, stdout=line + "\n", stderr="")
@@ -1388,3 +1389,225 @@ def test_a_result_that_answers_for_the_order_is_left_as_it_came(monkeypatch):
 
     assert res.assembly.order == [1, 0]
     assert res.assembly.unchecked == []
+
+
+# --- the kinds a caller asks a run for --------------------------------------
+
+_ONE_BOX = "from build123d import *\nresult = Box(8, 8, 8)\n"
+_REFUSED_KINDS = "the run's export kinds cannot be used: "
+
+
+def _written(tmp_path, capsys, code: str, kinds: str | None) -> tuple[dict, list[str]]:
+    """The child's result for ``code`` asked for ``kinds``, and the files then in its folder.
+
+    A folder of its own: the child's script is written beside it, not into it.
+    """
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    asked = () if kinds is None else ("", kinds)
+    payload = _child(tmp_path, capsys, code, str(out), "1", "", "30", *asked)
+    return payload, sorted(path.name for path in out.iterdir())
+
+
+def test_a_build_of_several_parts_writes_the_kinds_asked_and_their_whole_files(tmp_path, capsys):
+    payload, files = _written(tmp_path, capsys, _CAR, '["glb", "step"]')
+
+    assert payload["ok"] is True
+    assert files == sorted(
+        [f"model_p{part}.{kind}" for part in range(4) for kind in ("glb", "step")]
+        + ["assembly.glb", "assembly.step"]
+    )
+    assert payload["glb_path"].endswith("model_p0.glb")
+    assert "stl_path" not in payload
+    assert "obj_path" not in payload
+
+
+def test_no_whole_file_is_written_where_neither_of_its_kinds_is_asked(tmp_path, capsys):
+    payload, files = _written(tmp_path, capsys, _CAR, '["stl"]')
+
+    assert files == [f"model_p{part}.stl" for part in range(4)]
+    assert "assembly_glb_path" not in payload
+    assert "assembly_step_path" not in payload
+
+
+def test_a_kind_not_asked_for_leaves_nothing_of_an_earlier_build_behind(tmp_path, capsys):
+    _written(tmp_path, capsys, _CAR, None)
+    motion = tmp_path / "out" / "assembly.json"
+    motion.write_text("{}")
+
+    payload, files = _written(tmp_path, capsys, _CAR, '["glb"]')
+
+    assert files == sorted(
+        [f"model_p{part}.glb" for part in range(4)] + ["assembly.glb", "assembly.json"]
+    )
+    assert payload["assembly_glb_path"].endswith("assembly.glb")
+    assert "assembly_step_path" not in payload
+    assert motion.read_text() == "{}"
+
+
+def test_a_one_part_build_asked_for_one_kind_clears_a_build_of_several_parts(tmp_path, capsys):
+    _written(tmp_path, capsys, _CAR, None)
+
+    payload, files = _written(tmp_path, capsys, _ONE_BOX, '["step"]')
+
+    assert payload["ok"] is True
+    assert files == ["model.step"]
+
+
+def test_the_child_walks_the_registry_as_it_stands_for_what_it_writes_and_clears(
+    tmp_path, capsys, monkeypatch
+):
+    from cadless import exporters
+
+    def writes(kind):
+        def export(shape, out_dir, name="model"):
+            path = Path(out_dir) / f"{name}.{kind}"
+            path.write_text(kind)
+            return str(path)
+
+        return export
+
+    monkeypatch.setattr(exporters, "EXPORTERS", {"mesh": writes("mesh"), "brep": writes("brep")})
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "model.brep").write_text("an earlier build's")
+
+    payload, files = _written(tmp_path, capsys, _ONE_BOX, '["mesh"]')
+
+    assert payload["ok"] is True
+    assert files == ["model.mesh"]
+    assert payload["mesh_path"].endswith("model.mesh")
+    assert "brep_path" not in payload
+
+
+@pytest.mark.parametrize(
+    ("argument", "fault"),
+    [
+        ("[]", "the list names no kind"),
+        ('["dxf"]', "dxf is not an export kind (step, glb, stl, obj)"),
+        ('"stl"', "the kinds are the text 'stl' rather than a list of names"),
+        ('["glb", ["stl"]]', "entry 1 is not text"),
+    ],
+    ids=["an empty list", "an unknown name", "a bare name", "an entry that is a list"],
+)
+def test_the_child_refuses_kinds_it_cannot_use_before_the_script_runs(
+    tmp_path, capsys, argument, fault
+):
+    # The script fails on its own first line, so an error that is the request's
+    # is one that came before it ran.
+    payload, _ = _written(tmp_path, capsys, "raise SystemExit('ran')\n", argument)
+
+    assert payload["ok"] is False
+    assert payload["error"] == _REFUSED_KINDS + fault
+
+
+@pytest.mark.parametrize(
+    "argument", ["{", "[" * 100_000], ids=["no JSON", "nesting past the parser"]
+)
+def test_the_child_refuses_kinds_it_cannot_read_before_the_script_runs(tmp_path, capsys, argument):
+    payload, _ = _written(tmp_path, capsys, "raise SystemExit('ran')\n", argument)
+
+    assert payload["ok"] is False
+    assert payload["error"].startswith(_REFUSED_KINDS)
+
+
+def test_kinds_reach_the_child_as_text_after_an_empty_place_for_the_request_file(monkeypatch):
+    runs = _spawning(monkeypatch)
+
+    run_code("result = 1\n", kinds=["glb", "step", "glb"])
+
+    (cmd, _) = runs[0]
+    assert cmd[8:] == ["", '["step", "glb"]']
+    assert cmd[6] == ""  # kinds ask for no measurement
+
+
+def test_kinds_follow_the_request_file_where_both_are_asked(monkeypatch):
+    from cadless.assembly_check import CheckRequest
+
+    runs = _spawning(monkeypatch)
+
+    run_code("result = 1\n", check=CheckRequest(order=[1, 0]), kinds=("obj",))
+
+    (cmd, asked) = runs[0]
+    assert len(cmd) == 10
+    assert asked["order"] == [1, 0]
+    assert cmd[9] == '["obj"]'
+
+
+@pytest.mark.parametrize(
+    ("kinds", "fault"),
+    [
+        ([], "the list names no kind"),
+        ("stl", "the kinds are the text 'stl' rather than a list of names"),
+        (["glb", "dxf"], "dxf is not an export kind (step, glb, stl, obj)"),
+        (["assembly_glb"], "assembly_glb is a whole-assembly file, written with its kind glb"),
+    ],
+    ids=["an empty list", "a bare name", "an unknown name", "a whole file"],
+)
+def test_kinds_that_cannot_be_used_fail_the_run_with_nothing_spawned(monkeypatch, kinds, fault):
+    runs = _spawning(monkeypatch)
+
+    res = run_code("result = 1\n", kinds=kinds)
+
+    assert (res.ok, res.error) == (False, _REFUSED_KINDS + fault)
+    assert runs == []
+
+
+_TWO_BLOCKS = (
+    "from build123d import *\n"
+    "result = Compound([Box(10, 10, 10), Pos(30, 0, 0) * Box(10, 10, 10)])\n"
+)
+
+
+def test_run_code_writes_the_kind_asked_for_a_build_whose_order_it_confirms(tmp_path):
+    from cadless.assembly_check import CheckRequest
+
+    res = run_code(
+        _TWO_BLOCKS,
+        export_dir=str(tmp_path),
+        check=CheckRequest(order=[1, 0], releases=[[], [-3, 0, 0]]),
+        kinds=["glb"],
+    )
+
+    assert res.ok, res.error
+    assert res.assembly.declared == {"binds": True, "outcome": "confirmed"}
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "assembly.glb",
+        "model_p0.glb",
+        "model_p1.glb",
+    ]
+    assert res.glb_path == str(tmp_path / "model_p0.glb")
+    assert res.assembly_glb_path == str(tmp_path / "assembly.glb")
+    assert (res.step_path, res.stl_path, res.obj_path, res.assembly_step_path) == (None,) * 4
+
+
+def _less_its_time(path: Path) -> bytes:
+    """A STEP file's bytes less the header line that carries when it was written."""
+    lines = path.read_bytes().split(b"\n")
+    return b"\n".join(line for line in lines if not line.startswith(b"FILE_NAME("))
+
+
+def test_a_kind_asked_for_is_written_as_a_run_asked_for_nothing_writes_it(tmp_path):
+    every, some = tmp_path / "every", tmp_path / "some"
+
+    assert run_code(_CAR, export_dir=str(every)).ok
+    assert run_code(_CAR, export_dir=str(some), kinds=["glb", "step"]).ok
+
+    for name in ("model_p0.glb", "model_p3.glb", "assembly.glb"):
+        assert (some / name).read_bytes() == (every / name).read_bytes(), name
+    for name in ("model_p0.step", "assembly.step"):
+        assert _less_its_time(some / name) == _less_its_time(every / name), name
+
+
+def test_a_kind_the_api_knows_and_its_child_does_not_fails_the_run_once(tmp_path, monkeypatch):
+    # The child is another process, with a registry of its own.
+    from cadless import exporters
+
+    monkeypatch.setattr(exporters, "EXPORTERS", {**exporters.EXPORTERS, "brep": None})
+    (tmp_path / "model.stl").write_text("an earlier build's")
+
+    res = run_code(_ONE_BOX, export_dir=str(tmp_path), kinds=["brep"])
+
+    assert res.ok is False
+    assert res.error == _REFUSED_KINDS + "brep is not an export kind (step, glb, stl, obj)"
+    assert (tmp_path / "model.stl").read_text() == "an earlier build's"

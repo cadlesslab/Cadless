@@ -709,3 +709,251 @@ def test_the_writers_leave_no_document_behind(tmp_path):
     export_assembly(build_tree(_car()), str(tmp_path))
 
     assert application.NbDocuments() == before
+
+
+# --- the kinds a caller asks a run for --------------------------------------
+
+
+def test_asking_for_nothing_is_read_as_no_request():
+    from cadless.exporters import read_kinds
+
+    assert read_kinds(None) is None
+
+
+@pytest.mark.parametrize(
+    ("asked", "read"),
+    [
+        (["glb", "step"], ("step", "glb")),
+        (("obj",), ("obj",)),
+        (["obj", "step", "obj", "step"], ("step", "obj")),
+    ],
+    ids=["out of order", "a tuple", "each twice"],
+)
+def test_a_request_is_read_as_the_registry_s_kinds_in_the_registry_s_order(asked, read):
+    from cadless.exporters import read_kinds
+
+    assert read_kinds(asked) == read
+
+
+@pytest.mark.parametrize(
+    ("asked", "fault"),
+    [
+        ([], "the list names no kind"),
+        ("stl", "the kinds are the text 'stl' rather than a list of names"),
+        ({"glb": True}, "the kinds are of type dict rather than a list of names"),
+        (["glb", ["stl"]], "entry 1 is not text"),
+        ([{}, "glb"], "entry 0 is not text"),
+        (["glb", None], "entry 1 is not text"),
+        (["glb", b"stl"], "entry 1 is not text"),
+        (["glb", "dxf"], "dxf is not an export kind (step, glb, stl, obj)"),
+        (["STL"], "STL is not an export kind (step, glb, stl, obj)"),
+        (["assembly_glb"], "assembly_glb is a whole-assembly file, written with its kind glb"),
+        (["assembly.step"], "assembly.step is a whole-assembly file, written with its kind step"),
+    ],
+    ids=[
+        "an empty list",
+        "a bare name",
+        "no list",
+        "an entry that is a list",
+        "a first entry that is no text",
+        "an entry that is nothing",
+        "an entry in bytes",
+        "an unknown name",
+        "a name in capitals",
+        "a whole file by its kind",
+        "a whole file by its name",
+    ],
+)
+def test_a_request_that_cannot_be_used_is_refused_with_its_fault_named(asked, fault):
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(asked)
+
+    assert str(refused.value) == fault
+
+
+def test_a_long_name_is_cut_short_where_a_refusal_repeats_it():
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(["x" * 5000])
+
+    assert str(refused.value) == "x" * 40 + "... is not an export kind (step, glb, stl, obj)"
+
+
+def test_a_long_text_given_for_the_list_is_cut_short_where_a_refusal_repeats_it():
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds("x" * 5000)
+
+    assert str(refused.value) == (
+        "the kinds are the text '" + "x" * 40 + "...' rather than a list of names"
+    )
+
+
+def test_a_name_that_breaks_the_line_is_repeated_on_one_line():
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(["st\nl\x1b[31m"])
+
+    assert str(refused.value) == "st\\nl\\x1b[31m is not an export kind (step, glb, stl, obj)"
+
+
+def test_what_a_refusal_repeats_of_a_long_name_does_not_turn_on_what_lies_past_the_start_it_reads():
+    from cadless.exporters import read_kinds
+
+    # Read to its end, the second kind of quote would have the first one escaped.
+    with pytest.raises(ValueError) as refused:
+        read_kinds(["it's" + "x" * 50 + '"'])
+
+    assert str(refused.value) == (
+        "it's" + "x" * 36 + "... is not an export kind (step, glb, stl, obj)"
+    )
+
+
+def test_the_registry_as_it_stands_is_the_one_a_request_is_read_against(monkeypatch):
+    from cadless import exporters
+
+    monkeypatch.setattr(exporters, "EXPORTERS", {"mesh": None, "brep": None})
+
+    assert exporters.read_kinds(["brep", "mesh"]) == ("mesh", "brep")
+    with pytest.raises(ValueError) as refused:
+        exporters.read_kinds(["step"])
+    assert str(refused.value) == "step is not an export kind (mesh, brep)"
+
+
+def _answered(self, *args, **kwargs):
+    raise AssertionError("the caller's own text answered for itself")
+
+
+#: What an object and its class are made with.
+_MADE_WITH = {"__new__", "__init__", "__class__", "__init_subclass__", "__subclasshook__"}
+
+#: A caller's own kind of text: every other method ``str`` has fails the test.
+_OwnText = type(
+    "_OwnText",
+    (str,),
+    {
+        name: _answered
+        for name in dir(str)
+        if callable(getattr(str, name)) and name not in _MADE_WITH
+    },
+)
+
+
+def test_a_name_handed_over_as_a_caller_s_own_kind_of_text_is_not_what_is_looked_up():
+    from cadless.exporters import read_kinds
+
+    assert read_kinds([_OwnText("glb")]) == ("glb",)
+
+
+def test_an_entry_that_only_says_it_is_text_is_not_taken_for_text():
+    from unittest.mock import Mock
+
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(["glb", Mock(spec=str)])
+
+    assert str(refused.value) == "entry 1 is not text"
+
+
+def test_what_only_says_it_is_text_is_named_by_the_type_it_has():
+    from unittest.mock import Mock
+
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(Mock(spec=str))
+
+    assert str(refused.value) == "the kinds are of type Mock rather than a list of names"
+
+
+def test_a_type_is_asked_nothing_its_own_class_could_answer_for_it():
+    from cadless.exporters import read_kinds
+
+    class Answering(type):
+        __hash__ = type.__hash__
+
+        def __eq__(cls, other):
+            raise AssertionError("compared")
+
+        @property
+        def __name__(cls):
+            raise AssertionError("asked its name")
+
+    class Handed(metaclass=Answering):
+        pass
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(Handed())
+
+    assert str(refused.value) == "the kinds are of type Handed rather than a list of names"
+
+
+def test_a_type_named_in_a_caller_s_own_kind_of_text_is_named_in_plain_text():
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(type(_OwnText("Handed"), (), {})())
+
+    assert str(refused.value) == "the kinds are of type Handed rather than a list of names"
+
+
+def test_a_caller_s_own_kind_of_text_given_for_the_list_is_repeated_in_plain_text():
+    from cadless.exporters import read_kinds
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(_OwnText("stl"))
+
+    assert str(refused.value) == "the kinds are the text 'stl' rather than a list of names"
+
+
+def test_a_caller_s_own_kind_of_list_is_refused_without_being_walked():
+    from cadless.exporters import read_kinds
+
+    class Walked(list):
+        def __iter__(self):
+            raise AssertionError("walked")
+
+    with pytest.raises(ValueError) as refused:
+        read_kinds(Walked(["glb"]))
+
+    assert str(refused.value) == "the kinds are of type Walked rather than a list of names"
+
+
+def test_the_whole_glb_alone_is_written_where_glb_alone_is_asked(tmp_path):
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+
+    paths = export_assembly(build_tree(_car()), str(tmp_path), kinds=("glb",))
+
+    assert paths == {"assembly_glb": str(tmp_path / "assembly.glb")}
+    assert [written.name for written in tmp_path.iterdir()] == ["assembly.glb"]
+
+
+def test_the_whole_step_alone_is_written_where_step_alone_is_asked(tmp_path):
+    from cadless.assembly_tree import build_tree
+    from cadless.exporters import export_assembly
+
+    paths = export_assembly(build_tree(_car()), str(tmp_path), kinds=("step",))
+
+    assert paths == {"assembly_step": str(tmp_path / "assembly.step")}
+    assert [written.name for written in tmp_path.iterdir()] == ["assembly.step"]
+
+
+def test_the_whole_is_not_put_together_where_neither_of_its_kinds_is_asked(tmp_path, monkeypatch):
+    from cadless import exporters
+    from cadless.assembly_tree import build_tree
+
+    def put_together(tree):
+        raise AssertionError("the whole was put together for no file")
+
+    tree = build_tree(_car())
+    monkeypatch.setattr(exporters, "_assembly_compound", put_together)
+
+    assert exporters.export_assembly(tree, str(tmp_path), kinds=("stl",)) == {}
+    assert list(tmp_path.iterdir()) == []

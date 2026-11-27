@@ -253,8 +253,11 @@ candidate judging, the identity seam and the image decisions are recorded under
    the assembly check (`CheckRequest` in `cadless/assembly_check.py`): an order
    to confirm in place of the search, a heading per part, and budgets of its
    own. It reaches the child on either path and is read before the script runs.
-5. The worker executes build123d and writes STEP, GLB, STL, and OBJ artifacts to
-   the shared data volume — one file per kind, or one per solid where the build
+   A caller may also name the export kinds the run writes, which travel and are
+   read the same way; a run that names none writes every kind.
+5. The worker executes build123d and writes the export kinds the run asked for
+   (STEP, GLB, STL, and OBJ, all four unless the caller named fewer) to the
+   shared data volume — one file per kind, or one per solid where the build
    produced several. It reads the result as the tree build123d makes
    (`cadless/assembly_tree.py`): the parts are the result's solids in the order
    `solids()` returns them, which is the order every part file is numbered by,
@@ -266,8 +269,8 @@ candidate judging, the identity seam and the image decisions are recorded under
    one-part build, exported as the shape the code made, keeps any placement of
    its own and is handed over inside a holder that has none, which takes the
    turn and leaves the placement beneath it. A build of several parts also gets
-   the whole of itself as one GLB and one STEP, written from the same parts and
-   naming each part and labelled group. The API persists metadata — the part
+   the whole of itself as one GLB and one STEP, each where its kind is written,
+   from the same parts and naming each part and labelled group. The API persists metadata — the part
    names with the version, checked and bounded where they are stored, and
    returned only where they number the files the version holds — and serves the
    artifacts, copying a build's files only from the route's own staging
@@ -409,6 +412,8 @@ catalog content read-only.
   request for the assembly check ignores one and searches. `run_code` reads a
   binding order whose result carries no record of it as not established, and
   does not hand on the order or the trapped parts that worker's search found.
+  A worker that takes no export kinds writes every kind; `run_code` removes
+  none of them, and the paths in the result say what was written.
 - SSE must remain unbuffered through the proxy or progress appears only after a
   generation has finished.
 - Catalog items contain executable source. Third-party catalog content crosses

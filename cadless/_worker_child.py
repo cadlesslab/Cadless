@@ -6,12 +6,15 @@ computes a geometry summary, optionally exports artifacts, and prints a single
 ``__VTRESULT__ {json}`` line to stdout -- the only thing it writes there: run as
 a program, it points everything else written to stdout at stderr. Kept
 dependency-light, and side-effect free apart from the optional export — which
-writes one file per solid and first removes what an earlier build left of that
-kind in the same directory, plus one GLB and one STEP of the whole for a build
-of several parts, clearing an earlier build's pair by exact name.
+writes one file per solid for each kind asked, every kind unless the caller
+names fewer, removing what an earlier build left of a kind in the same
+directory before it writes that kind, and what it left of every kind it does
+not write; plus, for a build of several parts, the whole as one GLB and one
+STEP where those kinds are written, clearing an earlier build's pair by exact
+name.
 
 Run: python -m cadless._worker_child <code_file> [<export_dir>] [<export_scale>]
-     [<check_assembly>] [<wall_secs>] [<check_file>]
+     [<check_assembly>] [<wall_secs>] [<check_file>] [<kinds>]
 """
 
 from __future__ import annotations
@@ -295,6 +298,18 @@ def main(argv: list[str]) -> int:
         except (OSError, ValueError, RecursionError) as refused:
             _emit({"ok": False, "error": f"the assembly check's request cannot be used: {refused}"})
             return 1
+    # The kinds the caller asks the export for, read before the script runs for
+    # the reason the request above is. Text in the argument rather than a file:
+    # it names a few of the registry's kinds however many parts a build has.
+    kinds = None
+    if len(argv) > 7 and argv[7]:
+        from cadless.exporters import read_kinds  # noqa: PLC0415 - lazy, as below
+
+        try:
+            kinds = read_kinds(json.loads(argv[7]))
+        except (ValueError, RecursionError) as refused:
+            _emit({"ok": False, "error": f"the run's export kinds cannot be used: {refused}"})
+            return 1
     code = open(code_file).read()  # noqa: S108,SIM115 - trusted path from parent
 
     # Lazy, as the exporters are: the parent imports this module for SENTINEL.
@@ -378,7 +393,16 @@ def main(argv: list[str]) -> int:
 
             from cadless import exporters  # lazy: only when export requested
 
-            for kind, export in exporters.EXPORTERS.items():
+            registry = exporters.EXPORTERS
+            writers = registry if kinds is None else {kind: registry[kind] for kind in kinds}
+            # A kind the caller did not ask for is cleared all the same: the
+            # directory is reused, and whoever reads it next files what it finds
+            # with this build. Nothing to do where every kind is written, each
+            # being cleared below as it always was.
+            for kind in registry:
+                if kind not in writers:
+                    _clear_previous(export_dir, kind)
+            for kind, export in writers.items():
                 _clear_previous(export_dir, kind)
                 paths = [
                     export(part, export_dir, exporters.part_name(i, len(parts)))
@@ -402,7 +426,8 @@ def main(argv: list[str]) -> int:
             # would, rather than reporting a build of several parts with its
             # whole files missing and nothing said.
             if tree is not None and len(tree.parts) > 1:
-                for kind, path in exporters.export_assembly(tree, export_dir).items():
+                whole = exporters.export_assembly(tree, export_dir, kinds)
+                for kind, path in whole.items():
                     summary[f"{kind}_path"] = path
     except BaseException as exc:  # noqa: BLE001
         _emit(_error_payload(exc, code, prefix="post-process: "))
