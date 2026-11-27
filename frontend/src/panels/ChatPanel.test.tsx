@@ -692,7 +692,7 @@ describe("ChatPanel", () => {
     return () => signal;
   }
 
-  it("says the turn will stop after the current build once Stop is pressed", () => {
+  it("says the turn will stop after the current step once Stop is pressed", () => {
     sendUnending();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(screen.getByText("Stopping after the current step…")).toBeInTheDocument();

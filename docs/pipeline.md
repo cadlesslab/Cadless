@@ -286,7 +286,9 @@ like a steer message, so it cannot carry over to the next turn.
 **Restarts.** On shutdown the app lets its running turns finish for up to
 `chat_shutdown_grace_secs`. It then cancels the rest, which settle `interrupted`
 through a shielded write, tells their threads to start nothing more, and waits
-up to the same grace again for those settles. On startup it settles as
+up to the same grace again for those settles. A reply settled this way links the
+last build its turn kept and leaves the project's current version where it is,
+since a turn only ever makes a successful build current. On startup it settles as
 `interrupted` any reply an earlier process left `pending`
 (`settle_interrupted_on_start`): what a crash leaves, and what the drain leaves
 when the process is killed before it finishes. Such a reply links no version and

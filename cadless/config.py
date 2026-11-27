@@ -308,11 +308,11 @@ class Settings(BaseSettings):
     # a refused build. Used in place of agent_time_budget_secs when the turn
     # carries an assembly spec, asked for or inherited.
     assembly_agent_time_budget_secs: float = 300.0
-    # How long a stopping server lets its running chat turns finish before it
-    # cancels them, and then how long it waits for the ones it cancelled to settle
-    # as interrupted: up to twice this in all. Short, because a container is
-    # commonly killed ten seconds after it is asked to stop (Docker's default), and
-    # a turn that kill cuts off is left for the next start to settle.
+    # How long a stopping server gives its running chat turns to finish, and then
+    # gives the ones it cuts short to record that they were interrupted. Short,
+    # because a container is commonly killed ten seconds after it is asked to stop
+    # (Docker's default) and both waits are meant to fit inside that; a turn the
+    # kill cuts off is left for the next start to settle.
     chat_shutdown_grace_secs: float = 4.0
     # Whether startup settles chat replies an earlier process left pending, as
     # interrupted. Turns live in the process that ran them, so a reply older than

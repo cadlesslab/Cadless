@@ -9,6 +9,7 @@ page would have ended the turn.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -255,6 +256,33 @@ def test_a_turn_that_cannot_start_leaves_nothing_behind(store, monkeypatch, site
     assert app.state.turns.for_session(user.session_id) == []
 
 
+async def _two_builds_and_the_older_chosen(store: Store, pid: int) -> int:
+    """Two builds of ``pid``, the older made current as a user restoring it would.
+
+    Returns the version chosen.
+    """
+    first = await store.add_version(pid, "make a cube", "result = None", True)
+    await store.add_version(pid, "make it taller", "result = None", True)
+    await store.set_current_version(pid, first.id)
+    return first.id
+
+
+def test_a_turn_that_kept_nothing_leaves_the_chosen_version_current(store, monkeypatch):
+    """A turn cut short before it kept a build has nothing to undo, so the project
+    stays on the version its user chose, though a newer one exists."""
+    _install(monkeypatch, ScriptedProvider([_text_turn("Done.")]))
+    monkeypatch.setattr(chat, "compact_history", _failing_compaction)
+
+    with TestClient(create_app(store=store), raise_server_exceptions=False) as client:
+        pid = client.post("/projects", json={"name": "P"}).json()["id"]
+        chosen = asyncio.run(_two_builds_and_the_older_chosen(store, pid))
+        client.post(f"/projects/{pid}/chat", json={"message": "x"})
+
+    _, assistant = _messages(store, pid)
+    assert _current_version_id(store, pid) == chosen
+    assert assistant.version_id is None
+
+
 def test_closing_the_page_during_the_build_lets_the_turn_finish(store, monkeypatch):
     reached, release = threading.Event(), threading.Event()
     provider = ScriptedProvider(
@@ -367,9 +395,9 @@ def test_stop_with_no_turn_left_to_stop_says_so(store, monkeypatch):
 
 
 def test_a_stop_must_be_sent_as_json(store, monkeypatch):
-    """A page on another site can send an empty or a plain-text POST without the
-    browser asking this server first, and a stop sent that way would end someone's
-    turn."""
+    """A page on another site can send an empty, a plain-text or an untyped POST
+    without the browser asking this server first, and a stop sent that way would end
+    someone's turn."""
     _install(monkeypatch, ScriptedProvider([_text_turn("Done.")]))
 
     with TestClient(create_app(store=store)) as client:
@@ -378,25 +406,34 @@ def test_a_stop_must_be_sent_as_json(store, monkeypatch):
         plain = client.post(
             f"/projects/{pid}/chat/stop", content="{}", headers={"content-type": "text/plain"}
         )
+        untyped = client.post(f"/projects/{pid}/chat/stop", content="{}")
         as_json = client.post(f"/projects/{pid}/chat/stop", json={})
 
-    assert (bare.status_code, plain.status_code, as_json.status_code) == (422, 422, 202)
+    assert "content-type" not in untyped.request.headers
+    assert [r.status_code for r in (bare, plain, untyped, as_json)] == [422, 422, 422, 202]
 
 
 def test_a_stop_during_the_turns_lead_up_reaches_it(store, monkeypatch):
     """The lead-up to a turn can take a model call of its own, folding a long
-    transcript, and a stop asked for meanwhile ends the turn before its first."""
+    transcript. A stop asked for meanwhile ends the turn before any further one:
+    no retrieval, which would embed the request, and no turn of the model."""
     compacting, release = threading.Event(), threading.Event()
+    retrieved = []
 
     async def held_compaction(history, provider):
         compacting.set()
         await _until(release)
         return history
 
+    async def recording_retrieval(*args, **kwargs):
+        retrieved.append(kwargs.get("intent"))
+        return ""
+
     tool = _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"})
     provider = ScriptedProvider([tool, _text_turn("never sent")])
     _install(monkeypatch, provider)
     monkeypatch.setattr(chat, "compact_history", held_compaction)
+    monkeypatch.setattr(chat, "retrieve_grounding", recording_retrieval)
 
     with TestClient(create_app(store=store)) as client:
         pid = client.post("/projects", json={"name": "P"}).json()["id"]
@@ -404,6 +441,7 @@ def test_a_stop_during_the_turns_lead_up_reaches_it(store, monkeypatch):
         _stream_chat(client, pid)
 
     assert answers["stop"].json() == {"stopping": True}
+    assert retrieved == []
     assert provider.calls == []
     _, assistant = _messages(store, pid)
     assert assistant.status == "stopped"
@@ -519,10 +557,7 @@ def _left_pending(store: Store, *, built: bool) -> tuple[int, int | None]:
         await store.add_message(session.id, "assistant", None, status="pending")
         if not built:
             return project.id, None
-        first = await store.add_version(project.id, "make a cube", "result = None", True)
-        await store.add_version(project.id, "make it taller", "result = None", True)
-        await store.set_current_version(project.id, first.id)
-        return project.id, first.id
+        return project.id, await _two_builds_and_the_older_chosen(store, project.id)
 
     return asyncio.run(seed())
 
@@ -554,7 +589,12 @@ def test_the_sweep_settles_only_replies_older_than_its_cutoff(store):
     assert asyncio.run(store.settle_interrupted_turns(before=just_after, note="x")) == [reply.id]
 
 
-def test_a_reply_the_sweep_cannot_read_does_not_hold_back_the_rest(store):
+@pytest.mark.parametrize(
+    "corrupt_blocks",
+    ["{not json", "[" * 200_000],
+    ids=["not JSON", "nested deeper than the decoder follows"],
+)
+def test_a_reply_the_sweep_cannot_read_does_not_hold_back_the_rest(store, corrupt_blocks):
     """A reply whose stored blocks are unreadable settles as it is, and the replies
     after it settle too. A sweep that stopped at it would stop there on every start."""
     first, _ = _left_pending(store, built=False)
@@ -564,7 +604,7 @@ def test_a_reply_the_sweep_cannot_read_does_not_hold_back_the_rest(store):
     async def corrupt():
         async with store._connect() as db:
             await db.execute(
-                "UPDATE chat_messages SET blocks_json='{not json' WHERE id=?", (unreadable,)
+                "UPDATE chat_messages SET blocks_json=? WHERE id=?", (corrupt_blocks, unreadable)
             )
             await db.commit()
 
@@ -582,7 +622,7 @@ def test_a_reply_the_sweep_cannot_read_does_not_hold_back_the_rest(store):
 
     assert sorted(settled) == sorted([unreadable, readable])
     # Kept as they were: reading the reply still reports the corrupt row.
-    assert asyncio.run(stored(unreadable)) == ("interrupted", "{not json")
+    assert asyncio.run(stored(unreadable)) == ("interrupted", corrupt_blocks)
 
 
 def test_the_sweep_can_be_switched_off_for_more_than_one_process(store, monkeypatch):
@@ -604,7 +644,9 @@ def test_a_turn_running_when_its_server_stops_is_settled_interrupted(store, monk
         ]
     )
     _install(monkeypatch, provider, HeldPipeline(reached=reached, release=release))
-    monkeypatch.setattr(app_module.settings, "chat_shutdown_grace_secs", 0.2)
+    # Short, as the build it holds never finishes within it, and long enough for the
+    # settle on a loaded machine: the drain waits this again for it.
+    monkeypatch.setattr(app_module.settings, "chat_shutdown_grace_secs", 1.0)
 
     live = LiveServer(create_app(store=store)).start()
     try:
@@ -753,3 +795,122 @@ def test_a_shutdown_while_a_failure_is_recorded_settles_the_turn_interrupted(sto
     _, reply = _messages(store, pid)
     assert reply.status == "interrupted"
     assert reply.error == INTERRUPTED_NOTE
+
+
+def test_a_build_that_returns_after_the_settle_is_not_kept(store, monkeypatch):
+    """A shutdown settles a turn while its thread is still in a build. The build then
+    returns into a settled turn and is dropped, so the project's current model stays
+    the one the reply was settled against."""
+    reached, release = threading.Event(), threading.Event()
+    settled, go_on = threading.Event(), threading.Event()
+    settle = chat._settle_unfinished
+
+    async def holding_after_the_settle(*args, **kwargs):
+        await settle(*args, **kwargs)
+        settled.set()
+        # The task holds here, its turn settled and not yet finished, while the
+        # thread's build comes back.
+        await _until(go_on)
+
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("never sent"),
+        ]
+    )
+    _install(monkeypatch, provider, HeldPipeline(reached=reached, release=release))
+    monkeypatch.setattr(chat, "_settle_unfinished", holding_after_the_settle)
+    monkeypatch.setattr(app_module.settings, "chat_shutdown_grace_secs", 3.0)
+    app = create_app(store=store)
+
+    live = LiveServer(app).start()
+    try:
+        pid = _new_project(live)
+        post_then_drop(
+            live.port, f"/projects/{pid}/chat", {"message": "make a cube"}, drop_when=reached
+        )
+        (turn,) = app.state.turns.for_session(_messages(store, pid)[0].session_id)
+        stopper = threading.Thread(target=live.stop, daemon=True)
+        stopper.start()
+        assert settled.wait(SETTLE_S), "the shutdown never settled the turn"
+        release.set()
+        assert turn.drive_done.wait(SETTLE_S), "the thread never came back from its build"
+        go_on.set()
+        stopper.join(SETTLE_S * 2)
+    finally:
+        release.set()
+        go_on.set()
+
+    _, reply = _messages(store, pid)
+    assert reply.status == "interrupted"
+    assert _current_version_id(store, pid) is None
+
+
+def test_a_failure_recorded_while_a_build_is_still_being_kept_waits_for_it(
+    store, monkeypatch, caplog
+):
+    """The thread gives up waiting on a slow write, which fails the turn while the
+    write still runs. The failure is recorded after the write, so the reply links the
+    version the project is left on."""
+    keeping, release = threading.Event(), threading.Event()
+    keep = chat._persist_tool_version
+
+    async def slow_keep(*args, **kwargs):
+        keeping.set()
+        await _until(release)
+        return await keep(*args, **kwargs)
+
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("never sent"),
+        ]
+    )
+    _install(monkeypatch, provider)
+    monkeypatch.setattr(chat, "_persist_tool_version", slow_keep)
+    monkeypatch.setattr(chat, "_BRIDGE_TIMEOUT_S", 0.2)
+
+    with caplog.at_level(logging.ERROR, logger=chat.logger.name):
+        with TestClient(create_app(store=store)) as client:
+            pid = client.post("/projects", json={"name": "P"}).json()["id"]
+            tab = threading.Thread(target=_stream_chat, args=(client, pid), daemon=True)
+            tab.start()
+            try:
+                assert keeping.wait(SETTLE_S)
+                # The turn has failed, its write still held, once it says so.
+                assert _wait_for(
+                    lambda: any("chat turn failed" in r.getMessage() for r in caplog.records)
+                )
+            finally:
+                release.set()
+            tab.join(SETTLE_S)
+
+    _, reply = _messages(store, pid)
+    assert reply.status == "error"
+    assert reply.version_id is not None
+    assert reply.version_id == _current_version_id(store, pid)
+
+
+def test_a_turn_whose_reply_cannot_be_settled_says_so_in_the_log(store, monkeypatch, caplog):
+    """A turn that cannot even record how it ended has nowhere else to say so."""
+
+    class FailingProvider(FakeChatProvider):
+        def stream_turn(self, **kwargs):
+            raise RuntimeError("the provider failed")
+            yield  # pragma: no cover
+
+    async def store_down(*args, **kwargs):
+        raise RuntimeError("the store is down")
+
+    _install(monkeypatch, FailingProvider())
+    monkeypatch.setattr(chat, "_revert_to_last_ok", store_down)
+    monkeypatch.setattr(chat, "_settle_unfinished", store_down)
+
+    with caplog.at_level(logging.ERROR, logger="backend.turns"):
+        with TestClient(create_app(store=store)) as client:
+            pid = client.post("/projects", json={"name": "P"}).json()["id"]
+            _stream_chat(client, pid)
+            assert _wait_for(lambda: any(r.name == "backend.turns" for r in caplog.records))
+
+    (record,) = [r for r in caplog.records if r.name == "backend.turns"]
+    assert record.exc_info is not None

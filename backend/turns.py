@@ -40,13 +40,14 @@ class RunningTurn:
     stop: threading.Event = field(default_factory=threading.Event)
     # Set once the turn's reply row holds the status it ended with.
     settled: bool = False
-    # Held by each write the turn's thread makes, and by a settle that may race
-    # one: a write already running when the turn is cut short finishes before the
-    # settle reads the project, and a write arriving after it is dropped.
+    # Serialises the turn's writes with the recording of how it ended, so that a
+    # version saved and the reply that links it cannot disagree.
     writes: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # One set when the turn's thread returns, the other when its task has done its
-    # own clean-up. Whichever comes second removes the staging directory, since a
-    # thread still running may yet copy files out of it.
+    # The last version the turn saved, or ``None`` while it has saved none.
+    kept_version_id: int | None = None
+    # Set when the turn's thread returns, and when its task has finished. Two,
+    # because the thread can outlive its task: what both use is cleaned up by
+    # whichever ends second.
     drive_done: threading.Event = field(default_factory=threading.Event)
     finished: threading.Event = field(default_factory=threading.Event)
     task: asyncio.Task | None = None
@@ -98,10 +99,11 @@ class TurnRegistry:
     async def drain(self, grace_s: float) -> None:
         """Let the running turns finish for up to ``grace_s``, then cancel the rest.
 
-        For a shutdown. A cancelled turn settles ``interrupted`` and its thread is
-        told to start nothing more, and the drain waits up to ``grace_s`` again for
-        those settles. The turns are not asked to stop up front: a stop settles a
-        turn as stopped by its user, which is not what happened.
+        For a shutdown. The turns still running then are asked to stop as well as
+        cancelled, so a thread that outlives its task starts nothing more, and the
+        drain waits up to ``grace_s`` again for them to end. They are not asked to
+        stop up front: a turn that ends on a stop reads as stopped by its user,
+        which is not what happened.
         """
         tasks = {turn.task for turn in self._turns if turn.task is not None}
         if not tasks:

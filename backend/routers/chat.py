@@ -594,7 +594,7 @@ async def chat(
             return
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
-    def bridge(work):
+    def bridge(work, *, keeps_version: bool = False):
         """Run ``work`` on the loop from the turn's thread and wait for what it returns.
 
         Dropped, returning ``None``, once the turn's reply has settled: a version
@@ -602,13 +602,18 @@ async def chat(
         the reply. Not even handed over once the turn's task has finished, since the
         loop may be closing. The wait is bounded, so a thread waiting on a loop that
         is shutting down cannot hold the process open.
+
+        With ``keeps_version``, ``work`` saves a version and returns its id, which is
+        recorded as the turn's latest in the same locked step: a settle that cuts the
+        turn short a moment later still finds it, though this thread has not yet
+        been told.
         """
         if turn.finished.is_set():
             work.close()
             return None
-        return asyncio.run_coroutine_threadsafe(_unless_settled(turn, work), loop).result(
-            timeout=_BRIDGE_TIMEOUT_S
-        )
+        return asyncio.run_coroutine_threadsafe(
+            _unless_settled(turn, work, keeps_version=keeps_version), loop
+        ).result(timeout=_BRIDGE_TIMEOUT_S)
 
     # The reviewer's rounds, going two ways at once. Every round streams to the
     # client verbatim — the payload is already the shape it reads, and
@@ -791,7 +796,8 @@ async def chat(
                                     (ev.data.get("tool") != GENERATE_MODEL or regenerates)
                                     and inherits_assembly
                                 ),
-                            )
+                            ),
+                            keeps_version=True,
                         )
                         if version_id is not None:
                             chain_parent = version_id  # next tool chains onto this one
@@ -884,9 +890,15 @@ async def chat(
             try:
                 # The pipeline's snapshot, not the live singleton: retrieval and
                 # generation belong to the same turn, so a save landing between
-                # them must not put them under different settings.
-                context.grounding = await retrieve_grounding(
-                    store, provider, intent=body.message, config=pipeline.config
+                # them must not put them under different settings. None at all
+                # once a stop has been asked for: the turn ends at its first
+                # boundary, and retrieval's embedding call would buy nothing.
+                context.grounding = (
+                    ""
+                    if turn.stop.is_set()
+                    else await retrieve_grounding(
+                        store, provider, intent=body.message, config=pipeline.config
+                    )
                 )
             except Exception:  # noqa: BLE001  (best-effort grounding — never fail the turn)
                 logger.warning(
@@ -1103,18 +1115,24 @@ async def _revert_to_last_ok(store: ScopedStore, project_id: int) -> int | None:
     return target
 
 
-async def _unless_settled[T](turn: RunningTurn, work: Coroutine[Any, Any, T]) -> T | None:
+async def _unless_settled[T](
+    turn: RunningTurn, work: Coroutine[Any, Any, T], *, keeps_version: bool = False
+) -> T | None:
     """Run a write the turn's thread handed over, unless the turn's reply has settled.
 
     Under the turn's write lock, which a settle holds as well: a write already
     running when a settle starts finishes first, and one arriving after it finds
-    the reply settled and is dropped.
+    the reply settled and is dropped. With ``keeps_version`` the write's result is
+    the id of a version it saved, recorded on the turn before the lock is let go.
     """
     async with turn.writes:
         if turn.settled:
             work.close()
             return None
-        return await work
+        result = await work
+        if keeps_version and result is not None:
+            turn.kept_version_id = result
+        return result
 
 
 async def _settle_unfinished(
@@ -1128,20 +1146,21 @@ async def _settle_unfinished(
     """Settle a reply its turn ended without settling, with a note saying why.
 
     A turn the server's going away interrupted is ``interrupted``; anything else that
-    ended one before it settled is an ``error``. Either way the project goes back to
-    its last good version, as after a failed turn, and the note is a text block,
-    because a reply with nothing in it shows as nothing at all. Under the turn's
-    write lock, so the version it falls back to counts a build the thread was still
-    persisting, and none is persisted after it.
+    ended one before it settled is an ``error``. The note is a text block, because a
+    reply with nothing in it shows as nothing at all. The reply links the last
+    version the turn kept, if it kept one, and the project's current version is
+    left where it is: a turn makes only a build that succeeded current, so there is
+    no failed one to undo, and moving it could only undo a version its user chose.
+    Under the turn's write lock, so a build the thread was still keeping is counted
+    and none is kept after it.
     """
     async with turn.writes:
-        fallback_id = await _revert_to_last_ok(store, turn.project_id)
         await store.update_message(
             turn.assistant_id,
             status="interrupted" if interrupted else "error",
             error=note,
             blocks=[*blocks, ContentBlock.of_text(note)],
-            version_id=fallback_id,
+            version_id=turn.kept_version_id,
         )
         turn.settled = True
 

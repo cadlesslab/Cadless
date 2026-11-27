@@ -1623,7 +1623,9 @@ class Store:
                 blocks_json = _blocks_to_json(
                     [*_blocks_from_json(row["blocks_json"]), ContentBlock.of_text(note)]
                 )
-            except (ValueError, TypeError):
+            # RecursionError as well: a corrupt column can nest deeper than the
+            # decoder will follow.
+            except (ValueError, TypeError, RecursionError):
                 logger.warning(
                     "chat reply %s has unreadable blocks; settling it without its note",
                     row["id"],
