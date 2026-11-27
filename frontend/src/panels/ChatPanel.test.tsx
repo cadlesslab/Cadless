@@ -22,6 +22,7 @@ function failChat(_pid: number, _msg: string, onEvent: (e: ChatEvent) => void) {
 vi.mock("../api", async (orig) => ({
   ...(await orig<typeof import("../api")>()),
   streamChat: vi.fn(failChat),
+  stopChat: vi.fn(async () => ({ stopping: true })),
   listProjects: vi.fn(async () => []),
   listVersions: vi.fn(async () => []),
   getMessages: vi.fn(async () => []),
@@ -679,18 +680,30 @@ describe("ChatPanel", () => {
     expect(grids[1].querySelectorAll("img")).toHaveLength(2);
   });
 
-  it("shows a Stop button that aborts the in-flight turn", () => {
+  // A turn whose stream does not end on its own, so only Stop can end the read.
+  function sendUnending(): () => AbortSignal | undefined {
     let signal: AbortSignal | undefined;
     vi.mocked(api.streamChat).mockImplementationOnce((_p, _m, _on, sig) => {
       signal = sig;
-      return new Promise(() => {}); // never settles until aborted
+      return new Promise(() => {});
     });
     renderWithProviders(<ChatPanel />, { activeProjectId: 1, projects: [project] });
-    fireEvent.change(screen.getByPlaceholderText(/Describe or refine your part/), { target: { value: "a cube" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    send("a cube");
+    return () => signal;
+  }
+
+  it("says the turn will stop after the current build once Stop is pressed", () => {
+    sendUnending();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(screen.getByText("Stopping after the current build…")).toBeInTheDocument();
+  });
+
+  it("stops reading the in-flight turn when Stop is pressed again", () => {
+    const signal = sendUnending();
     const stop = screen.getByRole("button", { name: "Stop" });
-    expect(signal?.aborted).toBe(false);
     fireEvent.click(stop);
-    expect(signal?.aborted).toBe(true);
+    expect(signal()?.aborted).toBe(false);
+    fireEvent.click(stop);
+    expect(signal()?.aborted).toBe(true);
   });
 });

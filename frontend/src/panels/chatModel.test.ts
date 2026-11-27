@@ -85,6 +85,8 @@ function msg(over: Partial<MessageOut> = {}): MessageOut {
 const FAILURE = "part 1 and part 2 share 40 mm^3 of interior volume; they must not overlap";
 const UNCHECKED =
   "assembly order: part 2 and part 3 touch where the check cannot follow their surfaces exactly";
+// The note an interrupted turn ends on.
+const INTERRUPTED = "This turn was interrupted before it finished, because the server stopped.";
 
 function toolCall(id: string, content: unknown): MessageOut["blocks"] {
   return [
@@ -141,6 +143,24 @@ describe("messagesFromBlocks", () => {
       msg({ id: 4, role: "assistant", status: "error", error: "boom", version_id: 5, blocks: [] }),
     ]);
     expect(msgs[0]).toMatchObject({ kind: "result", versionId: 5, ok: false, error: "boom" });
+  });
+
+  // Neither ending is the turn failing: one is its user's choice, the other the
+  // server's going away.
+  it.each([
+    ["stopped", null, "\n\nStopped. Kept the last build."],
+    ["interrupted", INTERRUPTED, INTERRUPTED],
+  ])("keeps the closing line of a turn settled as %s, and its model on an ok card", (status, error, closing) => {
+    const msgs = messagesFromBlocks([
+      msg({
+        id: 5, role: "assistant", status, error, version_id: 8,
+        blocks: [{ kind: "text", text: "Building the bracket." }, { kind: "text", text: closing }],
+      }),
+    ]);
+    expect(msgs).toEqual([
+      expect.objectContaining({ kind: "text", text: expect.stringContaining(closing.trim()) }),
+      expect.objectContaining({ kind: "result", versionId: 8, ok: true }),
+    ]);
   });
 
   it("maps a clarification block to a clarification message with questions + chips", () => {

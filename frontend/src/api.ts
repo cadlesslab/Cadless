@@ -1188,6 +1188,11 @@ export async function streamChat(
   }
 }
 
+/** Ask the server to end the project's in-flight `/chat` turn, rather than only
+ * stop reading it. */
+export const stopChat = (projectId: number) =>
+  req<{ stopping: boolean }>(`/projects/${projectId}/chat/stop`, { method: "POST" });
+
 /** Queue a steer message for the project's in-flight `/chat` turn. The
  * running agent loop drains it at its next iteration boundary, injecting it so the
  * next model call sees it. Returns 202 (accepted/queued). */

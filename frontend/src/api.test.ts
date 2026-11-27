@@ -148,6 +148,14 @@ describe("REST client", () => {
     expect(JSON.parse(init.body)).toEqual({ params: { hole_dia: 8 } });
   });
 
+  it("stopChat POSTs to /projects/{id}/chat/stop", async () => {
+    const fetchFn = mockFetch(202, { stopping: true });
+    await api.stopChat(4);
+    const [url, init] = fetchFn.mock.calls[0];
+    expect(url).toMatch(/\/projects\/4\/chat\/stop$/);
+    expect(init.method).toBe("POST");
+  });
+
   it("builds artifact URLs for every format", () => {
     expect(api.stepUrl(5)).toMatch(/\/versions\/5\/artifacts\/step$/);
     expect(api.glbUrl(5)).toMatch(/\/versions\/5\/artifacts\/glb$/);

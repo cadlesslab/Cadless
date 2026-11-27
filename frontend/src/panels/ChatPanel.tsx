@@ -105,6 +105,7 @@ export function ChatPanel({
   const chatEvents = useStoreSelector((s) => s.chatEvents);
   const chatPending = useStoreSelector((s) => s.chatPending);
   const generating = useStoreSelector((s) => s.generating);
+  const stopping = useStoreSelector((s) => s.stopping);
   const activeProjectId = useStoreSelector((s) => s.activeProjectId);
   const activeProject = useActiveProject();
   const recalled = useStoreSelector((s) => s.recalledPrompt);
@@ -220,12 +221,13 @@ export function ChatPanel({
   // Stick to the newest message as the thread grows / streams. `visible` is a
   // dependency because a hidden thread has no layout: messages that arrive
   // while the drawer is closed would otherwise leave it scrolled to the oldest
-  // one, which is where it opens.
+  // one, which is where it opens. `stopping` is one too: the turn saying it is
+  // stopping grows the thread without an event arriving to scroll it.
   useEffect(() => {
     if (!visible) return;
     const el = threadRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, chatEvents.length, generating, visible]);
+  }, [messages.length, chatEvents.length, generating, stopping, visible]);
 
   // Catalog items are read-only, and the backend refuses a chat turn on one with
   // a 403. Follow the convention the other panels use (VersionsPanel rerun,
