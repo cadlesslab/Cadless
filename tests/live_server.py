@@ -42,10 +42,14 @@ class LiveServer:
 
     def start(self) -> LiveServer:
         self._thread.start()
-        deadline = time.monotonic() + 10
+        # Generous: the app's own startup can take many times longer on a busy
+        # machine, and the bound is only there to catch a hang.
+        deadline = time.monotonic() + 60
         while not self.server.started:
-            if time.monotonic() > deadline or not self._thread.is_alive():
-                raise RuntimeError("the live server did not start")
+            if not self._thread.is_alive():
+                raise RuntimeError("the live server stopped before it started")
+            if time.monotonic() > deadline:
+                raise RuntimeError("the live server did not start within 60 s")
             time.sleep(0.01)
         return self
 
