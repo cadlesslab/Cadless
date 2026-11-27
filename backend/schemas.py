@@ -83,6 +83,9 @@ class MessageOut(BaseModel):
     seq: int
     role: str
     content: str | None
+    # ``pending`` while the turn runs, then ``ok`` or ``error`` as it ended,
+    # ``stopped`` when its user stopped it, or ``interrupted`` when the server
+    # stopped first.
     status: str
     error: str | None
     version_id: int | None

@@ -33,6 +33,7 @@ import json
 import logging
 import shutil
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -45,11 +46,12 @@ from backend.assembly import assembly_findings, assembly_spec_for
 from backend.catalog_state import authoring_units, reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
-from backend.turns import RunningTurn, TurnRegistry
+from backend.turns import INTERRUPTED_NOTE, RunningTurn, TurnRegistry
 from backend.unstoppable import to_completion
 from cadless import user_settings
 from cadless.agent import (
     GENERATE_MODEL,
+    STOPPED_STOP,
     Agent,
     SessionSteerRegistry,
     ToolContext,
@@ -77,9 +79,6 @@ router = APIRouter(tags=["chat"])
 # Process-wide steer registry: the in-flight `/chat` loop drains its
 # session's queue at each iteration boundary; `POST /chat/steer` enqueues into it.
 _steer_registry = SessionSteerRegistry()
-
-# What a reply says when the server stopped before its turn could finish.
-INTERRUPTED_NOTE = "This turn was interrupted before it finished, because the server stopped."
 
 # How long the turn's thread waits for a write it handed to the event loop. A write
 # takes far less; the bound only matters when the loop is shutting down and will
@@ -155,8 +154,11 @@ class SteerRequest(BaseModel):
     assembly: bool = False
 
 
-def build_pipeline() -> Pipeline:
+def build_pipeline(should_stop: Callable[[], bool] | None = None) -> Pipeline:
     """Build the CAD pipeline the agent's tools run against (monkeypatched in tests).
+
+    ``should_stop`` is the turn's stop flag, so a stopped turn's build makes no
+    further model call of its own: no repair, no review, no names for its parts.
 
     This is where a render critic is injected. A pipeline built with no critic
     never critiques whatever the setting says, so the setting is necessary and
@@ -172,7 +174,11 @@ def build_pipeline() -> Pipeline:
     joints the engine measured. What a writer adds is names for the parts, so a
     pipeline built without one loses vocabulary rather than the guide.
     """
-    return Pipeline(critic=VlmCritic(renderer=render_views), guide_writer=GuideWriter())
+    return Pipeline(
+        critic=VlmCritic(renderer=render_views),
+        guide_writer=GuideWriter(),
+        should_stop=should_stop,
+    )
 
 
 def _refusal(detail: str) -> EventSourceResponse:
@@ -565,7 +571,7 @@ async def chat(
         # rewrites the conversational history replayed to the model. Purely additive:
         # a short session (at/below threshold) yields today's full history unchanged.
         history = await compact_history(history, provider)
-        pipeline = build_pipeline()
+        pipeline = build_pipeline(should_stop=turn.stop.is_set)
         # Forge both-true gate (C4): race best-of-N only when the turn opted in
         # AND the global kill-switch is on. N is budget-scaled (config), not hard-coded.
         forge_active = bool(body.forge and settings.forge_enabled)
@@ -613,6 +619,10 @@ async def chat(
     loop = asyncio.get_running_loop()
 
     def emit(event: dict) -> None:
+        # Once the task has finished nobody reads the stream, and on a shutdown the
+        # loop may already be closed to the thread that outlived it.
+        if turn.finished.is_set():
+            return
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
     def bridge(work):
@@ -681,6 +691,8 @@ async def chat(
         # Set when a cancel reached the turn. A closed page no longer can, so it
         # means the server is going away mid-turn.
         interrupted = False
+        # Why the agent ended the turn, as its ``turn_end`` reports it.
+        stop_reason: str | None = None
         # The last successful tool result of the turn — its code + metrics seed the
         # auto-distill flywheel once the turn settles ok.
         last_good: dict | None = None
@@ -703,13 +715,14 @@ async def chat(
             inherits_assembly = current_is_assembly
 
             def drive() -> None:
-                nonlocal produced_blocks, last_failed, last_good
+                nonlocal produced_blocks, last_failed, last_good, stop_reason
                 nonlocal plan_total, plan_cursor, chain_parent, inherits_assembly
                 for ev in agent.stream_turn(
                     user_text=body.message,
                     context=context,
                     history=history,
                     steer=_steer_registry.source_for(session.id),
+                    stop=turn.stop.is_set,
                 ):
                     if ev.kind == "plan":
                         plan_total = len(ev.data.get("steps") or [])
@@ -831,7 +844,8 @@ async def chat(
                         result = ev.data.get("result")
                         if result is not None:
                             produced_blocks = result.blocks
-                        emit({"event": "turn_end", "stop_reason": ev.data.get("stop_reason")})
+                        stop_reason = ev.data.get("stop_reason")
+                        emit({"event": "turn_end", "stop_reason": stop_reason})
                     else:
                         emit({"event": ev.kind, **ev.data})
 
@@ -867,20 +881,31 @@ async def chat(
                         shutil.rmtree(staging, ignore_errors=True)
 
             await run_in_threadpool(drive_to_its_end)
-            status = "error" if last_failed else "ok"
+            # A stopped turn says so whatever its last build did: the user ended it,
+            # and the agent's closing line already says what it leaves behind. The
+            # version follows the usual rule, so a stop after a failed build still
+            # falls back to the last good one.
+            if stop_reason == STOPPED_STOP:
+                status, error = "stopped", None
+            elif last_failed:
+                status, error = "error", "a tool call failed"
+            else:
+                status, error = "ok", None
             version_id = await _latest_version_id(last_failed, store, project_id)
             await store.update_message(
                 assistant.id,
                 status=status,
                 blocks=[*produced_blocks, *critique_blocks],
                 version_id=version_id,
-                error="a tool call failed" if last_failed else None,
+                error=error,
             )
             settled = turn.settled = True
             # Flywheel: a turn that settled ok+asserted auto-distills its
             # known-good result into a KB entry. Best-effort and AFTER the turn has
-            # settled, so a distill failure can never affect the user's turn.
-            if not last_failed and last_good is not None:
+            # settled, so a distill failure can never affect the user's turn. Only a
+            # turn that ran to its end: a stopped one was cut short of the repairs
+            # or the review that might have changed its answer.
+            if status == "ok" and last_good is not None:
                 await auto_distill(
                     store,
                     provider,
@@ -960,6 +985,10 @@ async def chat(
                 turn.finished.set()
                 if turn.drive_done.is_set():
                     shutil.rmtree(staging, ignore_errors=True)
+                else:
+                    # The thread outlives the task. Its reply is settled, so it
+                    # should start nothing more: no model call, no build.
+                    turn.stop.set()
                 loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
 
     turns.launch(turn, run())
@@ -993,6 +1022,23 @@ async def steer(project_id: int, body: SteerRequest, store: ScopedStore = Depend
     session = await store.get_or_create_session(project_id)
     _steer_registry.enqueue(session.id, body.message)
     return {"queued": True}
+
+
+@router.post("/projects/{project_id}/chat/stop", status_code=202)
+async def stop(project_id: int, request: Request, store: ScopedStore = Depends(get_store)):
+    """Ask the project's running chat turn to stop at its next boundary.
+
+    Answers at once; the turn ends on its own, before its next model call or tool,
+    and settles ``stopped`` keeping what it built. A model call or a build already
+    running finishes first. ``stopping`` is false when no turn was left to stop —
+    none running, or the one running has already settled — so asking twice is
+    harmless, and a stop never carries over to the next turn.
+    """
+    if not await store.get_project(project_id):
+        raise HTTPException(status_code=404, detail="project not found")
+    session = await store.get_or_create_session(project_id)
+    turns: TurnRegistry = request.app.state.turns
+    return {"stopping": turns.request_stop(session.id)}
 
 
 async def _last_ok_version_id(store: ScopedStore, project_id: int) -> int | None:

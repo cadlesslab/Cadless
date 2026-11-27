@@ -1596,6 +1596,47 @@ class Store:
             ).fetchone()
         return _message(row) if row else None
 
+    async def settle_interrupted_turns(self, *, before: str, note: str) -> list[int]:
+        """Settle every assistant reply left ``pending`` from before ``before``.
+
+        Each is settled ``interrupted``, with ``note`` as its error and its closing
+        text, and its project falls back to its last good version, as after a
+        failed turn. Unscoped, for startup, where nobody is signed in. Returns the
+        ids of the replies it settled.
+        """
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT chat_messages.id, chat_messages.blocks_json,"
+                    " chat_sessions.project_id FROM chat_messages"
+                    " JOIN chat_sessions ON chat_sessions.id = chat_messages.session_id"
+                    " WHERE chat_messages.role='assistant' AND chat_messages.status='pending'"
+                    " AND chat_messages.created_at < ?",
+                    (before,),
+                )
+            ).fetchall()
+        settled: list[int] = []
+        for row in rows:
+            fallback = await self.last_ok_version(row["project_id"])
+            if fallback is not None:
+                await self.set_current_version(row["project_id"], fallback.id)
+            blocks = [*_blocks_from_json(row["blocks_json"]), ContentBlock.of_text(note)]
+            async with self._connect() as db:
+                cur = await db.execute(
+                    "UPDATE chat_messages SET status='interrupted', error=?, version_id=?,"
+                    " blocks_json=? WHERE id=? AND status='pending'",
+                    (
+                        note,
+                        fallback.id if fallback else None,
+                        _blocks_to_json(blocks),
+                        row["id"],
+                    ),
+                )
+                await db.commit()
+            if cur.rowcount:
+                settled.append(row["id"])
+        return settled
+
     async def list_messages(self, session_id: int, *, owner: Owner = UNSCOPED) -> list[ChatMessage]:
         pred, params = _owner_sql(owner)
         async with self._connect() as db:

@@ -19,6 +19,10 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+# What a reply says when the server stopped before its turn could finish: whether a
+# drain cancelled the turn on the way out, or a start found it left pending.
+INTERRUPTED_NOTE = "This turn was interrupted before it finished, because the server stopped."
+
 
 @dataclass(eq=False)
 class RunningTurn:
@@ -27,6 +31,10 @@ class RunningTurn:
     project_id: int
     session_id: int
     assistant_id: int
+    # Asked at each of the turn's boundaries, from its thread. Per turn rather than
+    # queued per session like a steer message, so a stop that arrives as a turn
+    # ends cannot carry over and stop the next one.
+    stop: threading.Event = field(default_factory=threading.Event)
     # Set once the turn's reply row holds the status it ended with.
     settled: bool = False
     # Set by the turn's thread when it returns, and by the turn's task when its own
@@ -52,6 +60,39 @@ class TurnRegistry:
 
     def for_session(self, session_id: int) -> list[RunningTurn]:
         return [turn for turn in self._turns if turn.session_id == session_id]
+
+    def request_stop(self, session_id: int) -> bool:
+        """Ask every unsettled turn in the session to stop; whether any was asked.
+
+        A turn whose reply has settled answers no, though its task may still be
+        running the work that follows a settle: it has already ended as whatever
+        it ended as, and a stop cannot change that.
+        """
+        asked = False
+        for turn in self.for_session(session_id):
+            if not turn.settled:
+                turn.stop.set()
+                asked = True
+        return asked
+
+    async def drain(self, grace_s: float) -> None:
+        """Let the running turns finish for up to ``grace_s``, then cancel the rest.
+
+        For a shutdown. A cancelled turn settles ``interrupted``, and its thread is
+        asked to stop as well, so it makes no further model call while the process
+        winds down. The turns are not asked to stop up front: a stop settles a turn
+        as stopped by its user, which is not what happened.
+        """
+        tasks = {turn.task for turn in self._turns if turn.task is not None}
+        if not tasks:
+            return
+        _, late = await asyncio.wait(tasks, timeout=grace_s)
+        for turn in [turn for turn in self._turns if turn.task in late]:
+            turn.stop.set()
+        for task in late:
+            task.cancel()
+        if late:
+            await asyncio.wait(late, timeout=grace_s)
 
     def _forget(self, turn: RunningTurn, task: asyncio.Task) -> None:
         self._turns.discard(turn)

@@ -14,6 +14,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from importlib.metadata import entry_points
 
 from fastapi import APIRouter, FastAPI, Request
@@ -21,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import cadless
-from backend.turns import TurnRegistry
+from backend.turns import INTERRUPTED_NOTE, TurnRegistry
 from cadless.config import settings
 from cadless.identity import has_principal_resolver
 from cadless.store import Store, get_store
@@ -46,6 +47,22 @@ def _files_a_version_keeps_without_a_row() -> tuple[str, ...]:
     except ImportError:
         return ()
     return (GCODE_NAME, GCODE_NAME + PART_SUFFIX)
+
+
+async def _settle_interrupted(store: Store, *, before: str) -> None:
+    """Settle the chat replies a stopped or crashed process left ``pending``.
+
+    Without this a reply whose turn died with its process says nothing, forever:
+    the page shows the user's message with nothing under it. Never raises, so a
+    store it cannot read does not keep the server from starting.
+    """
+    try:
+        settled = await store.settle_interrupted_turns(before=before, note=INTERRUPTED_NOTE)
+    except Exception:  # a sweep that fails must never block startup
+        logger.exception("could not settle the chat turns an earlier process left pending")
+        return
+    if settled:
+        logger.info("settled %d chat turn(s) an earlier process left pending", len(settled))
 
 
 async def _report_orphans(store: Store) -> None:
@@ -173,10 +190,16 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Taken before anything can start a turn, so every reply older than this
+        # belongs to a process that has gone.
+        started = datetime.now(UTC).isoformat()
         await store.init()
+        if settings.settle_interrupted_on_start:
+            await _settle_interrupted(store, before=started)
         await _report_orphans(store)
         await _autoload_catalog(store)
         yield
+        await app.state.turns.drain(settings.chat_shutdown_grace_secs)
 
     app = FastAPI(
         title="Cadless",
