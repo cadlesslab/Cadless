@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import cadless
+from backend.turns import TurnRegistry
 from cadless.config import settings
 from cadless.identity import has_principal_resolver
 from cadless.store import Store, get_store
@@ -194,6 +195,10 @@ def create_app(store: Store | None = None) -> FastAPI:
     # it runs in this container rather than behind the execution sandbox. A
     # per-process CPU rlimit does not stop N of them arriving at once.
     app.state.slice_gate = asyncio.Lock()
+    # The chat turns running in this process. Held by the app rather than by the
+    # response that started each one, so a client that goes away cannot end a turn;
+    # per app for the same reason as the gates above, since a task belongs to a loop.
+    app.state.turns = TurnRegistry()
 
     app.add_middleware(
         CORSMiddleware,
