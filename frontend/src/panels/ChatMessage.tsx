@@ -470,7 +470,7 @@ function LiveChat({
           same wait, and differently. */}
       {stopping && (
         <p className="chat-thinking" role="status">
-          Stopping after the current build…
+          Stopping after the current step…
         </p>
       )}
     </>

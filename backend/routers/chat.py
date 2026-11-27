@@ -12,13 +12,14 @@ The existing pipeline ``stage`` events NEST inside ``tool_progress`` so the
 frontend ``StagedProgress`` is reused verbatim.
 
 The turn is persisted like ``persist_generation``: a user message plus
-a ``pending`` assistant message written up-front, settled to ``ok``/``error`` with
-``blocks_json`` at the end. Each successful tool call persists a real
-``ScriptVersion`` (+ artifacts) so ``tool_result`` can link ``version_id`` and a
-served thumbnail URL. A provider failure settles the turn to ``error``, and one the
-server's going away interrupts to ``interrupted``; none is left ``pending``. The turn
-belongs to the app (:mod:`backend.turns`), not to its response, so a client that goes
-away does not end it.
+a ``pending`` assistant message written up-front, settled with ``blocks_json`` at
+the end. Each successful tool call persists a real ``ScriptVersion`` (+ artifacts)
+so ``tool_result`` can link ``version_id`` and a served thumbnail URL. The reply
+settles ``ok``; ``error`` when its last build or its provider failed; ``stopped``
+when a stop reached the turn at a boundary before it ended; or ``interrupted`` when
+the server's going away cut it short. None is left ``pending``. The turn belongs to
+the app (:mod:`backend.turns`), not to its response, so a client that goes away does
+not end it.
 
 This reuses the SSE plumbing pattern from ``backend/routers/generation.py``; it
 does not reinvent it.
@@ -33,8 +34,9 @@ import json
 import logging
 import shutil
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -85,6 +87,11 @@ _steer_registry = SessionSteerRegistry()
 # never run it, where an unbounded wait would hold the process open.
 _BRIDGE_TIMEOUT_S = 120.0
 
+# What a reply says when its turn failed before it began. Fixed rather than the
+# failure's own text, which can carry a path or a provider's detail and would be
+# served to whoever reads the transcript.
+CANNOT_START_NOTE = "This turn could not start."
+
 
 class ImageAttachment(BaseModel):
     """One reference image the user attached to a turn."""
@@ -128,6 +135,18 @@ class ChatRequest(BaseModel):
         if not self.message.strip() and not self.images:
             raise ValueError("a turn needs a message or at least one image")
         return self
+
+
+class StopRequest(BaseModel):
+    """The stop body: an empty JSON object.
+
+    Asked for although it carries nothing, so that a page on another site cannot
+    send a stop without the browser first asking this server whether it may: a
+    browser sends a JSON body across sites only after asking, and an empty POST
+    without.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class SteerRequest(BaseModel):
@@ -557,14 +576,68 @@ async def chat(
         if not readings:
             readings.append(reading)
 
-    assistant = await store.add_message(session.id, "assistant", None, status="pending")
     turns: TurnRegistry = request.app.state.turns
+    assistant = await store.add_message(session.id, "assistant", None, status="pending")
     turn = RunningTurn(project_id=project_id, session_id=session.id, assistant_id=assistant.id)
-
+    # Counted as running from here, ahead of a lead-up that can take a model call,
+    # so a stop asked for meanwhile reaches it.
+    turns.register(turn)
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
-    staging.mkdir(parents=True, exist_ok=True)
 
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def emit(event: dict) -> None:
+        # Once the task has finished nobody reads the stream, and on a shutdown the
+        # loop may already be closed to the thread that outlived it.
+        if turn.finished.is_set():
+            return
+        loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    def bridge(work):
+        """Run ``work`` on the loop from the turn's thread and wait for what it returns.
+
+        Dropped, returning ``None``, once the turn's reply has settled: a version
+        persisted after that would move the project's current model out from under
+        the reply. Not even handed over once the turn's task has finished, since the
+        loop may be closing. The wait is bounded, so a thread waiting on a loop that
+        is shutting down cannot hold the process open.
+        """
+        if turn.finished.is_set():
+            work.close()
+            return None
+        return asyncio.run_coroutine_threadsafe(_unless_settled(turn, work), loop).result(
+            timeout=_BRIDGE_TIMEOUT_S
+        )
+
+    # The reviewer's rounds, going two ways at once. Every round streams to the
+    # client verbatim — the payload is already the shape it reads, and
+    # re-wrapping it here would put the field names in two places. Only the
+    # newest round is kept for the transcript: the stream is what shows the work
+    # as it happens, while a reload wants the state the turn ended in, and
+    # keeping every round would multiply a turn's stored bytes by however many
+    # it took to settle.
+    critique_blocks: list[ContentBlock] = []
+
+    def _relay_critique(event: dict) -> None:
+        nonlocal critique_blocks
+        critique_blocks = [
+            ContentBlock.of_text(_critique_line(event)),
+            *(
+                ContentBlock.of_image(
+                    data=view["png_b64"],
+                    media_type="image/png",
+                    reading=f"a render of the part this turn built, seen from the {view['name']}",
+                )
+                for view in event.get("views", ())
+            ),
+        ]
+        emit(event)
+
+    # Everything from here to the launch can fail while the reply row exists and
+    # the turn's own clean-up has not started, so a failure is settled here.
     try:
+        staging.mkdir(parents=True, exist_ok=True)
         # Session hygiene: fold older turns of a long transcript into a
         # rolling synopsis so the agent's context stays bounded. The durable code
         # source of truth stays the persisted script_versions chain — this only
@@ -598,90 +671,43 @@ async def chat(
         # loser candidate rows hang off the model the turn started from.
         project = await store.get_project(project_id)
         parent_version_id = project.current_version_id if project else None
+        # Stream fresh-generation codegen tokens to the client live as the model
+        # writes the build123d code: the agent pushes each delta here, and we map it
+        # to a ``codegen_delta`` SSE event onto the same queue the UI events use.
+        context = ToolContext(
+            pipeline=pipeline,
+            current_code=code,
+            current_params=params,
+            start_size_mm=current_size,
+            stated_mm=said_before,
+            export_dir=str(staging),
+            images=image_blocks,
+            on_reading=_keep_first_reading if image_blocks else None,
+            forge=forge_active,
+            forge_n=forge_n,
+            assembly=asked_spec,
+            inherited_assembly=inherited_spec,
+            on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
+            on_critique=_relay_critique,
+        )
+        agent = Agent(provider=provider)
     except BaseException as exc:
-        # The reply row and the staging directory already exist, and the turn's own
-        # clean-up has not started, so nothing else would ever settle or remove them.
         shutil.rmtree(staging, ignore_errors=True)
+        turns.discard(turn)
         interrupted = isinstance(exc, asyncio.CancelledError)
+        # A fixed line rather than the exception's text: the reply is served to
+        # whoever reads the transcript, and the text can carry a path or a
+        # provider's detail. The exception itself goes on up, raised again below.
         await to_completion(
             _settle_unfinished(
                 store,
-                project_id,
-                assistant.id,
+                turn,
                 [],
                 interrupted=interrupted,
-                note=INTERRUPTED_NOTE if interrupted else f"This turn could not start: {exc}",
+                note=INTERRUPTED_NOTE if interrupted else CANNOT_START_NOTE,
             )
         )
         raise
-
-    queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-
-    def emit(event: dict) -> None:
-        # Once the task has finished nobody reads the stream, and on a shutdown the
-        # loop may already be closed to the thread that outlived it.
-        if turn.finished.is_set():
-            return
-        loop.call_soon_threadsafe(queue.put_nowait, event)
-
-    def bridge(work):
-        """Run ``work`` on the loop from the turn's thread and wait for what it returns.
-
-        Skipped once the turn's task has finished: the reply row is settled by then,
-        and a version persisted now would move the project's current model under it.
-        The wait is bounded, so a thread waiting on a loop that is shutting down
-        cannot hold the process open.
-        """
-        if turn.finished.is_set():
-            work.close()
-            return None
-        return asyncio.run_coroutine_threadsafe(work, loop).result(timeout=_BRIDGE_TIMEOUT_S)
-
-    # The reviewer's rounds, going two ways at once. Every round streams to the
-    # client verbatim — the payload is already the shape it reads, and
-    # re-wrapping it here would put the field names in two places. Only the
-    # newest round is kept for the transcript: the stream is what shows the work
-    # as it happens, while a reload wants the state the turn ended in, and
-    # keeping every round would multiply a turn's stored bytes by however many
-    # it took to settle.
-    critique_blocks: list[ContentBlock] = []
-
-    def _relay_critique(event: dict) -> None:
-        nonlocal critique_blocks
-        critique_blocks = [
-            ContentBlock.of_text(_critique_line(event)),
-            *(
-                ContentBlock.of_image(
-                    data=view["png_b64"],
-                    media_type="image/png",
-                    reading=f"a render of the part this turn built, seen from the {view['name']}",
-                )
-                for view in event.get("views", ())
-            ),
-        ]
-        emit(event)
-
-    # Stream fresh-generation codegen tokens to the client live as the model writes
-    # the build123d code: the agent pushes each delta here, and we map it
-    # to a ``codegen_delta`` SSE event onto the same queue the UI events use.
-    context = ToolContext(
-        pipeline=pipeline,
-        current_code=code,
-        current_params=params,
-        start_size_mm=current_size,
-        stated_mm=said_before,
-        export_dir=str(staging),
-        images=image_blocks,
-        on_reading=_keep_first_reading if image_blocks else None,
-        forge=forge_active,
-        forge_n=forge_n,
-        assembly=asked_spec,
-        inherited_assembly=inherited_spec,
-        on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
-        on_critique=_relay_critique,
-    )
-    agent = Agent(provider=provider)
 
     async def run() -> None:
         produced_blocks: list = []
@@ -891,15 +917,16 @@ async def chat(
                 status, error = "error", "a tool call failed"
             else:
                 status, error = "ok", None
-            version_id = await _latest_version_id(last_failed, store, project_id)
-            await store.update_message(
-                assistant.id,
-                status=status,
-                blocks=[*produced_blocks, *critique_blocks],
-                version_id=version_id,
-                error=error,
-            )
-            settled = turn.settled = True
+            async with turn.writes:
+                version_id = await _latest_version_id(last_failed, store, project_id)
+                await store.update_message(
+                    assistant.id,
+                    status=status,
+                    blocks=[*produced_blocks, *critique_blocks],
+                    version_id=version_id,
+                    error=error,
+                )
+                settled = turn.settled = True
             # Flywheel: a turn that settled ok+asserted auto-distills its
             # known-good result into a KB entry. Best-effort and AFTER the turn has
             # settled, so a distill failure can never affect the user's turn. Only a
@@ -930,35 +957,40 @@ async def chat(
             logger.exception("chat turn failed for project %s", project_id)
             # Auto-revert policy: an aborted/failed turn must never leave
             # current pointing at a failed/partial version — guarantee last OK.
-            fallback_id = await _revert_to_last_ok(store, project_id)
-            await store.update_message(
-                assistant.id,
-                status="error",
-                error=str(exc),
-                blocks=[*produced_blocks, *critique_blocks],
-                version_id=fallback_id,
-            )
-            settled = turn.settled = True
+            # Under the write lock, since a write whose wait timed out in the
+            # thread may still be running.
+            async with turn.writes:
+                fallback_id = await _revert_to_last_ok(store, project_id)
+                await store.update_message(
+                    assistant.id,
+                    status="error",
+                    error=str(exc),
+                    blocks=[*produced_blocks, *critique_blocks],
+                    version_id=fallback_id,
+                )
+                settled = turn.settled = True
             emit({"event": "error", "detail": str(exc)})
         except BaseException:
             interrupted = True
             raise
         finally:
             try:
+                # A cancel landing while a failure is being recorded above is raised
+                # from inside that handler, where the clause for it never sees it.
+                current = asyncio.current_task()
+                interrupted = interrupted or (current is not None and current.cancelling() > 0)
                 if not settled:
                     # Shielded, so the cancel that brought the turn here cannot
                     # also stop the write that records how it ended.
                     await to_completion(
                         _settle_unfinished(
                             store,
-                            project_id,
-                            assistant.id,
+                            turn,
                             [*produced_blocks, *critique_blocks],
                             interrupted=interrupted,
                             note=INTERRUPTED_NOTE if interrupted else "This turn was aborted.",
                         )
                     )
-                    turn.settled = True
                 # Keep the reading beside the picture it describes. In ``finally``
                 # because a turn that aborted after codegen still read the reference,
                 # and best-effort because a cache that could fail a turn would be a
@@ -1025,14 +1057,20 @@ async def steer(project_id: int, body: SteerRequest, store: ScopedStore = Depend
 
 
 @router.post("/projects/{project_id}/chat/stop", status_code=202)
-async def stop(project_id: int, request: Request, store: ScopedStore = Depends(get_store)):
+async def stop(
+    project_id: int,
+    body: StopRequest,
+    request: Request,
+    store: ScopedStore = Depends(get_store),
+):
     """Ask the project's running chat turn to stop at its next boundary.
 
-    Answers at once; the turn ends on its own, before its next model call or tool,
-    and settles ``stopped`` keeping what it built. A model call or a build already
-    running finishes first. ``stopping`` is false when no turn was left to stop —
-    none running, or the one running has already settled — so asking twice is
-    harmless, and a stop never carries over to the next turn.
+    Answers at once. The turn ends on its own at its next boundary, keeping what it
+    built, and settles ``stopped``; what is already running — a model call, a build
+    — finishes first, and a turn that ends without reaching another boundary settles
+    as it would have. ``stopping`` is false when no turn was left to stop — none
+    running, or the one running has already settled — so asking twice is harmless,
+    and a stop never carries over to the next turn.
     """
     if not await store.get_project(project_id):
         raise HTTPException(status_code=404, detail="project not found")
@@ -1065,10 +1103,23 @@ async def _revert_to_last_ok(store: ScopedStore, project_id: int) -> int | None:
     return target
 
 
+async def _unless_settled[T](turn: RunningTurn, work: Coroutine[Any, Any, T]) -> T | None:
+    """Run a write the turn's thread handed over, unless the turn's reply has settled.
+
+    Under the turn's write lock, which a settle holds as well: a write already
+    running when a settle starts finishes first, and one arriving after it finds
+    the reply settled and is dropped.
+    """
+    async with turn.writes:
+        if turn.settled:
+            work.close()
+            return None
+        return await work
+
+
 async def _settle_unfinished(
     store: ScopedStore,
-    project_id: int,
-    message_id: int,
+    turn: RunningTurn,
     blocks: list[ContentBlock],
     *,
     interrupted: bool,
@@ -1079,16 +1130,20 @@ async def _settle_unfinished(
     A turn the server's going away interrupted is ``interrupted``; anything else that
     ended one before it settled is an ``error``. Either way the project goes back to
     its last good version, as after a failed turn, and the note is a text block,
-    because a reply with nothing in it shows as nothing at all.
+    because a reply with nothing in it shows as nothing at all. Under the turn's
+    write lock, so the version it falls back to counts a build the thread was still
+    persisting, and none is persisted after it.
     """
-    fallback_id = await _revert_to_last_ok(store, project_id)
-    await store.update_message(
-        message_id,
-        status="interrupted" if interrupted else "error",
-        error=note,
-        blocks=[*blocks, ContentBlock.of_text(note)],
-        version_id=fallback_id,
-    )
+    async with turn.writes:
+        fallback_id = await _revert_to_last_ok(store, turn.project_id)
+        await store.update_message(
+            turn.assistant_id,
+            status="interrupted" if interrupted else "error",
+            error=note,
+            blocks=[*blocks, ContentBlock.of_text(note)],
+            version_id=fallback_id,
+        )
+        turn.settled = True
 
 
 async def _latest_version_id(last_failed: bool, store: ScopedStore, project_id: int) -> int | None:

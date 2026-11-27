@@ -1189,9 +1189,13 @@ export async function streamChat(
 }
 
 /** Ask the server to end the project's in-flight `/chat` turn, rather than only
- * stop reading it. */
+ * stop reading it. The body is an empty JSON object, carried so that a stop is a
+ * request no other site's page can send without the browser asking first. */
 export const stopChat = (projectId: number) =>
-  req<{ stopping: boolean }>(`/projects/${projectId}/chat/stop`, { method: "POST" });
+  req<{ stopping: boolean }>(`/projects/${projectId}/chat/stop`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 
 /** Queue a steer message for the project's in-flight `/chat` turn. The
  * running agent loop drains it at its next iteration boundary, injecting it so the

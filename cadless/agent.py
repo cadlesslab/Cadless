@@ -827,7 +827,8 @@ def tool_label(name: str) -> str:
 SteerSource = Callable[[], "str | None"]
 
 # Asked at each boundary of a streamed turn whether its user has asked it to stop.
-# Called from the turn's own thread, so it reads a thread-safe flag and nothing else.
+# Asked from whichever thread drives the turn, so what it reads has to be safe to
+# read from any thread, and quick: nothing else at the boundary waits on it.
 StopSignal = Callable[[], bool]
 
 

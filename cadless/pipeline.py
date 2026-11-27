@@ -308,8 +308,8 @@ class Pipeline:
         # repair, the render review, the guide writer's names. Once it answers yes
         # the run makes none of them, and a run that needed a repair ends there,
         # failed. A build already running finishes; nothing here can cut one short.
-        # Per pipeline rather than per run, because the chat route builds one per
-        # turn and a forge race shares it between its candidates.
+        # Given here rather than to each run, so every run made with this pipeline
+        # answers to it without each caller having to pass it on.
         self._should_stop = should_stop
         # Snapshot, not the live object. The settings layer applies a change by
         # mutating the shared singleton in place, so holding it would let an

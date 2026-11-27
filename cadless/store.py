@@ -1600,37 +1600,40 @@ class Store:
         """Settle every assistant reply left ``pending`` from before ``before``.
 
         Each is settled ``interrupted``, with ``note`` as its error and its closing
-        text, and its project falls back to its last good version, as after a
-        failed turn. Unscoped, for startup, where nobody is signed in. Returns the
-        ids of the replies it settled.
+        text. It links no version and moves none: nothing records which version, if
+        any, was the dead turn's, and a reply left pending for days sits under a
+        project whose user may have chosen another since. Unscoped, for startup,
+        where nobody is signed in. Returns the ids of the replies it settled.
+
+        A reply whose stored blocks are not readable settles too, keeping them as
+        they are, so one bad row cannot stop the rest on every start, and settling
+        it does not paper over a corrupt row that reading it reports.
         """
         async with self._connect() as db:
             rows = await (
                 await db.execute(
-                    "SELECT chat_messages.id, chat_messages.blocks_json,"
-                    " chat_sessions.project_id FROM chat_messages"
-                    " JOIN chat_sessions ON chat_sessions.id = chat_messages.session_id"
-                    " WHERE chat_messages.role='assistant' AND chat_messages.status='pending'"
-                    " AND chat_messages.created_at < ?",
+                    "SELECT id, blocks_json FROM chat_messages"
+                    " WHERE role='assistant' AND status='pending' AND created_at < ?",
                     (before,),
                 )
             ).fetchall()
         settled: list[int] = []
         for row in rows:
-            fallback = await self.last_ok_version(row["project_id"])
-            if fallback is not None:
-                await self.set_current_version(row["project_id"], fallback.id)
-            blocks = [*_blocks_from_json(row["blocks_json"]), ContentBlock.of_text(note)]
+            try:
+                blocks_json = _blocks_to_json(
+                    [*_blocks_from_json(row["blocks_json"]), ContentBlock.of_text(note)]
+                )
+            except (ValueError, TypeError):
+                logger.warning(
+                    "chat reply %s has unreadable blocks; settling it without its note",
+                    row["id"],
+                )
+                blocks_json = row["blocks_json"]
             async with self._connect() as db:
                 cur = await db.execute(
-                    "UPDATE chat_messages SET status='interrupted', error=?, version_id=?,"
-                    " blocks_json=? WHERE id=? AND status='pending'",
-                    (
-                        note,
-                        fallback.id if fallback else None,
-                        _blocks_to_json(blocks),
-                        row["id"],
-                    ),
+                    "UPDATE chat_messages SET status='interrupted', error=?, blocks_json=?"
+                    " WHERE id=? AND status='pending'",
+                    (note, blocks_json, row["id"]),
                 )
                 await db.commit()
             if cur.rowcount:

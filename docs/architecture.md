@@ -398,8 +398,8 @@ catalog content read-only.
   reading lets the turn run to its end. What a closed page does is tested on a
   real server with a closed socket (`tests/live_server.py`).
 - The startup sweep that settles replies left `pending` assumes a single process
-  writes the store. A deployment that runs more than one turns it off.
-
+  writes the store. Turn it off (`settle_interrupted_on_start`) where more than
+  one process writes the store.
 - A copy of a catalog item counts its last authored step's prompt among the
   user's words since the current model was built: the catalog writes a step's
   messages after that step's model. Its figures can only back sides a build

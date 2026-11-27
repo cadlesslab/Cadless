@@ -695,7 +695,7 @@ describe("ChatPanel", () => {
   it("says the turn will stop after the current build once Stop is pressed", () => {
     sendUnending();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-    expect(screen.getByText("Stopping after the current build…")).toBeInTheDocument();
+    expect(screen.getByText("Stopping after the current step…")).toBeInTheDocument();
   });
 
   it("stops reading the in-flight turn when Stop is pressed again", () => {

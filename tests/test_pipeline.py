@@ -185,6 +185,25 @@ def test_a_stop_at_a_repair_that_does_not_check_its_result_ends_the_run(tmp_path
 
 
 @pytest.mark.build123d
+def test_a_stopped_run_asks_for_no_render_review(tmp_path):
+    reviewed = []
+
+    class Recording:
+        def critique(self, intent, mesh_path):
+            reviewed.append(mesh_path)
+            return Critique(True, "fine")
+
+    result = Pipeline(
+        generator=FakeGen([GOOD]),
+        config=Settings(vlm_critique_enabled=True),
+        critic=Recording(),
+        should_stop=lambda: True,
+    ).run("a cube", export_dir=str(tmp_path))
+    assert result.ok
+    assert reviewed == []
+
+
+@pytest.mark.build123d
 def test_success_first_try(tmp_path):
     gen = FakeGen([GOOD])
     result = Pipeline(generator=gen).run("a 10mm cube", export_dir=str(tmp_path))

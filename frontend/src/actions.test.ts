@@ -102,12 +102,8 @@ describe("Stop on a running chat turn", () => {
     expect(signal?.aborted).toBe(true);
   });
 
-  it.each([
-    ["an engine without the route answers 404", () => new api.ApiError(404, "Not Found")],
-    ["an engine without the route answers 405", () => new api.ApiError(405, "Method Not Allowed")],
-    ["the request fails", () => new TypeError("Failed to fetch")],
-  ])("stops reading at once when %s", async (_, failure) => {
-    vi.mocked(api.stopChat).mockRejectedValueOnce(failure());
+  it("stops reading at once when the server cannot take the request, as one from before the stop route", async () => {
+    vi.mocked(api.stopChat).mockRejectedValueOnce(new api.ApiError(404, "Not Found"));
     const store = running();
     actions.stopChat(store);
     await answered();

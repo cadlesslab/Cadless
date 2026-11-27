@@ -158,6 +158,7 @@ def _run(
     bbox=None,
     part_count=None,
     export_scale=1.0,
+    should_stop=None,
 ):
     _stub_run_code(monkeypatch, measurements, captured, bbox=bbox, part_count=part_count)
     events = []
@@ -165,6 +166,7 @@ def _run(
         generator=gen,
         config=Settings(repair_max_attempts=tries),
         guide_writer=guide_writer,
+        should_stop=should_stop,
     ).run(
         "a bracket",
         on_progress=events.append,
@@ -886,6 +888,15 @@ def test_only_a_turn_that_asked_has_its_parts_named_by_the_writer(monkeypatch):
     _run(FakeGen(), _sound(), monkeypatch, guide_writer=asked)
     assert unasked.calls == 0
     assert asked.calls == 1
+
+
+def test_a_stopped_run_numbers_its_parts_rather_than_asking_the_writer(monkeypatch):
+    writer = _CountingWriter()
+    result, _ = _run(
+        FakeGen(), _sound(), monkeypatch, guide_writer=writer, should_stop=lambda: True
+    )
+    assert result.ok
+    assert writer.calls == 0
 
 
 def test_a_single_part_build_is_not_an_assembly_and_gets_no_guide(monkeypatch):
