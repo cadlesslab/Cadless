@@ -34,6 +34,7 @@ import json
 import logging
 import shutil
 import uuid
+from collections.abc import Callable, Coroutine
 from functools import partial
 from pathlib import Path
 from typing import Any
