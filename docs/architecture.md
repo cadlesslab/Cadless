@@ -177,6 +177,11 @@ candidate judging, the identity seam and the image decisions are recorded under
    SSE. A chat turn may carry reference images alongside its text, or instead of
    it; they are gated at the request boundary — format, size, count, and whether
    the configured models can read one — and refused there when they cannot work.
+   The turn belongs to the app rather than to its response (`backend/turns.py`).
+   A client that goes away stops reading, and the turn still settles. Stop
+   (`POST /projects/{id}/chat/stop`) ends it at its next boundary as `stopped`.
+   A turn the server's going away ends is settled `interrupted`, by the
+   shutdown drain or by the next start (see `docs/pipeline.md`).
 2. The engine assembles the prompt and asks the selected provider for build123d
    source through the provider-neutral interface. An attached image travels with
    that prompt to every code-generating call of the turn: the fresh run, a
@@ -388,6 +393,12 @@ catalog content read-only.
   new provider, exporter, validation, or worker procedure from a module listing.
 
 ## Gotchas & Non-Obvious Context
+
+- `TestClient` never closes a stream from the client's side: a test that stops
+  reading lets the turn run to its end. What a closed page does is tested on a
+  real server with a closed socket (`tests/live_server.py`).
+- The startup sweep that settles replies left `pending` assumes a single process
+  writes the store. A deployment that runs more than one turns it off.
 
 - A copy of a catalog item counts its last authored step's prompt among the
   user's words since the current model was built: the catalog writes a step's
