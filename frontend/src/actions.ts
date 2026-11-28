@@ -194,8 +194,8 @@ export function refine(store: Store, priorVersionId: number, deltaPrompt: string
 }
 
 /** Drive a `POST /chat` SSE turn: stream UI events into the store and
- * refresh the transcript + versions once the turn settles. A Stop handle is held
- * in `abortChat` so the composer can abort the in-flight turn. */
+ * refresh the transcript + versions once the turn settles. The turn's project and
+ * a handle that stops reading it are held in the store for `stopChat`. */
 export function chat(
   store: Store,
   message: string,
@@ -211,10 +211,17 @@ export function chat(
     chatEvents: [],
     chatPending: message,
     abortChat: () => controller.abort(),
+    chatProjectId: pid,
   });
 
   const settle = async () => {
-    store.set({ generating: false, chatPending: null, abortChat: null });
+    store.set({
+      generating: false,
+      chatPending: null,
+      abortChat: null,
+      chatProjectId: null,
+      stopping: false,
+    });
     await refreshProjects(store);
     await Promise.all([loadVersions(store, pid), loadMessages(store, pid)]);
     // On a clean turn the persisted transcript now carries it; drop the live
@@ -241,9 +248,31 @@ export function chat(
     .finally(() => void settle());
 }
 
-/** Abort the in-flight chat turn (Stop button). */
+/** Stop the in-flight chat turn (Stop button).
+ *
+ * The first press asks the server to end the turn and goes on reading it, so how
+ * the turn ended, and what it kept, still arrive here. That can take a while, so
+ * a second press stops reading at once. So does a server that cannot take the
+ * request, or has no turn left to end: Stop then does what it did before it
+ * could ask. */
 export function stopChat(store: Store): void {
-  store.get().abortChat?.();
+  // The turn's own project rather than the open one, which can change while a
+  // turn runs: the request has to reach the turn being stopped.
+  const { abortChat: abort, chatProjectId: pid, stopping } = store.get();
+  if (abort == null || pid == null) return;
+  if (stopping) {
+    abort();
+    return;
+  }
+  store.set({ stopping: true });
+  // `abort` is this turn's own, so an answer that lands after the turn has ended
+  // cannot stop the next one.
+  void api
+    .stopChat(pid)
+    .then((answer) => {
+      if (!answer.stopping) abort();
+    })
+    .catch(() => abort());
 }
 
 /** Queue a steer message for the in-flight chat turn: post it to the

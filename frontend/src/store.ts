@@ -15,7 +15,9 @@ export interface AppState {
   messages: MessageOut[]; // persisted transcript from GET /messages
   chatEvents: ChatEvent[]; // live POST /chat SSE turn
   chatPending: string | null; // optimistic user message for the in-flight turn
-  abortChat: (() => void) | null; // aborts the in-flight chat turn (Stop)
+  abortChat: (() => void) | null; // stops reading the in-flight chat turn
+  chatProjectId: number | null; // the project the in-flight chat turn runs in
+  stopping: boolean; // the in-flight chat turn has been asked to stop
 }
 
 export const initialState: AppState = {
@@ -31,6 +33,8 @@ export const initialState: AppState = {
   chatEvents: [],
   chatPending: null,
   abortChat: null,
+  chatProjectId: null,
+  stopping: false,
 };
 
 type Listener = (s: AppState) => void;

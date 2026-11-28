@@ -308,6 +308,18 @@ class Settings(BaseSettings):
     # a refused build. Used in place of agent_time_budget_secs when the turn
     # carries an assembly spec, asked for or inherited.
     assembly_agent_time_budget_secs: float = 300.0
+    # How long a stopping server gives its running chat turns to finish, and then
+    # gives the ones it cuts short to record that they were interrupted. Short,
+    # because a container is commonly killed ten seconds after it is asked to stop
+    # (Docker's default) and both waits are meant to fit inside that; a turn the
+    # kill cuts off is left for the next start to settle.
+    chat_shutdown_grace_secs: float = 4.0
+    # Whether startup settles chat replies an earlier process left pending, as
+    # interrupted. Turns live in the process that ran them, so a reply older than
+    # this process can have nothing running in it -- true only while one process
+    # writes to the store, since another live process's reply is just as old. Turn
+    # it off where more than one process writes the store.
+    settle_interrupted_on_start: bool = True
     # Per-CALL output cap for the orchestrator. Distinct from the codegen
     # bedrock_max_tokens (2000, fine for short build123d scripts; an assembly
     # turn takes assembly_max_tokens instead): an orchestrator

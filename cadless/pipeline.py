@@ -301,8 +301,16 @@ class Pipeline:
         config: Settings | None = None,
         critic=None,
         guide_writer=None,
+        should_stop: Callable[[], bool] | None = None,
     ):
         self._gen = generator or CodeGenerator()
+        # Asked before every model call a run would make after its first draft: a
+        # repair, the render review, the guide writer's names. Once it answers yes
+        # the run makes none of them, and a run that needed a repair ends there,
+        # failed. A build already running finishes; nothing here can cut one short.
+        # Given here rather than to each run, so every run made with this pipeline
+        # answers to it without each caller having to pass it on.
+        self._should_stop = should_stop
         # Snapshot, not the live object. The settings layer applies a change by
         # mutating the shared singleton in place, so holding it would let an
         # edit land part-way through a turn and leave that turn attributable to
@@ -328,6 +336,9 @@ class Pipeline:
         different settings — the split this snapshot exists to prevent.
         """
         return self._cfg
+
+    def _stop_asked(self) -> bool:
+        return self._should_stop is not None and self._should_stop()
 
     @property
     def critic(self):
@@ -447,8 +458,21 @@ class Pipeline:
         last_error = "no attempts ran"
         last_critique: dict | None = None
         last_assembly: dict | None = None
+        stopped = False
+
+        def repair(*args, **kwargs) -> str | None:
+            """``_repair``, unless the run was asked to stop: then no repair, and the
+            loop ends at its next turn, where it finds no code to build."""
+            nonlocal stopped
+            if self._stop_asked():
+                stopped = True
+                return None
+            return self._repair(*args, **kwargs)
 
         for n in range(1, max_tries + 1):
+            # The repair sites that ``continue`` rather than checking leave here.
+            if code is None:
+                break
             # Cleared here rather than beside the critique, so that every way an
             # attempt can end reaches it — a build that fails to execute never
             # gets as far as a review, and carrying the previous attempt's
@@ -469,7 +493,7 @@ class Pipeline:
                 last_error = "validation: " + "; ".join(verdict.reasons)
                 _emit_stage(on_progress, "validate", "error", n, last_error)
                 self._record(attempts, on_progress, Attempt(n, code, "validate", last_error))
-                code = self._repair(
+                code = repair(
                     on_progress,
                     intent,
                     code,
@@ -510,7 +534,7 @@ class Pipeline:
                 # handed over with it attached.
                 crit = (
                     self._try_critique(on_progress, intent, res, n)
-                    if critique and self._should_critique(res)
+                    if critique and self._should_critique(res) and not self._stop_asked()
                     else None
                 )
                 if crit is not None:
@@ -522,7 +546,7 @@ class Pipeline:
                             self._record(
                                 attempts, on_progress, Attempt(n, code, "critique", last_error)
                             )
-                            code = self._repair(
+                            code = repair(
                                 on_progress,
                                 intent,
                                 code,
@@ -572,7 +596,7 @@ class Pipeline:
                             self._record(
                                 attempts, on_progress, Attempt(n, code, "assembly", last_error)
                             )
-                            code = self._repair(
+                            code = repair(
                                 on_progress,
                                 intent,
                                 code,
@@ -599,7 +623,7 @@ class Pipeline:
                         # run. Withholding the brief would leave it failing the
                         # same check until the budget ran out.
                         may_resplit = True
-                        code = self._repair(
+                        code = repair(
                             on_progress,
                             intent,
                             code,
@@ -626,7 +650,7 @@ class Pipeline:
                         last_error = "assertion: " + signal
                         _emit_stage(on_progress, "assert", "error", n, last_error)
                         self._record(attempts, on_progress, Attempt(n, code, "assert", last_error))
-                        code = self._repair(
+                        code = repair(
                             on_progress,
                             intent,
                             code,
@@ -661,7 +685,9 @@ class Pipeline:
                     last_assembly,
                     export_dir,
                     n,
-                    asked=assembly is not None,
+                    # A stopped run makes no more model calls, so its parts are
+                    # numbered rather than named.
+                    asked=assembly is not None and not self._stop_asked(),
                     names=(
                         _part_names(res.parts, len(res.assembly.part_bboxes))
                         if res.assembly is not None
@@ -691,7 +717,7 @@ class Pipeline:
             last_error = "execution: " + (res.error or "unknown")
             _emit_stage(on_progress, "build", "error", n, last_error)
             self._record(attempts, on_progress, Attempt(n, code, "execute", last_error))
-            code = self._repair(
+            code = repair(
                 on_progress,
                 intent,
                 code,
@@ -706,6 +732,8 @@ class Pipeline:
             if code is None:
                 break
 
+        if stopped:
+            last_error = f"stopped before repairing it: {last_error}"
         return GenerationResult(
             ok=False,
             intent=intent,

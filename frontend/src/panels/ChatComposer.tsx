@@ -4,7 +4,7 @@
  *
  * Mid-stream the field stays editable: the user can type and QUEUE a
  * steer message that the in-flight turn applies at its next boundary. Queuing is
- * a distinct affordance from Stop — Stop aborts the turn, Queue steers it. While
+ * a distinct affordance from Stop — Stop ends the turn, Queue steers it. While
  * generating, Enter (and the Queue button) call `onQueue`; otherwise `onSubmit`.
  *
  * A turn can also carry reference pictures, pasted or picked from disk. They are

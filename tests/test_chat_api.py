@@ -299,8 +299,8 @@ def test_aborted_stream_leaves_no_dangling_pending(client, store, monkeypatch, c
     _install(monkeypatch, provider)
     pid = client.post("/projects", json={"name": "P"}).json()["id"]
 
-    # Open the stream and close it early (client disconnect / Stop) before reading
-    # to completion. The turn must still settle — never left ``pending``.
+    # Open the stream and stop reading it before it ends (the client stops reading).
+    # The turn must still settle — never left ``pending``.
     with client.stream("POST", f"/projects/{pid}/chat", json={"message": "x"}) as r:
         assert r.status_code == 200
         next(r.iter_text())  # read the first chunk, then drop the connection

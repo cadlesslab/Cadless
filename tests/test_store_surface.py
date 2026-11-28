@@ -45,6 +45,11 @@ UNSCOPED_BY_DESIGN = {
     # rows are the build's, so a route able to call it could change the sizes
     # every principal reads.
     "set_catalog_geometry",
+    # Settles every owner's replies an earlier process left pending, at startup,
+    # before any request exists. Scoped, it would leave every other owner's
+    # replies pending for good; reachable from a route, it could settle a turn
+    # another request is still running.
+    "settle_interrupted_turns",
 }
 
 # On the scoped view but taking no owner, because they read no rows.

@@ -412,6 +412,9 @@ function LiveChat({
     ? [...turn.stageEvents, { event: "error", detail: turn.error } as const]
     : turn.stageEvents;
   const streaming = !turn.done;
+  // While the turn streams: one that has ended is no longer stopping, though the
+  // read that brought its end may still be open.
+  const stopping = useStoreSelector((s) => s.stopping) && streaming;
   // Nothing surfaced yet but the turn is live → show a "thinking" placeholder so
   // the panel never looks frozen while the model reasons before its first token.
   // A critique round counts as content here even though the stages it belongs to
@@ -438,7 +441,7 @@ function LiveChat({
           {streaming && <span className="stream-cursor" aria-hidden />}
         </div>
       )}
-      {idle && (
+      {idle && !stopping && (
         <p className="chat-thinking" role="status">
           Thinking<span className="chat-thinking-dots" aria-hidden />
         </p>
@@ -461,6 +464,14 @@ function LiveChat({
       ))}
       {turn.clarification && turn.clarification.length > 0 && (
         <Clarification questions={turn.clarification} onAnswer={onAnswer} />
+      )}
+      {/* Last, below whatever the turn is still doing, and in place of the
+          Thinking placeholder rather than beside it: both would describe the
+          same wait, and differently. */}
+      {stopping && (
+        <p className="chat-thinking" role="status">
+          Stopping after the current step…
+        </p>
       )}
     </>
   );

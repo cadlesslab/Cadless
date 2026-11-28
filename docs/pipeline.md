@@ -185,6 +185,15 @@ and the paths in the result say what was written.
   synchronous; the chat router drives it in a worker thread
   (`run_in_threadpool`) and bridges events back to the SSE response through
   an `asyncio.Queue` with `loop.call_soon_threadsafe`.
+- **A chat turn belongs to the app, not to its response.** The router launches
+  the turn's task into the app's `TurnRegistry` (`backend/turns.py`), and the
+  SSE response only reads the queue. A client that goes away cancels the
+  response and nothing else: the turn runs on and settles, and its reply is
+  there when the page is opened again. Whichever of the task and its thread
+  finishes second removes the staging directory. A write the thread hands the
+  loop after the reply has settled is dropped, and a settle waits for one
+  already running, so the reply and the project's current model agree. Once the
+  task is gone, the thread hands the loop nothing more and sends no more events.
 - **Retrieval, distillation and compaction are async** (`rag.py`,
   `distill.py`, `compaction.py` — the store is `aiosqlite`). The chat router
   runs retrieval first, then hands the resulting grounding string down into
@@ -250,6 +259,42 @@ not during one, and one step can be a whole generation — every repair attempt,
 each on the build clock (the assembly clock on an assembly turn), and the model
 calls between them — so a turn that starts one just inside its budget can
 overrun it by that whole run.
+
+A chat reply is `pending` while its turn runs, and settles as one of these:
+
+| Status | When |
+|---|---|
+| `ok` | the turn ran to its end, and its last build did not fail |
+| `error` | the turn's last build failed, or the turn raised |
+| `stopped` | a stop reached the turn at a boundary before it ended |
+| `interrupted` | the server stopped before the turn finished |
+
+**Stop** is `POST /projects/{id}/chat/stop`, with an empty JSON object as its
+body. It answers at once with `{"stopping": bool}`; the value is false when no
+turn was left to stop. The turn ends at its next boundary: before its next model
+call or tool in the agent, and before a repair, the render review or the guide
+writer's names in the pipeline. A model call or build already running finishes
+first, so the worst case is one model call plus one build, except in a Forge
+race: the candidates already racing each finish their draft and build, and the
+judge still compares them. A stop that lands during the turn's last model call,
+which asks for nothing more, reaches no boundary, and the turn settles as it
+would have. A stopped turn keeps what it built, ends on a line saying so, and is
+not distilled. The flag belongs to the turn from the moment its reply exists, so
+a stop also reaches a turn still in its lead-up, and it is not queued per session
+like a steer message, so it cannot carry over to the next turn.
+
+**Restarts.** On shutdown the app lets its running turns finish for up to
+`chat_shutdown_grace_secs`. It then cancels the rest, which settle `interrupted`
+through a shielded write, tells their threads to start nothing more, and waits
+up to the same grace again for those settles. A reply settled this way links the
+last build its turn kept and leaves the project's current version where it is,
+since a turn only ever makes a successful build current. On startup it settles as
+`interrupted` any reply an earlier process left `pending`
+(`settle_interrupted_on_start`): what a crash leaves, and what the drain leaves
+when the process is killed before it finishes. Such a reply links no version and
+moves none, since nothing records which version was the dead turn's. That holds
+only while one process writes the store: a reply another live process is working
+on is just as old.
 
 **Direct generation** — `POST /projects/{id}/generate` +
 `GET /projects/{id}/generate/stream` (`backend/routers/generation.py`) runs

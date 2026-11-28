@@ -12,11 +12,14 @@ The existing pipeline ``stage`` events NEST inside ``tool_progress`` so the
 frontend ``StagedProgress`` is reused verbatim.
 
 The turn is persisted like ``persist_generation``: a user message plus
-a ``pending`` assistant message written up-front, settled to ``ok``/``error`` with
-``blocks_json`` at the end. Each successful tool call persists a real
-``ScriptVersion`` (+ artifacts) so ``tool_result`` can link ``version_id`` and a
-served thumbnail URL. A clean abort / provider failure settles the dangling
-assistant turn to ``error`` — never leaving it ``pending``.
+a ``pending`` assistant message written up-front, settled with ``blocks_json`` at
+the end. Each successful tool call persists a real ``ScriptVersion`` (+ artifacts)
+so ``tool_result`` can link ``version_id`` and a served thumbnail URL. The reply
+settles ``ok``; ``error`` when its last build or its provider failed; ``stopped``
+when a stop reached the turn at a boundary before it ended; or ``interrupted`` when
+the server's going away cut it short. None is left ``pending``. The turn belongs to
+the app (:mod:`backend.turns`), not to its response, so a client that goes away does
+not end it.
 
 This reuses the SSE plumbing pattern from ``backend/routers/generation.py``; it
 does not reinvent it.
@@ -31,10 +34,12 @@ import json
 import logging
 import shutil
 import uuid
+from collections.abc import Callable, Coroutine
 from functools import partial
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
@@ -44,9 +49,12 @@ from backend.assembly import assembly_findings, assembly_spec_for
 from backend.catalog_state import authoring_units, reject_if_catalog
 from backend.deps import get_store
 from backend.sse import SSE_HEADERS
+from backend.turns import INTERRUPTED_NOTE, RunningTurn, TurnRegistry
+from backend.unstoppable import to_completion
 from cadless import user_settings
 from cadless.agent import (
     GENERATE_MODEL,
+    STOPPED_STOP,
     Agent,
     SessionSteerRegistry,
     ToolContext,
@@ -74,6 +82,16 @@ router = APIRouter(tags=["chat"])
 # Process-wide steer registry: the in-flight `/chat` loop drains its
 # session's queue at each iteration boundary; `POST /chat/steer` enqueues into it.
 _steer_registry = SessionSteerRegistry()
+
+# How long the turn's thread waits for a write it handed to the event loop. A write
+# takes far less; the bound only matters when the loop is shutting down and will
+# never run it, where an unbounded wait would hold the process open.
+_BRIDGE_TIMEOUT_S = 120.0
+
+# What a reply says when its turn failed before it began. Fixed rather than the
+# failure's own text, which can carry a path or a provider's detail and would be
+# served to whoever reads the transcript.
+CANNOT_START_NOTE = "This turn could not start."
 
 
 class ImageAttachment(BaseModel):
@@ -120,6 +138,18 @@ class ChatRequest(BaseModel):
         return self
 
 
+class StopRequest(BaseModel):
+    """The stop body: an empty JSON object.
+
+    Asked for although it carries nothing, so that a page on another site cannot
+    send a stop without the browser first asking this server whether it may: a
+    browser sends a JSON body across sites only after asking, and an empty POST
+    without.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SteerRequest(BaseModel):
     """The steer body — deliberately narrower than :class:`ChatRequest`.
 
@@ -144,8 +174,11 @@ class SteerRequest(BaseModel):
     assembly: bool = False
 
 
-def build_pipeline() -> Pipeline:
+def build_pipeline(should_stop: Callable[[], bool] | None = None) -> Pipeline:
     """Build the CAD pipeline the agent's tools run against (monkeypatched in tests).
+
+    ``should_stop`` is the turn's stop flag, so a stopped turn's build makes no
+    further model call of its own: no repair, no review, no names for its parts.
 
     This is where a render critic is injected. A pipeline built with no critic
     never critiques whatever the setting says, so the setting is necessary and
@@ -493,7 +526,9 @@ async def _persist_tool_version(
 
 
 @router.post("/projects/{project_id}/chat")
-async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(get_store)):
+async def chat(
+    project_id: int, body: ChatRequest, request: Request, store: ScopedStore = Depends(get_store)
+):
     if not await store.get_project(project_id):
         raise HTTPException(status_code=404, detail="project not found")
     # A turn persists a new version and moves current, so catalog items refuse
@@ -550,50 +585,44 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         if not readings:
             readings.append(reading)
 
+    turns: TurnRegistry = request.app.state.turns
     assistant = await store.add_message(session.id, "assistant", None, status="pending")
-
+    turn = RunningTurn(project_id=project_id, session_id=session.id, assistant_id=assistant.id)
+    # Counted as running from here, ahead of a lead-up that can take a model call,
+    # so a stop asked for meanwhile reaches it.
+    turns.register(turn)
     staging = Path(store.artifacts_dir) / "_staging" / uuid.uuid4().hex
-    staging.mkdir(parents=True, exist_ok=True)
-
-    # Session hygiene: fold older turns of a long transcript into a
-    # rolling synopsis so the agent's context stays bounded. The durable code
-    # source of truth stays the persisted script_versions chain — this only
-    # rewrites the conversational history replayed to the model. Purely additive:
-    # a short session (at/below threshold) yields today's full history unchanged.
-    history = await compact_history(history, provider)
-    pipeline = build_pipeline()
-    # Forge both-true gate (C4): race best-of-N only when the turn opted in
-    # AND the global kill-switch is on. N is budget-scaled (config), not hard-coded.
-    forge_active = bool(body.forge and settings.forge_enabled)
-    forge_n = settings.forge_scaled_n() if forge_active else 1
-    # The same both-true gate, and the printer read once here rather than deeper
-    # down: the prompt has to describe one machine, and the saved file is on disk
-    # -- reading it per candidate in a forge race would be the same answer bought
-    # N times, with nothing stopping the two halves disagreeing mid-turn.
-    # Asking on this turn is one way in; the other is editing a model that was
-    # already built as one, because the option is per-turn: a turn can arrive with
-    # it off -- the user switched it off for one turn, or a client that does not
-    # start it from the record -- while the model stays in pieces.
-    spec = await assembly_spec_for(bool(body.assembly or current_is_assembly))
-    # The same spec, split by where the answer came from, because the two are not
-    # entitled to the same tools: a fresh generation starts a new model and may only
-    # be an assembly if this turn asked, unless it regenerates the model the turn was
-    # editing, while an edit acts on the model that already exists and takes either.
-    # Without the split the opt-in would be permanent —
-    # every later turn in the project would inherit, including "forget that, make me
-    # a simple cube", and switching the composer's toggle off would take nothing back.
-    asked_spec = spec if body.assembly else None
-    inherited_spec = spec if current_is_assembly else None
-    # The current version (if any) is the parent the race branches off, so winner +
-    # loser candidate rows hang off the model the turn started from.
-    project = await store.get_project(project_id)
-    parent_version_id = project.current_version_id if project else None
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
     def emit(event: dict) -> None:
+        # Once the task has finished nobody reads the stream, and on a shutdown the
+        # loop may already be closed to the thread that outlived it.
+        if turn.finished.is_set():
+            return
         loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    def bridge(work, *, keeps_version: bool = False):
+        """Run ``work`` on the loop from the turn's thread and wait for what it returns.
+
+        Dropped, returning ``None``, once the turn's reply has settled: a version
+        persisted after that would move the project's current model out from under
+        the reply. Not even handed over once the turn's task has finished, since the
+        loop may be closing. The wait is bounded, so a thread waiting on a loop that
+        is shutting down cannot hold the process open.
+
+        With ``keeps_version``, ``work`` saves a version and returns its id, which is
+        recorded as the turn's latest in the same locked step: a settle that cuts the
+        turn short a moment later still finds it, though this thread has not yet
+        been told.
+        """
+        if turn.finished.is_set():
+            work.close()
+            return None
+        return asyncio.run_coroutine_threadsafe(
+            _unless_settled(turn, work, keeps_version=keeps_version), loop
+        ).result(timeout=_BRIDGE_TIMEOUT_S)
 
     # The reviewer's rounds, going two ways at once. Every round streams to the
     # client verbatim — the payload is already the shape it reads, and
@@ -619,32 +648,91 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
         ]
         emit(event)
 
-    # Stream fresh-generation codegen tokens to the client live as the model writes
-    # the build123d code: the agent pushes each delta here, and we map it
-    # to a ``codegen_delta`` SSE event onto the same queue the UI events use.
-    context = ToolContext(
-        pipeline=pipeline,
-        current_code=code,
-        current_params=params,
-        start_size_mm=current_size,
-        stated_mm=said_before,
-        export_dir=str(staging),
-        images=image_blocks,
-        on_reading=_keep_first_reading if image_blocks else None,
-        forge=forge_active,
-        forge_n=forge_n,
-        assembly=asked_spec,
-        inherited_assembly=inherited_spec,
-        on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
-        on_critique=_relay_critique,
-    )
-    agent = Agent(provider=provider)
+    # Everything from here to the launch can fail while the reply row exists and
+    # the turn's own clean-up has not started, so a failure is settled here.
+    try:
+        staging.mkdir(parents=True, exist_ok=True)
+        # Session hygiene: fold older turns of a long transcript into a
+        # rolling synopsis so the agent's context stays bounded. The durable code
+        # source of truth stays the persisted script_versions chain — this only
+        # rewrites the conversational history replayed to the model. Purely additive:
+        # a short session (at/below threshold) yields today's full history unchanged.
+        history = await compact_history(history, provider)
+        pipeline = build_pipeline(should_stop=turn.stop.is_set)
+        # Forge both-true gate (C4): race best-of-N only when the turn opted in
+        # AND the global kill-switch is on. N is budget-scaled (config), not hard-coded.
+        forge_active = bool(body.forge and settings.forge_enabled)
+        forge_n = settings.forge_scaled_n() if forge_active else 1
+        # The same both-true gate, and the printer read once here rather than deeper
+        # down: the prompt has to describe one machine, and the saved file is on disk
+        # -- reading it per candidate in a forge race would be the same answer bought
+        # N times, with nothing stopping the two halves disagreeing mid-turn.
+        # Asking on this turn is one way in; the other is editing a model that was
+        # already built as one, because the option is per-turn: a turn can arrive with
+        # it off -- the user switched it off for one turn, or a client that does not
+        # start it from the record -- while the model stays in pieces.
+        spec = await assembly_spec_for(bool(body.assembly or current_is_assembly))
+        # The same spec, split by where the answer came from, because the two are not
+        # entitled to the same tools: a fresh generation starts a new model and may
+        # only be an assembly if this turn asked, unless it regenerates the model the
+        # turn was editing, while an edit acts on the model that already exists and
+        # takes either. Without the split the opt-in would be permanent — every later
+        # turn in the project would inherit, including "forget that, make me a simple
+        # cube", and switching the composer's toggle off would take nothing back.
+        asked_spec = spec if body.assembly else None
+        inherited_spec = spec if current_is_assembly else None
+        # The current version (if any) is the parent the race branches off, so winner +
+        # loser candidate rows hang off the model the turn started from.
+        project = await store.get_project(project_id)
+        parent_version_id = project.current_version_id if project else None
+        # Stream fresh-generation codegen tokens to the client live as the model
+        # writes the build123d code: the agent pushes each delta here, and we map it
+        # to a ``codegen_delta`` SSE event onto the same queue the UI events use.
+        context = ToolContext(
+            pipeline=pipeline,
+            current_code=code,
+            current_params=params,
+            start_size_mm=current_size,
+            stated_mm=said_before,
+            export_dir=str(staging),
+            images=image_blocks,
+            on_reading=_keep_first_reading if image_blocks else None,
+            forge=forge_active,
+            forge_n=forge_n,
+            assembly=asked_spec,
+            inherited_assembly=inherited_spec,
+            on_codegen=lambda text: emit({"event": "codegen_delta", "text": text}),
+            on_critique=_relay_critique,
+        )
+        agent = Agent(provider=provider)
+    except BaseException as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        turns.discard(turn)
+        interrupted = isinstance(exc, asyncio.CancelledError)
+        # A fixed line rather than the exception's text: the reply is served to
+        # whoever reads the transcript, and the text can carry a path or a
+        # provider's detail. The exception itself goes on up, raised again below.
+        await to_completion(
+            _settle_unfinished(
+                store,
+                turn,
+                [],
+                interrupted=interrupted,
+                note=INTERRUPTED_NOTE if interrupted else CANNOT_START_NOTE,
+            )
+        )
+        raise
 
     async def run() -> None:
         produced_blocks: list = []
         # Whether the turn's latest tool result failed: the turn's outcome.
         last_failed = False
         settled = False
+        # Set when a cancel reached the turn. A closed page no longer can, so it
+        # means the server is going away mid-turn.
+        interrupted = False
+        # Why the agent ended the turn, as its ``turn_end`` reports it.
+        stop_reason: str | None = None
         # The last successful tool result of the turn — its code + metrics seed the
         # auto-distill flywheel once the turn settles ok.
         last_good: dict | None = None
@@ -667,13 +755,14 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             inherits_assembly = current_is_assembly
 
             def drive() -> None:
-                nonlocal produced_blocks, last_failed, last_good
+                nonlocal produced_blocks, last_failed, last_good, stop_reason
                 nonlocal plan_total, plan_cursor, chain_parent, inherits_assembly
                 for ev in agent.stream_turn(
                     user_text=body.message,
                     context=context,
                     history=history,
                     steer=_steer_registry.source_for(session.id),
+                    stop=turn.stop.is_set,
                 ):
                     if ev.kind == "plan":
                         plan_total = len(ev.data.get("steps") or [])
@@ -693,7 +782,7 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                         if plan_total:
                             plan_cursor = min(plan_cursor + 1, plan_total)
                             plan_step = plan_cursor
-                        version_id = asyncio.run_coroutine_threadsafe(
+                        version_id = bridge(
                             _persist_tool_version(
                                 store,
                                 project_id,
@@ -717,8 +806,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                     and inherits_assembly
                                 ),
                             ),
-                            loop,
-                        ).result()
+                            keeps_version=True,
+                        )
                         if version_id is not None:
                             chain_parent = version_id  # next tool chains onto this one
                         # A fresh model replaces the one the turn started on, so a
@@ -745,16 +834,13 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                         # unplanned turns keep today's behavior (settlement-only
                         # revert) untouched.
                         if not ok and plan_total:
-                            asyncio.run_coroutine_threadsafe(
-                                _revert_to_last_ok(store, project_id),
-                                loop,
-                            ).result()
+                            bridge(_revert_to_last_ok(store, project_id))
                         # Forge race: the winner was just persisted as the
                         # current version above; record the losing candidates as
                         # non-current rows tied to it (same async-store bridge).
                         forge_race = ev.data.get("forge")
                         if version_id is not None and forge_race:
-                            asyncio.run_coroutine_threadsafe(
+                            bridge(
                                 persist_losers(
                                     store,
                                     project_id,
@@ -766,9 +852,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                                     # losers follow the winner's rule above.
                                     built_as_assembly=asked_spec is not None
                                     or (regenerates and inherits_assembly),
-                                ),
-                                loop,
-                            ).result()
+                                )
+                            )
                         # A build kept with its parts found not to go together
                         # is no example to learn from, and the turn's message
                         # now describes it rather than the build before it.
@@ -800,7 +885,8 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                         result = ev.data.get("result")
                         if result is not None:
                             produced_blocks = result.blocks
-                        emit({"event": "turn_end", "stop_reason": ev.data.get("stop_reason")})
+                        stop_reason = ev.data.get("stop_reason")
+                        emit({"event": "turn_end", "stop_reason": stop_reason})
                     else:
                         emit({"event": ev.kind, **ev.data})
 
@@ -813,9 +899,15 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             try:
                 # The pipeline's snapshot, not the live singleton: retrieval and
                 # generation belong to the same turn, so a save landing between
-                # them must not put them under different settings.
-                context.grounding = await retrieve_grounding(
-                    store, provider, intent=body.message, config=pipeline.config
+                # them must not put them under different settings. None at all
+                # once a stop has been asked for: the turn ends at its first
+                # boundary, and retrieval's embedding call would buy nothing.
+                context.grounding = (
+                    ""
+                    if turn.stop.is_set()
+                    else await retrieve_grounding(
+                        store, provider, intent=body.message, config=pipeline.config
+                    )
                 )
             except Exception:  # noqa: BLE001  (best-effort grounding — never fail the turn)
                 logger.warning(
@@ -825,21 +917,43 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
                 )
                 context.grounding = ""
 
-            await run_in_threadpool(drive)
-            status = "error" if last_failed else "ok"
-            version_id = await _latest_version_id(last_failed, store, project_id)
-            await store.update_message(
-                assistant.id,
-                status=status,
-                blocks=[*produced_blocks, *critique_blocks],
-                version_id=version_id,
-                error="a tool call failed" if last_failed else None,
-            )
-            settled = True
+            def drive_to_its_end() -> None:
+                try:
+                    drive()
+                finally:
+                    turn.drive_done.set()
+                    # The task gave up waiting and has already gone, so the
+                    # staging directory is this thread's to remove.
+                    if turn.finished.is_set():
+                        shutil.rmtree(staging, ignore_errors=True)
+
+            await run_in_threadpool(drive_to_its_end)
+            # A stopped turn says so whatever its last build did: the user ended it,
+            # and the agent's closing line already says what it leaves behind. The
+            # version follows the usual rule, so a stop after a failed build still
+            # falls back to the last good one.
+            if stop_reason == STOPPED_STOP:
+                status, error = "stopped", None
+            elif last_failed:
+                status, error = "error", "a tool call failed"
+            else:
+                status, error = "ok", None
+            async with turn.writes:
+                version_id = await _latest_version_id(last_failed, store, project_id)
+                await store.update_message(
+                    assistant.id,
+                    status=status,
+                    blocks=[*produced_blocks, *critique_blocks],
+                    version_id=version_id,
+                    error=error,
+                )
+                settled = turn.settled = True
             # Flywheel: a turn that settled ok+asserted auto-distills its
             # known-good result into a KB entry. Best-effort and AFTER the turn has
-            # settled, so a distill failure can never affect the user's turn.
-            if not last_failed and last_good is not None:
+            # settled, so a distill failure can never affect the user's turn. Only a
+            # turn that ran to its end: a stopped one was cut short of the repairs
+            # or the review that might have changed its answer.
+            if status == "ok" and last_good is not None:
                 await auto_distill(
                     store,
                     provider,
@@ -864,55 +978,83 @@ async def chat(project_id: int, body: ChatRequest, store: ScopedStore = Depends(
             logger.exception("chat turn failed for project %s", project_id)
             # Auto-revert policy: an aborted/failed turn must never leave
             # current pointing at a failed/partial version — guarantee last OK.
-            fallback_id = await _revert_to_last_ok(store, project_id)
-            await store.update_message(
-                assistant.id,
-                status="error",
-                error=str(exc),
-                blocks=[*produced_blocks, *critique_blocks],
-                version_id=fallback_id,
-            )
-            settled = True
+            # Under the write lock, since a write whose wait timed out in the
+            # thread may still be running.
+            async with turn.writes:
+                fallback_id = await _revert_to_last_ok(store, project_id)
+                await store.update_message(
+                    assistant.id,
+                    status="error",
+                    error=str(exc),
+                    blocks=[*produced_blocks, *critique_blocks],
+                    version_id=fallback_id,
+                )
+                settled = turn.settled = True
             emit({"event": "error", "detail": str(exc)})
+        except BaseException:
+            interrupted = True
+            raise
         finally:
-            if not settled:
-                # Defensive: never leave a dangling pending assistant turn.
-                await store.update_message(assistant.id, status="error", error="turn aborted")
-            # Keep the reading beside the picture it describes. In ``finally``
-            # because a turn that aborted after codegen still read the reference,
-            # and best-effort because a cache that could fail a turn would be a
-            # worse trade than no cache at all.
-            if readings:
-                try:
-                    await store.update_message(
-                        user_message.id,
-                        blocks=[
-                            b.model_copy(update={"reading": readings[0]})
-                            if b.kind == "image"
-                            else b
-                            for b in user_blocks
-                        ],
+            try:
+                # A cancel landing while a failure is being recorded above is raised
+                # from inside that handler, where the clause for it never sees it.
+                current = asyncio.current_task()
+                interrupted = interrupted or (current is not None and current.cancelling() > 0)
+                if not settled:
+                    # Shielded, so the cancel that brought the turn here cannot
+                    # also stop the write that records how it ended.
+                    await to_completion(
+                        _settle_unfinished(
+                            store,
+                            turn,
+                            [*produced_blocks, *critique_blocks],
+                            interrupted=interrupted,
+                            note=INTERRUPTED_NOTE if interrupted else "This turn was aborted.",
+                        )
                     )
-                except Exception:  # noqa: BLE001  (the cache is never worth a turn)
-                    logger.warning(
-                        "could not store the reference reading for project %s",
-                        project_id,
-                        exc_info=True,
-                    )
-            shutil.rmtree(staging, ignore_errors=True)
-            loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
+                # Keep the reading beside the picture it describes. In ``finally``
+                # because a turn that aborted after codegen still read the reference,
+                # and best-effort because a cache that could fail a turn would be a
+                # worse trade than no cache at all.
+                if readings:
+                    try:
+                        await store.update_message(
+                            user_message.id,
+                            blocks=[
+                                b.model_copy(update={"reading": readings[0]})
+                                if b.kind == "image"
+                                else b
+                                for b in user_blocks
+                            ],
+                        )
+                    except Exception:  # noqa: BLE001  (the cache is never worth a turn)
+                        logger.warning(
+                            "could not store the reference reading for project %s",
+                            project_id,
+                            exc_info=True,
+                        )
+            finally:
+                # Never behind an await: a second cancel must not skip these.
+                turn.finished.set()
+                if turn.drive_done.is_set():
+                    shutil.rmtree(staging, ignore_errors=True)
+                else:
+                    # The thread outlives the task. Its reply is settled, so it
+                    # should start nothing more: no model call, no build.
+                    turn.stop.set()
+                loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel
 
-    task = asyncio.create_task(run())
+    turns.launch(turn, run())
 
     async def events():
-        try:
-            while True:
-                event = await queue.get()
-                if event is None:
-                    break
-                yield {"data": json.dumps(event)}
-        finally:
-            await task
+        # Reads what the turn sends and nothing more. It never waits on the turn,
+        # because a client that goes away cancels this generator, and a cancel
+        # passed on through an await of the turn's task would end the turn with it.
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield {"data": json.dumps(event)}
 
     return EventSourceResponse(events(), headers=SSE_HEADERS)
 
@@ -933,6 +1075,29 @@ async def steer(project_id: int, body: SteerRequest, store: ScopedStore = Depend
     session = await store.get_or_create_session(project_id)
     _steer_registry.enqueue(session.id, body.message)
     return {"queued": True}
+
+
+@router.post("/projects/{project_id}/chat/stop", status_code=202)
+async def stop(
+    project_id: int,
+    body: StopRequest,
+    request: Request,
+    store: ScopedStore = Depends(get_store),
+):
+    """Ask the project's running chat turn to stop at its next boundary.
+
+    Answers at once. The turn ends on its own at its next boundary, keeping what it
+    built, and settles ``stopped``; what is already running — a model call, a build
+    — finishes first, and a turn that ends without reaching another boundary settles
+    as it would have. ``stopping`` is false when no turn was left to stop — none
+    running, or the one running has already settled — so asking twice is harmless,
+    and a stop never carries over to the next turn.
+    """
+    if not await store.get_project(project_id):
+        raise HTTPException(status_code=404, detail="project not found")
+    session = await store.get_or_create_session(project_id)
+    turns: TurnRegistry = request.app.state.turns
+    return {"stopping": turns.request_stop(session.id)}
 
 
 async def _last_ok_version_id(store: ScopedStore, project_id: int) -> int | None:
@@ -957,6 +1122,56 @@ async def _revert_to_last_ok(store: ScopedStore, project_id: int) -> int | None:
     if target is not None:
         await store.set_current_version(project_id, target)
     return target
+
+
+async def _unless_settled[T](
+    turn: RunningTurn, work: Coroutine[Any, Any, T], *, keeps_version: bool = False
+) -> T | None:
+    """Run a write the turn's thread handed over, unless the turn's reply has settled.
+
+    Under the turn's write lock, which a settle holds as well: a write already
+    running when a settle starts finishes first, and one arriving after it finds
+    the reply settled and is dropped. With ``keeps_version`` the write's result is
+    the id of a version it saved, recorded on the turn before the lock is let go.
+    """
+    async with turn.writes:
+        if turn.settled:
+            work.close()
+            return None
+        result = await work
+        if keeps_version and result is not None:
+            turn.kept_version_id = result
+        return result
+
+
+async def _settle_unfinished(
+    store: ScopedStore,
+    turn: RunningTurn,
+    blocks: list[ContentBlock],
+    *,
+    interrupted: bool,
+    note: str,
+) -> None:
+    """Settle a reply its turn ended without settling, with a note saying why.
+
+    A turn the server's going away interrupted is ``interrupted``; anything else that
+    ended one before it settled is an ``error``. The note is a text block, because a
+    reply with nothing in it shows as nothing at all. The reply links the last
+    version the turn kept, if it kept one, and the project's current version is
+    left where it is: a turn makes only a build that succeeded current, so there is
+    no failed one to undo, and moving it could only undo a version its user chose.
+    Under the turn's write lock, so a build the thread was still keeping is counted
+    and none is kept after it.
+    """
+    async with turn.writes:
+        await store.update_message(
+            turn.assistant_id,
+            status="interrupted" if interrupted else "error",
+            error=note,
+            blocks=[*blocks, ContentBlock.of_text(note)],
+            version_id=turn.kept_version_id,
+        )
+        turn.settled = True
 
 
 async def _latest_version_id(last_failed: bool, store: ScopedStore, project_id: int) -> int | None:

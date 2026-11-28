@@ -1596,6 +1596,52 @@ class Store:
             ).fetchone()
         return _message(row) if row else None
 
+    async def settle_interrupted_turns(self, *, before: str, note: str) -> list[int]:
+        """Settle every assistant reply left ``pending`` from before ``before``.
+
+        Each is settled ``interrupted``, with ``note`` as its error and its closing
+        text. It links no version and moves none: nothing records which version, if
+        any, was the dead turn's, and a reply left pending for days sits under a
+        project whose user may have chosen another since. Unscoped, for startup,
+        where nobody is signed in. Returns the ids of the replies it settled.
+
+        A reply whose stored blocks are not readable settles too, keeping them as
+        they are, so one bad row cannot stop the rest on every start, and settling
+        it does not paper over a corrupt row that reading it reports.
+        """
+        async with self._connect() as db:
+            rows = await (
+                await db.execute(
+                    "SELECT id, blocks_json FROM chat_messages"
+                    " WHERE role='assistant' AND status='pending' AND created_at < ?",
+                    (before,),
+                )
+            ).fetchall()
+        settled: list[int] = []
+        for row in rows:
+            try:
+                blocks_json = _blocks_to_json(
+                    [*_blocks_from_json(row["blocks_json"]), ContentBlock.of_text(note)]
+                )
+            # RecursionError as well: a corrupt column can nest deeper than the
+            # decoder will follow.
+            except (ValueError, TypeError, RecursionError):
+                logger.warning(
+                    "chat reply %s has unreadable blocks; settling it without its note",
+                    row["id"],
+                )
+                blocks_json = row["blocks_json"]
+            async with self._connect() as db:
+                cur = await db.execute(
+                    "UPDATE chat_messages SET status='interrupted', error=?, blocks_json=?"
+                    " WHERE id=? AND status='pending'",
+                    (note, blocks_json, row["id"]),
+                )
+                await db.commit()
+            if cur.rowcount:
+                settled.append(row["id"])
+        return settled
+
     async def list_messages(self, session_id: int, *, owner: Owner = UNSCOPED) -> list[ChatMessage]:
         pred, params = _owner_sql(owner)
         async with self._connect() as db:
