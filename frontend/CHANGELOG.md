@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1](https://github.com/cadlesslab/Cadless/compare/frontend-v1.5.0...frontend-v1.5.1) (2026-11-28)
+
+
+### Fixes
+
+* hold every script to the code gate where it runs, and narrow what scripts can reach ([#98](https://github.com/cadlesslab/Cadless/issues/98)) ([aeb811b](https://github.com/cadlesslab/Cadless/commit/aeb811b589dc938d27ac76a84093270398b9fca6))
+* keep a chat turn running when its page closes, and stop it on the server ([#109](https://github.com/cadlesslab/Cadless/issues/109)) ([824f5a3](https://github.com/cadlesslab/Cadless/commit/824f5a314489f326ce21047007e979d9795cb489))
+
 ## [1.5.0](https://github.com/cadlesslab/Cadless/compare/frontend-v1.4.0...frontend-v1.5.0) (2026-11-11)
 
 
