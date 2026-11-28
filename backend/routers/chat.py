@@ -206,6 +206,7 @@ def build_pipeline(should_stop: Callable[[], bool] | None = None) -> Pipeline:
             renderer=partial(render_views, size=settings.vlm_critique_view_size, edges=True)
         ),
         guide_writer=GuideWriter(),
+        should_stop=should_stop,
     )
 
 
