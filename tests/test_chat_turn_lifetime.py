@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 import httpx
 import pytest
@@ -26,7 +27,9 @@ from backend.turns import INTERRUPTED_NOTE, TurnRegistry
 from cadless.llm.providers import StreamChunk
 from cadless.llm.providers.fake import FakeChatProvider
 from cadless.llm.types import StreamEvent
+from cadless.pipeline import Pipeline
 from cadless.store import Store
+from cadless.worker import ExecResult
 from tests.chat_api_helpers import (
     ScriptedProvider,
     StubPipeline,
@@ -311,12 +314,12 @@ def _stop_when(client, pid: int, reached: threading.Event, release: threading.Ev
     """Post a stop once ``reached`` is set, then let the turn go on.
 
     The answer lands in the returned dict, for the test to read once the stream it
-    runs meanwhile has ended.
+    runs meanwhile has ended, beside whether ``reached`` was set before the stop went.
     """
     answers: dict = {}
 
     def stop() -> None:
-        reached.wait(SETTLE_S)
+        answers["reached"] = reached.wait(SETTLE_S)
         answers["stop"] = client.post(f"/projects/{pid}/chat/stop", json={})
         release.set()
 
@@ -474,6 +477,57 @@ def test_a_stop_after_the_reply_has_settled_answers_no(store, monkeypatch):
 
     assert answer.json() == {"stopping": False}
     assert _messages(store, pid)[-1].status == "ok"
+
+
+class _CountingGenerator:
+    """Writes the same buildable script every time, and counts the repairs asked of it."""
+
+    def __init__(self) -> None:
+        self.repairs = 0
+
+    def generate(self, intent, *args, **kwargs):
+        return "from build123d import *\nresult = Box(10, 10, 10)\n"
+
+    def repair(self, intent, code, error, *args, **kwargs):
+        self.repairs += 1
+        return code
+
+
+def test_a_stop_reaches_the_pipeline_the_chat_route_builds(store, monkeypatch):
+    """The route's own pipeline rather than a stand-in for it: a build that fails
+    after a stop is left unrepaired, where a repair would be a model call the user
+    stopped paying for."""
+    reached, release = threading.Event(), threading.Event()
+    generator = _CountingGenerator()
+
+    def held_failing_build(code, **kwargs):
+        reached.set()
+        release.wait(SETTLE_S)
+        return ExecResult(ok=False, error="the build failed")
+
+    provider = ScriptedProvider(
+        [
+            _tool_turn(tool_use_id="tu-1", name="generate_model", tool_input={"spec": "a cube"}),
+            _text_turn("never sent"),
+        ]
+    )
+    monkeypatch.setattr(chat, "build_provider", lambda *a, **k: provider)
+    monkeypatch.setattr(chat.settings, "llm_provider", "fake")
+    # Room for a repair, whatever the environment sets: with none left, the pipeline
+    # would not ask for one whether or not it saw the stop.
+    monkeypatch.setattr(chat.settings, "repair_max_attempts", 3)
+    monkeypatch.setattr(chat, "Pipeline", partial(Pipeline, generator=generator))
+    monkeypatch.setattr("cadless.pipeline.run_code", held_failing_build)
+
+    with TestClient(create_app(store=store)) as client:
+        pid = client.post("/projects", json={"name": "P"}).json()["id"]
+        answers = _stop_when(client, pid, reached, release)
+        _stream_chat(client, pid)
+
+    assert answers["reached"], "the turn never reached its build"
+    assert answers["stop"].json() == {"stopping": True}
+    assert generator.repairs == 0
+    assert _messages(store, pid)[-1].status == "stopped"
 
 
 def test_a_stop_reaches_every_turn_running_in_the_session(store, monkeypatch):
