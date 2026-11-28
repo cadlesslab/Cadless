@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.7.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.6.0...backend-v1.7.0) (2026-11-28)
+
+
+### Features
+
+* confirm an assembly order a caller declares, and say where one fails ([#106](https://github.com/cadlesslab/Cadless/issues/106)) ([0f6bbf0](https://github.com/cadlesslab/Cadless/commit/0f6bbf0588fcd5834a3cb26805b7099fa6f2d46c))
+* let a caller choose which export kinds a run writes ([#108](https://github.com/cadlesslab/Cadless/issues/108)) ([357ba40](https://github.com/cadlesslab/Cadless/commit/357ba40e0cfa7149fc2b559faf02cdbc43705c66))
+
+
+### Fixes
+
+* have the render critique check each named feature where a view would show it ([#110](https://github.com/cadlesslab/Cadless/issues/110)) ([61ea084](https://github.com/cadlesslab/Cadless/commit/61ea084d4293b08e4e4ab24c07d743df04fe626d))
+* keep a chat turn running when its page closes, and stop it on the server ([#109](https://github.com/cadlesslab/Cadless/issues/109)) ([824f5a3](https://github.com/cadlesslab/Cadless/commit/824f5a314489f326ce21047007e979d9795cb489))
+
 ## [1.6.0](https://github.com/cadlesslab/Cadless/compare/backend-v1.5.2...backend-v1.6.0) (2026-11-25)
 
 
