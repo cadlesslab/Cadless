@@ -314,12 +314,12 @@ def _stop_when(client, pid: int, reached: threading.Event, release: threading.Ev
     """Post a stop once ``reached`` is set, then let the turn go on.
 
     The answer lands in the returned dict, for the test to read once the stream it
-    runs meanwhile has ended.
+    runs meanwhile has ended, beside whether ``reached`` was set before the stop went.
     """
     answers: dict = {}
 
     def stop() -> None:
-        reached.wait(SETTLE_S)
+        answers["reached"] = reached.wait(SETTLE_S)
         answers["stop"] = client.post(f"/projects/{pid}/chat/stop", json={})
         release.set()
 
@@ -513,6 +513,9 @@ def test_a_stop_reaches_the_pipeline_the_chat_route_builds(store, monkeypatch):
     )
     monkeypatch.setattr(chat, "build_provider", lambda *a, **k: provider)
     monkeypatch.setattr(chat.settings, "llm_provider", "fake")
+    # Room for a repair, whatever the environment sets: with none left, the pipeline
+    # would not ask for one whether or not it saw the stop.
+    monkeypatch.setattr(chat.settings, "repair_max_attempts", 3)
     monkeypatch.setattr(chat, "Pipeline", partial(Pipeline, generator=generator))
     monkeypatch.setattr("cadless.pipeline.run_code", held_failing_build)
 
@@ -521,6 +524,7 @@ def test_a_stop_reaches_the_pipeline_the_chat_route_builds(store, monkeypatch):
         answers = _stop_when(client, pid, reached, release)
         _stream_chat(client, pid)
 
+    assert answers["reached"], "the turn never reached its build"
     assert answers["stop"].json() == {"stopping": True}
     assert generator.repairs == 0
     assert _messages(store, pid)[-1].status == "stopped"
